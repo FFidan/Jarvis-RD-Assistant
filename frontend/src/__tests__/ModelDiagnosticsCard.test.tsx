@@ -32,10 +32,42 @@ const baseSettings = {
   eval_report_date: '2026-05-22',
 };
 
+const systemModels = {
+  status: 'ok',
+  installed: [],
+  hardware: {},
+  current: {
+    fast_model: 'qwen3:4b',
+    smart_model: 'openrouter/inclusionai/ling-3.0-tiny:free',
+  },
+  issues: {},
+  catalog: [],
+  recommendations: {},
+  hardware_recommendation: {
+    vram_mb: null,
+    bucket: 'CPU_ONLY',
+    summary: 'test',
+    aliases: [],
+  },
+  delivery: { fast: 'applied', smart: 'applied', embed: 'applied' },
+  routing: {
+    fast: 'qwen3:4b',
+    smart: 'openrouter/inclusionai/ling-3.0-tiny:free',
+  },
+  consistent: false,
+  provider_lists: {},
+  embedding_contract: {
+    model: 'qwen3-embedding:4b',
+    dimension: 2560,
+    change_requires_reindex: true,
+  },
+};
+
 describe('ModelDiagnosticsCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.redetectHW).mockResolvedValue(baseSettings as any);
+    vi.mocked(api.fetchSystemModels).mockResolvedValue(systemModels as any);
   });
 
   it('renders the detected tier, serving backend, and recommended model with its date', async () => {
@@ -80,5 +112,17 @@ describe('ModelDiagnosticsCard', () => {
     await screen.findByText('Model runtime');
     fireEvent.click(screen.getByRole('button', { name: /re-detect/i }));
     await waitFor(() => expect(api.redetectHW).toHaveBeenCalled());
+  });
+
+  it('shows Quick, Main, and dimension-locked Embedding runtime truth', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    render(wrap(<ModelDiagnosticsCard />));
+
+    const routes = await screen.findByTestId('active-model-routes');
+    expect(routes).toHaveTextContent('Quick');
+    expect(routes).toHaveTextContent('Main');
+    expect(routes).toHaveTextContent('Embedding');
+    expect(routes).toHaveTextContent('qwen3-embedding:4b');
+    expect(routes).toHaveTextContent('Runtime unavailable');
   });
 });

@@ -1,100 +1,42 @@
 import { useMemo, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
-import { QUERY_KEYS } from '@/lib/query-keys';
+import { CheckCircle, CircleDashed, ExternalLink, KeyRound, Loader2, Plus, ShieldAlert } from 'lucide-react';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   compareCloudProviders,
   fetchConfig,
+  fetchProviderAccount,
   fetchSystemModels,
   listProviders,
   setConfig,
   testProvider,
 } from '@/lib/api';
 import type { ProviderMetadata, ProviderModelListStatus } from '@/lib/api';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Loader2, CheckCircle, CircleDashed, ShieldAlert, Plus, KeyRound } from 'lucide-react';
-import { toast } from 'sonner';
 import { errorMessage } from '@/lib/errors';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import type { ConfigEntry } from '@/types';
 
+type EditableField = 'apiKey' | 'baseUrl';
+type DraftState = Partial<Record<EditableField, string>>;
 type TestState = { ok: boolean; error: string | null } | null;
 
-type DraftState = {
-  apiKey?: string | null;
-  baseUrl?: string | null;
-};
-
-type SaveProviderConfigVariables = {
+interface SaveProviderConfigVariables {
   providerId: string;
-  field: keyof DraftState;
+  field: EditableField;
   key: string;
   value: string;
-};
+}
 
 function getMaskedConfig(configs: ConfigEntry[], key: string | null | undefined): string {
   if (!key) return '';
-  const entry = configs.find((c) => c.key === key);
-  if (entry == null) return '';
-  const v = entry.value;
-  if (typeof v === 'string') return v.replace(/^"|"$/g, '');
-  return '';
-}
-
-function providerStatus(provider: ProviderMetadata, maskedValue: string, result: TestState) {
-  if (result?.ok) {
-    return {
-      icon: CheckCircle,
-      label: maskedValue || provider.configured ? 'Configured and tested' : 'Tested',
-      className: 'text-[var(--status-ok)]',
-    };
-  }
-  if (result && !result.ok) {
-    return {
-      icon: ShieldAlert,
-      label: `Configured, degraded${result.error ? `: ${result.error}` : ''}`,
-      className: 'text-destructive',
-    };
-  }
-  if (!maskedValue && !provider.configured && !provider.base_url_configured) {
-    return {
-      icon: CircleDashed,
-      label: 'Not configured',
-      className: 'text-muted-foreground',
-    };
-  }
-  return {
-    icon: CircleDashed,
-    label: 'Configured, not tested',
-    className: 'text-[var(--status-warn)]',
-  };
-}
-
-/**
- * Model-availability line for a provider tile, sourced from `provider_lists`
- * (fetch freshness) plus the merged catalog's per-provider count — additive to
- * `providerStatus`, which states connectivity, not model availability.
- */
-function providerAvailabilityText(
-  catalogCount: number,
-  listStatus: ProviderModelListStatus | undefined,
-): string | null {
-  if (!listStatus) return null;
-  // A successful fetch can still yield nothing usable, so the failure wording
-  // belongs to the error, not to the count.
-  if (listStatus.error) {
-    return "No models available yet — JARVIS could not fetch this provider's model list";
-  }
-  if (catalogCount === 0) {
-    return 'No models available yet — this provider offered none JARVIS can use';
-  }
-  const fetchedLabel = listStatus.fetched_at
-    ? formatDistanceToNow(new Date(listStatus.fetched_at), { addSuffix: true })
-    : null;
-  const countLabel = `${catalogCount} model${catalogCount === 1 ? '' : 's'} available`;
-  return fetchedLabel ? `${countLabel} · Fetched ${fetchedLabel}` : countLabel;
+  const value = configs.find((entry) => entry.key === key)?.value;
+  return typeof value === 'string' ? value.replace(/^"|"$/g, '') : '';
 }
 
 function providerGroupLabel(provider: ProviderMetadata): string {
@@ -104,140 +46,252 @@ function providerGroupLabel(provider: ProviderMetadata): string {
 }
 
 function sortProviders(providers: ProviderMetadata[]): ProviderMetadata[] {
-  return [...providers].sort((a, b) => compareCloudProviders(a.id, b.id) || a.display_name.localeCompare(b.display_name));
+  return [...providers].sort(
+    (left, right) =>
+      compareCloudProviders(left.id, right.id) || left.display_name.localeCompare(right.display_name),
+  );
 }
 
-export function ProvidersSection() {
-  const queryClient = useQueryClient();
+function providerAvailabilityText(
+  catalogCount: number,
+  status: ProviderModelListStatus | undefined,
+): string | null {
+  if (!status) return null;
+  if (status.error) return "Catalog unavailable — JARVIS could not refresh this provider's models";
+  if (catalogCount === 0) return 'Catalog checked — no compatible models were returned';
+  const checked = status.fetched_at
+    ? formatDistanceToNow(new Date(status.fetched_at), { addSuffix: true })
+    : null;
+  const count = `${catalogCount} model${catalogCount === 1 ? '' : 's'} available`;
+  return checked ? `${count} · Checked ${checked}` : count;
+}
 
-  const {
-    data: configs = [],
-    isLoading: configsLoading,
-    isError: configsError,
-    error: configsErrorValue,
-  } = useQuery({
-    queryKey: QUERY_KEYS.config.all(),
-    queryFn: fetchConfig,
+function providerStatus(
+  provider: ProviderMetadata,
+  status: ProviderModelListStatus | undefined,
+  sessionResult: TestState,
+) {
+  if (!provider.configured && !provider.base_url_configured) {
+    return { icon: CircleDashed, label: 'Not configured', className: 'text-muted-foreground' };
+  }
+  if (status?.error || sessionResult?.ok === false) {
+    return { icon: ShieldAlert, label: 'Configured; connection needs attention', className: 'text-destructive' };
+  }
+  if (status?.fetched_at) {
+    const checked = formatDistanceToNow(new Date(status.fetched_at), { addSuffix: true });
+    return { icon: CheckCircle, label: `Connected · checked ${checked}`, className: 'text-[var(--status-ok)]' };
+  }
+  if (sessionResult?.ok) {
+    return { icon: CheckCircle, label: 'Connection test passed', className: 'text-[var(--status-ok)]' };
+  }
+  return { icon: CircleDashed, label: 'Configured; not checked yet', className: 'text-[var(--status-warn)]' };
+}
+
+function accountLabel(key: string): string {
+  return {
+    is_free_tier: 'Free tier',
+    usage: 'Usage',
+    usage_daily: 'Usage today',
+    usage_weekly: 'Usage this week',
+    usage_monthly: 'Usage this month',
+    limit: 'Limit',
+    limit_remaining: 'Limit remaining',
+    limit_reset: 'Limit resets',
+    expires_at: 'Expires',
+  }[key] ?? key.replace(/_/g, ' ');
+}
+
+function accountValue(value: boolean | number | string | null): string {
+  if (value == null) return 'Unavailable';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return value;
+}
+
+function AccountSnapshot({
+  provider,
+  connection,
+  models,
+}: {
+  provider: ProviderMetadata;
+  connection: string;
+  models: string;
+}) {
+  const accountQuery = useQuery({
+    queryKey: QUERY_KEYS.config.providerAccount(provider.id),
+    queryFn: () => fetchProviderAccount(provider.id),
+    enabled: provider.account_capability === 'current_key' && provider.configured,
+    staleTime: 60_000,
   });
-  const {
-    data: providerRows = [],
-    isLoading: providersLoading,
-    isError: providersError,
-    error: providersErrorValue,
-  } = useQuery({
-    queryKey: ['settings', 'providers'],
-    queryFn: listProviders,
-  });
-  // Same query key IngestionSection registers for /api/system/models — TanStack
-  // dedupes by key, so this costs no extra request.
-  const { data: systemModels } = useQuery({
+  const entries = Object.entries(accountQuery.data?.data ?? {});
+  const accountStatus = (() => {
+    if (provider.account_capability !== 'current_key') {
+      return 'Unavailable from this API key';
+    }
+    if (!provider.configured) return 'Add a key to check';
+    if (accountQuery.isLoading) return 'Loading';
+    if (accountQuery.isError || accountQuery.data?.error_code) return 'Temporarily unavailable';
+    return entries.length > 0 ? 'Available' : 'No supported fields returned';
+  })();
+
+  return (
+    <AccountPanel title="Provider account">
+      <dl className="divide-y divide-hair text-sm">
+        <div className="flex items-start justify-between gap-4 py-2">
+          <dt className="text-muted-foreground">Connection</dt>
+          <dd className="text-right">{connection}</dd>
+        </div>
+        <div className="flex items-start justify-between gap-4 py-2">
+          <dt className="text-muted-foreground">Models</dt>
+          <dd className="text-right">{models}</dd>
+        </div>
+        <div className="flex items-start justify-between gap-4 py-2">
+          <dt className="text-muted-foreground">Account data</dt>
+          <dd className="text-right">{accountStatus}</dd>
+        </div>
+        <div className="flex items-start justify-between gap-4 py-2">
+          <dt className="text-muted-foreground">Provider dashboard</dt>
+          <dd className="text-right">
+            <ProviderDashboardLink provider={provider} />
+          </dd>
+        </div>
+      </dl>
+      {entries.length > 0 && !accountQuery.isError && !accountQuery.data?.error_code && (
+        <div className="space-y-2 border-t border-hair pt-3">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            Current-key details
+          </p>
+          <dl className="divide-y divide-hair text-sm">
+          {entries.map(([key, value]) => (
+            <div key={key} className="flex items-center justify-between gap-4 py-2">
+              <dt className="text-muted-foreground">{accountLabel(key)}</dt>
+              <dd className="font-mono text-right">{accountValue(value)}</dd>
+            </div>
+          ))}
+          </dl>
+        </div>
+      )}
+    </AccountPanel>
+  );
+}
+
+function AccountPanel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <aside className="space-y-3 rounded-md border border-hair p-4" aria-label="Provider account snapshot">
+      <div>
+        <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Account snapshot</p>
+        <h4 className="mt-1 text-sm font-semibold">{title}</h4>
+      </div>
+      {children}
+    </aside>
+  );
+}
+
+function ProviderDashboardLink({ provider }: { provider: ProviderMetadata }) {
+  if (!provider.dashboard_url) {
+    return <span className="text-xs text-muted-foreground">Unavailable</span>;
+  }
+  return (
+    <a
+      href={provider.dashboard_url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs text-primary underline-offset-4 hover:underline"
+    >
+      Open provider dashboard
+      <ExternalLink className="h-3 w-3" />
+    </a>
+  );
+}
+
+export function ProvidersSection({ initialProviderId }: { initialProviderId?: string } = {}) {
+  const queryClient = useQueryClient();
+  const configQuery = useQuery({ queryKey: QUERY_KEYS.config.all(), queryFn: fetchConfig });
+  const providersQuery = useQuery({ queryKey: QUERY_KEYS.config.providers(), queryFn: listProviders });
+  const modelsQuery = useQuery({
     queryKey: QUERY_KEYS.config.systemModels(),
     queryFn: ({ signal }) => fetchSystemModels(signal),
     staleTime: 60_000,
   });
-  const providerLists = systemModels?.provider_lists ?? {};
-  const modelCatalog = systemModels?.catalog ?? [];
-
-  const loadError = configsError
-    ? errorMessage(configsErrorValue, 'Could not load stored provider keys')
-    : providersError
-      ? errorMessage(providersErrorValue, 'Could not load provider metadata')
-      : null;
-  const providers = useMemo(() => sortProviders(providerRows), [providerRows]);
-  const configuredProviders = providers.filter(
-    (provider) =>
-      provider.configured ||
-      provider.base_url_configured ||
-      getMaskedConfig(configs, provider.api_key_config_key),
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
+    initialProviderId ?? null,
   );
-  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [chooserOpen, setChooserOpen] = useState(false);
-  const selectedProvider =
-    providers.find((provider) => provider.id === selectedProviderId) ?? configuredProviders[0] ?? providers[0];
-
+  const [editing, setEditing] = useState<Record<string, Partial<Record<EditableField, boolean>>>>({});
   const [drafts, setDrafts] = useState<Record<string, DraftState>>({});
-  const [testing, setTesting] = useState<Record<string, boolean>>({});
   const [testResults, setTestResults] = useState<Record<string, TestState>>({});
 
-  const saveMut = useMutation({
+  const providers = useMemo(() => sortProviders(providersQuery.data ?? []), [providersQuery.data]);
+  const configured = providers.filter((provider) => provider.configured || provider.base_url_configured);
+  const selected =
+    providers.find((provider) => provider.id === selectedProviderId) ?? configured[0] ?? providers[0];
+  const configs = configQuery.data ?? [];
+  const providerLists = modelsQuery.data?.provider_lists ?? {};
+  const catalog = modelsQuery.data?.catalog ?? [];
+
+  const saveMutation = useMutation({
     mutationFn: ({ key, value }: SaveProviderConfigVariables) => setConfig(key, value),
     onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
-      queryClient.invalidateQueries({ queryKey: ['settings', 'providers'] });
-      setDrafts((prev) => {
-        const currentDraft = prev[variables.providerId]?.[variables.field];
-        if (currentDraft?.trim() !== variables.value) {
-          return prev;
-        }
-        return {
-          ...prev,
-          [variables.providerId]: {
-            ...prev[variables.providerId],
-            [variables.field]: null,
-          },
-        };
-      });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.providers() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
+      setEditing((previous) => ({
+        ...previous,
+        [variables.providerId]: { ...previous[variables.providerId], [variables.field]: false },
+      }));
+      setDrafts((previous) => ({
+        ...previous,
+        [variables.providerId]: { ...previous[variables.providerId], [variables.field]: undefined },
+      }));
+      toast.success(variables.field === 'apiKey' ? 'Provider key saved' : 'Provider endpoint saved');
     },
-    onError: (err: Error) => {
-      toast.error(err.message ?? 'Failed to save provider setting');
+    onError: (error: Error) => toast.error(error.message || 'Failed to save provider setting'),
+  });
+
+  const beginEdit = (provider: ProviderMetadata, field: EditableField) => {
+    setDrafts((previous) => ({ ...previous, [provider.id]: { ...previous[provider.id], [field]: '' } }));
+    setEditing((previous) => ({ ...previous, [provider.id]: { ...previous[provider.id], [field]: true } }));
+  };
+  const cancelEdit = (provider: ProviderMetadata, field: EditableField) => {
+    setDrafts((previous) => ({ ...previous, [provider.id]: { ...previous[provider.id], [field]: undefined } }));
+    setEditing((previous) => ({ ...previous, [provider.id]: { ...previous[provider.id], [field]: false } }));
+  };
+  const saveField = (provider: ProviderMetadata, field: EditableField) => {
+    const key = field === 'apiKey' ? provider.api_key_config_key : provider.base_url_config_key;
+    const value = drafts[provider.id]?.[field]?.trim();
+    if (!key || !value) return;
+    saveMutation.mutate({ providerId: provider.id, field, key, value });
+  };
+
+  const testMutation = useMutation({
+    mutationFn: (provider: ProviderMetadata) => testProvider(provider.id),
+    onSuccess: (result, provider) => {
+      setTestResults((previous) => ({ ...previous, [provider.id]: result }));
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
+      if (result.ok) {
+        toast.success(`${provider.display_name} connection passed`);
+      } else {
+        toast.error(result.error ?? `${provider.display_name} connection failed`);
+      }
+    },
+    onError: (error: Error, provider) => {
+      const message = errorMessage(error, 'Connection failed');
+      setTestResults((previous) => ({ ...previous, [provider.id]: { ok: false, error: message } }));
+      toast.error(message);
     },
   });
 
-  const handleDraft = (providerId: string, field: keyof DraftState, value: string) => {
-    setDrafts((prev) => ({ ...prev, [providerId]: { ...prev[providerId], [field]: value } }));
-  };
-
-  const saveIfChanged = (provider: ProviderMetadata, field: keyof DraftState) => {
-    const key = field === 'apiKey' ? provider.api_key_config_key : provider.base_url_config_key;
-    if (!key) return;
-    const draft = drafts[provider.id]?.[field];
-    const current = getMaskedConfig(configs, key);
-    if (draft === null || draft === undefined) return;
-    const value = draft.trim();
-    if (value !== '' && value !== current) {
-      saveMut.mutate({ providerId: provider.id, field, key, value });
-      return;
-    }
-    setDrafts((prev) => ({ ...prev, [provider.id]: { ...prev[provider.id], [field]: null } }));
-  };
-
-  const handleTest = async (provider: ProviderMetadata) => {
-    setTesting((prev) => ({ ...prev, [provider.id]: true }));
-    setTestResults((prev) => ({ ...prev, [provider.id]: null }));
-    try {
-      const result = await testProvider(provider.id);
-      setTestResults((prev) => ({ ...prev, [provider.id]: result }));
-      if (result.ok) {
-        toast.success(`${provider.display_name} connection OK`);
-      } else {
-        toast.error(result.error ?? `${provider.display_name} test failed`);
-      }
-    } catch (err) {
-      const msg = errorMessage(err, 'Connection failed');
-      setTestResults((prev) => ({ ...prev, [provider.id]: { ok: false, error: msg } }));
-      toast.error(msg);
-    } finally {
-      setTesting((prev) => ({ ...prev, [provider.id]: false }));
-    }
-  };
-
-  if (configsLoading || providersLoading) {
+  if (configQuery.isLoading || providersQuery.isLoading) {
     return <div className="py-4 text-sm text-muted-foreground">Loading provider settings...</div>;
   }
-
-  if (loadError) {
+  if (configQuery.isError || providersQuery.isError) {
+    const loadError = configQuery.isError
+      ? errorMessage(configQuery.error, 'Could not load stored provider keys')
+      : errorMessage(providersQuery.error, 'Could not load provider metadata');
     return (
       <Card className="rounded-md border-hair shadow-none">
-        <CardHeader className="space-y-2">
-          <h3 className="text-base font-semibold">Providers &amp; Routing</h3>
-          <p className="max-w-3xl text-sm text-muted-foreground">
-            Local models stay the default. Provider keys are deployment-wide and encrypted at rest.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-            Could not load provider settings. {loadError}
-          </div>
+        <CardContent className="p-4">
+          <p role="alert" className="text-sm text-destructive">Could not load provider settings. {loadError}</p>
         </CardContent>
       </Card>
     );
@@ -247,12 +301,10 @@ export function ProvidersSection() {
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader className="space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
+          <div>
             <h3 className="text-base font-semibold">Providers &amp; Routing</h3>
-            <p className="max-w-3xl text-sm text-muted-foreground">
-              Local models stay the default. Add cloud providers only when you want selected Main or
-              Quick model routes to use external compute. Provider keys are deployment-wide and
-              encrypted at rest.
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              Add cloud access only when a Quick or Main route should use external compute. Provider keys are deployment-wide and encrypted at rest.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => setChooserOpen((open) => !open)}>
@@ -262,147 +314,137 @@ export function ProvidersSection() {
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
-        {configuredProviders.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Connected
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {configuredProviders.map((provider) => {
-                const maskedValue = getMaskedConfig(configs, provider.api_key_config_key);
-                const status = providerStatus(provider, maskedValue, testResults[provider.id] ?? null);
+        {configured.length > 0 && (
+          <section className="space-y-2" aria-labelledby="connected-providers-heading">
+            <p id="connected-providers-heading" className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Connected providers</p>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {configured.map((provider) => {
+                const listStatus = providerLists[provider.id];
+                const status = providerStatus(provider, listStatus, testResults[provider.id] ?? null);
                 const StatusIcon = status.icon;
-                const catalogCount = modelCatalog.filter((entry) => entry.provider === provider.id).length;
-                const availabilityText = providerAvailabilityText(catalogCount, providerLists[provider.id]);
+                const count = catalog.filter((entry) => entry.provider === provider.id).length;
                 return (
                   <button
                     key={provider.id}
                     type="button"
                     onClick={() => setSelectedProviderId(provider.id)}
-                    className="flex min-h-16 items-center justify-between gap-3 rounded-md border border-hair bg-background px-3 py-2 text-left hover:border-primary focus:outline-none focus:ring-2 focus:ring-primary"
+                    aria-pressed={selected?.id === provider.id}
+                    className="min-h-24 rounded-md border border-hair bg-background px-3 py-2 text-left hover:border-primary aria-pressed:border-primary aria-pressed:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-primary"
                   >
-                    <span>
-                      <span className="block text-sm font-medium">{provider.display_name}</span>
-                      <span className={`mt-1 flex items-center gap-1 text-xs ${status.className}`}>
-                        <StatusIcon className="h-3 w-3" />
-                        {status.label}
-                      </span>
-                      {availabilityText && (
-                        <span className="mt-0.5 block text-xs text-muted-foreground">
-                          {availabilityText}
-                        </span>
-                      )}
+                    <span className="block text-sm font-medium">{provider.display_name}</span>
+                    <span className={`mt-1 flex items-center gap-1 text-xs ${status.className}`}>
+                      <StatusIcon className="h-3 w-3" />{status.label}
                     </span>
-                    <KeyRound className="h-4 w-4 text-muted-foreground" />
+                    {providerAvailabilityText(count, listStatus) && (
+                      <span className="mt-1 block text-xs text-muted-foreground">{providerAvailabilityText(count, listStatus)}</span>
+                    )}
                   </button>
                 );
               })}
             </div>
-          </div>
+          </section>
         )}
 
         {chooserOpen && (
           <div className="space-y-3 rounded-md border border-hair bg-muted/20 p-3">
             {['Direct providers', 'Recommended routers', 'Advanced endpoints'].map((group) => {
-              const groupProviders = providers.filter((provider) => providerGroupLabel(provider) === group);
-              if (groupProviders.length === 0) return null;
+              const rows = providers.filter((provider) => providerGroupLabel(provider) === group);
+              if (rows.length === 0) return null;
               return (
-                <div key={group} className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    {group}
-                  </p>
+                <section key={group} className="space-y-2">
+                  <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{group}</p>
                   <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                    {groupProviders.map((provider) => (
+                    {rows.map((provider) => (
                       <Button
                         key={provider.id}
                         type="button"
                         variant="outline"
                         className="h-auto justify-start whitespace-normal py-2 text-left"
-                        onClick={() => {
-                          setSelectedProviderId(provider.id);
-                          setChooserOpen(false);
-                        }}
+                        onClick={() => { setSelectedProviderId(provider.id); setChooserOpen(false); }}
                       >
-                        <span>
-                          <span className="block text-sm font-medium">{provider.display_name}</span>
-                          <span className="block text-xs text-muted-foreground">{provider.best_for}</span>
-                        </span>
+                        <span><span className="block font-medium">{provider.display_name}</span><span className="block text-xs text-muted-foreground">{provider.best_for}</span></span>
                       </Button>
                     ))}
                   </div>
-                </div>
+                </section>
               );
             })}
           </div>
         )}
 
-        {selectedProvider && (
-          <div className="space-y-4 rounded-md border border-hair p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h4 className="text-sm font-semibold">{selectedProvider.display_name}</h4>
-                <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                  {selectedProvider.best_for}
-                </p>
+        {selected && (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <section className="space-y-4 rounded-md border border-hair p-4" aria-label={`${selected.display_name} credentials and privacy`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div><p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Credential and privacy</p><h4 className="mt-1 text-base font-semibold">{selected.display_name}</h4><p className="mt-1 text-sm text-muted-foreground">{selected.best_for}</p></div>
+                <span className="text-xs text-muted-foreground">{selected.privacy_boundary.replace(/_/g, ' ')}</span>
               </div>
-              <span className="rounded-sm border border-hair px-2 py-1 text-xs text-muted-foreground">
-                {selectedProvider.privacy_boundary.replace(/_/g, ' ')}
-              </span>
-            </div>
 
-            <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
               <div className="space-y-2">
-                <Label htmlFor={`provider-key-${selectedProvider.id}`}>API key</Label>
-                <Input
-                  id={`provider-key-${selectedProvider.id}`}
-                  type="password"
-                  placeholder="Paste provider API key"
-                  value={
-                    drafts[selectedProvider.id]?.apiKey ??
-                    getMaskedConfig(configs, selectedProvider.api_key_config_key)
-                  }
-                  onChange={(e) => handleDraft(selectedProvider.id, 'apiKey', e.target.value)}
-                  onBlur={() => saveIfChanged(selectedProvider, 'apiKey')}
-                  autoComplete="off"
-                />
+                <Label htmlFor={`provider-key-${selected.id}`}>API key</Label>
+                {editing[selected.id]?.apiKey ? (
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input id={`provider-key-${selected.id}`} type="password" autoComplete="off" placeholder="Paste a new provider API key" value={drafts[selected.id]?.apiKey ?? ''} onChange={(event) => setDrafts((previous) => ({ ...previous, [selected.id]: { ...previous[selected.id], apiKey: event.target.value } }))} />
+                    <Button onClick={() => saveField(selected, 'apiKey')} disabled={!drafts[selected.id]?.apiKey?.trim() || saveMutation.isPending}>Save key</Button>
+                    <Button variant="outline" onClick={() => cancelEdit(selected, 'apiKey')}>Cancel</Button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input id={`provider-key-${selected.id}`} readOnly value={getMaskedConfig(configs, selected.api_key_config_key) || (selected.configured ? 'Configured' : 'Not configured')} aria-label={`${selected.display_name} stored key status`} />
+                    <Button variant="outline" onClick={() => beginEdit(selected, 'apiKey')}><KeyRound className="mr-2 h-4 w-4" />{selected.configured ? 'Replace key' : 'Add key'}</Button>
+                    <Button variant="outline" onClick={() => testMutation.mutate(selected)} disabled={!selected.configured || testMutation.isPending}>{testMutation.isPending && testMutation.variables?.id === selected.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Test now</Button>
+                  </div>
+                )}
               </div>
-              <div className="flex items-end">
-                <Button
-                  variant="outline"
-                  onClick={() => handleTest(selectedProvider)}
-                  disabled={testing[selectedProvider.id] ?? false}
-                  aria-label={`Test ${selectedProvider.display_name} connection`}
-                >
-                  {testing[selectedProvider.id] ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : null}
-                  {testing[selectedProvider.id] ? 'Testing...' : 'Test'}
-                </Button>
-              </div>
-            </div>
 
-            {selectedProvider.base_url_config_key && (
-              <div className="space-y-2">
-                <Label htmlFor={`provider-base-url-${selectedProvider.id}`}>Base URL</Label>
-                <Input
-                  id={`provider-base-url-${selectedProvider.id}`}
-                  type="url"
-                  placeholder="https://example.com/v1"
-                  value={
-                    drafts[selectedProvider.id]?.baseUrl ??
-                    getMaskedConfig(configs, selectedProvider.base_url_config_key)
-                  }
-                  onChange={(e) => handleDraft(selectedProvider.id, 'baseUrl', e.target.value)}
-                  onBlur={() => saveIfChanged(selectedProvider, 'baseUrl')}
-                  autoComplete="off"
-                />
-              </div>
-            )}
+              {selected.base_url_config_key && (
+                <div className="space-y-2">
+                  <Label htmlFor={`provider-base-url-${selected.id}`}>Base URL</Label>
+                  {editing[selected.id]?.baseUrl ? (
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input id={`provider-base-url-${selected.id}`} type="url" placeholder="https://example.com/v1" value={drafts[selected.id]?.baseUrl ?? ''} onChange={(event) => setDrafts((previous) => ({ ...previous, [selected.id]: { ...previous[selected.id], baseUrl: event.target.value } }))} />
+                      <Button onClick={() => saveField(selected, 'baseUrl')} disabled={!drafts[selected.id]?.baseUrl?.trim() || saveMutation.isPending}>Save endpoint</Button>
+                      <Button variant="outline" onClick={() => cancelEdit(selected, 'baseUrl')}>Cancel</Button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input id={`provider-base-url-${selected.id}`} readOnly value={getMaskedConfig(configs, selected.base_url_config_key) || (selected.base_url_configured ? 'Configured' : 'Not configured')} />
+                      <Button variant="outline" onClick={() => beginEdit(selected, 'baseUrl')}>{selected.base_url_configured ? 'Replace endpoint' : 'Add endpoint'}</Button>
+                    </div>
+                  )}
+                </div>
+              )}
 
-            <p className="text-xs text-muted-foreground">
-              Admin-wide setting. {selectedProvider.data_note} Leave all provider keys blank to keep this
-              deployment local-only; local Ollama/vLLM routes remain available.
-            </p>
+              <div className="rounded-md border border-primary/25 bg-primary/5 p-3 text-xs text-muted-foreground">
+                {selected.data_note} Leave every provider key blank to keep this deployment local-only.
+              </div>
+              {testResults[selected.id]?.ok === false && <p role="alert" className="text-xs text-destructive">Connection test failed: {testResults[selected.id]?.error ?? 'Unknown provider error'}</p>}
+              {selected.supports_assignment && (
+                <div className="flex flex-wrap gap-3 text-sm">
+                  <Link className="text-primary underline-offset-4 hover:underline" to={`/settings?section=models&item=llm&role=fast&provider=${encodeURIComponent(selected.id)}`}>
+                    Use for Quick
+                  </Link>
+                  <Link className="text-primary underline-offset-4 hover:underline" to={`/settings?section=models&item=llm&role=smart&provider=${encodeURIComponent(selected.id)}`}>
+                    Use for Main
+                  </Link>
+                </div>
+              )}
+            </section>
+            <AccountSnapshot
+              provider={selected}
+              connection={providerStatus(
+                selected,
+                providerLists[selected.id],
+                testResults[selected.id] ?? null,
+              ).label}
+              models={
+                providerLists[selected.id]?.error
+                  ? 'Catalog unavailable'
+                  : providerLists[selected.id]
+                    ? `${catalog.filter((entry) => entry.provider === selected.id).length} available`
+                    : 'Not checked'
+              }
+            />
           </div>
         )}
       </CardContent>

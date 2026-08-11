@@ -16,6 +16,8 @@ const PROVIDERS = [
     configured: false,
     base_url_configured: false,
     supports_assignment: true,
+    dashboard_url: 'https://console.anthropic.com/',
+    account_capability: 'unavailable',
   },
   {
     id: 'openai',
@@ -31,6 +33,8 @@ const PROVIDERS = [
     configured: true,
     base_url_configured: false,
     supports_assignment: true,
+    dashboard_url: 'https://platform.openai.com/api-keys',
+    account_capability: 'unavailable',
   },
   {
     id: 'openrouter',
@@ -46,6 +50,8 @@ const PROVIDERS = [
     configured: false,
     base_url_configured: false,
     supports_assignment: true,
+    dashboard_url: 'https://openrouter.ai/dashboard/api-keys',
+    account_capability: 'current_key',
   },
   {
     id: 'custom_openai_compatible',
@@ -61,11 +67,13 @@ const PROVIDERS = [
     configured: false,
     base_url_configured: false,
     supports_assignment: true,
+    dashboard_url: null,
+    account_capability: 'unavailable',
   },
 ];
 
 const CONFIG = [
-  { key: 'llm.openai.api_key', value: 'sk-****' },
+  { key: 'llm.openai.api_key', value: 'masked-key' },
   { key: 'llm.smart_model', value: 'qwen3:14b' },
   { key: 'llm.fast_model', value: 'qwen3:4b' },
 ];
@@ -118,6 +126,7 @@ const SYSTEM_MODELS = {
       default_num_ctx: null, max_num_ctx: null, supports_thinking: false,
       active: false, pulled: false, provider_key_present: true, fit: 'available', can_assign: true, assign_blocker: null,
       fit_detail: CLOUD_FIT_DETAIL,
+      input_price_per_million: '2.5', output_price_per_million: '10', price_source: 'openrouter',
     },
     {
       id: 'openrouter/meta-llama/llama-3.1-70b-instruct', name: 'OpenRouter Llama 70B', provider: 'openrouter', ollama_tag: null, roles: ['smart'],
@@ -129,6 +138,7 @@ const SYSTEM_MODELS = {
       active: false, pulled: false, provider_key_present: false, fit: 'key_required', can_assign: false,
       assign_blocker: 'Add an OpenRouter API key before assigning this model.',
       fit_detail: CLOUD_FIT_DETAIL,
+      input_price_per_million: null, output_price_per_million: null, price_source: null,
     },
   ],
   recommendations: {},
@@ -141,7 +151,14 @@ const SYSTEM_MODELS = {
   delivery: { smart: 'applied', fast: 'applied' },
   routing: { smart: 'qwen3:14b', fast: 'qwen3:4b' },
   consistent: true,
-  provider_lists: {},
+  provider_lists: {
+    openai: { model_count: 1, fetched_at: '2026-08-11T08:00:00Z', error: null, truncated: false, excluded: {} },
+  },
+  embedding_contract: {
+    model: 'qwen3-embedding:4b',
+    dimension: 2560,
+    change_requires_reindex: true,
+  },
 };
 
 async function seedAdminSession(page: Page) {
@@ -193,8 +210,7 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
 
     await expect(page.getByRole('heading', { name: 'Providers & Routing', level: 2 })).toBeVisible({ timeout: 8000 });
     await expect(page.getByRole('heading', { name: 'Providers & Routing', level: 3 })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'OpenAI Configured, not tested' })).toBeVisible();
-    await expect(page.getByText('Configured, not tested')).toBeVisible();
+    await expect(page.getByRole('button', { name: /OpenAI Connected .*1 model available/ })).toBeVisible();
 
     await page.getByRole('button', { name: 'Add cloud provider' }).click();
     await expect(page.getByText('Recommended routers')).toBeVisible();
@@ -203,23 +219,45 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
 
     await page.getByRole('button', { name: /Custom OpenAI-compatible endpoint/ }).click();
     await expect(page.getByText('Trusted self-hosted or institutional gateways.')).toBeVisible();
-    await expect(page.getByLabel('API key')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Custom OpenAI-compatible endpoint stored key status' })).toBeVisible();
     await expect(page.getByLabel('Base URL')).toBeVisible();
-    await expect(page.getByText(/Admin-wide setting/)).toBeVisible();
+    await expect(page.getByText(/Provider keys are deployment-wide and encrypted at rest/)).toBeVisible();
   });
 
-  test('model selector keeps local first and shows missing-key cloud routes disabled', async ({ page }) => {
+  test('model picker separates provider catalogs and keeps blocked routes explicit', async ({ page }) => {
     await setupProviderMocks(page);
     await page.goto('/settings?section=models&item=llm');
 
     await expect(page.getByRole('heading', { name: 'AI models', level: 2 })).toBeVisible({ timeout: 8000 });
-    await page.getByRole('combobox').first().click();
-    await expect(page.getByText('Ollama (default)').first()).toBeVisible();
-    await expect(page.getByText('OpenAI').first()).toBeVisible();
+    await page.getByTestId('change-model-smart').click();
+    await expect(page.getByRole('heading', { name: 'Choose a Main model' })).toBeVisible();
+    await page.getByRole('button', { name: /OpenAI 1/ }).click();
     await expect(page.getByText('GPT-4o', { exact: true })).toBeVisible();
-    await expect(page.getByText('OpenRouter').first()).toBeVisible();
+    await expect(page.getByText('$2.5 input / $10 output per 1M tokens')).toBeVisible();
+    await page.getByRole('button', { name: /OpenRouter 1/ }).click();
     await expect(page.getByText('OpenRouter Llama 70B')).toBeVisible();
     await expect(page.getByText('Add an OpenRouter API key before assigning this model.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use OpenRouter Llama 70B' })).toBeDisabled();
+  });
+
+  test('provider assignment links open the matching role and provider catalog', async ({ page }) => {
+    await setupProviderMocks(page);
+    await page.goto('/settings?section=models&item=providers');
+
+    await page.getByRole('link', { name: 'Use for Main' }).click();
+    await expect(page.getByRole('heading', { name: 'Choose a Main model' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /OpenAI 1/ })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByText('GPT-4o', { exact: true })).toBeVisible();
+  });
+
+  test('embedding route stays visible without a stored embedding override', async ({ page }) => {
+    await setupProviderMocks(page);
+    await page.goto('/settings?section=models&item=llm');
+
+    await expect(page.getByRole('heading', { name: 'Embedding model' })).toBeVisible();
+    await expect(page.getByText('qwen3-embedding:4b')).toBeVisible();
+    await expect(page.getByText(/2,560 values per vector/)).toBeVisible();
+    await expect(page.getByRole('link', { name: /embedding model migration guide/i })).toBeVisible();
   });
 
   test('provider setup remains usable on a narrow viewport', async ({ page }) => {

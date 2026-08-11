@@ -173,8 +173,17 @@ export const providerMetadataSchema = z.looseObject({
   configured: z.boolean(),
   base_url_configured: z.boolean(),
   supports_assignment: z.boolean(),
+  dashboard_url: z.string().url().nullable(),
+  account_capability: z.enum(['current_key', 'unavailable']),
 });
 export const providerMetadataListSchema = z.array(providerMetadataSchema);
+
+export const providerAccountResponseSchema = z.looseObject({
+  provider: z.string(),
+  capability: z.enum(['current_key', 'unavailable']),
+  data: z.record(z.string(), z.union([z.boolean(), z.number(), z.string(), z.null()])),
+  error_code: z.string().nullable(),
+});
 
 export const providerTestResponseSchema = z.looseObject({
   ok: z.boolean(),
@@ -202,3 +211,4 @@ export type FirstRunCloudKeysResponse = z.infer<typeof firstRunCloudKeysResponse
 export type TelegramPairTokenResponse = z.infer<typeof telegramPairTokenResponseSchema>;
 export type UserTelegramPairingStatus = z.infer<typeof userTelegramPairingStatusSchema>;
 export type ProviderMetadata = z.infer<typeof providerMetadataSchema>;
+export type ProviderAccountResponse = z.infer<typeof providerAccountResponseSchema>;

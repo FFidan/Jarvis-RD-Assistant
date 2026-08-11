@@ -82,6 +82,9 @@ export const modelCatalogEntrySchema = z.looseObject({
   quantization: z.string().optional(),
   source: z.enum(['catalog', 'provider']).optional(),
   fetched_at: z.string().nullable().optional(),
+  input_price_per_million: z.string().nullable().optional(),
+  output_price_per_million: z.string().nullable().optional(),
+  price_source: z.string().nullable().optional(),
 });
 
 const hardwareRecommendationSchema = z.looseObject({
@@ -132,6 +135,11 @@ export const systemModelsResponseSchema = z.looseObject({
   routing: z.record(z.string(), z.string()),
   consistent: z.boolean(),
   provider_lists: z.record(z.string(), providerModelListStatusSchema),
+  embedding_contract: z.looseObject({
+    model: z.string(),
+    dimension: z.number(),
+    change_requires_reindex: z.boolean(),
+  }).optional(),
 });
 
 export const dashboardMetricsSchema: z.ZodType<DashboardMetrics> = z.looseObject({

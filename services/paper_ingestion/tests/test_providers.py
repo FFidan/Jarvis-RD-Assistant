@@ -440,6 +440,31 @@ async def test_openrouter_account_uses_public_pinned_transport_and_discards_iden
 
 
 @pytest.mark.asyncio
+async def test_openrouter_account_omits_supported_fields_absent_from_provider_response(monkeypatch):
+    """Missing fields stay missing so the UI cannot claim account data is available."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+        payload = {"data": {"label": "discarded"}}
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code is None
+
+
+@pytest.mark.asyncio
 async def test_openrouter_account_failure_codes_are_sanitized(monkeypatch):
     """Provider response details never become account endpoint output."""
     from paper_ingestion.services import provider_account

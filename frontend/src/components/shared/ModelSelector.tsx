@@ -1,132 +1,36 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { formatDistanceToNow } from 'date-fns';
-import { QUERY_KEYS } from '@/lib/query-keys';
-import { ChevronDown, ChevronRight, Cpu, Download, Trash2 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, Download, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { ModelPickerDialog } from '@/components/shared/model-picker/ModelPickerDialog';
+import {
+  isLocalModel,
+  matchesModelId,
+  type GenerativeModelRole,
+} from '@/components/shared/model-picker/model-options';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useConfirm } from '@/hooks/use-confirm';
-import { apiFetchVoid, cloudProviderLabel, compareCloudProviders, fetchSystemModels } from '@/lib/api';
-import type { ModelCatalogEntry, SystemModelsResponse } from '@/lib/api';
-import type { ModelFitDetail } from '@/types';
+import { apiFetchVoid, cloudProviderLabel, fetchSystemModels } from '@/lib/api';
+import type { ModelCatalogEntry } from '@/lib/api';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
   configKey?: string;
+  initialSource?: string;
+  defaultOpen?: boolean;
 }
 
-type ModelRole = 'smart' | 'fast' | 'embed';
-type HardwareInfo = SystemModelsResponse['hardware'];
-
-// ---------------------------------------------------------------------------
-// Fit-detail helpers (mirrored from IngestionSection)
-// ---------------------------------------------------------------------------
-
-/** Find the largest snap-step (power of 2) that stays within 85% VRAM threshold. */
-function largestFittingCtxForEntry(fitDetail: ModelFitDetail, vramGb: number): number {
-  const STOPS = [2048, 4096, 8192, 16384, 32768, 65536];
-  let best: number = STOPS[0] ?? 2048;
-  for (const stop of STOPS) {
-    if (stop > fitDetail.max_num_ctx) break;
-    const kvBytes = fitDetail.kv_cache_bytes_per_token ?? 1024;
-    const required = (fitDetail.required_vram_gb ?? 0) + (Math.max(0, stop - fitDetail.default_num_ctx) * kvBytes) / 1e9;
-    if (required <= vramGb * 0.85) best = stop;
-  }
-  return best;
-}
-
-/**
- * Effective fit string for a catalog entry: prefer fit_detail.default (populated by
- * T3-B backend) so the pull-CTA predicate uses the same VRAM-aware value as the
- * row-disable logic. Falls back to entry.fit for older backends that omit fit_detail.
- */
-const effectiveFit = (e: ModelCatalogEntry): string => e.fit_detail?.default ?? e.fit;
-
-// ---------------------------------------------------------------------------
-
-function modelProviderLabel(provider: string): string {
-  return provider === 'local' ? 'Ollama (default)' : cloudProviderLabel(provider);
-}
-
-function compareModelProviders(a: string, b: string): number {
-  if (a === 'local') return b === 'local' ? 0 : -1;
-  if (b === 'local') return 1;
-  return compareCloudProviders(a, b);
-}
+type ModelRole = GenerativeModelRole | 'embed';
 
 function roleFromConfigKey(configKey?: string): ModelRole | undefined {
   const role = configKey?.replace(/^llm\./, '').replace(/_model$/, '');
   return role === 'smart' || role === 'fast' || role === 'embed' ? role : undefined;
 }
 
-function providerGroup(entry: ModelCatalogEntry): string {
-  return entry.provider === 'ollama' ? 'local' : entry.provider;
-}
-
-/**
- * Muted caption shown under a cloud provider group's label, sourced from the
- * provider's `provider_lists` fetch status rather than any per-entry field —
- * catalog entries carry no `source`, and a provider present only in
- * `provider_lists` (fetch failed, no bundled fallback) has no entries at all.
- */
-function providerGroupCaption(
-  status: { fetched_at: string | null; error: string | null; truncated?: boolean } | undefined,
-  groupModelCount: number,
-): string | null {
-  if (!status) return null;
-  // Whether the fetch failed decides the wording, not how many models survived
-  // it: a successful list whose models were all excluded or already bundled is
-  // empty for reasons that adding a key or fixing the network cannot change.
-  if (status.error) {
-    return groupModelCount === 0
-      ? 'Model list unavailable — add a working key or restore connectivity'
-      : 'Model list unavailable — showing built-in entries only';
-  }
-  if (groupModelCount === 0) {
-    return 'This provider offered no models JARVIS can use for this role';
-  }
-  if (status.truncated) {
-    return `Showing the first ${groupModelCount} — this provider has more`;
-  }
-  if (status.fetched_at) {
-    return `Fetched ${formatDistanceToNow(new Date(status.fetched_at), { addSuffix: true })}`;
-  }
-  return null;
-}
-
-function isLocalModel(entry: ModelCatalogEntry): boolean {
-  return entry.provider === 'ollama' || Boolean(entry.ollama_tag);
-}
-
-
 function isOllamaManaged(entry: ModelCatalogEntry): boolean {
   return entry.provider === 'ollama';
-}
-
-function isEntrySelectableForRole(entry: ModelCatalogEntry, role?: ModelRole): boolean {
-  if (role && !entry.roles.includes(role)) return false;
-  if (typeof entry.can_assign === 'boolean') return entry.can_assign;
-  if (isLocalModel(entry)) {
-    return entry.status !== 'unfit' && (entry.active || entry.pulled || entry.status === 'active');
-  }
-  return entry.provider_key_present || entry.active || entry.status === 'cloud_active';
 }
 
 function isEntryVisibleForRole(entry: ModelCatalogEntry, role?: ModelRole): boolean {
@@ -139,7 +43,7 @@ function assignmentBlocker(entry: ModelCatalogEntry, role?: ModelRole): string |
   if (entry.assign_blocker) return entry.assign_blocker;
   if (typeof entry.can_assign === 'boolean') return entry.can_assign ? null : 'Not assignable.';
   if (isLocalModel(entry)) {
-    if (entry.status === 'unfit') return 'Requires more VRAM.';
+    if (entry.status === 'unfit' || entry.fit_detail?.default === 'unfit') return 'Requires more VRAM.';
     if (!entry.active && !entry.pulled) return 'Pull this model before assigning it.';
   }
   if (!entry.provider_key_present && !entry.active && entry.status !== 'cloud_active') {
@@ -153,105 +57,74 @@ function currentModelForRole(current: Record<string, string> | undefined, role?:
   return current[`${role}_model`] ?? current[role] ?? '';
 }
 
-function normalizeLocalTag(value: string): string {
-  return value.replace(/:latest$/, '');
-}
-
-function matchesConfiguredValue(entry: ModelCatalogEntry, value: string): boolean {
-  if (!value) return false;
-  const candidates = [entry.id, entry.ollama_tag].filter(
-    (candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0,
-  );
-  return candidates.some(
-    (candidate) => candidate === value || normalizeLocalTag(candidate) === normalizeLocalTag(value),
-  );
-}
-
-function localModelTag(entry: ModelCatalogEntry): string {
-  return entry.ollama_tag ?? entry.id;
-}
-
 function localModelPath(entry: ModelCatalogEntry): string {
-  return encodeURIComponent(localModelTag(entry));
+  return encodeURIComponent(entry.ollama_tag ?? entry.id);
 }
 
-export function ModelSelector({ value, onChange, configKey: role }: ModelSelectorProps) {
+export function ModelSelector({
+  value,
+  onChange,
+  configKey,
+  initialSource,
+  defaultOpen = false,
+}: ModelSelectorProps) {
   const queryClient = useQueryClient();
-  const { isOpen: deleteIsOpen, confirm: confirmDelete, handleConfirm: handleDeleteConfirm, handleCancel: handleDeleteCancel } = useConfirm();
-  const { isOpen: pullIsOpen, confirm: confirmPull, handleConfirm: handlePullConfirm, handleCancel: handlePullCancel } = useConfirm();
+  const currentRole = roleFromConfigKey(configKey);
+  const [manageOpen, setManageOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ModelCatalogEntry | null>(null);
   const [pullTarget, setPullTarget] = useState<ModelCatalogEntry | null>(null);
+  const [pullingIds, setPullingIds] = useState<Set<string>>(new Set());
+  const deleteConfirm = useConfirm();
+  const pullConfirm = useConfirm();
   const { data, error } = useQuery({
     queryKey: QUERY_KEYS.config.systemModels(),
     queryFn: ({ signal }) => fetchSystemModels(signal),
     staleTime: 60_000,
   });
 
-  const catalog = data?.catalog ?? [];
-  const currentRole = roleFromConfigKey(role);
-  const systemDefault = currentModelForRole(data?.current, currentRole);
-  const allModels = catalog.filter((entry) => isEntryVisibleForRole(entry, currentRole));
-  const selectedEntry =
-    allModels.find((entry) => matchesConfiguredValue(entry, value)) ??
-    allModels.find((entry) => matchesConfiguredValue(entry, systemDefault));
-  const effectiveValue = selectedEntry?.id ?? '';
-  const issues = Object.values(data?.issues ?? {}).filter(Boolean);
-  const emptyStateMessage = error
-    ? 'Could not load models. Check the API and Ollama status.'
-    : issues[0] ?? 'No models found. Is Ollama running?';
-  const emptyStateContent =
-    catalog.length > 0
-      ? 'No compatible models available for this role'
-      : issues.length > 0
-        ? 'No models available.'
-        : emptyStateMessage;
-
-  const formatSize = (bytes: number) => {
-    if (bytes > 1e9) return `${(bytes / 1e9).toFixed(1)}GB`;
-    if (bytes > 1e6) return `${(bytes / 1e6).toFixed(0)}MB`;
-    return `${bytes}B`;
-  };
-
-  const formatGb = (value: number) => {
-    if (value <= 0) return '';
-    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}GB`;
-  };
-
-  const hardwareSummary = (hardware: HardwareInfo | undefined) => {
-    if (!hardware) return null;
-    const parts: ReactNode[] = [];
-    if (typeof hardware.vram_gb === 'number') parts.push(`${formatGb(hardware.vram_gb)} VRAM`);
-    if (typeof hardware.tier === 'number') parts.push(`Tier ${hardware.tier}`);
-    if (hardware.vram_source === 'macos-approx') parts.push('approximate');
-    return parts.length > 0 ? parts : null;
-  };
-
-  const statusLabel = (entry: ModelCatalogEntry, isCurrent: boolean) => {
-    if (isCurrent) return 'current';
-    if (entry.status === 'pulled') return 'pulled';
-    if (entry.status === 'downloadable') return 'downloadable';
-    return '';
-  };
-
-  const providerLists = data?.provider_lists ?? {};
-  // Union with provider_lists keys: a configured cloud provider whose live fetch
-  // failed and which has no bundled catalog entries would otherwise have no
-  // group at all to hang its unavailable caption on.
-  const groups = Array.from(
-    new Set([...allModels.map(providerGroup), ...Object.keys(providerLists)]),
-  ).sort(compareModelProviders);
-
-  const groupedModels = groups.map((group) => ({
-    group,
-    models: allModels.filter((model) => providerGroup(model) === group),
-  }));
-  const detectedHardware = hardwareSummary(data?.hardware);
-  const pullableModels = allModels.filter(
-    (entry) =>
-      isOllamaManaged(entry) &&
-      entry.status === 'downloadable' &&
-      effectiveFit(entry) !== 'unfit',
+  const allModels = (data?.catalog ?? []).filter((entry) =>
+    isEntryVisibleForRole(entry, currentRole),
   );
+  const systemDefault = currentModelForRole(data?.current, currentRole);
+  const selectedEntry =
+    allModels.find((entry) => matchesModelId(entry, value)) ??
+    allModels.find((entry) => matchesModelId(entry, systemDefault));
+  const selectedId = selectedEntry?.id ?? (value || systemDefault);
+  const recommendedIds = new Set(
+    currentRole ? (data?.recommendations?.[currentRole] ?? []).map((entry) => entry.id) : [],
+  );
+  const localRoute = selectedEntry != null && isLocalModel(selectedEntry);
+  const pullableModels = localRoute
+    ? allModels.filter(
+        (entry) =>
+          isOllamaManaged(entry) &&
+          entry.status === 'downloadable' &&
+          entry.fit_detail?.default !== 'unfit',
+      )
+    : [];
+  const deletableModels = localRoute
+    ? allModels.filter(
+        (entry) =>
+          isOllamaManaged(entry) &&
+          entry.pulled &&
+          !entry.active &&
+          entry.status !== 'active' &&
+          entry.id !== selectedEntry?.id,
+      )
+    : [];
+  const canDeleteSelected = Boolean(
+    localRoute &&
+      selectedEntry?.pulled &&
+      !selectedEntry.active &&
+      selectedEntry.status !== 'active',
+  );
+  const setupNeeded = Boolean(
+    localRoute &&
+      selectedEntry &&
+      (selectedEntry.status === 'downloadable' || selectedEntry.status === 'unfit'),
+  );
+  const recommendedEntry = setupNeeded ? (pullableModels[0] ?? null) : null;
+
   const pullMutation = useMutation({
     mutationFn: (entry: ModelCatalogEntry) =>
       apiFetchVoid(`/api/system/models/${localModelPath(entry)}/pull`, { method: 'POST' }),
@@ -262,309 +135,140 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
       apiFetchVoid(`/api/system/models/${localModelPath(entry)}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() }),
   });
-  const [pullingIds, setPullingIds] = useState<Set<string>>(new Set());
-  const [manageOpen, setManageOpen] = useState(false);
-  const canDeleteSelected =
-    selectedEntry !== undefined &&
-    isOllamaManaged(selectedEntry) &&
-    selectedEntry.pulled &&
-    !selectedEntry.active &&
-    selectedEntry.status !== 'active';
-  const deletableModels = (catalog ?? []).filter(
-    (e) =>
-      isOllamaManaged(e) &&
-      e.pulled &&
-      !e.active &&
-      e.status !== 'active' &&
-      e.id !== selectedEntry?.id,
-  );
+
   const handlePull = async (entry: ModelCatalogEntry) => {
     setPullTarget(entry);
-    const confirmed = await confirmPull();
+    const confirmed = await pullConfirm.confirm();
     setPullTarget(null);
     if (!confirmed) return;
-    setPullingIds((prev) => new Set(prev).add(entry.id));
+    setPullingIds((previous) => new Set(previous).add(entry.id));
     try {
       await pullMutation.mutateAsync(entry);
     } finally {
-      setPullingIds((prev) => {
-        const next = new Set(prev);
+      setPullingIds((previous) => {
+        const next = new Set(previous);
         next.delete(entry.id);
         return next;
       });
     }
   };
+
   const handleDelete = async (entry: ModelCatalogEntry) => {
     setDeleteTarget(entry);
-    const confirmed = await confirmDelete();
-    if (confirmed) {
-      deleteMutation.mutate(entry);
-    }
+    const confirmed = await deleteConfirm.confirm();
+    if (confirmed) deleteMutation.mutate(entry);
     setDeleteTarget(null);
   };
 
-  const setupNeeded =
-    selectedEntry !== undefined &&
-    isOllamaManaged(selectedEntry) &&
-    (selectedEntry.status === 'downloadable' || selectedEntry.status === 'unfit');
-  const recommendedEntry = setupNeeded ? (pullableModels[0] ?? null) : null;
-  const hardwareLabel = detectedHardware ? detectedHardware.join(' · ') : null;
-
-  // Routing divergence: what LiteLLM actually serves vs what is saved.
-  const routingMap = data?.routing;
   const savedModel = currentRole ? systemDefault : undefined;
-  const routedModel = currentRole ? routingMap?.[currentRole] : undefined;
-  const isDiverged =
-    savedModel != null &&
-    savedModel !== '' &&
-    routedModel != null &&
-    routedModel !== savedModel;
+  const routedModel = currentRole ? data?.routing?.[currentRole] : undefined;
+  const isDiverged = Boolean(savedModel && routedModel && routedModel !== savedModel);
+  const issues = Object.values(data?.issues ?? {}).filter(Boolean);
 
   return (
     <div className="space-y-2">
       {setupNeeded && recommendedEntry && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950">
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
           <p className="font-semibold text-amber-900 dark:text-amber-100">Setup needed</p>
-          <p className="text-sm text-amber-800 dark:text-amber-200">
-            <strong>{selectedEntry?.id}</strong> is not pulled yet.
-            {hardwareLabel && ` Recommended for your hardware (${hardwareLabel}):`}{' '}
-            <strong>{recommendedEntry.name}</strong>
+          <p className="text-amber-800 dark:text-amber-200">
+            {selectedEntry?.name} is not installed. Recommended available model:{' '}
+            <strong>{recommendedEntry.name}</strong>.
           </p>
-          <Button
-            type="button"
-            size="sm"
-            className="mt-2"
-            onClick={() => handlePull(recommendedEntry)}
-            disabled={pullingIds.has(recommendedEntry.id)}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Pull {recommendedEntry.name} to get started
-          </Button>
         </div>
       )}
-      <Select value={effectiveValue} onValueChange={onChange}>
-        <SelectTrigger>
-          <SelectValue placeholder="Select a model" />
-        </SelectTrigger>
-        <SelectContent>
-          {detectedHardware && (
-            <div className="px-2 pb-2 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">Detected hardware</span>
-              <span className="ml-2 inline-flex flex-wrap gap-x-1">
-                {detectedHardware.map((part, index) => (
-                  <span key={String(part)}>
-                    {index > 0 && <span aria-hidden="true">· </span>}
-                    {part}
-                  </span>
-                ))}
-              </span>
-            </div>
-          )}
-          {issues.map((issue) => (
-            <div key={issue} className="px-2 pb-2 text-xs text-amber-700">
-              {issue}
-            </div>
-          ))}
-          {groupedModels.length === 0 ? (
-            <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-              <Cpu className="mx-auto mb-2 h-5 w-5" />
-              {emptyStateContent}
-            </div>
-          ) : (
-            groupedModels.map(({ group, models: groupModels }, index) => {
-              const groupCaption = providerGroupCaption(providerLists[group], groupModels.length);
-              return (
-              <SelectGroup key={group}>
-                {index > 0 && <SelectSeparator />}
-                <SelectLabel>{modelProviderLabel(group)}</SelectLabel>
-                {groupCaption && (
-                  <div className="px-2 pb-1 text-xs text-muted-foreground">{groupCaption}</div>
-                )}
-                {groupModels.map((m) => {
-                  const blocker = assignmentBlocker(m, currentRole);
-                  const canAssign = blocker === null && isEntrySelectableForRole(m, currentRole);
-                  const isCurrent =
-                    m.active ||
-                    m.status === 'active' ||
-                    m.status === 'cloud_active' ||
-                    matchesConfiguredValue(m, systemDefault) ||
-                    matchesConfiguredValue(m, value);
-                  const badge = statusLabel(m, isCurrent);
 
-                  // fit_detail-based disabling
-                  const fitDefault = m.fit_detail?.default;
-                  const isUnfitByDetail = fitDefault === 'unfit';
-                  const isCloud = fitDefault === 'cloud' || m.provider !== 'ollama';
-                  // A model is disabled if canAssign=false OR fit_detail says unfit
-                  const isDisabled = !canAssign || isUnfitByDetail;
+      {(currentRole === 'fast' || currentRole === 'smart') && allModels.length > 0 ? (
+        <ModelPickerDialog
+          role={currentRole}
+          models={allModels}
+          selectedId={selectedId}
+          recommendedIds={recommendedIds}
+          providerLists={data?.provider_lists ?? {}}
+          blockerFor={(entry) => assignmentBlocker(entry, currentRole)}
+          onSelect={onChange}
+          initialSource={initialSource}
+          defaultOpen={defaultOpen}
+        />
+      ) : null}
 
-                  // Tooltip for unfit via fit_detail
-                  const vramGb = data?.hardware?.vram_gb ?? 0;
-                  const unfitTooltip = isUnfitByDetail && m.fit_detail && vramGb > 0
-                    ? `Won't fit in GPU memory at the current context length — try ${largestFittingCtxForEntry(m.fit_detail, vramGb).toLocaleString()} tokens instead`
-                    : undefined;
-
-                  const itemContent = (
-                    <SelectItem key={m.id} value={m.id} disabled={isDisabled}>
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span>{m.name}</span>
-                          {m.id !== m.name && (
-                            <span className="text-xs text-muted-foreground">
-                              {m.id}
-                            </span>
-                          )}
-                          {m.quantization && (
-                            <span className="text-xs text-muted-foreground">
-                              {m.quantization}
-                            </span>
-                          )}
-                          {m.size !== undefined && m.size > 0 && (
-                            <span className="text-xs text-muted-foreground">
-                              ({formatSize(m.size)})
-                            </span>
-                          )}
-                          {m.size === undefined && m.disk_gb > 0 && (
-                            <span className="text-xs text-muted-foreground">
-                              ({formatGb(m.disk_gb)} disk)
-                            </span>
-                          )}
-                          {m.vram_gb > 0 && (
-                            <span className="text-xs text-muted-foreground">
-                              {formatGb(m.vram_gb)} VRAM
-                            </span>
-                          )}
-                          {badge && (
-                            <span className="text-xs font-medium text-green-600">
-                              {badge}
-                            </span>
-                          )}
-                          {/* fit_detail badges */}
-                          {isCloud && fitDefault === 'cloud' && (
-                            <span className="text-xs rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
-                              Cloud
-                            </span>
-                          )}
-                          {fitDefault === 'unknown' && (
-                            <span className="text-xs text-muted-foreground">?</span>
-                          )}
-                        </div>
-                        {blocker && !unfitTooltip && (
-                          <div className="text-xs text-amber-700">
-                            {blocker}
-                          </div>
-                        )}
-                        {unfitTooltip && (
-                          <div className="text-xs text-red-600">
-                            {unfitTooltip}
-                          </div>
-                        )}
-                      </div>
-                    </SelectItem>
-                  );
-
-                  // Wrap in Tooltip when there's an unfit message
-                  if (unfitTooltip) {
-                    return (
-                      <TooltipProvider key={m.id}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>{itemContent}</TooltipTrigger>
-                          <TooltipContent>{unfitTooltip}</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    );
-                  }
-                  return itemContent;
-                })}
-              </SelectGroup>
-              );
-            })
-          )}
-        </SelectContent>
-      </Select>
-      {isDiverged && (
-        <p
-          className="text-xs text-amber-700 dark:text-amber-400"
-          data-testid={`routing-diverged-${currentRole}`}
-        >
-          You selected &quot;{savedModel}&quot; but the system is currently using &quot;{routedModel}&quot;.
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          Could not load models. Check the API and model service status.
         </p>
       )}
-      {(pullableModels.length > 0 ||
-        (canDeleteSelected && selectedEntry) ||
-        deletableModels.length > 0) && (
+      {!error && allModels.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          {issues[0] ?? 'No compatible models are available for this role.'}
+        </p>
+      )}
+      {isDiverged && (
+        <p className="text-xs text-amber-700 dark:text-amber-400" data-testid={`routing-diverged-${currentRole}`}>
+          You selected &quot;{savedModel}&quot; but the model service is currently using &quot;{routedModel}&quot;.
+        </p>
+      )}
+
+      {localRoute && (pullableModels.length > 0 || canDeleteSelected || deletableModels.length > 0) && (
         <div className="border-t pt-2">
           <button
             type="button"
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setManageOpen((prev) => !prev)}
+            onClick={() => setManageOpen((previous) => !previous)}
             aria-expanded={manageOpen}
           >
-            {manageOpen ? (
-              <ChevronDown className="h-3 w-3" />
-            ) : (
-              <ChevronRight className="h-3 w-3" />
-            )}
-            Install &amp; manage models
+            {manageOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Install &amp; manage local models
           </button>
           {manageOpen && (
-            <div className="mt-2 space-y-3">
-              {pullableModels.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {pullableModels.map((entry) => (
-                    <Button
-                      key={`pull-${entry.id}`}
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handlePull(entry)}
-                      disabled={pullingIds.has(entry.id)}
-                      aria-label={`Pull model ${entry.name}`}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Pull {entry.name}
-                    </Button>
-                  ))}
-                </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {pullableModels.map((entry) => (
+                <Button
+                  key={`pull-${entry.id}`}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handlePull(entry)}
+                  disabled={pullingIds.has(entry.id)}
+                  aria-label={`Pull model ${entry.name}`}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Pull {entry.name}
+                </Button>
+              ))}
+              {canDeleteSelected && selectedEntry && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleDelete(selectedEntry)}
+                  disabled={deleteMutation.isPending || deleteTarget != null}
+                  aria-label={`Delete model ${selectedEntry.name}`}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete {selectedEntry.name}
+                </Button>
               )}
-              {((canDeleteSelected && selectedEntry) || deletableModels.length > 0) && (
-                <div className="flex flex-wrap gap-2">
-                  {canDeleteSelected && selectedEntry && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleDelete(selectedEntry)}
-                      disabled={deleteMutation.isPending || !!deleteTarget}
-                      aria-label={`Delete model ${selectedEntry.name}`}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete {selectedEntry.name}
-                    </Button>
-                  )}
-                  {deletableModels.map((entry) => (
-                    <Button
-                      key={`delete-${entry.id}`}
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleDelete(entry)}
-                      disabled={deleteMutation.isPending || !!deleteTarget}
-                      aria-label={`Delete model ${entry.name}`}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete {entry.name}
-                    </Button>
-                  ))}
-                </div>
-              )}
+              {deletableModels.map((entry) => (
+                <Button
+                  key={`delete-${entry.id}`}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleDelete(entry)}
+                  disabled={deleteMutation.isPending || deleteTarget != null}
+                  aria-label={`Delete model ${entry.name}`}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete {entry.name}
+                </Button>
+              ))}
             </div>
           )}
         </div>
       )}
+
       <ConfirmDialog
-        open={deleteIsOpen && deleteTarget !== null}
-        title="Delete Model"
+        open={deleteConfirm.isOpen && deleteTarget != null}
+        title="Delete model"
         description={
           deleteTarget
             ? `This removes ${deleteTarget.name} from Ollama${
@@ -575,34 +279,16 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
             : undefined
         }
         confirmLabel="Delete"
-        onConfirm={handleDeleteConfirm}
-        onCancel={handleDeleteCancel}
+        onConfirm={deleteConfirm.handleConfirm}
+        onCancel={deleteConfirm.handleCancel}
       />
       <ConfirmDialog
-        open={pullIsOpen && pullTarget !== null}
-        title="Pull Model"
-        description={
-          pullTarget
-            ? `Pull ${pullTarget.name}?${
-                [
-                  pullTarget.disk_gb > 0 ? `${pullTarget.disk_gb.toFixed(1)} GB disk` : '',
-                  pullTarget.vram_gb > 0 ? `${pullTarget.vram_gb.toFixed(1)} GB VRAM` : '',
-                ]
-                  .filter(Boolean)
-                  .join(', ')
-                  ? ` (requires ${[
-                      pullTarget.disk_gb > 0 ? `${pullTarget.disk_gb.toFixed(1)} GB disk` : '',
-                      pullTarget.vram_gb > 0 ? `${pullTarget.vram_gb.toFixed(1)} GB VRAM` : '',
-                    ]
-                      .filter(Boolean)
-                      .join(', ')})`
-                  : ''
-              }`
-            : undefined
-        }
+        open={pullConfirm.isOpen && pullTarget != null}
+        title="Pull model"
+        description={pullTarget ? `Pull ${pullTarget.name} to this machine?` : undefined}
         confirmLabel="Pull"
-        onConfirm={handlePullConfirm}
-        onCancel={handlePullCancel}
+        onConfirm={pullConfirm.handleConfirm}
+        onCancel={pullConfirm.handleCancel}
       />
     </div>
   );

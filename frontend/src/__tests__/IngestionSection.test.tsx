@@ -232,13 +232,13 @@ describe('IngestionSection — num_ctx slider', () => {
     ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
   });
 
-  it('renders a Configure toggle for each LLM role', async () => {
+  it('renders local controls for generative routes, but not the dimension-locked embedder', async () => {
     renderSection();
     await waitFor(() => {
       expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
       expect(screen.getByTestId('configure-toggle-fast')).toBeInTheDocument();
-      expect(screen.getByTestId('configure-toggle-embed')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('configure-toggle-embed')).not.toBeInTheDocument();
   });
 
   it('slider is not visible before Configure is opened', async () => {
@@ -1091,27 +1091,41 @@ describe('IngestionSection — researcher-language model labels', () => {
     await waitFor(() => {
       expect(screen.getByTestId('llm-models-description')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('llm-models-description').textContent).toMatch(/apply changes for you/i);
+    expect(screen.getByTestId('llm-models-description').textContent).toMatch(/applies your choices automatically/i);
   });
 
-  it('labels each role in plain language with the technical alias in parentheses', async () => {
+  it('labels each route in plain language without exposing internal aliases', async () => {
     renderSection();
     await waitFor(() => {
-      expect(screen.getByText('Main model (smart)')).toBeInTheDocument();
+      expect(screen.getByText('Main model')).toBeInTheDocument();
     });
-    expect(screen.getByText('Quick model (fast)')).toBeInTheDocument();
-    expect(screen.getByText('Embedding model (embed)')).toBeInTheDocument();
+    expect(screen.getByText('Quick model')).toBeInTheDocument();
+    expect(screen.getByText('Embedding model')).toBeInTheDocument();
   });
 
   it('describes what each model does and that choices apply automatically', async () => {
     renderSection();
     await waitFor(() => {
-      expect(screen.getByText(/Writes your summaries, cards, and Ask answers/i)).toBeInTheDocument();
+      expect(screen.getByText(/Writes summaries, cards, extraction, and Ask answers/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/Scores and triages incoming papers/i)).toBeInTheDocument();
-    expect(screen.getByText(/Powers search across your library/i)).toBeInTheDocument();
+    expect(screen.getByText(/Builds the searchable representation of every paper/i)).toBeInTheDocument();
     // Post-W1/2/3 truth: model choices apply automatically (not "pending restart").
     expect(screen.getAllByText(/applies automatically/i).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('resolves local route details when a stored model value includes the latest suffix', async () => {
+    const { fetchConfig } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue([
+      ...baseConfig.filter((entry) => entry.key !== 'llm.smart_model'),
+      { key: 'llm.smart_model', value: 'qwen3:14b:latest' },
+    ]);
+
+    renderSection();
+
+    const card = await screen.findByTestId('llm-route-card-smart');
+    expect(card).toHaveTextContent('Fits this machine');
+    expect(card).not.toHaveTextContent('Model details unavailable');
   });
 });
 

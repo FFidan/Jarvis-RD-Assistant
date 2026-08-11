@@ -23,7 +23,6 @@ import { Menu } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
 import { SettingsRail } from '@/components/settings/SettingsRail';
 import { SettingsDetailPane } from '@/components/settings/SettingsDetailPane';
-import { AboutSection } from '@/components/settings/AboutSection';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 
 // ---------------------------------------------------------------------------
@@ -54,6 +53,14 @@ export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedSection = searchParams.get('section');
   const requestedItem = searchParams.get('item');
+  const requestedRole = searchParams.get('role');
+  const requestedProvider = searchParams.get('provider');
+  const modelPickerRole =
+    requestedRole === 'fast' || requestedRole === 'smart' ? requestedRole : undefined;
+  const modelPickerRequest: { role: 'fast' | 'smart'; provider: string } | undefined =
+    requestedProvider && modelPickerRole
+      ? { role: modelPickerRole, provider: requestedProvider }
+      : undefined;
 
   // Resolve active section/item with RBAC redirect
   const { activeSection, activeItem } = (() => {
@@ -127,13 +134,14 @@ export function SettingsPage() {
         </div>
 
         {/* Right detail pane — full-width on mobile */}
-        <SettingsDetailPane section={activeSection} item={activeItem} />
+        <SettingsDetailPane
+          section={activeSection}
+          item={activeItem}
+          modelPickerRequest={modelPickerRequest}
+          providerId={requestedProvider ?? undefined}
+        />
       </div>
 
-      {/* App/server version footer — shown below every section, not part of the rail IA */}
-      <div className="px-6 py-4 shrink-0">
-        <AboutSection />
-      </div>
     </div>
   );
 }

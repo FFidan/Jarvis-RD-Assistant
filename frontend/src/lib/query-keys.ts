@@ -225,6 +225,8 @@ export const QUERY_KEYS = {
     all: () => ["config"] as const,
     systemModels: () => ["system-models"] as const,
     systemCapabilities: () => ["system-capabilities"] as const,
+    providers: () => ["settings", "providers"] as const,
+    providerAccount: (provider: string) => ["settings", "providers", provider, "account"] as const,
   },
 
   // ── Topics ────────────────────────────────────────────────────────────────

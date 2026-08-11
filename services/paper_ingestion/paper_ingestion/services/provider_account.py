@@ -76,7 +76,7 @@ def _allowlisted_openrouter_data(payload: Mapping[str, Any]) -> dict[str, _ACCOU
     return {
         name: value
         for name in _OPENROUTER_ACCOUNT_FIELDS
-        if _safe_account_value(value := payload.get(name))
+        if name in payload and _safe_account_value(value := payload[name])
     }
 
 

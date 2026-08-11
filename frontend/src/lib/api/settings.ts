@@ -17,6 +17,7 @@ import {
   nudgeListSchema,
   nudgeSchema,
   providerMetadataListSchema,
+  providerAccountResponseSchema,
   providerTestResponseSchema,
   setupModeResponseSchema,
   setupStatusSchema,
@@ -42,6 +43,7 @@ export type {
   FirstRunStatus,
   FirstRunSystemCheck,
   ProviderMetadata,
+  ProviderAccountResponse,
   TelegramPairTokenResponse,
   UserTelegramPairingStatus,
 } from './schemas/settings';
@@ -317,6 +319,11 @@ export async function testProvider(
   provider: CloudProvider,
 ) {
   return apiFetchJson(`/api/providers/${provider}/test`, providerTestResponseSchema, { method: 'POST' });
+}
+
+/** Return a sanitized, capability-gated account snapshot for one provider. */
+export async function fetchProviderAccount(provider: CloudProvider) {
+  return apiFetchJson(`/api/providers/${provider}/account`, providerAccountResponseSchema);
 }
 
 // --- Settings: Telegram bot token (UI-4) ---
