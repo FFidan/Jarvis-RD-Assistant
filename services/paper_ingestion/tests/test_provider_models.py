@@ -650,7 +650,7 @@ async def test_unknown_capability_is_display_only_with_a_truthful_blocker() -> N
     entry = listing.entries[0]
     assert entry.assignable is False
     assert entry.notes == (
-        "Capabilities were not reported, so JARVIS cannot safely assign this model to a role."
+        "This provider did not say what this model can do, so JARVIS will not offer it for a role."
     )
     assert listing.excluded["unknown"] == 1
 
@@ -790,7 +790,6 @@ def test_inferred_chat_assignment_is_not_mislabeled_as_api_reported_capability()
         "openai",
         "gpt-test",
         fetched_at=datetime(2026, 8, 11, tzinfo=UTC),
-        capability="chat",
     )
 
     assert entry.capabilities == ()

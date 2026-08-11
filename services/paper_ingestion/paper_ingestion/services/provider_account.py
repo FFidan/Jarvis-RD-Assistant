@@ -165,13 +165,54 @@ def _safe_account_value(value: object) -> bool:
     )
 
 
+async def _provider_api_key(provider_id: str, db_pool: Any) -> str | None:
+    """Resolve a provider key without exposing secret-storage failures."""
+    try:
+        return await get_provider_api_key(provider_id, db_pool)
+    except Exception:  # noqa: BLE001 - secret resolution must not become an API detail
+        return None
+
+
+async def _fetch_account_payload(
+    *, request_url: str, api_key: str
+) -> tuple[Mapping[str, Any] | None, str | None]:
+    """Fetch one account payload and reduce transport failures to stable codes."""
+    try:
+        ensure_outbound_egress_allowed("cloud provider account snapshot")
+        async with asyncio.timeout(_ACCOUNT_TIMEOUT_SECONDS):
+            async with pinned_async_client(
+                PUBLIC_ONLY, timeout=httpx.Timeout(_ACCOUNT_TIMEOUT_SECONDS)
+            ) as client:
+                return await _read_account_payload(client, url=request_url, api_key=api_key), None
+    except OutboundEgressBlockedError:
+        return None, "egress_blocked"
+    except _AccountFetchError as exc:
+        return None, str(exc)
+    except (TimeoutError, httpx.TimeoutException):
+        return None, "provider_request_timed_out"
+    except httpx.HTTPError:
+        return None, "provider_request_failed"
+
+
+def _allowlisted_provider_data(
+    provider_id: str, payload: Mapping[str, Any]
+) -> dict[str, _ACCOUNT_VALUE]:
+    """Select the documented, non-identifying account fields for one provider."""
+    if provider_id == "openrouter":
+        data = payload.get("data")
+        if not isinstance(data, Mapping):
+            raise _AccountFetchError("provider_response_invalid")
+        return _allowlisted_openrouter_data(data)
+    if provider_id == "moonshot":
+        return _allowlisted_moonshot_balance(payload)
+    return _allowlisted_deepseek_balance(payload)
+
+
 async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderAccountSnapshot:
     """Return a capability-gated account snapshot without sharing the app HTTP client."""
     provider = provider_for_id(provider_id)
-    if provider.account_capability == "unavailable":
-        return _snapshot(provider)
     request_url = _ACCOUNT_URLS.get(provider.id)
-    if request_url is None:
+    if provider.account_capability == "unavailable" or request_url is None:
         return _snapshot(provider)
 
     try:
@@ -179,43 +220,16 @@ async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderA
     except OutboundEgressBlockedError:
         return _snapshot(provider, error_code="egress_blocked")
 
-    try:
-        api_key = await get_provider_api_key(provider.id, db_pool)
-    except Exception:  # noqa: BLE001 - secret resolution must not become an API detail
-        api_key = None
+    api_key = await _provider_api_key(provider.id, db_pool)
     if not api_key:
         return _snapshot(provider, error_code="api_key_unavailable")
 
-    payload: Mapping[str, Any] = {}
-    error_code: str | None = None
-    try:
-        ensure_outbound_egress_allowed("cloud provider account snapshot")
-        async with asyncio.timeout(_ACCOUNT_TIMEOUT_SECONDS):
-            async with pinned_async_client(
-                PUBLIC_ONLY, timeout=httpx.Timeout(_ACCOUNT_TIMEOUT_SECONDS)
-            ) as client:
-                payload = await _read_account_payload(client, url=request_url, api_key=api_key)
-    except OutboundEgressBlockedError:
-        error_code = "egress_blocked"
-    except _AccountFetchError as exc:
-        error_code = str(exc)
-    except (TimeoutError, httpx.TimeoutException):
-        error_code = "provider_request_timed_out"
-    except httpx.HTTPError:
-        error_code = "provider_request_failed"
-
+    payload, error_code = await _fetch_account_payload(request_url=request_url, api_key=api_key)
     if error_code is not None:
         return _snapshot(provider, error_code=error_code)
+    assert payload is not None  # The fetch helper always returns a payload or an error.
     try:
-        if provider.id == "openrouter":
-            openrouter_data = payload.get("data")
-            if not isinstance(openrouter_data, Mapping):
-                raise _AccountFetchError("provider_response_invalid")
-            data = _allowlisted_openrouter_data(openrouter_data)
-        elif provider.id == "moonshot":
-            data = _allowlisted_moonshot_balance(payload)
-        else:
-            data = _allowlisted_deepseek_balance(payload)
+        data = _allowlisted_provider_data(provider.id, payload)
     except _AccountFetchError as exc:
         return _snapshot(provider, error_code=str(exc))
     return _snapshot(provider, data=data)

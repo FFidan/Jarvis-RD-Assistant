@@ -789,21 +789,18 @@ def test_fits_with_embed_reserve_uses_fallback_weights_and_kv() -> None:
 
 _STATUS_KEYS = frozenset(ModelStatusDict.__annotations__)
 _UNKNOWN_NOTES = (
-    "Capabilities were not reported, so JARVIS cannot safely assign this model to a role."
+    "This provider did not say what this model can do, so JARVIS will not offer it for a role."
 )
 
 
 def _live_entry(
     provider: str,
     model_id: str,
-    *,
-    capability: str = "chat",
 ) -> ModelCatalogEntry:
     return live_model_entry(
         provider,  # type: ignore[arg-type]
         model_id,
         fetched_at=datetime(2026, 8, 1, tzinfo=UTC),
-        capability=capability,  # type: ignore[arg-type]
     )
 
 
@@ -829,7 +826,7 @@ def test_extra_entry_carries_every_model_status_key_and_is_assignable() -> None:
 
 
 def test_display_only_extra_entry_surfaces_its_own_notes_as_the_blocker() -> None:
-    entry = _live_entry("openai", "sora-2", capability="unknown")
+    entry = _live_entry("openai", "unclassified-model")
 
     statuses = build_model_statuses(
         installed=[],
@@ -839,7 +836,7 @@ def test_display_only_extra_entry_surfaces_its_own_notes_as_the_blocker() -> Non
         cloud_api_keys={"openai": True},
         extra_entries=(entry,),
     )
-    item = next(i for i in statuses if i["id"] == "openai/sora-2")
+    item = next(i for i in statuses if i["id"] == "openai/unclassified-model")
 
     assert item["can_assign"] is False
     assert item["assign_blocker"] == _UNKNOWN_NOTES

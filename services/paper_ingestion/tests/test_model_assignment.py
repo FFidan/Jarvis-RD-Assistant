@@ -305,7 +305,6 @@ async def test_base_url_only_custom_endpoint_model_renders_enabled_in_the_picker
         "custom_openai_compatible",
         "org/model-y",
         fetched_at=None,
-        capability="chat",
     )
 
     statuses = build_model_statuses(

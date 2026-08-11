@@ -132,7 +132,7 @@ _EMBED_NOTES = (
     "to the built-in catalog."
 )
 _UNKNOWN_CAPABILITY_NOTES = (
-    "Capabilities were not reported, so JARVIS cannot safely assign this model to a role."
+    "This provider did not say what this model can do, so JARVIS will not offer it for a role."
 )
 
 # What each capability earns a model: the roles it may hold, whether it can be
@@ -361,11 +361,11 @@ def live_model_entry(
     model_id: str,
     *,
     fetched_at: datetime | None,
-    capability: Capability,
     pricing: ProviderPricing = (None, None, None),
     raw: Mapping[str, Any] | None = None,
 ) -> ModelCatalogEntry:
     """Build a catalog entry for one live-listed provider model."""
+    capability = classify_live_model(provider_id, model_id, raw or {})
     roles, assignable, notes = _CAPABILITY_RULING[capability]
     input_price, output_price, price_source = pricing
     raw = raw or {}
@@ -469,14 +469,18 @@ def _live_capabilities(provider_id: Provider, raw: Mapping[str, Any]) -> tuple[s
             if enabled is True and isinstance(name, str) and len(name) <= 64
         )
     elif provider_id == "moonshot":
-        for field_name, label in (
-            ("supports_image_in", "image input"),
-            ("supports_video_in", "video input"),
-            ("supports_reasoning", "reasoning"),
-        ):
-            if raw.get(field_name) is True:
-                values.append(label)
+        values.extend(_moonshot_capabilities(raw))
     return tuple(dict.fromkeys(values))
+
+
+def _moonshot_capabilities(raw: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return Moonshot's documented boolean capability flags as labels."""
+    field_labels = {
+        "supports_image_in": "image input",
+        "supports_video_in": "video input",
+        "supports_reasoning": "reasoning",
+    }
+    return tuple(label for field, label in field_labels.items() if raw.get(field) is True)
 
 
 def _live_lifecycle(provider_id: Provider, raw: Mapping[str, Any]) -> str | None:
@@ -600,7 +604,6 @@ def _build_entries(
             catalog_provider,
             model_id,
             fetched_at=fetched_at,
-            capability=capability,
             pricing=pricing,
             raw=raw,
         )
