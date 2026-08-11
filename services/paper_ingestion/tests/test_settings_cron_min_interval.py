@@ -159,6 +159,10 @@ async def test_write_config_scheduler_failure_returns_warning_not_500():
     # Minimal DB mock: fetchrow for old-cron pre-read, execute for UPSERT.
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = None  # no existing pulse.cron row
+    transaction_ctx = MagicMock()
+    transaction_ctx.__aenter__ = AsyncMock(return_value=None)
+    transaction_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_conn.transaction = MagicMock(return_value=transaction_ctx)
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=mock_conn)
     ctx.__aexit__ = AsyncMock(return_value=False)

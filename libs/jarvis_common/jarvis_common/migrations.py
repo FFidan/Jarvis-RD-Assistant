@@ -30,7 +30,7 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
 
 # Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
 # sync with that file, which is the single source of the baseline floor.
-_REQUIRED_CODE_SCHEMA_FALLBACK = 112
+_REQUIRED_CODE_SCHEMA_FALLBACK = 113
 
 
 def _log_migration_notice(_connection: object, message: object) -> None:
