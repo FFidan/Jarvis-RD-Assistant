@@ -187,7 +187,7 @@ function LlmRouteCard({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <h5 className="text-sm font-semibold">{copy.label}</h5>
+              <h4 className="text-sm font-semibold">{copy.label}</h4>
               {deliveryStatus === 'pending_restart' && (
                 <span className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid={`delivery-pending-${role}`}>
                   pending — applying automatically when the model service recovers
@@ -279,7 +279,7 @@ function EmbeddingRouteCard({
     <Card className="rounded-md border-hair shadow-none" data-testid="llm-route-card-embed">
       <CardContent className="space-y-3 p-4">
         <div>
-          <h5 className="text-sm font-semibold">Embedding model</h5>
+          <h4 className="text-sm font-semibold">Embedding model</h4>
           <p className="text-xs text-muted-foreground">Builds the searchable representation of every paper.</p>
         </div>
         <p className="font-mono text-xs">{model || 'Runtime model unavailable'}</p>
