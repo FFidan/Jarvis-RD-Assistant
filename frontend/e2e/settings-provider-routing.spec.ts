@@ -240,6 +240,31 @@ test.describe('AI provider setup and model routing @settings-ia', () => {
     await expect(page.getByRole('button', { name: 'Use OpenRouter Llama 70B' })).toBeDisabled();
   });
 
+  test('model picker keeps sources and assignment actions usable at 375 pixels', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await setupProviderMocks(page);
+    await page.goto('/settings?section=models&item=llm');
+
+    await page.getByTestId('change-model-smart').click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    const dialogWidth = await dialog.evaluate((element) => ({
+      client: element.clientWidth,
+      scroll: element.scrollWidth,
+    }));
+    expect(dialogWidth.scroll).toBe(dialogWidth.client);
+
+    const sources = dialog.getByRole('navigation', { name: 'Model sources' });
+    expect((await sources.boundingBox())?.height ?? Infinity).toBeLessThan(96);
+    await page.getByRole('button', { name: /OpenAI 1/ }).click();
+
+    const useButton = page.getByRole('button', { name: 'Use GPT-4o' });
+    await expect(useButton).toBeVisible();
+    const useButtonBox = await useButton.boundingBox();
+    expect((useButtonBox?.x ?? Infinity) + (useButtonBox?.width ?? Infinity)).toBeLessThanOrEqual(375);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  });
+
   test('provider assignment links open the matching role and provider catalog', async ({ page }) => {
     await setupProviderMocks(page);
     await page.goto('/settings?section=models&item=providers');

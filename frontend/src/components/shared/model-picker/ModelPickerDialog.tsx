@@ -105,7 +105,7 @@ export function ModelPickerDialog({
         </Button>
       </DialogTrigger>
       <DialogContent
-        className="h-[min(88vh,56rem)] w-[min(96vw,90rem)] max-w-none gap-0 overflow-hidden p-0"
+        className="h-[min(88vh,56rem)] w-[min(96vw,90rem)] min-w-0 max-w-none gap-0 overflow-hidden p-0"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           searchRef.current?.focus();
@@ -122,6 +122,8 @@ export function ModelPickerDialog({
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              id="model-picker-search"
+              name="model-picker-search"
               ref={searchRef}
               type="search"
               value={query}
@@ -133,9 +135,12 @@ export function ModelPickerDialog({
           </div>
         </div>
 
-        <div className="grid min-h-0 flex-1 md:grid-cols-[15rem_minmax(0,1fr)]">
-          <nav aria-label="Model sources" className="overflow-y-auto border-b border-hair bg-muted/25 p-3 md:border-b-0 md:border-r">
-            <p className="px-2 pb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[15rem_minmax(0,1fr)] md:grid-rows-1">
+          <nav
+            aria-label="Model sources"
+            className="flex min-w-0 items-center gap-1 overflow-x-auto border-b border-hair bg-muted/25 p-3 md:block md:overflow-y-auto md:border-b-0 md:border-r"
+          >
+            <p className="hidden px-2 pb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground md:block">
               Browse
             </p>
             {recommendedIds.size > 0 && (
@@ -143,7 +148,7 @@ export function ModelPickerDialog({
                 type="button"
                 onClick={() => chooseSource('recommended')}
                 className={cn(
-                  'flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm',
+                  'flex shrink-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm md:w-full md:justify-between',
                   source === 'recommended' ? 'bg-background font-medium shadow-sm' : 'hover:bg-background/70',
                 )}
                 aria-current={source === 'recommended' ? 'page' : undefined}
@@ -160,7 +165,7 @@ export function ModelPickerDialog({
                   type="button"
                   onClick={() => chooseSource(item)}
                   className={cn(
-                    'mt-1 flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm',
+                    'flex shrink-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm md:mt-1 md:w-full md:justify-between',
                     source === item ? 'bg-background font-medium shadow-sm' : 'hover:bg-background/70',
                   )}
                   aria-current={source === item ? 'page' : undefined}
@@ -172,7 +177,7 @@ export function ModelPickerDialog({
             })}
           </nav>
 
-          <section className="flex min-h-0 flex-col" aria-label="Available models">
+          <section className="flex min-h-0 min-w-0 flex-col" aria-label="Available models">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hair px-4 py-3">
               <div>
                 <h3 className="font-semibold">{source === 'recommended' ? 'Recommended models' : sourceLabel(source)}</h3>
@@ -244,20 +249,22 @@ export function ModelPickerDialog({
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto">
+            <div className="min-h-0 min-w-0 flex-1 overflow-auto">
               {visibleModels.length === 0 ? (
                 <p className="p-8 text-center text-sm text-muted-foreground">
                   No models match these filters.
                 </p>
               ) : (
-                <Table>
+                <Table className="min-w-[48rem]">
                   <TableHeader className="sticky top-0 z-10 bg-background">
                     <TableRow>
                       <TableHead>Model</TableHead>
                       <TableHead>Provider</TableHead>
                       <TableHead>Context</TableHead>
                       <TableHead>Price</TableHead>
-                      <TableHead className="w-28"><span className="sr-only">Choose</span></TableHead>
+                      <TableHead className="sticky right-0 w-28 bg-background">
+                        <span className="sr-only">Choose</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -266,7 +273,7 @@ export function ModelPickerDialog({
                       const selected = entry.id === selectedId;
                       const upstreamProvider = openRouterUpstream(entry);
                       return (
-                        <TableRow key={entry.id} data-testid={`model-row-${entry.id}`}>
+                        <TableRow key={entry.id} className="group" data-testid={`model-row-${entry.id}`}>
                           <TableCell>
                             <p className="font-medium">{entry.name}</p>
                             <p className="break-all font-mono text-xs text-muted-foreground">{entry.id}</p>
@@ -280,7 +287,7 @@ export function ModelPickerDialog({
                             {entry.context_tokens > 0 ? entry.context_tokens.toLocaleString() : 'Unknown'}
                           </TableCell>
                           <TableCell className="text-xs">{modelPriceLabel(entry)}</TableCell>
-                          <TableCell>
+                          <TableCell className="sticky right-0 bg-background group-hover:bg-muted/50">
                             <Button
                               type="button"
                               size="sm"
