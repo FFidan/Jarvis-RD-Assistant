@@ -97,6 +97,9 @@ class ModelStatusDict(TypedDict):
     default_num_ctx: int | None
     max_num_ctx: int | None
     supports_thinking: bool
+    input_price_per_million: str | None
+    output_price_per_million: str | None
+    price_source: str | None
     # -- runtime keys added by build_model_statuses --
     active: bool
     pulled: bool

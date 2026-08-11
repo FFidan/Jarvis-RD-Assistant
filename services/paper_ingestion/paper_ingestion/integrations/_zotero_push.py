@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
@@ -21,6 +22,14 @@ logger = logging.getLogger("paper_ingestion.integrations.zotero_service")
 # A push is a handful of Zotero API calls; anything waiting longer than this is
 # queued behind a stuck holder and is better failed than left holding a slot.
 _PUSH_LOCK_TIMEOUT_SECONDS = 60
+
+
+@dataclass(frozen=True, slots=True)
+class ZoteroItemRef:
+    """The local paper and remote Zotero key reconciled as one identity."""
+
+    paper_id: int
+    zotero_key: str
 
 
 @asynccontextmanager
@@ -182,9 +191,7 @@ def _build_creators(authors: list[Any]) -> list[dict[str, str]]:
 async def _reconcile_existing_item(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     client: Any,
-    *,
-    paper_id: int,
-    zotero_key: str,
+    item: ZoteroItemRef,
     project_ids: list[int],
     owner_user_id: int | None,
 ) -> None:
@@ -193,11 +200,11 @@ async def _reconcile_existing_item(
         conn, client, project_ids, owner_user_id
     )
     if collection_keys:
-        await client.add_item_to_collections(zotero_key, collection_keys)
+        await client.add_item_to_collections(item.zotero_key, collection_keys)
     logger.debug(
         "Paper %d already in Zotero (%s); collections reconciled",
-        paper_id,
-        zotero_key,
+        item.paper_id,
+        item.zotero_key,
     )
 
 
@@ -401,8 +408,7 @@ async def _push_paper_with_conn(
             await _reconcile_existing_item(
                 conn,
                 client,
-                paper_id=paper_id,
-                zotero_key=paper["zotero_item_key"],
+                ZoteroItemRef(paper_id, paper["zotero_item_key"]),
                 project_ids=project_ids,
                 owner_user_id=owner_user_id,
             )
@@ -418,8 +424,7 @@ async def _push_paper_with_conn(
             await _reconcile_existing_item(
                 conn,
                 client,
-                paper_id=paper_id,
-                zotero_key=zotero_key,
+                ZoteroItemRef(paper_id, zotero_key),
                 project_ids=project_ids,
                 owner_user_id=owner_user_id,
             )

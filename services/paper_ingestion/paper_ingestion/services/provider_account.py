@@ -14,7 +14,11 @@ from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outboun
 from jarvis_common.pinned_transport import PUBLIC_ONLY, pinned_async_client
 
 from paper_ingestion.services.litellm_config import get_provider_api_key
-from paper_ingestion.services.llm_provider_registry import AccountCapability, provider_for_id
+from paper_ingestion.services.llm_provider_registry import (
+    AccountCapability,
+    ProviderDefinition,
+    provider_for_id,
+)
 
 _OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 _ACCOUNT_TIMEOUT_SECONDS = 10.0
@@ -41,6 +45,21 @@ class ProviderAccountSnapshot:
     capability: AccountCapability
     data: dict[str, _ACCOUNT_VALUE] = field(default_factory=dict)
     error_code: str | None = None
+
+
+def _snapshot(
+    provider: ProviderDefinition,
+    *,
+    data: dict[str, _ACCOUNT_VALUE] | None = None,
+    error_code: str | None = None,
+) -> ProviderAccountSnapshot:
+    """Build one account response without repeating provider identity fields."""
+    return ProviderAccountSnapshot(
+        provider=provider.id,
+        capability=provider.account_capability,
+        data=data or {},
+        error_code=error_code,
+    )
 
 
 async def _read_openrouter_key(client: httpx.AsyncClient, api_key: str) -> Mapping[str, Any]:
@@ -106,28 +125,22 @@ async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderA
     """Return a capability-gated account snapshot without sharing the app HTTP client."""
     provider = provider_for_id(provider_id)
     if provider.account_capability != "current_key":
-        return ProviderAccountSnapshot(provider=provider.id, capability=provider.account_capability)
+        return _snapshot(provider)
 
     try:
         ensure_outbound_egress_allowed("cloud provider account snapshot")
     except OutboundEgressBlockedError:
-        return ProviderAccountSnapshot(
-            provider=provider.id,
-            capability=provider.account_capability,
-            error_code="egress_blocked",
-        )
+        return _snapshot(provider, error_code="egress_blocked")
 
     try:
         api_key = await get_provider_api_key(provider.id, db_pool)
     except Exception:  # noqa: BLE001 - secret resolution must not become an API detail
         api_key = None
     if not api_key:
-        return ProviderAccountSnapshot(
-            provider=provider.id,
-            capability=provider.account_capability,
-            error_code="api_key_unavailable",
-        )
+        return _snapshot(provider, error_code="api_key_unavailable")
 
+    payload: Mapping[str, Any] = {}
+    error_code: str | None = None
     try:
         ensure_outbound_egress_allowed("cloud provider account snapshot")
         async with asyncio.timeout(_ACCOUNT_TIMEOUT_SECONDS):
@@ -136,32 +149,14 @@ async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderA
             ) as client:
                 payload = await _read_openrouter_key(client, api_key)
     except OutboundEgressBlockedError:
-        return ProviderAccountSnapshot(
-            provider=provider.id,
-            capability=provider.account_capability,
-            error_code="egress_blocked",
-        )
+        error_code = "egress_blocked"
     except _AccountFetchError as exc:
-        return ProviderAccountSnapshot(
-            provider=provider.id,
-            capability=provider.account_capability,
-            error_code=str(exc),
-        )
+        error_code = str(exc)
     except (TimeoutError, httpx.TimeoutException):
-        return ProviderAccountSnapshot(
-            provider=provider.id,
-            capability=provider.account_capability,
-            error_code="provider_request_timed_out",
-        )
+        error_code = "provider_request_timed_out"
     except httpx.HTTPError:
-        return ProviderAccountSnapshot(
-            provider=provider.id,
-            capability=provider.account_capability,
-            error_code="provider_request_failed",
-        )
+        error_code = "provider_request_failed"
 
-    return ProviderAccountSnapshot(
-        provider=provider.id,
-        capability=provider.account_capability,
-        data=_allowlisted_openrouter_data(payload),
-    )
+    if error_code is not None:
+        return _snapshot(provider, error_code=error_code)
+    return _snapshot(provider, data=_allowlisted_openrouter_data(payload))

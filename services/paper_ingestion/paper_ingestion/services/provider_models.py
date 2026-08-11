@@ -81,6 +81,7 @@ _ID_KEYS = ("id", "name", "model")
 _LIST_KEYS = ("data", "models", "list")
 
 Capability = Literal["chat", "embed", "other", "unknown"]
+ProviderPricing = tuple[str | None, str | None, str | None]
 
 _EMBED_MARKER = "embed"
 # Conservative deny-list of non-chat model families, matched case-insensitively
@@ -340,17 +341,15 @@ def live_model_entry(
     provider_id: Provider,
     model_id: str,
     *,
-    assignment_id: str,
     fetched_at: datetime | None,
     capability: Capability,
-    input_price_per_million: str | None = None,
-    output_price_per_million: str | None = None,
-    price_source: str | None = None,
+    pricing: ProviderPricing = (None, None, None),
 ) -> ModelCatalogEntry:
     """Build a catalog entry for one live-listed provider model."""
     roles, assignable, notes = _CAPABILITY_RULING[capability]
+    input_price, output_price, price_source = pricing
     return ModelCatalogEntry(
-        id=assignment_id,
+        id=f"{provider_for_id(provider_id).assignment_prefix}{model_id}",
         name=model_id,
         provider=provider_id,
         ollama_tag=None,
@@ -365,8 +364,8 @@ def live_model_entry(
         last_reviewed=fetched_at.date().isoformat() if fetched_at else "",
         phase="advanced",
         assignable=assignable,
-        input_price_per_million=input_price_per_million,
-        output_price_per_million=output_price_per_million,
+        input_price_per_million=input_price,
+        output_price_per_million=output_price,
         price_source=price_source,
     )
 
@@ -446,19 +445,14 @@ def _build_entries(
         seen.add(normalized)
         if capability == "unknown":
             excluded["unknown"] += 1
-        input_price, output_price, price_source = (
-            _openrouter_pricing(raw) if provider.id == "openrouter" else (None, None, None)
-        )
+        pricing = _openrouter_pricing(raw) if provider.id == "openrouter" else (None, None, None)
         entries.append(
             live_model_entry(
                 catalog_provider,
                 model_id,
-                assignment_id=assignment_id,
                 fetched_at=fetched_at,
                 capability=capability,
-                input_price_per_million=input_price,
-                output_price_per_million=output_price,
-                price_source=price_source,
+                pricing=pricing,
             )
         )
     return tuple(entries), excluded
