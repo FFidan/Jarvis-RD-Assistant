@@ -10,7 +10,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException
 from typing import Any, Literal, cast, get_args
 
 import httpx
@@ -60,6 +60,9 @@ _MAX_MODEL_ID_CHARS = 128
 # before any of it becomes Python objects.
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _TOKENS_PER_MILLION = Decimal(1_000_000)
+_MAX_PRICE_INPUT_CHARS = 64
+_MAX_PRICE_SIGNIFICANT_DIGITS = 32
+_MAX_PRICE_ADJUSTED_EXPONENT = 100
 _MAX_PAGES = 20
 _PER_PROVIDER_TIMEOUT_SECONDS = 8.0
 # httpx's timeout bounds each read, not the whole exchange, so a server dripping
@@ -370,15 +373,21 @@ def live_model_entry(
 
 def _normalize_openrouter_price(value: object) -> str | None:
     """Convert one documented OpenRouter per-token price into a per-million string."""
-    if not isinstance(value, str):
+    if not isinstance(value, str) or len(value) > _MAX_PRICE_INPUT_CHARS:
         return None
     try:
         price = Decimal(value)
-    except (InvalidOperation, ValueError):
+        significant_digits = len(price.as_tuple().digits)
+        if (
+            significant_digits > _MAX_PRICE_SIGNIFICANT_DIGITS
+            or abs(price.adjusted()) > _MAX_PRICE_ADJUSTED_EXPONENT
+        ):
+            return None
+        normalized = format((price * _TOKENS_PER_MILLION).normalize(), "f")
+    except (DecimalException, ValueError):
         return None
     if not price.is_finite() or price < 0:
         return None
-    normalized = format((price * _TOKENS_PER_MILLION).normalize(), "f")
     return normalized.rstrip("0").rstrip(".") if "." in normalized else normalized
 
 

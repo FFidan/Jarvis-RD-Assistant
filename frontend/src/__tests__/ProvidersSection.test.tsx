@@ -402,8 +402,58 @@ describe('ProvidersSection', () => {
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid API key');
     });
-    expect(screen.getAllByText('Configured; connection needs attention')).not.toHaveLength(0);
+    expect(screen.getAllByText('Configured; not checked yet')).not.toHaveLength(0);
     expect(screen.getByRole('alert')).toHaveTextContent('Connection test failed: Invalid API key');
+  });
+
+  it('uses refreshed provider-list truth after a failed connection test', async () => {
+    vi.mocked(testProvider).mockResolvedValue({ ok: false, error: 'Temporary test failure' });
+    vi.mocked(fetchSystemModels)
+      .mockResolvedValueOnce(EMPTY_SYSTEM_MODELS)
+      .mockResolvedValueOnce(systemModels({
+        catalog: [modelEntry('anthropic')],
+        provider_lists: {
+          anthropic: providerListStatus({
+            fetched_at: new Date().toISOString(),
+            error: null,
+          }),
+        },
+      }));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Test now' }));
+
+    expect(await screen.findAllByText(/Connected · checked/)).not.toHaveLength(0);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Connection test failed: Temporary test failure',
+    );
+    expect(screen.queryByText('Configured; connection needs attention')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['provider_authentication_failed', 'Provider rejected this key'],
+    ['provider_payment_required', 'Provider account needs billing attention'],
+    ['provider_rate_limited', 'Provider rate limit reached'],
+    ['provider_unavailable', 'Provider service is unavailable'],
+    ['provider_request_timed_out', 'Provider did not respond in time'],
+  ])('explains account failure %s without provider response details', async (errorCode, copy) => {
+    vi.mocked(listProviders).mockResolvedValue(
+      PROVIDERS.map((provider) =>
+        provider.id === 'openrouter' ? { ...provider, configured: true } : provider,
+      ),
+    );
+    vi.mocked(fetchProviderAccount).mockResolvedValue({
+      provider: 'openrouter',
+      capability: 'current_key',
+      data: {},
+      error_code: errorCode,
+    });
+
+    renderSection('openrouter');
+
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.queryByText('Temporarily unavailable')).not.toBeInTheDocument();
   });
 
   it('shows model count and fetch staleness for a connected provider with a live list', async () => {

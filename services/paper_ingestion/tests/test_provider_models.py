@@ -245,6 +245,9 @@ async def test_openrouter_pricing_is_decimal_normalized_per_million() -> None:
         {"prompt": "Infinity", "completion": "0"},
         {"prompt": "not-a-number", "completion": "0"},
         {"prompt": "0.000001"},
+        {"prompt": "1e999999", "completion": "0"},
+        {"prompt": "1e-1000000", "completion": "0"},
+        {"prompt": "0." + "1" * 80, "completion": "0"},
     ],
 )
 def test_openrouter_invalid_pricing_stays_unknown(pricing: object) -> None:

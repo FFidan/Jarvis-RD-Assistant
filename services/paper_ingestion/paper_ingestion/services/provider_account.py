@@ -53,7 +53,7 @@ async def _read_openrouter_key(client: httpx.AsyncClient, api_key: str) -> Mappi
         timeout=_ACCOUNT_TIMEOUT_SECONDS,
     ) as response:
         if response.status_code >= 400:
-            raise _AccountFetchError("provider_http_error")
+            raise _AccountFetchError(_provider_http_error_code(response.status_code))
         async for chunk in response.aiter_bytes():
             body.extend(chunk)
             if len(body) > _MAX_ACCOUNT_RESPONSE_BYTES:
@@ -69,6 +69,19 @@ async def _read_openrouter_key(client: httpx.AsyncClient, api_key: str) -> Mappi
 
 class _AccountFetchError(Exception):
     """A stable, sanitized account-snapshot failure code."""
+
+
+def _provider_http_error_code(status_code: int) -> str:
+    """Classify provider HTTP failures without retaining response details."""
+    if status_code in {401, 403}:
+        return "provider_authentication_failed"
+    if status_code == 402:
+        return "provider_payment_required"
+    if status_code == 429:
+        return "provider_rate_limited"
+    if status_code >= 500:
+        return "provider_unavailable"
+    return "provider_http_error"
 
 
 def _allowlisted_openrouter_data(payload: Mapping[str, Any]) -> dict[str, _ACCOUNT_VALUE]:
@@ -134,7 +147,7 @@ async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderA
             capability=provider.account_capability,
             error_code=str(exc),
         )
-    except TimeoutError:
+    except (TimeoutError, httpx.TimeoutException):
         return ProviderAccountSnapshot(
             provider=provider.id,
             capability=provider.account_capability,

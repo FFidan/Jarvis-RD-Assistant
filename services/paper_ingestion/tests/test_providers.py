@@ -464,9 +464,20 @@ async def test_openrouter_account_omits_supported_fields_absent_from_provider_re
     assert snapshot.error_code is None
 
 
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (401, "provider_authentication_failed"),
+        (402, "provider_payment_required"),
+        (429, "provider_rate_limited"),
+        (500, "provider_unavailable"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_openrouter_account_failure_codes_are_sanitized(monkeypatch):
-    """Provider response details never become account endpoint output."""
+async def test_openrouter_account_failure_codes_are_sanitized(
+    monkeypatch, status_code: int, expected_code: str
+):
+    """Provider status classes remain actionable without exposing response details."""
     from paper_ingestion.services import provider_account
 
     @asynccontextmanager
@@ -474,7 +485,7 @@ async def test_openrouter_account_failure_codes_are_sanitized(monkeypatch):
         del timeout
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(
-                lambda _request: httpx.Response(401, text="sensitive upstream response")
+                lambda _request: httpx.Response(status_code, text="sensitive upstream response")
             )
         ) as client:
             yield client
@@ -487,7 +498,33 @@ async def test_openrouter_account_failure_codes_are_sanitized(monkeypatch):
     snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
 
     assert snapshot.data == {}
-    assert snapshot.error_code == "provider_http_error"
+    assert snapshot.error_code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_timeout_has_a_specific_sanitized_code(monkeypatch):
+    """HTTP-client timeouts are not collapsed into an unhelpful network failure."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+
+        def raise_timeout(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("sensitive timeout detail", request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(raise_timeout)) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code == "provider_request_timed_out"
 
 
 @pytest.mark.asyncio

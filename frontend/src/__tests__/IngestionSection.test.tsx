@@ -19,6 +19,7 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 
 const ingestionApiMocks = vi.hoisted(() => ({
   fetchSystemModels: vi.fn(),
+  listProviders: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async () => {
@@ -27,6 +28,7 @@ vi.mock('@/lib/api', async () => {
     fetchConfig: vi.fn(),
     setConfig: async () => ({}),
     fetchSystemModels: ingestionApiMocks.fetchSystemModels,
+    listProviders: ingestionApiMocks.listProviders,
   });
   return mocked;
 });
@@ -180,6 +182,7 @@ describe('IngestionSection — hardware strip', () => {
     const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
     ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.listProviders.mockResolvedValue([]);
   });
 
   it('shows VRAM and tier in hardware strip', async () => {
@@ -221,6 +224,62 @@ describe('IngestionSection — hardware strip', () => {
     });
     // Only one strip
     expect(screen.getAllByTestId('hardware-strip')).toHaveLength(1);
+  });
+});
+
+describe('IngestionSection — unavailable cloud catalog', () => {
+  it('keeps a configured cloud route truthful when its catalog entry is unavailable', async () => {
+    const { fetchConfig } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue([
+      ...baseConfig.filter((entry) => entry.key !== 'llm.smart_model'),
+      { key: 'llm.smart_model', value: 'openrouter/vendor/unlisted-model' },
+    ]);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      current: {
+        ...systemModelsWithFitDetail.current,
+        smart_model: 'openrouter/vendor/unlisted-model',
+      },
+      catalog: systemModelsWithFitDetail.catalog,
+      provider_lists: {
+        openrouter: {
+          model_count: 0,
+          fetched_at: '2026-08-11T00:00:00Z',
+          error: 'provider request failed',
+          truncated: false,
+          excluded: {},
+        },
+      },
+    });
+    ingestionApiMocks.listProviders.mockResolvedValue([
+      {
+        id: 'openrouter',
+        display_name: 'OpenRouter',
+        kind: 'router',
+        api_key_config_key: 'llm.providers.openrouter.api_key',
+        base_url_config_key: null,
+        assignment_prefix: 'openrouter/',
+        litellm_prefix: 'openrouter/',
+        privacy_boundary: 'router',
+        best_for: 'Hosted models',
+        data_note: 'Requests pass through OpenRouter to the selected upstream provider.',
+        configured: true,
+        base_url_configured: false,
+        supports_assignment: true,
+        dashboard_url: 'https://openrouter.ai/dashboard/api-keys',
+        account_capability: 'current_key',
+      },
+    ]);
+
+    renderSection();
+
+    const card = await screen.findByTestId('llm-route-card-smart');
+    expect(card).toHaveTextContent('Cloud — through OpenRouter');
+    expect(card).toHaveTextContent('Provider catalog is currently unavailable');
+    expect(card).toHaveTextContent('Price unavailable');
+    expect(card).not.toHaveTextContent('No provider charge');
+    expect(screen.queryByTestId('configure-toggle-smart')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Provider details' })).toBeInTheDocument();
   });
 });
 

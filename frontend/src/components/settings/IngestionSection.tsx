@@ -89,19 +89,29 @@ const ROLE_COPY: Record<GenerativeRole, { key: string; label: string; descriptio
   },
 };
 
-function providerForEntry(
+function providerForRoute(
   entry: ModelCatalogEntry | undefined,
+  value: string,
   providers: ProviderMetadata[],
 ): ProviderMetadata | undefined {
-  if (!entry || isLocalModel(entry)) return undefined;
-  return providers.find((provider) => provider.id === entry.provider);
+  if (entry) {
+    return isLocalModel(entry)
+      ? undefined
+      : providers.find((provider) => provider.id === entry.provider);
+  }
+  return providers.find((provider) => value.startsWith(provider.assignment_prefix));
 }
 
 function availabilityLabel(
   entry: ModelCatalogEntry | undefined,
+  provider: ProviderMetadata | undefined,
   listStatus: ProviderModelListStatus | undefined,
 ): string {
-  if (!entry) return 'Model details unavailable';
+  if (!entry) {
+    if (provider && listStatus?.error) return 'Provider catalog is currently unavailable';
+    if (provider) return 'Configured cloud model; catalog details unavailable';
+    return 'Model details unavailable';
+  }
   if (isLocalModel(entry)) {
     const fit = entry.fit_detail?.default;
     if (fit === 'unfit') return 'Does not fit this machine at the current reading window';
@@ -115,9 +125,10 @@ function availabilityLabel(
 }
 
 function boundaryLabel(entry: ModelCatalogEntry | undefined, provider: ProviderMetadata | undefined): string {
-  if (!entry || isLocalModel(entry)) return 'Local — stays on this machine';
+  if (entry && isLocalModel(entry)) return 'Local — stays on this machine';
   if (provider?.kind === 'router') return `Cloud — through ${provider.display_name}`;
-  return `Cloud — direct to ${provider?.display_name ?? entry.provider}`;
+  if (provider) return `Cloud — direct to ${provider.display_name}`;
+  return 'Unknown — route details unavailable';
 }
 
 function RouteDetails({ rows }: { rows: Array<{ label: string; value: string }> }) {
@@ -168,7 +179,8 @@ function LlmRouteCard({
 }: LlmRouteCardProps) {
   const [configureOpen, setConfigureOpen] = useState(false);
   const copy = ROLE_COPY[role];
-  const local = entry == null || isLocalModel(entry);
+  const local = Boolean(entry && isLocalModel(entry));
+  const cloud = Boolean(provider);
   return (
     <Card className="rounded-md border-hair shadow-none" data-testid={`llm-route-card-${role}`}>
       <CardContent className="space-y-3 p-4">
@@ -189,12 +201,17 @@ function LlmRouteCard({
 
         <RouteDetails rows={[
           { label: 'Boundary', value: boundaryLabel(entry, provider) },
-          { label: 'Availability', value: availabilityLabel(entry, listStatus) },
+          { label: 'Availability', value: availabilityLabel(entry, provider, listStatus) },
           {
             label: 'Data handling',
-            value: local ? 'Prompts and research text stay on this machine' : provider?.data_note ?? 'Selected research text leaves this machine',
+            value: local
+              ? 'Prompts and research text stay on this machine'
+              : provider?.data_note ?? 'Data handling is unavailable for this route',
           },
-          { label: 'Price', value: local ? 'No provider charge' : entry ? modelPriceLabel(entry) : 'Price unavailable' },
+          {
+            label: 'Price',
+            value: local ? 'No provider charge' : cloud && entry ? modelPriceLabel(entry) : 'Price unavailable',
+          },
         ]} />
 
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -430,7 +447,7 @@ export function IngestionSection({ filterGroups, modelPickerRequest }: Ingestion
             {(['fast', 'smart'] as const).map((role) => {
               const value = modelValue(role);
               const entry = catalogEntry(role, value);
-              const provider = providerForEntry(entry, providers);
+              const provider = providerForRoute(entry, value, providers);
               return (
                 <LlmRouteCard
                   key={role}
@@ -438,7 +455,7 @@ export function IngestionSection({ filterGroups, modelPickerRequest }: Ingestion
                   value={value}
                   entry={entry}
                   provider={provider}
-                  listStatus={entry ? systemModels?.provider_lists?.[entry.provider] : undefined}
+                  listStatus={provider ? systemModels?.provider_lists?.[provider.id] : undefined}
                   machineId={machineId}
                   hardware={hardware}
                   configs={configs}

@@ -69,22 +69,35 @@ function providerAvailabilityText(
 function providerStatus(
   provider: ProviderMetadata,
   status: ProviderModelListStatus | undefined,
-  sessionResult: TestState,
 ) {
   if (!provider.configured && !provider.base_url_configured) {
     return { icon: CircleDashed, label: 'Not configured', className: 'text-muted-foreground' };
   }
-  if (status?.error || sessionResult?.ok === false) {
+  if (status?.error) {
     return { icon: ShieldAlert, label: 'Configured; connection needs attention', className: 'text-destructive' };
   }
   if (status?.fetched_at) {
     const checked = formatDistanceToNow(new Date(status.fetched_at), { addSuffix: true });
     return { icon: CheckCircle, label: `Connected · checked ${checked}`, className: 'text-[var(--status-ok)]' };
   }
-  if (sessionResult?.ok) {
-    return { icon: CheckCircle, label: 'Connection test passed', className: 'text-[var(--status-ok)]' };
-  }
   return { icon: CircleDashed, label: 'Configured; not checked yet', className: 'text-[var(--status-warn)]' };
+}
+
+function accountStatusText(errorCode: string | null | undefined): string {
+  if (!errorCode) return 'Temporarily unavailable';
+  return {
+    provider_authentication_failed: 'Provider rejected this key',
+    provider_payment_required: 'Provider account needs billing attention',
+    provider_rate_limited: 'Provider rate limit reached',
+    provider_unavailable: 'Provider service is unavailable',
+    provider_request_timed_out: 'Provider did not respond in time',
+    egress_blocked: 'Outbound provider access is disabled',
+    api_key_unavailable: 'Provider key is unavailable',
+    provider_response_too_large: 'Provider returned too much account data',
+    provider_response_invalid: 'Provider returned unsupported account data',
+    provider_request_failed: 'Provider account request failed',
+    provider_http_error: 'Provider rejected the account request',
+  }[errorCode] ?? 'Provider account data is unavailable';
 }
 
 function accountLabel(key: string): string {
@@ -130,7 +143,8 @@ function AccountSnapshot({
     }
     if (!provider.configured) return 'Add a key to check';
     if (accountQuery.isLoading) return 'Loading';
-    if (accountQuery.isError || accountQuery.data?.error_code) return 'Temporarily unavailable';
+    if (accountQuery.isError) return 'Provider account request failed';
+    if (accountQuery.data?.error_code) return accountStatusText(accountQuery.data.error_code);
     return entries.length > 0 ? 'Available' : 'No supported fields returned';
   })();
 
@@ -320,7 +334,7 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               {configured.map((provider) => {
                 const listStatus = providerLists[provider.id];
-                const status = providerStatus(provider, listStatus, testResults[provider.id] ?? null);
+                const status = providerStatus(provider, listStatus);
                 const StatusIcon = status.icon;
                 const count = catalog.filter((entry) => entry.provider === provider.id).length;
                 return (
@@ -435,7 +449,6 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
               connection={providerStatus(
                 selected,
                 providerLists[selected.id],
-                testResults[selected.id] ?? null,
               ).label}
               models={
                 providerLists[selected.id]?.error

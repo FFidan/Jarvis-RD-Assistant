@@ -17,6 +17,7 @@ import { fetchSystemModels, getAISettings, redetectHW } from '@/lib/api';
 import type { SystemModelsResponse } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
+import { normalizeModelId } from '@/components/shared/model-picker/model-options';
 
 export function ModelDiagnosticsCard() {
   const qc = useQueryClient();
@@ -161,7 +162,9 @@ function routeState(
 ): string {
   if (data.delivery[role] === 'pending_restart') return 'Pending model-service recovery';
   if (!serving) return 'Runtime unavailable';
-  return serving === configured ? 'Applied' : 'Configured and serving differ';
+  return normalizeModelId(serving) === normalizeModelId(configured)
+    ? 'Applied'
+    : 'Configured and serving differ';
 }
 
 function ActiveRouteTable({

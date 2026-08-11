@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { ModelDiagnosticsCard } from '@/components/admin/ModelDiagnosticsCard';
 import * as api from '@/lib/api';
@@ -124,5 +124,19 @@ describe('ModelDiagnosticsCard', () => {
     expect(routes).toHaveTextContent('Embedding');
     expect(routes).toHaveTextContent('qwen3-embedding:4b');
     expect(routes).toHaveTextContent('Runtime unavailable');
+  });
+
+  it('treats an omitted latest tag as the same active route', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    vi.mocked(api.fetchSystemModels).mockResolvedValue({
+      ...systemModels,
+      current: { ...systemModels.current, fast_model: 'qwen3:4b:latest' },
+      routing: { ...systemModels.routing, fast: 'qwen3:4b' },
+    } as any);
+    render(wrap(<ModelDiagnosticsCard />));
+
+    const quickRow = await screen.findByRole('row', { name: /Quick/ });
+    expect(within(quickRow).getByText('Applied')).toBeInTheDocument();
+    expect(within(quickRow).queryByText('Configured and serving differ')).not.toBeInTheDocument();
   });
 });
