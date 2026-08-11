@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 import { renderWithProviders } from '@/__tests__/test-utils';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
+import type { ActiveFocusSession } from '@/types';
 
 const apiMocks = vi.hoisted(() => ({
   fetchActiveFocusSession: vi.fn(),
@@ -15,6 +16,14 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock('@/lib/api', () => apiMocks);
 
 const { fetchActiveFocusSession, startFocusSession } = apiMocks;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 const activeSession = {
   id: 51,
@@ -36,6 +45,25 @@ describe('PomodoroAutoLogger durable focus synchronization', () => {
     vi.clearAllMocks();
     usePomodoroStore.getState().reset();
     fetchActiveFocusSession.mockResolvedValue(null);
+    apiMocks.pauseFocusSession.mockResolvedValue({
+      changed: true,
+      session: {
+        ...activeSession,
+        state: 'paused',
+        paused_at: '2026-08-09T12:01:00+00:00',
+      },
+    });
+    apiMocks.resumeFocusSession.mockResolvedValue({ changed: true, session: activeSession });
+    apiMocks.completeFocusSession.mockResolvedValue({
+      changed: true,
+      session: {
+        ...activeSession,
+        state: 'completed',
+        remaining_seconds: 0,
+        completed_at: '2026-08-09T12:01:00+00:00',
+        recorded_seconds: 60,
+      },
+    });
   });
 
   it('restores a Telegram session and observes external pause and completion', async () => {
@@ -83,5 +111,54 @@ describe('PomodoroAutoLogger durable focus synchronization', () => {
       sessionId: 52,
       serverSource: 'web',
     });
+  });
+
+  it('applies a pause requested while the Web start is still in flight', async () => {
+    const start = deferred<ActiveFocusSession>();
+    startFocusSession.mockReturnValue(start.promise);
+    renderWithProviders(<PomodoroAutoLogger />);
+
+    act(() => usePomodoroStore.getState().startWork());
+    await waitFor(() => expect(startFocusSession).toHaveBeenCalledOnce());
+    act(() => usePomodoroStore.getState().pause());
+    act(() => start.resolve({ ...activeSession, id: 52, source: 'web' }));
+
+    await waitFor(() => expect(apiMocks.pauseFocusSession).toHaveBeenCalledWith(52));
+    await waitFor(() => expect(usePomodoroStore.getState().pendingOperation).toBeNull());
+    expect(startFocusSession).toHaveBeenCalledOnce();
+    expect(usePomodoroStore.getState().pausedAt).not.toBeNull();
+  });
+
+  it('does not pause when a pre-start pause is resumed before the start returns', async () => {
+    const start = deferred<ActiveFocusSession>();
+    startFocusSession.mockReturnValue(start.promise);
+    renderWithProviders(<PomodoroAutoLogger />);
+
+    act(() => usePomodoroStore.getState().startWork());
+    await waitFor(() => expect(startFocusSession).toHaveBeenCalledOnce());
+    act(() => usePomodoroStore.getState().pause());
+    act(() => usePomodoroStore.getState().resume());
+    act(() => start.resolve({ ...activeSession, id: 53, source: 'web' }));
+
+    await waitFor(() => expect(usePomodoroStore.getState().pendingOperation).toBeNull());
+    expect(apiMocks.pauseFocusSession).not.toHaveBeenCalled();
+    expect(apiMocks.resumeFocusSession).not.toHaveBeenCalled();
+    expect(usePomodoroStore.getState()).toMatchObject({ phase: 'work', sessionId: 53 });
+  });
+
+  it('completes the server session when stop is requested during Web start', async () => {
+    const start = deferred<ActiveFocusSession>();
+    startFocusSession.mockReturnValue(start.promise);
+    renderWithProviders(<PomodoroAutoLogger />);
+
+    act(() => usePomodoroStore.getState().startWork());
+    await waitFor(() => expect(startFocusSession).toHaveBeenCalledOnce());
+    act(() => usePomodoroStore.getState().stopAndLog());
+    act(() => start.resolve({ ...activeSession, id: 54, source: 'web' }));
+
+    await waitFor(() => expect(apiMocks.completeFocusSession).toHaveBeenCalledWith(54, 'stop'));
+    await waitFor(() => expect(usePomodoroStore.getState().pendingOperation).toBeNull());
+    expect(startFocusSession).toHaveBeenCalledOnce();
+    expect(usePomodoroStore.getState().phase).toBe('idle');
   });
 });

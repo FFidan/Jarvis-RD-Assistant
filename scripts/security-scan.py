@@ -244,6 +244,8 @@ def _run_scans(tools: dict[str, Path]) -> None:
         _run(
             [
                 "uvx",
+                "--from",
+                "pip-audit==2.10.1",
                 "pip-audit",
                 "--no-deps",
                 "--disable-pip",

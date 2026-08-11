@@ -474,7 +474,7 @@ def test_local_security_scan_is_pinned_fail_closed_and_outside_the_repo() -> Non
     assert "_verify_digest(artifact" in scanner
     assert "_verify_executable(executable" in scanner
     assert "--verify-cache-only" in scanner
-    assert "uvx" in scanner and "pip-audit" in scanner
+    assert "uvx" in scanner and "pip-audit==2.10.1" in scanner
     assert "scripts/check_npm_audit.py" in scanner
     assert 'tools["osv-scanner"]' in scanner
     assert '"--recursive"' not in scanner

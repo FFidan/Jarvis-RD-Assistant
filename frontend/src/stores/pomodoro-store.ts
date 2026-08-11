@@ -22,6 +22,8 @@ type FocusOperation =
   | { id: number; kind: 'resume'; sessionId: number }
   | { id: number; kind: 'complete'; sessionId: number; mode: 'elapsed' | 'stop' };
 
+type PendingStartAction = 'pause' | 'complete' | null;
+
 let nextOperationId = 1;
 
 interface PomodoroState {
@@ -43,6 +45,7 @@ interface PomodoroState {
   sessionId: number | null;
   serverSource: 'web' | 'telegram' | null;
   pendingOperation: FocusOperation | null;
+  pendingStartAction: PendingStartAction;
 
   // Computed (NOT persisted — recomputed each tick)
   secondsRemaining: number;
@@ -87,6 +90,7 @@ export const usePomodoroStore = create<PomodoroState>()(
       sessionId: null,
       serverSource: null,
       pendingOperation: null,
+      pendingStartAction: null,
 
       // Ephemeral signal
       completedSession: null,
@@ -118,6 +122,7 @@ export const usePomodoroStore = create<PomodoroState>()(
           attachedItem: item ?? null,
           lastWorkElapsedMs: 0,
           pendingOperation: operation,
+          pendingStartAction: null,
         });
       },
 
@@ -222,8 +227,10 @@ export const usePomodoroStore = create<PomodoroState>()(
         const state = get();
         // Only allow pausing during work phase, and only if not already paused
         if (state.phase === 'work' && state.pausedAt === null && state.startedAt !== null) {
+          const awaitingStart = state.sessionId === null && state.pendingOperation?.kind === 'start';
           set({
             pausedAt: Date.now(),
+            pendingStartAction: awaitingStart ? 'pause' : state.pendingStartAction,
             pendingOperation: state.sessionId === null
               ? state.pendingOperation
               : { id: nextOperationId++, kind: 'pause', sessionId: state.sessionId },
@@ -235,9 +242,11 @@ export const usePomodoroStore = create<PomodoroState>()(
         const state = get();
         if (state.pausedAt !== null) {
           const additionalPause = Date.now() - state.pausedAt;
+          const awaitingStart = state.sessionId === null && state.pendingOperation?.kind === 'start';
           set({
             pausedAt: null,
             totalPausedMs: state.totalPausedMs + additionalPause,
+            pendingStartAction: awaitingStart ? null : state.pendingStartAction,
             pendingOperation: state.sessionId === null
               ? state.pendingOperation
               : { id: nextOperationId++, kind: 'resume', sessionId: state.sessionId },
@@ -283,8 +292,9 @@ export const usePomodoroStore = create<PomodoroState>()(
           }
         }
 
+        const awaitingStart = state.sessionId === null && state.pendingOperation?.kind === 'start';
         const completionOperation: FocusOperation | null = state.sessionId === null
-          ? null
+          ? state.pendingOperation
           : {
               id: nextOperationId++,
               kind: 'complete',
@@ -305,6 +315,7 @@ export const usePomodoroStore = create<PomodoroState>()(
           sessionId: null,
           serverSource: null,
           pendingOperation: completionOperation,
+          pendingStartAction: awaitingStart ? 'complete' : null,
         });
 
         return result;
@@ -328,6 +339,7 @@ export const usePomodoroStore = create<PomodoroState>()(
               attachedItem: null,
               sessionId: null,
               serverSource: null,
+              pendingStartAction: null,
             });
           }
           return;
@@ -354,9 +366,10 @@ export const usePomodoroStore = create<PomodoroState>()(
               lastWorkElapsedMs: session.recorded_seconds * 1000,
               sessionId: null,
               serverSource: null,
+              pendingStartAction: null,
             });
           } else {
-            set({ sessionId: null, serverSource: null });
+            set({ sessionId: null, serverSource: null, pendingStartAction: null });
           }
           return;
         }
@@ -367,22 +380,43 @@ export const usePomodoroStore = create<PomodoroState>()(
           : session.paper_id !== null
             ? { id: session.paper_id, title: '', type: 'paper' }
             : null;
+        const postStartAction = state.pendingOperation?.kind === 'start'
+          ? state.pendingStartAction
+          : null;
+        if (postStartAction === 'complete') {
+          set({
+            sessionId: session.id,
+            serverSource: session.source,
+            pendingOperation: {
+              id: nextOperationId++,
+              kind: 'complete',
+              sessionId: session.id,
+              mode: 'stop',
+            },
+            pendingStartAction: null,
+          });
+          return;
+        }
         set({
           phase: 'work',
           startedAt,
-          pausedAt,
+          pausedAt: postStartAction === 'pause' ? (state.pausedAt ?? Date.now()) : pausedAt,
           totalPausedMs: session.paused_seconds * 1000,
           phaseDurationMs: session.duration_seconds * 1000,
           secondsRemaining: session.remaining_seconds,
           attachedItem,
           sessionId: session.id,
           serverSource: session.source,
+          pendingOperation: postStartAction === 'pause'
+            ? { id: nextOperationId++, kind: 'pause', sessionId: session.id }
+            : state.pendingOperation,
+          pendingStartAction: null,
         });
       },
 
       clearPendingOperation(operationId) {
         if (get().pendingOperation?.id === operationId) {
-          set({ pendingOperation: null });
+          set({ pendingOperation: null, pendingStartAction: null });
         }
       },
 
@@ -401,6 +435,7 @@ export const usePomodoroStore = create<PomodoroState>()(
           sessionId: null,
           serverSource: null,
           pendingOperation: null,
+          pendingStartAction: null,
         });
       },
 

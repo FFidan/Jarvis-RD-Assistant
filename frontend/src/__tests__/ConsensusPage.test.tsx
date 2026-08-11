@@ -3,6 +3,7 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ConsensusPage } from '@/pages/ConsensusPage';
+import { consensusAxisLayout } from '@/components/consensus/ConsensusMeter';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const fetchConsensusMock = vi.fn();
@@ -51,6 +52,11 @@ beforeEach(() => {
 });
 
 describe('ConsensusPage', () => {
+  it('preserves drawable bar width on a narrow consensus card', () => {
+    expect(consensusAxisLayout(231)).toEqual({ axisWidth: 92, labelLength: 14 });
+    expect(231 - 32 - consensusAxisLayout(231).axisWidth).toBeGreaterThan(100);
+  });
+
   it('renders claim clusters with stance counts and click-through to verified quotes', async () => {
     fetchConsensusMock.mockResolvedValue({
       total: 1,
