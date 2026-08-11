@@ -463,7 +463,9 @@ describe('PaperDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Zotero')).toBeInTheDocument();
     });
-    expect(screen.getByText('Link to a project first to enable Zotero push.')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Link this paper to a project first. The project determines its Zotero collection.',
+    )).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeDisabled();
   });
 
@@ -481,7 +483,9 @@ describe('PaperDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeInTheDocument();
     });
-    expect(screen.queryByText('Link to a project first to enable Zotero push.')).not.toBeInTheDocument();
+    expect(screen.queryByText(
+      'Link this paper to a project first. The project determines its Zotero collection.',
+    )).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeEnabled();
   });
 
