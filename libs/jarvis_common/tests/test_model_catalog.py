@@ -43,3 +43,12 @@ def test_embedding_candidates_have_expected_assignability_defaults() -> None:
     assert catalog["qwen3-embedding:4b"].assignable is True
     assert catalog["qwen3-embedding:4b"].embedding_dimension == 2560
     assert catalog["openai/text-embedding-3-small"].assignable is False
+
+
+def test_bundled_catalog_entries_default_to_unknown_provider_pricing() -> None:
+    """Static and local catalog entries do not invent provider pricing."""
+    entry = load_model_catalog()[0]
+
+    assert entry.input_price_per_million is None
+    assert entry.output_price_per_million is None
+    assert entry.price_source is None

@@ -10,6 +10,8 @@ Covers:
 from __future__ import annotations
 
 import socket
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
 import httpcore
 import httpx
@@ -102,6 +104,14 @@ async def _post_provider_test(app, provider: str, *, role: str | None = "admin")
         transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
         return await client.post(f"/api/providers/{provider}/test")
+
+
+async def _get_provider_account(app, provider: str, *, role: str | None = "admin"):
+    transport_app = RoleMiddleware(app, role) if role is not None else app
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=transport_app), base_url="http://test"
+    ) as client:
+        return await client.get(f"/api/providers/{provider}/account")
 
 
 @pytest.mark.asyncio
@@ -320,6 +330,10 @@ async def test_list_providers_admin_returns_metadata(_app):
     assert resp.status_code == 200
     provider_ids = {item["id"] for item in resp.json()}
     assert {"anthropic", "openai", "custom_openai_compatible"} <= provider_ids
+    openrouter = next(item for item in resp.json() if item["id"] == "openrouter")
+    assert openrouter["dashboard_url"] == "https://openrouter.ai/dashboard/api-keys"
+    assert openrouter["account_capability"] == "current_key"
+    assert {"label", "creator_user_id", "workspace_id", "hash"}.isdisjoint(openrouter)
 
 
 @pytest.mark.asyncio
@@ -334,6 +348,149 @@ async def test_test_provider_requires_admin_session(_app):
     assert api_key_only.status_code == 403
     assert member.status_code == 403
     conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_provider_account_requires_admin_session(_app):
+    """Account snapshots keep the same browser-admin boundary as provider tests."""
+    app, conn = _app
+
+    api_key_only = await _get_provider_account(app, "openrouter", role=None)
+    member = await _get_provider_account(app, "openrouter", role="member")
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(monkeypatch):
+    """Unsupported provider accounts are a capability response, never an outbound probe."""
+    from paper_ingestion.services import provider_account
+
+    fetch_key = AsyncMock()
+    pinned_factory = AsyncMock()
+    monkeypatch.setattr(provider_account, "get_provider_api_key", fetch_key)
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_factory)
+
+    snapshot = await provider_account.fetch_provider_account("anthropic", db_pool=object())
+
+    assert snapshot.capability == "unavailable"
+    assert snapshot.data == {}
+    assert snapshot.error_code is None
+    fetch_key.assert_not_awaited()
+    pinned_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_uses_public_pinned_transport_and_discards_identity(monkeypatch):
+    """Current-key snapshots use a dedicated public transport and an explicit field allow-list."""
+    from jarvis_common.pinned_transport import PUBLIC_ONLY
+    from paper_ingestion.services import provider_account
+
+    transport_calls: list[object] = []
+
+    @asynccontextmanager
+    async def pinned_client(policy, *, timeout):
+        transport_calls.append((policy, timeout))
+        payload = {
+            "data": {
+                "is_free_tier": False,
+                "usage": 2.5,
+                "usage_daily": 1.25,
+                "usage_weekly": 2.5,
+                "usage_monthly": 2.5,
+                "limit": 10,
+                "limit_remaining": 7.5,
+                "limit_reset": "monthly",
+                "expires_at": "2030-01-01T00:00:00Z",
+                "label": "must-not-leak",
+                "creator_user_id": "must-not-leak",
+                "workspace_id": "must-not-leak",
+                "hash": "must-not-leak",
+            }
+        }
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert transport_calls and transport_calls[0][0] is PUBLIC_ONLY
+    assert snapshot.capability == "current_key"
+    assert snapshot.error_code is None
+    assert snapshot.data == {
+        "is_free_tier": False,
+        "usage": 2.5,
+        "usage_daily": 1.25,
+        "usage_weekly": 2.5,
+        "usage_monthly": 2.5,
+        "limit": 10,
+        "limit_remaining": 7.5,
+        "limit_reset": "monthly",
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_failure_codes_are_sanitized(monkeypatch):
+    """Provider response details never become account endpoint output."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(401, text="sensitive upstream response")
+            )
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code == "provider_http_error"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_response_is_hard_byte_capped(monkeypatch):
+    """Account snapshots stop reading oversized bodies before decoding them."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200, content=b"x" * (provider_account._MAX_ACCOUNT_RESPONSE_BYTES + 1)
+                )
+            )
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code == "provider_response_too_large"
 
 
 # ---------------------------------------------------------------------------

@@ -118,3 +118,86 @@ async def test_settings_save_event_failure_does_not_block_response(_app) -> None
             )
 
     assert resp.status_code == 200, f"log_event failure should not block 200: {resp.text}"
+
+
+@pytest.mark.asyncio
+async def test_route_assignment_uses_dedicated_audit_and_event(_app) -> None:
+    """Quick/Main assignments are distinguishable from ordinary setting changes."""
+    from paper_ingestion.services.config_write import ConfigWriteResult
+
+    app, _conn, _mock_http = _app
+    write_config_mock = AsyncMock(return_value=ConfigWriteResult(display_value="qwen3:8b"))
+    event_mock = AsyncMock()
+    audit_mock = AsyncMock()
+    with (
+        patch("paper_ingestion.routers.settings.write_config", new=write_config_mock),
+        patch("paper_ingestion.routers.settings._log_event", new=event_mock),
+        patch("paper_ingestion.routers.settings.log_audit", new=audit_mock),
+    ):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.put(
+                "/api/config/llm.fast_model",
+                json={"key": "llm.fast_model", "value": "qwen3:8b"},
+            )
+
+    assert response.status_code == 200
+    assert audit_mock.await_args.kwargs["action"] == "llm.route.change"
+    assert audit_mock.await_args.kwargs["resource"] == "llm.fast_model"
+    event_kwargs = event_mock.await_args.kwargs
+    assert event_kwargs["message"] == "llm/route_changed"
+    assert event_kwargs["context"] == {"key": "llm.fast_model", "role": "fast"}
+
+
+@pytest.mark.asyncio
+async def test_provider_connection_test_emits_sanitized_event(_app) -> None:
+    """Connection events identify the provider and stable outcome without a secret or body."""
+    from paper_ingestion.services.provider_test import ProviderTestResult
+
+    app, conn, _mock_http = _app
+    conn.fetchrow.return_value = {"value": "ignored", "encrypted_value": None}
+    event_mock = AsyncMock()
+    with (
+        patch("paper_ingestion.routers.settings.resolve_secret_row", return_value="test-token"),
+        patch(
+            "paper_ingestion.routers.settings.test_provider_connectivity",
+            new=AsyncMock(
+                return_value=ProviderTestResult(ok=False, error="provider request failed")
+            ),
+        ),
+        patch("paper_ingestion.routers.settings._log_event", new=event_mock),
+    ):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/providers/openrouter/test")
+
+    assert response.status_code == 200
+    event_kwargs = event_mock.await_args.kwargs
+    assert event_kwargs["message"] == "llm/provider_connection_checked"
+    assert event_kwargs["context"] == {
+        "provider": "openrouter",
+        "success": False,
+        "code": "connection_failed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_provider_key_still_emits_connection_event(_app) -> None:
+    """A local configuration failure is a checked connection outcome, not silent state."""
+    app, conn, _mock_http = _app
+    conn.fetchrow.return_value = None
+    event_mock = AsyncMock()
+    with patch("paper_ingestion.routers.settings._log_event", new=event_mock):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/providers/openrouter/test")
+
+    assert response.status_code == 200
+    assert event_mock.await_args.kwargs["context"] == {
+        "provider": "openrouter",
+        "success": False,
+        "code": "api_key_unavailable",
+    }

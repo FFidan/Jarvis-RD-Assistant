@@ -48,6 +48,9 @@ class ModelCatalogEntry:
     default_num_ctx: int | None = None
     max_num_ctx: int | None = None
     supports_thinking: bool = False
+    input_price_per_million: str | None = None
+    output_price_per_million: str | None = None
+    price_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize this entry to a plain dict suitable for JSON responses."""
@@ -89,6 +92,9 @@ def _coerce_entry(raw: dict) -> ModelCatalogEntry:
         ),
         max_num_ctx=(int(raw["max_num_ctx"]) if raw.get("max_num_ctx") is not None else None),
         supports_thinking=bool(raw.get("supports_thinking", False)),
+        input_price_per_million=raw.get("input_price_per_million"),
+        output_price_per_million=raw.get("output_price_per_million"),
+        price_source=raw.get("price_source"),
     )
 
 

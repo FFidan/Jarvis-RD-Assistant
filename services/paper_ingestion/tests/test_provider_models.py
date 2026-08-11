@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import socket
+from datetime import UTC, datetime
 from typing import Any
 
 import httpcore
@@ -209,6 +210,67 @@ async def test_overlong_model_id_is_dropped_and_counted() -> None:
 
     assert [entry.name for entry in listing.entries] == ["kimi-k2"]
     assert listing.excluded["invalid"] == 1
+
+
+@pytest.mark.asyncio
+async def test_openrouter_pricing_is_decimal_normalized_per_million() -> None:
+    """OpenRouter's documented per-token strings remain exact UI metadata."""
+    listing = await _fetch(
+        "openrouter",
+        Recorder(
+            {
+                "data": [
+                    {
+                        "id": "vendor/model",
+                        "pricing": {"prompt": "0.0000015", "completion": "0"},
+                    }
+                ]
+            }
+        ),
+    )
+
+    entry = listing.entries[0]
+    assert entry.input_price_per_million == "1.5"
+    assert entry.output_price_per_million == "0"
+    assert entry.price_source == "openrouter"
+
+
+@pytest.mark.parametrize(
+    "pricing",
+    [
+        None,
+        {},
+        {"prompt": "-0.000001", "completion": "0"},
+        {"prompt": "NaN", "completion": "0"},
+        {"prompt": "Infinity", "completion": "0"},
+        {"prompt": "not-a-number", "completion": "0"},
+        {"prompt": "0.000001"},
+    ],
+)
+def test_openrouter_invalid_pricing_stays_unknown(pricing: object) -> None:
+    """Only complete, finite, non-negative OpenRouter pricing becomes a price."""
+    entries, _excluded = provider_models._build_entries(
+        provider_for_id("openrouter"),
+        [("vendor/model", {"pricing": pricing})],
+        datetime.now(UTC),
+    )
+
+    assert entries[0].input_price_per_million is None
+    assert entries[0].output_price_per_million is None
+    assert entries[0].price_source is None
+
+
+def test_non_openrouter_pricing_stays_unknown() -> None:
+    """A similarly shaped response from another provider is not a pricing contract."""
+    entries, _excluded = provider_models._build_entries(
+        provider_for_id("openai"),
+        [("gpt-5", {"pricing": {"prompt": "0.000001", "completion": "0.000002"}})],
+        datetime.now(UTC),
+    )
+
+    assert entries[0].input_price_per_million is None
+    assert entries[0].output_price_per_million is None
+    assert entries[0].price_source is None
 
 
 @pytest.mark.asyncio

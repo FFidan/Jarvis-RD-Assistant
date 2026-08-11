@@ -9,7 +9,7 @@ Sub-routers:
 """
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -52,8 +52,10 @@ from paper_ingestion.services.llm_provider_registry import (
     provider_for_id,
 )
 from paper_ingestion.services.model_assignment import cloud_provider_key_present
+from paper_ingestion.services.provider_account import fetch_provider_account
 from paper_ingestion.services.provider_test import (
     _SUPPORTED_PROVIDERS,
+    ProviderTestResult,
     test_provider_connectivity,
 )
 
@@ -90,6 +92,17 @@ class ProviderMetadataResponse(BaseModel):
     configured: bool
     base_url_configured: bool = False
     supports_assignment: bool
+    dashboard_url: str | None = None
+    account_capability: Literal["current_key", "unavailable"]
+
+
+class ProviderAccountResponse(BaseModel):
+    """Capability-gated, sanitized account data for one registered provider."""
+
+    provider: str
+    capability: Literal["current_key", "unavailable"]
+    data: dict[str, bool | int | float | str | None]
+    error_code: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +227,15 @@ async def set_config(
     )
     display_value = result.display_value
 
-    if key in _ENCRYPTED_KEYS:
+    route_role = {"llm.fast_model": "fast", "llm.smart_model": "smart"}.get(key)
+    if route_role is not None:
+        await log_audit(
+            db_pool,
+            action="llm.route.change",
+            resource=key,
+            user_id=str(caller_user_id) if caller_user_id is not None else None,
+        )
+    elif key in _ENCRYPTED_KEYS:
         await log_audit(
             db_pool,
             action="secret.rotate",
@@ -229,16 +250,20 @@ async def set_config(
             level="info",
             category="config",
             source="settings",
-            message="setting_changed",
-            context={
-                "key": key,
-                "new_value": str(display_value),
-                **(
-                    {"schedule_apply_warnings": result.schedule_apply_warnings}
-                    if result.schedule_apply_warnings
-                    else {}
-                ),
-            },
+            message="llm/route_changed" if route_role is not None else "setting_changed",
+            context=(
+                {"key": key, "role": route_role}
+                if route_role is not None
+                else {
+                    "key": key,
+                    "new_value": str(display_value),
+                    **(
+                        {"schedule_apply_warnings": result.schedule_apply_warnings}
+                        if result.schedule_apply_warnings
+                        else {}
+                    ),
+                }
+            ),
         )
     except Exception:  # noqa: BLE001
         logger.debug("config event log_event failed (non-fatal)", exc_info=True)
@@ -313,9 +338,33 @@ async def list_providers(
                 configured=configured,
                 base_url_configured=base_url_configured,
                 supports_assignment=provider.supports_assignment,
+                dashboard_url=provider.dashboard_url,
+                account_capability=provider.account_capability,
             )
         )
     return rows
+
+
+@router.get("/providers/{provider}/account", response_model=ProviderAccountResponse)
+@limiter.limit("5/minute")
+async def get_provider_account(
+    request: Request,
+    provider: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
+) -> ProviderAccountResponse:
+    """Return only the account fields that this provider's API key can safely expose."""
+    try:
+        snapshot = await fetch_provider_account(provider, db_pool=db_pool)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="unsupported provider") from exc
+    return ProviderAccountResponse(
+        provider=snapshot.provider,
+        capability=snapshot.capability,
+        data=snapshot.data,
+        error_code=snapshot.error_code,
+    )
 
 
 @router.post("/providers/{provider}/test", response_model=ProviderTestResponse)
@@ -346,16 +395,44 @@ async def test_provider(
             api_key = None
 
     if not api_key:
-        return ProviderTestResponse(ok=False, error="no api key configured")
-
-    base_url = None
-    if provider_definition.base_url_config_key is not None:
-        base_url = await get_provider_base_url(provider, db_pool)
-        if base_url is None:
-            return ProviderTestResponse(ok=False, error="no base URL configured")
-
-    result = await test_provider_connectivity(provider, api_key, base_url=base_url)
+        result = ProviderTestResult(ok=False, error="no api key configured")
+    else:
+        base_url = None
+        if provider_definition.base_url_config_key is not None:
+            base_url = await get_provider_base_url(provider, db_pool)
+        if provider_definition.base_url_config_key is not None and base_url is None:
+            result = ProviderTestResult(ok=False, error="no base URL configured")
+        else:
+            result = await test_provider_connectivity(provider, api_key, base_url=base_url)
+    try:
+        await _log_event(
+            pool=db_pool,
+            level="info" if result.ok else "warning",
+            category="config",
+            source="settings",
+            message="llm/provider_connection_checked",
+            context={
+                "provider": provider,
+                "success": result.ok,
+                "code": _provider_test_code(result.error, result.ok),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("provider connection event log_event failed (non-fatal)", exc_info=True)
     return ProviderTestResponse(ok=result.ok, error=result.error)
+
+
+def _provider_test_code(error: str | None, ok: bool) -> str:
+    """Map provider-test outcomes to stable event codes without logging provider text."""
+    if ok:
+        return "ok"
+    if error is None:
+        return "connection_failed"
+    return {
+        "no api key configured": "api_key_unavailable",
+        "no base URL configured": "base_url_unavailable",
+        "unsupported provider": "unsupported_provider",
+    }.get(error, "connection_failed")
 
 
 # ---------------------------------------------------------------------------

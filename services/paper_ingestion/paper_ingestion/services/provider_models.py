@@ -10,6 +10,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, cast, get_args
 
 import httpx
@@ -58,6 +59,7 @@ _MAX_MODEL_ID_CHARS = 128
 # endpoint chooses the payload, so cap the bytes read and the pages followed
 # before any of it becomes Python objects.
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+_TOKENS_PER_MILLION = Decimal(1_000_000)
 _MAX_PAGES = 20
 _PER_PROVIDER_TIMEOUT_SECONDS = 8.0
 # httpx's timeout bounds each read, not the whole exchange, so a server dripping
@@ -338,6 +340,9 @@ def live_model_entry(
     assignment_id: str,
     fetched_at: datetime | None,
     capability: Capability,
+    input_price_per_million: str | None = None,
+    output_price_per_million: str | None = None,
+    price_source: str | None = None,
 ) -> ModelCatalogEntry:
     """Build a catalog entry for one live-listed provider model."""
     roles, assignable, notes = _CAPABILITY_RULING[capability]
@@ -357,7 +362,36 @@ def live_model_entry(
         last_reviewed=fetched_at.date().isoformat() if fetched_at else "",
         phase="advanced",
         assignable=assignable,
+        input_price_per_million=input_price_per_million,
+        output_price_per_million=output_price_per_million,
+        price_source=price_source,
     )
+
+
+def _normalize_openrouter_price(value: object) -> str | None:
+    """Convert one documented OpenRouter per-token price into a per-million string."""
+    if not isinstance(value, str):
+        return None
+    try:
+        price = Decimal(value)
+    except (InvalidOperation, ValueError):
+        return None
+    if not price.is_finite() or price < 0:
+        return None
+    normalized = format((price * _TOKENS_PER_MILLION).normalize(), "f")
+    return normalized.rstrip("0").rstrip(".") if "." in normalized else normalized
+
+
+def _openrouter_pricing(raw: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """Return verified OpenRouter pricing only when both documented rates are usable."""
+    pricing = raw.get("pricing")
+    if not isinstance(pricing, Mapping):
+        return None, None, None
+    input_price = _normalize_openrouter_price(pricing.get("prompt"))
+    output_price = _normalize_openrouter_price(pricing.get("completion"))
+    if input_price is None or output_price is None:
+        return None, None, None
+    return input_price, output_price, "openrouter"
 
 
 def _validation_error(provider: ProviderDefinition, model_id: str) -> str | None:
@@ -403,6 +437,9 @@ def _build_entries(
         seen.add(normalized)
         if capability == "unknown":
             excluded["unknown"] += 1
+        input_price, output_price, price_source = (
+            _openrouter_pricing(raw) if provider.id == "openrouter" else (None, None, None)
+        )
         entries.append(
             live_model_entry(
                 catalog_provider,
@@ -410,6 +447,9 @@ def _build_entries(
                 assignment_id=assignment_id,
                 fetched_at=fetched_at,
                 capability=capability,
+                input_price_per_million=input_price,
+                output_price_per_million=output_price,
+                price_source=price_source,
             )
         )
     return tuple(entries), excluded

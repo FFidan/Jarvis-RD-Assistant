@@ -509,6 +509,11 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
         "issues": {},
         "catalog": [],
         "recommendations": {},
+        "embedding_contract": {
+            "model": EMBEDDING_MODEL_NAME,
+            "dimension": EMBEDDING_DIMENSION,
+            "change_requires_reindex": True,
+        },
     }
 
     cloud_api_keys: dict[str, bool] = {"anthropic": False, "openai": False, "google": False}

@@ -361,6 +361,32 @@ async def test_system_models_no_config(_app):
 
 
 @pytest.mark.asyncio
+async def test_system_models_always_exposes_effective_embedding_contract(_app, monkeypatch):
+    """The embedding route comes from runtime configuration, not an optional DB row."""
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import get_system_models
+    import paper_ingestion.services.litellm_config as litellm_config
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = []
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def unavailable_litellm():
+        raise RuntimeError("LiteLLM unavailable")
+
+    monkeypatch.setattr(litellm_config, "get_litellm_deployments", unavailable_litellm)
+
+    body = await get_system_models(request)
+
+    assert body.current.get("embed_model") is None
+    assert body.embedding_contract == {
+        "model": "qwen3-embedding:4b",
+        "dimension": 2560,
+        "change_requires_reindex": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_system_models_db_failure_still_returns_ollama_data(_app):
     """GET /api/system/models degrades when config loading fails but still returns Ollama data."""
     app, conn, mock_http = _app
