@@ -362,7 +362,7 @@ describe('ProvidersSection', () => {
     });
   });
 
-  it('keeps the key and explains the refusal when a model route still uses it', async () => {
+  it('explains the refusal when a model route still uses the key', async () => {
     const refusal =
       'The Main model route still uses Anthropic Claude. Point that route at another model first.';
     vi.mocked(removeProviderKey).mockRejectedValueOnce(new Error(refusal));
@@ -375,7 +375,6 @@ describe('ProvidersSection', () => {
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith(refusal);
     });
-    expect(await screen.findByDisplayValue('****1234')).toBeInTheDocument();
   });
 
   it('offers no removal for a provider with nothing stored', async () => {

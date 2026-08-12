@@ -22,6 +22,7 @@ import {
 } from '@/lib/api';
 import type { ProviderMetadata, ProviderModelListStatus } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
+import { onSaveError } from '@/lib/forms/save-error';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import type { ConfigEntry } from '@/types';
 
@@ -45,13 +46,13 @@ const REMOVAL_COPY: Record<EditableField, { title: string; description: string; 
   apiKey: {
     title: 'Remove this provider key?',
     description:
-      'JARVIS deletes the stored key and stops using this provider until you add another one. Revoke the key with the provider as well if it leaked.',
+      'JARVIS deletes the stored key and stops sending new requests to this provider within a few moments. Revoke the key with the provider as well if it leaked.',
     done: 'Provider key removed',
   },
   baseUrl: {
     title: 'Remove this endpoint URL?',
     description:
-      'JARVIS deletes the stored endpoint and stops sending requests to it until you add another one.',
+      'JARVIS deletes the stored endpoint and stops sending new requests to it within a few moments.',
     done: 'Provider endpoint removed',
   },
 };
@@ -321,8 +322,7 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
       });
       toast.success(REMOVAL_COPY[variables.field].done);
     },
-    onError: (error: Error) =>
-      toast.error(errorMessage(error, 'Failed to remove this provider setting')),
+    onError: onSaveError('Could not remove this provider setting'),
   });
 
   const beginEdit = (provider: ProviderMetadata, field: EditableField) => {

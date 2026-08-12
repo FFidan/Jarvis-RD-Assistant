@@ -470,7 +470,10 @@ async def _model_route_using(provider: ProviderDefinition, db_pool: asyncpg.Pool
     if issue is not None:
         raise HTTPException(
             status_code=503,
-            detail="Cannot verify active model assignments; refusing to remove this setting",
+            detail=(
+                "The stored model routes could not be read just now, so this setting "
+                "was left in place. Please try again in a moment."
+            ),
         )
     for row_key, label in _MODEL_ROUTE_LABELS.items():
         model_id = assignments.get(row_key)
@@ -497,7 +500,13 @@ async def _remove_provider_setting(
         definition.api_key_config_key if field == "api_key" else definition.base_url_config_key
     )
     if config_key is None:
-        raise HTTPException(status_code=400, detail="provider has no endpoint URL")
+        stored = "an API key" if field == "api_key" else "an endpoint URL"
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{definition.display_name} does not store {stored}, so there is nothing to remove."
+            ),
+        )
 
     # Refuse rather than reassign: no code path in this service rewrites a model
     # route, and doing it here would skip the assignment validation the settings

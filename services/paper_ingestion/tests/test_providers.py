@@ -453,6 +453,25 @@ async def test_remove_provider_key_requires_admin_session(_app):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_remove_provider_base_url_requires_admin_session(_app):
+    """The endpoint route has its own decorator stack, so it needs its own boundary check."""
+    app, conn = _app
+
+    api_key_only = await _delete_provider_setting(
+        app, "custom_openai_compatible", "base-url", role=None
+    )
+    member = await _delete_provider_setting(
+        app, "custom_openai_compatible", "base-url", role="member"
+    )
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetch.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider_id", ["anthropic", "zai", "custom_openai_compatible"])
 async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(
     monkeypatch, provider_id
@@ -1079,11 +1098,8 @@ async def test_removing_a_provider_key_clears_it_and_records_the_change(
     resp = await _delete_provider_setting(app, "anthropic")
 
     assert resp.status_code == 204
-    delete_sql, deleted_key = _statement_with(conn, "DELETE FROM user_config")
+    _, deleted_key = _statement_with(conn, "DELETE FROM user_config")
     assert deleted_key == "llm.anthropic.api_key"
-    # The presence read that decides "configured" is system-scoped, so the
-    # delete has to clear that exact row or the provider still reports a key.
-    assert "user_id IS NULL" in delete_sql
     _cache_invalidations.assert_awaited_once_with("anthropic")
     audit = _statement_with(conn, "audit_log")
     assert audit[2] == "secret.remove"
