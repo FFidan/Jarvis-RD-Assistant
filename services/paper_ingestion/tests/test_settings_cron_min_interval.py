@@ -5,10 +5,12 @@ Verifies sub-hourly rejection plus the scheduler warning surface in
 """
 
 from __future__ import annotations
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from paper_ingestion.services import config_validators
 from paper_ingestion.services.config_validators import _validate_cron, _validate_zotero_cron
 
 
@@ -58,6 +60,33 @@ def test_zotero_poll_cron_accepts_a_half_hourly_schedule() -> None:
     # Pins the floor at fifteen minutes rather than Pulse's hour: this case is
     # what fails if someone later copies the Pulse limit across.
     _validate_zotero_cron("0,30 * * * *")
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        pytest.param(datetime(2026, 8, 12, 12, 10), id="first-gap-is-small"),
+        pytest.param(datetime(2026, 8, 12, 12, 55), id="first-gap-is-large"),
+    ],
+)
+def test_zotero_poll_cron_rejects_a_tight_pair_whatever_the_time_of_day(monkeypatch, base) -> None:
+    """The floor must hold at every base time, not just the one the save happened at.
+
+    ``0,50,51 * * * *`` fires an hour apart, then one minute apart. Looking only
+    at the next two fire times sees the tight pair from 12:10 and misses it from
+    12:55, so the same expression would be accepted or rejected by the clock.
+    """
+    monkeypatch.setattr(config_validators, "_now", lambda: base)
+
+    with pytest.raises(ValueError, match="15 minutes"):
+        _validate_zotero_cron("0,50,51 * * * *")
+
+
+def test_zotero_poll_cron_accepts_a_weekly_schedule(monkeypatch) -> None:
+    """A schedule firing less often than the scan window is above the floor by definition."""
+    monkeypatch.setattr(config_validators, "_now", lambda: datetime(2026, 8, 12, 12, 10))
+
+    _validate_zotero_cron("0 9 * * 1")
 
 
 # ---------------------------------------------------------------------------
