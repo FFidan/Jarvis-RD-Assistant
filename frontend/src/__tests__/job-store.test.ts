@@ -596,6 +596,27 @@ describe('JobStore', () => {
     expect(toast.success).toHaveBeenCalledWith('Generating Pulse completed');
   });
 
+  it('names the scope in the completion notice for a paper-scoped scan', async () => {
+    // The same kind is submitted library-wide and for one paper, so a notice
+    // that names only the kind reads identically for two different results.
+    const { toast } = await import('sonner');
+    useJobStore.setState({ discoveryInitialized: true });
+
+    useJobStore
+      .getState()
+      ._handleTerminal(
+        makeJob({ id: 'scoped-scan', status: 'succeeded', kind: 'contradictions.scan', payload: { paper_id: 42 } }),
+      );
+    expect(toast.success).toHaveBeenCalledWith('Scanning Paper Contradictions completed');
+
+    useJobStore
+      .getState()
+      ._handleTerminal(
+        makeJob({ id: 'library-scan', status: 'succeeded', kind: 'contradictions.scan', payload: {} }),
+      );
+    expect(toast.success).toHaveBeenCalledWith('Scanning Contradictions completed');
+  });
+
   it('subscribe: succeeded card.generate with zero cards does NOT fire the success toast', async () => {
     const { toast } = await import('sonner');
 

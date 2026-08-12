@@ -128,11 +128,13 @@ def _resolve_config_value(key: str, row: Any) -> Any:
                 # Decrypt then mask — never expose plaintext over the API
                 plaintext = decrypt_secret(enc.decode("ascii"))
             except (InvalidToken, UnicodeDecodeError):
-                # Ciphertext the current key cannot read, after a restore or a
-                # rotated configuration key. One unreadable row must not take
-                # down the configuration listing the administrator needs in
-                # order to replace it. Never fall through to masking the stored
-                # bytes — that would present ciphertext as a working value.
+                # One stored value the current key cannot read, which a restore
+                # can leave behind. It must not take down the configuration
+                # listing the administrator needs in order to replace it. A
+                # missing or malformed configuration key is a different, global
+                # failure and is deliberately still raised. Never fall through
+                # to masking the stored bytes — that would present ciphertext
+                # as a working value.
                 logger.warning("Stored secret for %s could not be decrypted", key, exc_info=True)
                 return _UNREADABLE_SECRET
             return mask_secret(plaintext)

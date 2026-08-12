@@ -121,12 +121,16 @@ const outcomeParts = (
  * rather than raising. A green "completed" toast would misreport that, so a
  * `partial` result gets a warning naming both counts.
  */
+/** Label a job by kind, narrowed by scope where a kind serves two scopes. */
+const jobLabel = (job: Job): string =>
+  kindLabel(job.kind, { paperScoped: job.payload?.paper_id != null });
+
 const partialWarning = (job: Job): string => {
   const library = job.kind === 'papers.process_library';
   const { failed, skipped, remaining, total } = jobOutcomeCounts(job.result);
   const parts = outcomeParts(failed, skipped, { library });
   if (remaining > 0) parts.push(`${remaining} not processed`);
-  const label = library ? 'Library processing' : kindLabel(job.kind);
+  const label = library ? 'Library processing' : jobLabel(job);
   if (parts.length === 0) {
     return `${label} finished with incomplete results; open Jobs for details`;
   }
@@ -146,7 +150,7 @@ const cancelledWarning = (job: Job): string => {
     remaining > 0 ? `${remaining} not processed` : 'stopped before completion',
     ...outcomeParts(failed, skipped, { library }),
   ];
-  const label = library ? 'Library processing' : kindLabel(job.kind);
+  const label = library ? 'Library processing' : jobLabel(job);
   return `${label} was cancelled - ${parts.join(', ')}; open Jobs for details`;
 };
 
@@ -320,7 +324,7 @@ function applyTerminalEffects(job: Job, notify = true): void {
       } else if (resultStatus === 'partial') {
         toast.warning(partialWarning(job));
       } else if (!zeroCards) {
-        toast.success(`${kindLabel(job.kind)} completed`);
+        toast.success(`${jobLabel(job)} completed`);
       }
     }
     if (job.kind === 'paper.summarize') applySummaryCoverageToCache(job);
@@ -331,7 +335,7 @@ function applyTerminalEffects(job: Job, notify = true): void {
       }
     }
   } else if (job.status === 'failed' && notify) {
-    const msg = job.error?.message ?? `${kindLabel(job.kind)} failed`;
+    const msg = job.error?.message ?? `${jobLabel(job)} failed`;
     const actionLink = job.error?.action_link;
     if (actionLink) {
       toast.error(msg, {

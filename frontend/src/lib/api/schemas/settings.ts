@@ -174,13 +174,13 @@ export const providerMetadataSchema = z.looseObject({
   base_url_configured: z.boolean(),
   supports_assignment: z.boolean(),
   dashboard_url: z.string().url().nullable(),
-  account_capability: z.enum(['current_key', 'balance', 'unavailable']),
+  account_capability: z.enum(['current_key', 'balance', 'unavailable', 'no_provider_api']),
 });
 export const providerMetadataListSchema = z.array(providerMetadataSchema);
 
 export const providerAccountResponseSchema = z.looseObject({
   provider: z.string(),
-  capability: z.enum(['current_key', 'balance', 'unavailable']),
+  capability: z.enum(['current_key', 'balance', 'unavailable', 'no_provider_api']),
   data: z.record(z.string(), z.union([z.boolean(), z.number(), z.string(), z.null()])),
   error_code: z.string().nullable(),
 });

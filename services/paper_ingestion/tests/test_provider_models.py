@@ -527,10 +527,12 @@ async def test_a_recovered_provider_stops_reporting_the_earlier_failure(
     monkeypatch.setattr(provider_models, "_cache_clock", lambda: now[0])
     reachable = [True]
 
+    served = ["kimi-k2"]
+
     def handler(request: httpx.Request) -> httpx.Response:
         if not reachable[0]:
             return httpx.Response(503, json={})
-        return httpx.Response(200, json={"data": [{"id": "kimi-k2"}]})
+        return httpx.Response(200, json={"data": [{"id": served[0]}]})
 
     async with mock_http_client(handler) as client:
         pool = FakeConfigPool()
@@ -539,11 +541,18 @@ async def test_a_recovered_provider_stops_reporting_the_earlier_failure(
         now[0] += provider_models._CACHE_TTL_SECONDS + 1
         failed = await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
         reachable[0] = True
+        served[0] = "kimi-k2-turbo"
         now[0] += provider_models._FAILURE_CACHE_TTL_SECONDS + 1
         recovered = await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
 
+    # The failing listing still serves its cached entries, so the reason it
+    # carries is the only thing separating it from a healthy one.
     assert failed.error is not None
+    assert [entry.id for entry in failed.entries] == ["moonshot/kimi-k2"]
+    # Changing what the provider serves proves recovery refetched rather than
+    # replaying the cache, which is what makes the cleared reason meaningful.
     assert recovered.error is None
+    assert [entry.id for entry in recovered.entries] == ["moonshot/kimi-k2-turbo"]
 
 
 @pytest.mark.asyncio

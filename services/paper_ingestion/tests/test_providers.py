@@ -1094,3 +1094,28 @@ async def test_models_response_offers_a_keyless_custom_endpoint_live_models(monk
     assert entry["source"] == "provider"
     assert entry["fetched_at"] == summary["fetched_at"]
     assert any(item["id"] == "custom_openai/org/model-y" for item in body.recommendations["smart"])
+
+
+def test_every_account_capability_is_accepted_by_the_browser_schema() -> None:
+    """The browser validates this vocabulary independently and rejects unknowns.
+
+    The dashboard parses the provider listing against its own enum and discards
+    the whole response when a value is missing from it, so a capability added
+    here but not there would blank the providers panel rather than degrade one
+    field. Keeping the two in step has to fail here, not in a browser.
+    """
+    import re
+    from pathlib import Path
+    from typing import get_args
+
+    from paper_ingestion.services.llm_provider_registry import AccountCapability
+
+    schema = (
+        Path(__file__).resolve().parents[3] / "frontend/src/lib/api/schemas/settings.ts"
+    ).read_text(encoding="utf-8")
+    declared = set(get_args(AccountCapability))
+    for enum_body in re.findall(
+        r"account_capability: z\.enum\(\[([^\]]+)\]\)", schema
+    ) + re.findall(r"capability: z\.enum\(\[([^\]]+)\]\)", schema):
+        accepted = set(re.findall(r"'([^']+)'", enum_body))
+        assert declared <= accepted, f"not accepted by the browser schema: {declared - accepted}"
