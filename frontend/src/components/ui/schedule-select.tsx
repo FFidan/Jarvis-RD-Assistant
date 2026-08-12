@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { TimeSelect } from '@/components/ui/time-select';
@@ -91,8 +92,24 @@ export function ScheduleSelect({ value, onChange, disabled, id }: ScheduleSelect
   const frequencyId = id ? `${id}-frequency` : 'schedule-frequency';
 
   const currentTime = schedule.kind === 'daily' || schedule.kind === 'weekly' ? schedule.time : DEFAULT_TIME;
-  const currentDay = schedule.kind === 'weekly' ? schedule.day : DEFAULT_DAY;
-  const currentHours = schedule.kind === 'every-n-hours' ? schedule.hours : DEFAULT_HOUR_STEP;
+
+  // Remember the day and hour-step the control last actually held. Weekly and
+  // "every N hours" are the only presets that carry these fields, so leaving
+  // one of them and coming back would otherwise fall through to the constant
+  // defaults below, silently rewriting whatever value was there before.
+  const [lastDay, setLastDay] = useState(schedule.kind === 'weekly' ? schedule.day : DEFAULT_DAY);
+  if (schedule.kind === 'weekly' && schedule.day !== lastDay) {
+    setLastDay(schedule.day);
+  }
+  const currentDay = schedule.kind === 'weekly' ? schedule.day : lastDay;
+
+  const [lastHours, setLastHours] = useState(
+    schedule.kind === 'every-n-hours' ? schedule.hours : DEFAULT_HOUR_STEP,
+  );
+  if (schedule.kind === 'every-n-hours' && schedule.hours !== lastHours) {
+    setLastHours(schedule.hours);
+  }
+  const currentHours = schedule.kind === 'every-n-hours' ? schedule.hours : lastHours;
 
   function handleFrequencyChange(frequency: string) {
     const [hh, mm] = currentTime.split(':');
@@ -163,7 +180,7 @@ export function ScheduleSelect({ value, onChange, disabled, id }: ScheduleSelect
 
       {schedule.kind === 'every-n-hours' && (
         <Select value={String(currentHours)} onValueChange={handleHoursChange} disabled={disabled}>
-          <SelectTrigger className="w-36">
+          <SelectTrigger className="w-36" aria-label="Hours">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -177,12 +194,14 @@ export function ScheduleSelect({ value, onChange, disabled, id }: ScheduleSelect
       )}
 
       {(schedule.kind === 'daily' || schedule.kind === 'weekly') && (
-        <TimeSelect value={currentTime} onChange={handleTimeChange} disabled={disabled} />
+        <div role="group" aria-label="Run time">
+          <TimeSelect value={currentTime} onChange={handleTimeChange} disabled={disabled} />
+        </div>
       )}
 
       {schedule.kind === 'weekly' && (
         <Select value={currentDay} onValueChange={handleDayChange} disabled={disabled}>
-          <SelectTrigger className="w-36">
+          <SelectTrigger className="w-36" aria-label="Day of week">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

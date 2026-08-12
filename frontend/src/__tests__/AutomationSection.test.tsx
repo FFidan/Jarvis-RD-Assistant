@@ -183,14 +183,15 @@ describe('AutomationSection', () => {
 
     // The Radix mock overwrites _selectOnValueChange on each rendered Select, so it
     // always holds the last one TimeSelect renders — the minutes picker.
-    act(() => {
+    await act(async () => {
       _selectOnValueChange?.('15');
     });
 
-    // A single selection must reach the server immediately, with no timer in between.
-    await waitFor(() => {
-      expect(vi.mocked(updateNudge)).toHaveBeenCalledWith(4, { cron_expression: '15 8 * * *' });
-    });
+    // Asserted immediately after act (which only drains microtasks) rather
+    // than inside waitFor's up-to-one-second polling window: a real timer
+    // sitting between the pick and the call would not have fired yet here,
+    // so this fails if a debounce is reintroduced.
+    expect(vi.mocked(updateNudge)).toHaveBeenCalledWith(4, { cron_expression: '15 8 * * *' });
   });
 
   it('shows a schedule the picker cannot represent as text, not an editable control', async () => {
