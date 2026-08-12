@@ -262,7 +262,7 @@ export function PulseDeck() {
           </Button>
         </div>
       )}
-      {deck.cards.length === 0 && !deck.degraded_reason ? (
+      {deck.cards.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-start gap-3 py-6">
             <p className="text-muted-foreground text-sm">
