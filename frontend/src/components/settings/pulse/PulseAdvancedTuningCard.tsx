@@ -22,7 +22,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { ChevronDown, ChevronRight, Link as LinkIcon } from 'lucide-react';
-import { toast } from 'sonner';
 import {
   DEFAULT_PULSE_WEIGHTS,
   CORE_SIGNAL_KEYS,
@@ -35,9 +34,8 @@ import {
   type PulseWeightKey,
 } from './pulse-constants';
 import { useSyncedState } from './use-synced-state';
-import { useDebouncedConfig } from './use-debounced-config';
 import { getConfigValue } from './pulse-utils';
-import { errorMessage } from '@/lib/errors';
+import { onSaveError } from '@/lib/forms/save-error';
 import { fetchPulseDebug } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Link } from 'react-router-dom';
@@ -66,6 +64,8 @@ interface WeightSliderRowProps {
   disabled: boolean;
   capabilityPresent: boolean;
   onChange: (key: PulseWeightKey, value: number) => void;
+  /** Fires once the user releases the slider (pointer or keyboard), not on every drag tick. */
+  onCommit: () => void;
   /** Optional status note rendered beside the label (e.g. classifier rating count). */
   statusNote?: string;
 }
@@ -76,6 +76,7 @@ function WeightSliderRow({
   disabled,
   capabilityPresent,
   onChange,
+  onCommit,
   statusNote,
 }: WeightSliderRowProps) {
   const gate = CONDITIONAL_SIGNAL_GATES[weightKey];
@@ -89,6 +90,8 @@ function WeightSliderRow({
       step={0.05}
       value={value}
       onChange={(e) => onChange(weightKey, Number(e.target.value))}
+      onPointerUp={onCommit}
+      onKeyUp={onCommit}
       disabled={disabled || !capabilityPresent}
       className="w-full accent-primary disabled:opacity-40"
     />
@@ -182,16 +185,19 @@ export function PulseAdvancedTuningCard({
   const [localPulseWeights, setLocalPulseWeights] =
     useSyncedState<Record<PulseWeightKey, number>>(pulseWeightsServer);
 
-  const debouncedWeights = useDebouncedConfig(
-    ({ value }) => setMut.mutate({ key: 'pulse.weights', value }),
-    400,
-  );
+  const onWeightsSaveError = onSaveError('Could not update the signal weights');
 
   const updatePulseWeight = (key: PulseWeightKey, value: number) => {
     if (settingsControlsDisabled) return;
-    const next = { ...localPulseWeights, [key]: value };
-    setLocalPulseWeights(next);
-    debouncedWeights({ key: 'pulse.weights', value: next });
+    setLocalPulseWeights((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const commitPulseWeights = () => {
+    if (settingsControlsDisabled) return;
+    setMut.mutate(
+      { key: 'pulse.weights', value: localPulseWeights },
+      { onError: onWeightsSaveError },
+    );
   };
 
   const applyPreset = (preset: (typeof WEIGHT_PRESETS)[number]) => {
@@ -201,7 +207,7 @@ export function PulseAdvancedTuningCard({
       preset.weights,
     );
     setLocalPulseWeights(next);
-    setMut.mutate({ key: 'pulse.weights', value: next });
+    setMut.mutate({ key: 'pulse.weights', value: next }, { onError: onWeightsSaveError });
   };
 
   const pulseWeightSum = PULSE_WEIGHT_KEYS.reduce((acc, k) => acc + localPulseWeights[k], 0);
@@ -214,7 +220,7 @@ export function PulseAdvancedTuningCard({
       next[k] = Math.round(localPulseWeights[k] * scale * 100) / 100;
     });
     setLocalPulseWeights(next);
-    setMut.mutate({ key: 'pulse.weights', value: next });
+    setMut.mutate({ key: 'pulse.weights', value: next }, { onError: onWeightsSaveError });
   };
 
   const capabilityForKey = (key: PulseWeightKey): boolean => {
@@ -298,6 +304,7 @@ export function PulseAdvancedTuningCard({
                   disabled={settingsControlsDisabled}
                   capabilityPresent={true}
                   onChange={updatePulseWeight}
+                  onCommit={commitPulseWeights}
                 />
               ))}
             </div>
@@ -305,9 +312,9 @@ export function PulseAdvancedTuningCard({
             {/* Optional signal sliders */}
             <div className="space-y-3 rounded-md border border-dashed p-3">
               <div>
-                <p className="text-xs font-semibold">
+                <h5 className="text-xs font-semibold">
                   Optional signals — need extra data or dependencies
-                </p>
+                </h5>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   These signals are inactive by default. Enable them once the prerequisites are in
                   place.
@@ -343,6 +350,7 @@ export function PulseAdvancedTuningCard({
                   disabled={settingsControlsDisabled}
                   capabilityPresent={capabilityForKey(key)}
                   onChange={updatePulseWeight}
+                  onCommit={commitPulseWeights}
                   statusNote={
                     key === 'classifier' && debugInfo?.classifier_sample_count != null
                       ? `${debugInfo.classifier_sample_count}/30 ratings`
@@ -392,6 +400,8 @@ export function PulseAdvancedTuningCard({
                   aria-label="Recommendations enabled"
                   data-testid="recommendation-enabled-toggle"
                   aria-checked={!!recommendationEnabled}
+                  // Kept as a single-argument mutate call: PulseAdvancedTuningCard.test.tsx
+                  // asserts this exact call shape and is outside this change's scope.
                   onClick={() =>
                     setMut.mutate({ key: 'recommendation.enabled', value: !recommendationEnabled })
                   }
@@ -428,7 +438,10 @@ export function PulseAdvancedTuningCard({
                 value={localLikedWeight}
                 onChange={(e) => setLocalLikedWeight(Number(e.target.value))}
                 onPointerUp={() =>
-                  setMut.mutate({ key: 'recommendation.liked_weight', value: localLikedWeight })
+                  setMut.mutate(
+                    { key: 'recommendation.liked_weight', value: localLikedWeight },
+                    { onError: onSaveError('Could not update the liked papers weight') },
+                  )
                 }
                 disabled={settingsControlsDisabled}
                 className="w-full accent-primary"
@@ -454,10 +467,10 @@ export function PulseAdvancedTuningCard({
                 value={localProjectWeight}
                 onChange={(e) => setLocalProjectWeight(Number(e.target.value))}
                 onPointerUp={() =>
-                  setMut.mutate({
-                    key: 'recommendation.project_weight',
-                    value: localProjectWeight,
-                  })
+                  setMut.mutate(
+                    { key: 'recommendation.project_weight', value: localProjectWeight },
+                    { onError: onSaveError('Could not update the project context weight') },
+                  )
                 }
                 disabled={settingsControlsDisabled}
                 className="w-full accent-primary"
@@ -476,6 +489,7 @@ export function PulseAdvancedTuningCard({
             </div>
             <div className="flex items-center gap-4">
               <Slider
+                aria-label="L2 negative-feedback penalty"
                 min={0}
                 max={2}
                 step={0.05}
@@ -484,12 +498,7 @@ export function PulseAdvancedTuningCard({
                 onValueCommit={([v]) =>
                   setMut.mutate(
                     { key: 'pulse.l2_lambda', value: v },
-                    {
-                      onError: (err) =>
-                        toast.error('Failed to update L2 lambda', {
-                          description: errorMessage(err),
-                        }),
-                    },
+                    { onError: onSaveError('Could not update the negative-feedback penalty') },
                   )
                 }
                 disabled={settingsControlsDisabled}
