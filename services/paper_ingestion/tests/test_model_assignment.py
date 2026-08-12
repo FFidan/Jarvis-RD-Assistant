@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from paper_ingestion.services.config_write import write_config
 from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
 from paper_ingestion.services.model_assignment import (
+    cloud_provider_key_present,
     provider_access_configured,
     reload_telegram_nudges,
     validate_model_assignment,
@@ -293,6 +294,20 @@ async def test_a_cleared_base_url_does_not_count_as_configured() -> None:
     )
 
     assert access["custom_openai_compatible"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_cleared_provider_key_does_not_count_as_configured() -> None:
+    """The key path uses the same presence rule as the base-URL path, not a second one.
+
+    A row cleared to the empty string reported the provider as configured, which
+    left the account fetch and the Test button enabled for a credential that
+    cannot authenticate anything.
+    """
+    key = "llm.providers.openrouter.api_key"
+
+    assert await cloud_provider_key_present("openrouter", FakeConfigPool({key: ""})) is False
+    assert await cloud_provider_key_present("openrouter", FakeConfigPool({key: "sk-test"})) is True
 
 
 @pytest.mark.asyncio

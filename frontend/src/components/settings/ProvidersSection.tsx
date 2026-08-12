@@ -148,7 +148,7 @@ function AccountSnapshot({
   const accountQuery = useQuery({
     queryKey: QUERY_KEYS.config.providerAccount(provider.id),
     queryFn: () => fetchProviderAccount(provider.id),
-    enabled: provider.account_capability !== 'unavailable' && provider.configured,
+    enabled: (provider.account_capability === 'current_key' || provider.account_capability === 'balance') && provider.configured,
     staleTime: 60_000,
   });
   const entries = Object.entries(accountQuery.data?.data ?? {});
