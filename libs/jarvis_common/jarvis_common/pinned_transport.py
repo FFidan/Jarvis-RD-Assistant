@@ -89,12 +89,26 @@ class OutboundAddressPolicy:
 
 PUBLIC_ONLY = OutboundAddressPolicy()
 
-# These are fixed Compose service names, plus the explicit loopback development
-# surface.  Arbitrary remote requests using the shared service client still use
-# the public-only branch of this policy.
+# Fixed Compose service names, plus the explicit loopback development surface.
+# The application services are here because service-to-service calls resolve onto
+# the private bridge subnet: the Telegram bot dials paper_ingestion and
+# learning_engine, paper ingestion dials the bot for nudge reloads and the vector
+# sidecar for its health probe.  Arbitrary remote requests through the shared
+# client still take the public-only branch of this policy.
 JARVIS_SERVICE_POLICY = OutboundAddressPolicy(
     allowed_private_hosts=frozenset(
-        {"localhost", "ollama", "qdrant", "litellm", "postgres", "host.docker.internal"}
+        {
+            "localhost",
+            "ollama",
+            "qdrant",
+            "litellm",
+            "postgres",
+            "host.docker.internal",
+            "paper_ingestion",
+            "learning_engine",
+            "telegram_bot",
+            "vector",
+        }
     ),
     allowed_private_addresses=frozenset({"127.0.0.1", "::1"}),
 )

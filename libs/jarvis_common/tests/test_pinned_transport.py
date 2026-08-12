@@ -148,6 +148,18 @@ def test_litellm_policy_preserves_only_documented_internal_provider_names(host: 
     assert LITELLM_PROVIDER_POLICY.allows(f"attacker-{host}.example", private) is False
 
 
+@pytest.mark.parametrize("host", ["paper_ingestion", "learning_engine", "telegram_bot", "vector"])
+def test_service_policy_permits_the_compose_application_hostnames(host: str) -> None:
+    """Every in-cluster service the app dials must survive the private-address check.
+
+    These names resolve onto the Compose bridge subnet, so omitting one silently
+    refuses that hop before a socket opens instead of failing at request time.
+    """
+    private = ipaddress.ip_address("10.137.241.4")
+    assert JARVIS_SERVICE_POLICY.allows(host, private) is True
+    assert JARVIS_SERVICE_POLICY.allows(f"{host}.attacker.example", private) is False
+
+
 async def test_candidate_order_and_retry_stay_within_one_validated_answer_set() -> None:
     backend = _Backend(failures={"2001:4860:4860::8888"})
 
