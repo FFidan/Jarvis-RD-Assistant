@@ -552,14 +552,83 @@ fi
 ok "Dashboard is serving HTTP at ${DASHBOARD_URL}."
 
 # -----------------------------------------------------------------------------
+# In-cluster egress. The pinned outbound transport validates the resolved address
+# of every internal hop, so a service name missing from its allowlist is refused
+# before a socket opens. Every other cross-service test drives the apps
+# in-process and never sees that, so ask a service's own interpreter to make one
+# real call over the container network.
+# -----------------------------------------------------------------------------
+EGRESS_PROBE_PY="$(cat <<'PY'
+import asyncio
+import sys
+
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
+
+
+async def probe() -> None:
+    async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=15.0) as client:
+        response = await client.get(sys.argv[1])
+        response.raise_for_status()
+
+
+asyncio.run(probe())
+PY
+)"
+
+# verify_in_cluster_egress SERVICE URL [COMPOSE_PROFILE] — one real hop, made by
+# SERVICE's own interpreter through the pinned transport.
+verify_in_cluster_egress() {
+  local service="$1" target="$2" profile="${3:-}"
+  local -a compose_args=(-p "$SMOKE_PROJECT")
+  [ -n "$profile" ] && compose_args+=(--profile "$profile")
+  docker compose "${compose_args[@]}" exec -T "$service" \
+    python -c "$EGRESS_PROBE_PY" "$target"
+}
+
+# smoke_env_value KEY — one value from the .env the bootstrap just generated.
+smoke_env_value() {
+  local line
+  line="$(grep -m1 -- "^$1=" "$REPO_ROOT/.env")" || return 1
+  printf '%s' "${line#*=}"
+}
+
+info "Verifying in-cluster service egress over the container network..."
+if ! verify_in_cluster_egress paper_ingestion "http://learning_engine:8001/health"; then
+  err "Paper ingestion cannot reach learning engine over the container network."
+  err "Every internal service name must be on the pinned outbound allowlist."
+  exit 1
+fi
+ok "Paper ingestion reaches learning engine over the container network."
+
+# The bot runs only when its profile is active, so its hop is checked only then.
+# The skip is announced rather than passing silently as a verified hop.
+if [[ ",$(smoke_env_value COMPOSE_PROFILES || true)," == *,telegram,* ]]; then
+  if ! verify_in_cluster_egress telegram_bot "http://paper_ingestion:8000/health" telegram; then
+    err "The Telegram bot cannot reach paper ingestion over the container network."
+    exit 1
+  fi
+  ok "The Telegram bot reaches paper ingestion over the container network."
+else
+  info "Telegram profile inactive — skipping the bot's in-cluster egress check."
+fi
+
+# -----------------------------------------------------------------------------
 # Optional gated integration suite (--integration): tests/integration is NOT in
 # testpaths and skipif-passes without SMOKE_INTEGRATION=1 — set the gate so the
 # suite genuinely runs against the live smoke stack.
 # -----------------------------------------------------------------------------
 if [ "$INTEGRATION" -eq 1 ]; then
   info "Running the gated integration suite against the live stack..."
+  # The per-dependency health detail the suite asserts sits behind the API key
+  # this bootstrap generated, so the suite is handed the running stack's own key.
+  smoke_api_key="$(smoke_env_value JARVIS_API_KEY)" || {
+    err "The generated .env has no JARVIS_API_KEY — the suite cannot authenticate."
+    exit 1
+  }
   if ! SMOKE_INTEGRATION=1 \
        PAPER_INGESTION_BASE="http://localhost:${PAPER_INGESTION_HOST_PORT}" \
+       LEARNING_ENGINE_BASE="http://localhost:${LEARNING_ENGINE_HOST_PORT}" \
+       JARVIS_API_KEY="$smoke_api_key" \
        uv run pytest tests/integration -q; then
     err "Integration tests failed against the live stack."
     exit 1
