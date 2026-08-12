@@ -40,6 +40,7 @@ function formatMetadata(meta: Record<string, unknown> | null): string {
 const ACTION_LABELS: Readonly<Record<string, string>> = {
   'llm.route.change': 'Model route changed',
   'secret.rotate': 'Secret replaced',
+  'secret.remove': 'Secret removed',
 };
 
 function actionLabel(action: string): string | undefined {

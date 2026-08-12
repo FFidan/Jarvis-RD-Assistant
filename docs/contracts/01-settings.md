@@ -250,6 +250,38 @@ Some keys trigger work beyond the row write:
 
 GET responses for `_ENCRYPTED_KEYS` return `mask_secret(plaintext)`; GET for `_SECRET_KEYS \ _ENCRYPTED_KEYS` returns `"****"` if non-null. Plaintext **never** leaves the API.
 
+### 5.1 Removing a stored provider credential
+
+`PUT /api/config/{key}` rejects a blank value, so a provider credential can be
+replaced but not withdrawn through that surface. Two dedicated routes delete the
+stored row instead. Both are admin-only browser routes (`verify_api_key` +
+`require_admin`), rate-limited to 5 requests per minute, and return `204` with no
+body on success.
+
+| Route | Deletes | Refusals | Audit + side effects |
+|---|---|---|---|
+| `DELETE /api/providers/{provider}/key` | The registry's `api_key_config_key` row, system-scoped (`user_id IS NULL`) | `400` unknown provider; `409` while a model route still resolves to this provider; `503` when the assignment rows cannot be read | `secret.remove` audit event on the deleted key; provider model-list cache invalidated |
+| `DELETE /api/providers/{provider}/base-url` | The registry's `base_url_config_key` row, system-scoped | `400` unknown provider **or** a provider that stores no endpoint URL; `409` and `503` as above | Same |
+
+Three properties of the refusals are part of the contract:
+
+- **Route identity comes from the assignment prefix, not the delivery prefix.**
+  `llm.{smart,fast,embed}_model` store the app-facing prefix, which for the custom
+  endpoint (`custom_openai/`) differs from what LiteLLM is handed (`openai/`).
+  Resolving identity from the delivery prefix would read a custom-endpoint route as
+  OpenAI's and clear a credential that is still in use.
+- **The `409` refuses rather than reassigns.** Nothing in this service rewrites a
+  model route, and doing so here would bypass the assignment validation the write
+  path applies. The message names the affected route (Main / Quick / Embedding) so
+  the operator knows what to repoint first.
+- **The assignment read is fail-closed.** An unreadable assignment table is not
+  evidence that no route uses the credential, so the removal is refused with `503`
+  and no row is deleted.
+
+`secret.remove` is deliberately distinct from the `secret.rotate` event a `PUT`
+emits: an audit reader must be able to tell a replaced credential from a withdrawn
+one. Both actions are labelled in the admin audit log view.
+
 ---
 
 ## 6. Failure modes
@@ -360,6 +392,10 @@ The implementation MUST satisfy these. Testable.
 | `reload_telegram_nudges` | services/paper_ingestion/paper_ingestion/services/model_assignment.py:21 | POST `/internal/reload-nudges` to telegram_bot |
 | `update_litellm_model` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:477 | Delivers a role→model change via LiteLLM's admin DB (`GET /v1/model/info` + `POST /model/new` + `POST /model/delete`); no-ops when the alias already routes the requested signature; refuses re-routing the dimension-locked `embed` alias; raises RuntimeError on delivery failure (reconciler retries) |
 | `get_provider_api_key` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:149 | Decrypts cloud-provider key from user_config |
+| `remove_provider_key` / `remove_provider_base_url` | services/paper_ingestion/paper_ingestion/routers/settings.py:532, 551 | Admin-only, rate-limited DELETE routes returning 204; both delegate to `_remove_provider_setting` |
+| `_remove_provider_setting` | services/paper_ingestion/paper_ingestion/routers/settings.py:485 | Deletes the system-scoped provider row after the route check, invalidates the provider model cache, and writes a `secret.remove` audit event |
+| `_model_route_using` | services/paper_ingestion/paper_ingestion/routers/settings.py:461 | Resolves the blocking route label from the stored assignment prefix; raises 503 when `_load_current_model_assignments` reports a read failure |
+| `ACTION_LABELS` | frontend/src/pages/AdminAuditLogPage.tsx:40 | Maps `secret.rotate` and `secret.remove` to distinct audit-log labels |
 | `pulse.weights` / lookback / grace load | services/paper_ingestion/paper_ingestion/pulse/profile.py:221-242 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1]; reads `pulse.lookback_days` (default 7) + `pulse.startup_grace_seconds` (default 0.0) |
 | `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs a fresh `FSRSManager` inside the review transaction |
 | `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/setup.py (get_status) | Reads `setup.completed` from `user_config`; returned in pre-auth `/api/setup/status`; unified `OnboardingGate` keys on this field |

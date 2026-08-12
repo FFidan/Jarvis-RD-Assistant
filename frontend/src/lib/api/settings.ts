@@ -314,6 +314,16 @@ export async function setProviderKey(
   await setConfig(configKey ?? `llm.${provider}.api_key`, apiKey);
 }
 
+/** Delete a cloud provider's stored API key. */
+export async function removeProviderKey(provider: CloudProvider): Promise<void> {
+  await apiFetchVoid(`/api/providers/${provider}/key`, { method: 'DELETE' });
+}
+
+/** Delete a cloud provider's stored endpoint URL. */
+export async function removeProviderBaseUrl(provider: CloudProvider): Promise<void> {
+  await apiFetchVoid(`/api/providers/${provider}/base-url`, { method: 'DELETE' });
+}
+
 /** Test connectivity for a cloud provider. */
 export async function testProvider(
   provider: CloudProvider,

@@ -90,6 +90,10 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         best_for="Multimodal-capable models and fast lower-cost tiers.",
         data_note="Selected prompts and source excerpts are sent to Google when assigned.",
         dashboard_url="https://aistudio.google.com/app/apikey",
+        # The Gemini API an API key authenticates against serves models and
+        # generation only; usage and billing live in Google Cloud behind
+        # different credentials, so no account lookup exists to integrate.
+        account_capability="no_provider_api",
     ),
     ProviderDefinition(
         id="openrouter",

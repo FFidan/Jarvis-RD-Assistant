@@ -12,7 +12,7 @@ import logging
 from typing import Any, Literal
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from jarvis_common import log_audit
 from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
@@ -49,7 +49,9 @@ from paper_ingestion.services.litellm_config import (
 )
 from paper_ingestion.services.llm_provider_registry import (
     PROVIDER_REGISTRY,
+    ProviderDefinition,
     provider_for_id,
+    provider_for_prefix,
 )
 from paper_ingestion.services.model_assignment import cloud_provider_key_present
 from paper_ingestion.services.provider_account import fetch_provider_account
@@ -59,6 +61,7 @@ from paper_ingestion.services.provider_test import (
     ProviderTestResult,
     test_provider_connectivity,
 )
+from paper_ingestion.services.system_models_view import _load_current_model_assignments
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -445,6 +448,116 @@ def _provider_test_code(error: str | None, ok: bool) -> str:
         "no base URL configured": "base_url_unavailable",
         "unsupported provider": "unsupported_provider",
     }.get(error, "connection_failed")
+
+
+#: Stored model-route rows, under the names the settings UI gives them.
+_MODEL_ROUTE_LABELS: dict[str, str] = {
+    "smart_model": "Main",
+    "fast_model": "Quick",
+    "embed_model": "Embedding",
+}
+
+
+async def _model_route_using(provider: ProviderDefinition, db_pool: asyncpg.Pool) -> str | None:
+    """Return the label of a committed model route still pointing at *provider*.
+
+    Routes record the app-facing assignment prefix, which is not the prefix
+    delivered to LiteLLM: a custom endpoint is assigned as ``custom_openai/`` and
+    delivered as ``openai/``. Resolving identity from the delivery prefix would
+    read that route as OpenAI's and clear a credential still in use.
+    """
+    assignments, issue = await _load_current_model_assignments(db_pool)
+    if issue is not None:
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot verify active model assignments; refusing to remove this setting",
+        )
+    for row_key, label in _MODEL_ROUTE_LABELS.items():
+        model_id = assignments.get(row_key)
+        if (
+            isinstance(model_id, str)
+            and provider_for_prefix(model_id.partition("/")[0]) == provider
+        ):
+            return label
+    return None
+
+
+async def _remove_provider_setting(
+    provider: str,
+    field: Literal["api_key", "base_url"],
+    db_pool: asyncpg.Pool,
+    caller_user_id: int | None,
+) -> Response:
+    """Delete one stored provider row once no model route depends on that provider."""
+    try:
+        definition = provider_for_id(provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="unsupported provider") from exc
+    config_key = (
+        definition.api_key_config_key if field == "api_key" else definition.base_url_config_key
+    )
+    if config_key is None:
+        raise HTTPException(status_code=400, detail="provider has no endpoint URL")
+
+    # Refuse rather than reassign: no code path in this service rewrites a model
+    # route, and doing it here would skip the assignment validation the settings
+    # write path applies.
+    blocking_route = await _model_route_using(definition, db_pool)
+    if blocking_route is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The {blocking_route} model route still uses {definition.display_name}. "
+                "Point that route at another model first."
+            ),
+        )
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM user_config WHERE key = $1 AND user_id IS NULL",
+            config_key,
+        )
+    await invalidate_provider_model_cache(definition.id)
+    await log_audit(
+        db_pool,
+        action="secret.remove",
+        resource=config_key,
+        user_id=str(caller_user_id) if caller_user_id is not None else None,
+    )
+    return Response(status_code=204)
+
+
+@router.delete("/providers/{provider}/key", status_code=204, response_class=Response)
+@limiter.limit("5/minute")
+async def remove_provider_key(
+    request: Request,
+    provider: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
+    caller_user_id: int = Depends(current_user_id_strict),
+) -> Response:
+    """Delete a provider's stored API key.
+
+    The write path refuses a blank value, so without this route a key pasted
+    under the wrong provider, revoked upstream, or leaked could only ever be
+    overwritten — never taken out of service.
+    """
+    return await _remove_provider_setting(provider, "api_key", db_pool, caller_user_id)
+
+
+@router.delete("/providers/{provider}/base-url", status_code=204, response_class=Response)
+@limiter.limit("5/minute")
+async def remove_provider_base_url(
+    request: Request,
+    provider: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
+    caller_user_id: int = Depends(current_user_id_strict),
+) -> Response:
+    """Delete a provider's stored endpoint URL, retiring a decommissioned endpoint."""
+    return await _remove_provider_setting(provider, "base_url", db_pool, caller_user_id)
 
 
 # ---------------------------------------------------------------------------

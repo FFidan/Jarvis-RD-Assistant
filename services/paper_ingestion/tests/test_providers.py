@@ -114,6 +114,36 @@ async def _get_provider_account(app, provider: str, *, role: str | None = "admin
         return await client.get(f"/api/providers/{provider}/account")
 
 
+async def _delete_provider_setting(
+    app, provider: str, field: str = "key", *, role: str | None = "admin"
+):
+    transport_app = RoleMiddleware(app, role) if role is not None else app
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=transport_app), base_url="http://test"
+    ) as client:
+        return await client.delete(f"/api/providers/{provider}/{field}")
+
+
+def _assignment_rows(**models: str) -> list[dict[str, str]]:
+    """Rows shaped like the ``llm.*_model`` reads behind the removal guard.
+
+    Values are JSONB-encoded strings in production, so they arrive quoted.
+    """
+    return [{"key": f"llm.{role}", "value": f'"{model}"'} for role, model in models.items()]
+
+
+def _executed(conn) -> list[tuple]:
+    """Return the SQL and bound arguments of every statement the route ran."""
+    return [call.args for call in conn.execute.await_args_list]
+
+
+def _statement_with(conn, fragment: str) -> tuple:
+    """Return the single executed statement containing *fragment*."""
+    matches = [args for args in _executed(conn) if fragment in args[0]]
+    assert len(matches) == 1, f"expected exactly one {fragment!r} statement, got {len(matches)}"
+    return matches[0]
+
+
 @pytest.mark.asyncio
 async def test_provider_probe_route_refuses_quarantine_before_database(_app, monkeypatch, tmp_path):
     """A quarantined provider test returns 503 before its database lookup."""
@@ -405,6 +435,21 @@ async def test_provider_account_requires_admin_session(_app):
     assert api_key_only.status_code == 403
     assert member.status_code == 403
     conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_remove_provider_key_requires_admin_session(_app):
+    """Deleting a credential keeps the same browser-admin boundary as the sibling routes."""
+    app, conn = _app
+
+    api_key_only = await _delete_provider_setting(app, "anthropic", role=None)
+    member = await _delete_provider_setting(app, "anthropic", role="member")
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetch.assert_not_awaited()
+    conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1005,6 +1050,119 @@ async def test_google_probe_uses_header_not_url_param(_app):
     assert req.headers.get("x-goog-api-key") == plaintext_key, (
         "Expected x-goog-api-key header with the API key"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests: removing a stored provider credential
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def _cache_invalidations(monkeypatch):
+    """Record the provider ids whose cached model list the route discarded."""
+    from paper_ingestion.routers import settings as settings_router
+
+    invalidate = AsyncMock()
+    monkeypatch.setattr(settings_router, "invalidate_provider_model_cache", invalidate)
+    return invalidate
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_provider_key_clears_it_and_records_the_change(
+    _app, _cache_invalidations
+) -> None:
+    """Removal must be a first-class action, not an overwrite with a placeholder."""
+    app, conn = _app
+    conn.fetch.return_value = []
+
+    resp = await _delete_provider_setting(app, "anthropic")
+
+    assert resp.status_code == 204
+    delete_sql, deleted_key = _statement_with(conn, "DELETE FROM user_config")
+    assert deleted_key == "llm.anthropic.api_key"
+    # The presence read that decides "configured" is system-scoped, so the
+    # delete has to clear that exact row or the provider still reports a key.
+    assert "user_id IS NULL" in delete_sql
+    _cache_invalidations.assert_awaited_once_with("anthropic")
+    audit = _statement_with(conn, "audit_log")
+    assert audit[2] == "secret.remove"
+    assert audit[3] == "llm.anthropic.api_key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_key_a_model_route_still_uses_is_refused(_app) -> None:
+    """A live route would start failing mid-request, so the credential stays put."""
+    app, conn = _app
+    conn.fetch.return_value = _assignment_rows(smart_model="anthropic/claude-sonnet-4")
+
+    resp = await _delete_provider_setting(app, "anthropic")
+
+    assert resp.status_code == 409
+    assert "Main" in resp.json()["detail"]
+    # A refusal must leave the stored settings completely untouched, so assert
+    # no write ran at all rather than that one particular statement did not.
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_route_identity_follows_the_assignment_prefix_not_the_delivery_prefix(
+    _app, _cache_invalidations
+) -> None:
+    """A custom endpoint is assigned as ``custom_openai/`` but delivered as ``openai/``."""
+    app, conn = _app
+    conn.fetch.return_value = _assignment_rows(fast_model="custom_openai/org/model-y")
+
+    blocked = await _delete_provider_setting(app, "custom_openai_compatible")
+    unrelated = await _delete_provider_setting(app, "openai")
+
+    assert blocked.status_code == 409
+    assert "Quick" in blocked.json()["detail"]
+    assert unrelated.status_code == 204
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_key_refuses_when_assignments_cannot_be_read(_app) -> None:
+    """An unreadable assignment table is not evidence that no route uses the key."""
+    app, conn = _app
+    conn.fetch.side_effect = RuntimeError("connection reset")
+
+    resp = await _delete_provider_setting(app, "anthropic")
+
+    assert resp.status_code == 503
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_custom_endpoint_url_clears_the_endpoint_row(
+    _app, _cache_invalidations
+) -> None:
+    """The endpoint URL is stored encrypted like a key and needs the same exit."""
+    app, conn = _app
+    conn.fetch.return_value = []
+
+    resp = await _delete_provider_setting(app, "custom_openai_compatible", "base-url")
+
+    assert resp.status_code == 204
+    _, deleted_key = _statement_with(conn, "DELETE FROM user_config")
+    assert deleted_key == "llm.providers.custom_openai_compatible.base_url"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_an_endpoint_url_a_provider_never_had_is_rejected(_app) -> None:
+    """Only the custom endpoint provider stores a base URL; the rest have none to clear."""
+    app, conn = _app
+    conn.fetch.return_value = []
+
+    resp = await _delete_provider_setting(app, "anthropic", "base-url")
+
+    assert resp.status_code == 400
+    conn.execute.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
