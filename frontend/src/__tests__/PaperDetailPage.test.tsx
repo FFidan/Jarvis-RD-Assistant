@@ -502,7 +502,9 @@ describe('PaperDetailPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Zotero status unavailable.')).toBeInTheDocument();
+      expect(
+        screen.getByText('Zotero status is temporarily unavailable. Try again shortly.'),
+      ).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Send to Zotero' })).not.toBeInTheDocument();
   });
