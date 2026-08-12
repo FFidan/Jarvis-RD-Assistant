@@ -112,6 +112,16 @@ That the containers actually start, read their configuration, and report
 healthy is proven by the cold-install and upgrade checks below, before any
 stable tag exists.
 
+Each paper-ingestion leg also converts a sample PDF inside the image it just
+built, which loads the compiled vision stack that an import cannot reach. Every
+architecture runs it, because an architecture-specific compiled dependency is
+exactly what it exists to catch. The document pipeline downloads its layout and
+OCR models the first time it converts, so this step needs the model host to be
+reachable while the release runs and takes noticeably longer than the rest of
+the leg. A failure naming a download or the step timeout is an infrastructure
+condition, like a rate-limited registry: re-dispatch the run rather than looking
+for a regression in the diff.
+
 Only after that run succeeds, use the SHA images for the credential-free install
 and supported upgrade checks:
 
@@ -275,6 +285,15 @@ for an advisory that has none. Raising a floor means raising it in every manifes
 that declares it — the root `pyproject.toml`, `libs/jarvis_common/pyproject.toml`,
 and each service's `requirements.txt` — then re-locking both projects and
 regenerating the lock-derived pins with `scripts/export-service-requirements.sh`.
+
+The GHCR workflow scans each verification manifest as well and prints the result
+to the job summary. That step is a report, not a gate: it reads the same live
+advisory database, and the run's digest receipts are the only artifacts a stable
+tag can promote, so failing it would discard an otherwise sound verification run
+and force a full rebuild over an advisory published minutes earlier. Read the
+report before tagging. A high or critical finding with an installable fix is
+handled like any other dependency finding — raise the floor, re-verify, and let
+the branch-level scans above block the release.
 
 Reproduce the locally runnable dependency and secret scans before pushing a
 release branch and again before tagging:

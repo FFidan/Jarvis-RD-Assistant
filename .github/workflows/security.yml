@@ -43,20 +43,29 @@ jobs:
       # audits the exact dependency graph Docker installs. requirements.txt uses
       # range pins (>=,<) which --disable-pip rejects; constraints.txt is the
       # fully-pinned lock. osv-scanner already does the deep transitive scan.
+      #
+      # --from pip-audit==2.10.1 keeps this job on the same scanner release that
+      # `make security-scan` runs locally (scripts/security-scan.py); a bare uvx
+      # resolves the newest release at run time, so the hosted and local scans
+      # could disagree without either one changing.
       - name: Audit paper_ingestion
         # Both suppressions this step used to carry are gone: torch 2.13.0 is past
         # the last affected release for CVE-2025-3000, and it no longer caps
         # setuptools below the release that fixes PYSEC-2026-3447. The audit runs
         # unsuppressed, so a regression on either one fails the job again.
         run: |
-          uvx pip-audit --no-deps --disable-pip \
+          uvx --from pip-audit==2.10.1 pip-audit --no-deps --disable-pip \
             -r services/paper_ingestion/constraints.txt
 
       - name: Audit learning_engine
-        run: uvx pip-audit --no-deps --disable-pip -r services/learning_engine/constraints.txt
+        run: |
+          uvx --from pip-audit==2.10.1 pip-audit --no-deps --disable-pip \
+            -r services/learning_engine/constraints.txt
 
       - name: Audit telegram_bot
-        run: uvx pip-audit --no-deps --disable-pip -r services/telegram_bot/constraints.txt
+        run: |
+          uvx --from pip-audit==2.10.1 pip-audit --no-deps --disable-pip \
+            -r services/telegram_bot/constraints.txt
 
   # ---------------------------------------------------------------------------
   # npm-audit — Frontend JavaScript dependency CVE scan
