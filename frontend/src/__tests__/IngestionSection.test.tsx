@@ -9,8 +9,11 @@
  * - Thinking-mode checkbox renders for supports_thinking entries and persists
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { IngestionSection } from '@/components/settings/IngestionSection';
+import { docsUrl } from '@/lib/docs-links';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
@@ -1212,5 +1215,74 @@ describe('IngestionSection — config load failure', () => {
     expect(screen.getByTestId('config-load-error')).toHaveTextContent(/Failed to load configuration/i);
     // The empty-state copy must NOT appear on failure.
     expect(screen.queryByText('No config entries')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Documentation links — routed through docsUrl() (src/lib/docs-links.ts) so
+// the published-site base URL and path-to-URL shape live in one place.
+// ---------------------------------------------------------------------------
+
+describe('IngestionSection — embedding guide link', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { fetchConfig } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
+  });
+
+  it('resolves the migration guide link through docsUrl, with no raw hostname in the component', async () => {
+    renderSection();
+
+    const link = await screen.findByRole('link', { name: /embedding model migration guide/i });
+    expect(link).toHaveAttribute('href', docsUrl('manual/changing-embedding-model.md'));
+
+    const componentSource = readFileSync(
+      path.resolve(__dirname, '../components/settings/IngestionSection.tsx'),
+      'utf8',
+    );
+    expect(componentSource).not.toContain('limitcycle-oss.github.io');
+  });
+});
+
+describe('docsUrl() call sites name a real file under docs/', () => {
+  const srcRoot = path.resolve(__dirname, '..');
+  const docsRoot = path.resolve(__dirname, '../../../docs');
+  // Matches a docsUrl call whose sole argument is a single- or double-quoted
+  // string literal, capturing the quoted path in group 2.
+  const CALL_PATTERN = /\bdocsUrl\(\s*(['"])((?:(?!\1).)+)\1\s*\)/g;
+
+  // Scan product source only. Test files are excluded so the scan can never
+  // match its own regex definition or assertion strings — see this file's
+  // "embedding guide link" test above for the one legitimate test-side call.
+  function productFilesUnder(directory: string): string[] {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      if (entry.name === '__tests__') return [];
+      const absolute = path.join(directory, entry.name);
+      return entry.isDirectory() ? productFilesUnder(absolute) : [absolute];
+    }).filter((file) => (file.endsWith('.ts') || file.endsWith('.tsx')) && !file.endsWith('.test.tsx') && !file.endsWith('.test.ts'));
+  }
+
+  function docPathsUsed(): string[] {
+    const paths: string[] = [];
+    for (const file of productFilesUnder(srcRoot)) {
+      for (const match of readFileSync(file, 'utf8').matchAll(CALL_PATTERN)) {
+        const docPath = match[2];
+        if (docPath !== undefined) paths.push(docPath);
+      }
+    }
+    return paths;
+  }
+
+  it('every docsUrl(path) argument in the product source resolves to a file under docs/', () => {
+    const docPaths = docPathsUsed();
+    // A pattern miss would make this check vacuously pass — pin the known
+    // call count so a regex regression fails loudly instead of silently.
+    expect(docPaths.length).toBeGreaterThanOrEqual(3);
+
+    for (const docPath of docPaths) {
+      const exists = existsSync(path.resolve(docsRoot, docPath));
+      expect(exists, `docsUrl call argument "${docPath}" has no matching file under docs/`).toBe(true);
+    }
   });
 });
