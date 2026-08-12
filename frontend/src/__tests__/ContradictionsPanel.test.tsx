@@ -114,6 +114,46 @@ describe('ContradictionsPanel', () => {
     expect(screen.queryByText('No verified contradictions found.')).not.toBeInTheDocument();
   });
 
+  it('keeps verified contradictions visible when the latest rescan fails', async () => {
+    mockFetchContradictions.mockResolvedValue({
+      contradictions: [
+        {
+          id: 1,
+          paper_a_id: 42,
+          paper_b_id: 7,
+          paper_a_title: 'This paper',
+          paper_b_title: 'Other paper',
+          finding_a: 'Model A generalizes well.',
+          finding_b: 'Model A fails to generalize.',
+          quote_a: 'strong generalization observed',
+          quote_b: 'no generalization observed',
+          page_a: 3,
+          page_b: 5,
+          contradiction_type: 'Direct contradiction',
+          explanation: 'These findings directly conflict.',
+          confidence: 0.92,
+          status: 'verified',
+          created_at: '2026-04-28T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+    mocks.jobs = {
+      'job-1': {
+        kind: 'contradictions.scan',
+        payload: { paper_id: 42 },
+        status: 'failed',
+        error: { message: 'scanner unavailable' },
+        created_at: '2026-04-28T10:00:00Z',
+      },
+    };
+
+    renderPanel();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/scan failed/i);
+    expect(screen.getByText('These findings directly conflict.')).toBeInTheDocument();
+  });
+
   it('queues a paper-scoped scan and tracks the returned job', async () => {
     const user = userEvent.setup();
     mockScanPaperContradictions.mockResolvedValueOnce({ job_id: 'job-contradictions', status: 'queued' });
