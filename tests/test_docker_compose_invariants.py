@@ -237,7 +237,7 @@ def test_dashboard_builder_pin_matches_every_build_entrypoint(compose):
     dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text()
     compose_arg = compose["services"]["dashboard"]["build"]["args"]["NODE_BUILD_IMAGE"]
 
-    assert node_image == "node:22.22.2-alpine3.23"
+    assert re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", node_image), node_image
     assert f"ARG NODE_BUILD_IMAGE={node_image}" in dockerfile
     assert compose_arg == f"${{NODE_BUILD_IMAGE:-{node_image}}}"
 

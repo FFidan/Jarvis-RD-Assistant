@@ -913,7 +913,7 @@ def test_release_images_build_from_the_digest_pinned_bases() -> None:
     workflow = _read(".github/workflows/ghcr-publish.yml")
     build_job = workflow.split("\n  build:", 1)[1].split("\n  verify:", 1)[0]
 
-    for name in ("PYTHON_BASE_IMAGE", "NGINX_RUNTIME_IMAGE"):
+    for name in ("PYTHON_BASE_IMAGE", "NODE_BUILD_IMAGE", "NGINX_RUNTIME_IMAGE"):
         assert re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", versions[name]), versions[name]
 
     assert ". ./versions.env" in build_job
@@ -935,7 +935,7 @@ def test_release_images_build_from_the_digest_pinned_bases() -> None:
         assert f"ARG {declared}=" in _read(dockerfile), dockerfile
 
 
-def test_the_published_image_scan_is_the_report_the_release_guide_describes() -> None:
+def test_the_published_image_scan_blocks_a_fixable_critical_finding() -> None:
     """The scan's exit code and the release narrative must not drift apart.
 
     A scan left non-blocking while the guide calls it a gate reads as coverage
@@ -945,10 +945,24 @@ def test_the_published_image_scan_is_the_report_the_release_guide_describes() ->
     release = " ".join(_read("docs/RELEASE.md").split())
     verify_job = workflow.split("\n  verify:", 1)[1].split("\n  promote:", 1)[0]
 
-    assert 'exit-code: "0"' in verify_job
-    assert "A report, not a gate" in verify_job
-    assert "That step is a report, not a gate" in release
-    assert "Read the report before tagging" in release
+    assert 'exit-code: "1"' in verify_job
+    assert 'exit-code: "0"' not in verify_job
+    # Trailing newline: `severity: CRITICAL,HIGH` must not satisfy this.
+    assert "severity: CRITICAL\n" in verify_job
+    assert "ignore-unfixed: true" in verify_job
+    # A failing gate must still publish the report that explains it.
+    publish_step = "- name: Publish the vulnerability report to the job summary\n"
+    assert publish_step in verify_job
+    assert verify_job.split(publish_step, 1)[1].startswith("        if: ${{ !cancelled() }}\n")
+    assert "That step is a gate" in release
+    assert "Findings without a released fix are excluded" in release
+
+
+def test_the_paper_ingestion_image_carries_its_document_models() -> None:
+    dockerfile = _read("services/paper_ingestion/Dockerfile")
+
+    assert "docling-tools models download" in dockerfile
+    assert "ENV DOCLING_ARTIFACTS_PATH=" in dockerfile
 
 
 def test_a_partial_promotion_cannot_finish_as_a_successful_release() -> None:
