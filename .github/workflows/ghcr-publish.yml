@@ -150,6 +150,7 @@ jobs:
             arch: amd64
             runner: ubuntu-latest
             smoke_import: paper_ingestion.main
+            capability: native-vision pdf malformed-pdf
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
             context: .
@@ -159,6 +160,7 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             smoke_import: paper_ingestion.main
+            capability: native-vision pdf malformed-pdf
           - slug: paper-ingestion-cuda
             image: jarvis-paper-ingestion
             context: .
@@ -170,6 +172,9 @@ jobs:
             arch: amd64
             runner: ubuntu-latest
             smoke_import: paper_ingestion.main
+            # Hosted runners have no GPU, so this flavour proves the same
+            # host-side capabilities as the CPU images.
+            capability: native-vision pdf malformed-pdf
           - slug: learning-engine
             image: jarvis-learning-engine
             context: .
@@ -299,6 +304,27 @@ jobs:
           docker run --rm --entrypoint python \
             "ghcr.io/limitcycle-oss/${{ matrix.image }}@${{ steps.build.outputs.digest }}" \
             -c "import importlib; importlib.import_module('${{ matrix.smoke_import }}')"
+
+      # The import smoke proves the dependency set resolves. It cannot reach a
+      # lazily imported native stack: the document pipeline builds its converter
+      # on first use, so a mismatched compiled dependency stays invisible until a
+      # real PDF is converted. This runs the capability set declared by the matrix
+      # entry inside the exact digest, before that digest joins the manifest.
+      # The service package is copied to the image's WORKDIR rather than
+      # installed, and a script invoked by path puts only its own directory on
+      # sys.path, so PYTHONPATH is what lets the checker reach it.
+      # First use downloads the layout and OCR models, so this leg is slower than
+      # the import smoke; both arm64 and amd64 run it on native runners.
+      - name: Capability check - exercise runtime paths the import cannot reach
+        if: needs.preflight.outputs.mode == 'verify' && matrix.capability != ''
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/scripts/image-capability-check.py:/tmp/capability.py:ro" \
+            -v "${{ github.workspace }}/frontend/e2e/fixtures/sample.pdf:/tmp/sample.pdf:ro" \
+            -e PYTHONPATH=/app \
+            --entrypoint python \
+            "ghcr.io/limitcycle-oss/${{ matrix.image }}@${{ steps.build.outputs.digest }}" \
+            /tmp/capability.py --pdf /tmp/sample.pdf ${{ matrix.capability }}
 
       - name: Upload the platform digest
         if: needs.preflight.outputs.mode == 'verify'
