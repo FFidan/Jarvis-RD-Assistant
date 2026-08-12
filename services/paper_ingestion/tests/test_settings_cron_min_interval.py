@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.services.config_validators import _validate_cron
+from paper_ingestion.services.config_validators import _validate_cron, _validate_zotero_cron
 
 
 @pytest.mark.parametrize(
@@ -43,6 +43,21 @@ def test_pulse_cron_rejects_invalid_expression():
     """_validate_cron must still reject malformed cron expressions."""
     with pytest.raises(ValueError, match="invalid cron expression"):
         _validate_cron("not a cron")
+
+
+def test_zotero_poll_cron_rejects_a_sub_quarter_hour_schedule() -> None:
+    with pytest.raises(ValueError, match="15 minutes"):
+        _validate_zotero_cron("* * * * *")
+
+
+def test_zotero_poll_cron_accepts_the_hourly_default() -> None:
+    _validate_zotero_cron("0 * * * *")
+
+
+def test_zotero_poll_cron_accepts_a_half_hourly_schedule() -> None:
+    # Pins the floor at fifteen minutes rather than Pulse's hour: this case is
+    # what fails if someone later copies the Pulse limit across.
+    _validate_zotero_cron("0,30 * * * *")
 
 
 # ---------------------------------------------------------------------------

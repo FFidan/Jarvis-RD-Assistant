@@ -63,7 +63,8 @@ _PULSE_REQUIRED_WEIGHT_KEYS = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# DRY hoist 3: shared cron validation body
+# Shared cron validation: type/parse the expression, then enforce the
+# schedule's own minimum-fire-interval floor.
 # ---------------------------------------------------------------------------
 
 
@@ -77,22 +78,38 @@ def _validate_cron_base(v: Any, name: str) -> CronTrigger:
         raise ValueError(f"invalid cron expression: {exc}") from exc
 
 
-def _validate_cron(v: Any) -> None:
-    trigger = _validate_cron_base(v, "pulse.cron")
-    # Reject sub-hourly schedules — pulse runs are expensive; once per hour is the minimum.
+def _validate_cron_min_interval(trigger: CronTrigger, *, minimum: timedelta, message: str) -> None:
+    """Reject *trigger* if its first two fire times are closer together than *minimum*."""
     from datetime import datetime  # noqa: PLC0415
 
     base = datetime.now()
     t1 = trigger.get_next_fire_time(None, base)
     t2 = trigger.get_next_fire_time(t1, t1)
-    if t1 is not None and t2 is not None and (t2 - t1) < timedelta(hours=1):
-        raise ValueError("Pulse cron must fire no more than once per hour")
+    if t1 is not None and t2 is not None and (t2 - t1) < minimum:
+        raise ValueError(message)
+
+
+def _validate_cron(v: Any) -> None:
+    trigger = _validate_cron_base(v, "pulse.cron")
+    # Reject sub-hourly schedules — pulse runs are expensive; once per hour is the minimum.
+    _validate_cron_min_interval(
+        trigger,
+        minimum=timedelta(hours=1),
+        message="Pulse cron must fire no more than once per hour",
+    )
 
 
 def _validate_zotero_cron(v: Any) -> None:
     if not isinstance(v, str):
         raise ValueError("zotero.poll_cron must be a string")
-    _validate_cron_base(v, "zotero.poll_cron")
+    trigger = _validate_cron_base(v, "zotero.poll_cron")
+    # Reject schedules faster than every fifteen minutes — Zotero is a
+    # third-party API and must not be hammered by an over-eager sync.
+    _validate_cron_min_interval(
+        trigger,
+        minimum=timedelta(minutes=15),
+        message="Zotero sync must run no more than once every 15 minutes",
+    )
 
 
 def _validate_pulse_weights(v: Any) -> None:

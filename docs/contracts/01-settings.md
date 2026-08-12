@@ -223,7 +223,7 @@ Defined in `_CONFIG_VALIDATORS` ([config_validators.py:231-271](https://github.c
 | `_validate_optional_header_str` | `smtp.from_name` | Empty string or `null` clears; otherwise ≤ 255 printable chars, no `\r`/`\n`/`\x00` |
 | `_validate_library_type` | `zotero.library_type` | `"user"` or `"group"` |
 | `_validate_group_id` | `zotero.group_id` | Positive int or null |
-| `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab` (no sub-hourly limit, unlike Pulse) |
+| `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab`. Schedules faster than once every 15 minutes rejected |
 | `_validate_langfuse_dashboard_url` | `observability.langfuse_dashboard_url` | Empty / `https://` / loopback `http://` URL; rejects other schemes |
 | `_validate_fsrs_retention` | `fsrs.desired_retention` | Number in open range `(0, 1)`; rejects bool, 0, 1, and out-of-range floats |
 | `_validate_fsrs_learning_steps` | `fsrs.learning_steps` | `list[int]`, length 1–10, all strictly positive (minutes). Default `[1, 10]` matches the fsrs library default |
