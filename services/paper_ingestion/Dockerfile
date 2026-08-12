@@ -100,7 +100,10 @@ ENV DOCLING_ARTIFACTS_PATH=/opt/docling_models
 # revision needs to populate its own cache. Setting DOCLING_ARTIFACTS_PATH
 # above also makes Docling look for the OCR models under that directory
 # instead of RapidOCR's own package path, so symlink the wheel's copies into
-# the spot Docling expects rather than fetching or duplicating them.
+# the spot Docling expects rather than fetching or duplicating them. `ln -s`
+# never fails on a missing target, so a wheel revision that renames one of
+# these files would otherwise build clean and only break the first document
+# conversion at runtime; the loop below fails the build instead.
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     mkdir -p "$SITE_PKGS/rapidocr/models" && \
     chown -R appuser:appuser "$SITE_PKGS/rapidocr/models" && \
@@ -112,7 +115,12 @@ RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     ln -s "$SITE_PKGS/rapidocr/models/PP-OCRv6_rec_small.onnx" \
           /opt/docling_models/RapidOcr/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx && \
     ln -s "$SITE_PKGS/rapidocr/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx" \
-          /opt/docling_models/RapidOcr/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx
+          /opt/docling_models/RapidOcr/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx && \
+    for link in /opt/docling_models/RapidOcr/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx \
+                /opt/docling_models/RapidOcr/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx \
+                /opt/docling_models/RapidOcr/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx; do \
+      test -e "$link" || { echo "ERROR: RapidOCR model symlink does not resolve: $link" >&2; exit 1; }; \
+    done
 
 COPY services/paper_ingestion/paper_ingestion/ ./paper_ingestion/
 COPY services/paper_ingestion/entrypoint.sh /app/entrypoint.sh
