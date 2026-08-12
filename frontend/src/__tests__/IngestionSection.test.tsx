@@ -222,14 +222,21 @@ describe('IngestionSection — hardware strip', () => {
     expect(screen.getByText(/nvidia-smi/)).toBeInTheDocument();
   });
 
-  it('pairs the hardware strip toggle with its content via aria-controls', async () => {
+  it('pairs the hardware strip toggle with content that sits outside it', async () => {
     renderSection();
     const toggle = await screen.findByTestId('hardware-strip');
     expect(toggle).toHaveAttribute('aria-controls', 'hardware-strip-details');
+    expect(toggle).toHaveAccessibleName('15.9 GB VRAM · Tier 2');
 
     fireEvent.click(toggle);
     const detail = await screen.findByText(/nvidia-smi/);
-    expect(document.getElementById('hardware-strip-details')).toContainElement(detail);
+    const details = document.getElementById('hardware-strip-details');
+    expect(details).toContainElement(detail);
+    // Revealed content nested inside the toggle would make aria-controls point
+    // at the toggle's own subtree, and the detail text would be swallowed into
+    // the toggle's name — which would then change on every click.
+    expect(toggle).not.toContainElement(details);
+    expect(toggle).toHaveAccessibleName('15.9 GB VRAM · Tier 2');
   });
 
   it('renders hardware strip only in AI models group context', async () => {

@@ -33,24 +33,29 @@ export function HardwareStrip({ hardware }: HardwareStripProps) {
           <ChevronRight className="mr-1 inline h-3 w-3" />
         )}
         <span className="font-medium text-foreground">{summary}</span>
-        {expanded && (
-          <span id="hardware-strip-details" className="ml-3 space-x-3">
-            {hardware.vram_source && (
-              <span>
-                Source: <span className="text-foreground">{hardware.vram_source}</span>
-              </span>
-            )}
-            {hardware.detected_at && (
-              <span>
-                Detected:{' '}
-                <span className="text-foreground">
-                  {new Date(hardware.detected_at).toLocaleString()}
-                </span>
-              </span>
-            )}
-          </span>
-        )}
       </button>
+      {/* Sibling of the toggle, not a child: the toggle points at this with
+          aria-controls, and its own name must not change when it opens. */}
+      {expanded && (
+        <div
+          id="hardware-strip-details"
+          className="space-x-3 px-3 text-xs text-muted-foreground"
+        >
+          {hardware.vram_source && (
+            <span>
+              Source: <span className="text-foreground">{hardware.vram_source}</span>
+            </span>
+          )}
+          {hardware.detected_at && (
+            <span>
+              Detected:{' '}
+              <span className="text-foreground">
+                {new Date(hardware.detected_at).toLocaleString()}
+              </span>
+            </span>
+          )}
+        </div>
+      )}
       {hardware.vram_source_detail && (
         <p
           className="px-1 text-xs text-muted-foreground"
