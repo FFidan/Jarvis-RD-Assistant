@@ -176,6 +176,8 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 const EVICT_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 const RECENT_DISCOVERY_LIMIT = 30;
 const MAX_TRACKED_JOBS = 50;
+/** Cap on remembered terminal-notification markers (see removeJob). */
+const MAX_NOTIFIED_IDS = 100;
 const DISCOVERY_BASE_DELAY_MS = 10_000;
 const DISCOVERY_MAX_DELAY_MS = 30_000;
 
@@ -293,6 +295,13 @@ function boundedJobs(jobs: Record<string, Job>): Record<string, Job> {
   return Object.fromEntries([...active, ...terminal.slice(0, terminalLimit)]);
 }
 
+/** Keep the most recent markers; insertion order is preserved for string keys. */
+function boundedNotifiedIds(ids: Record<string, true>): Record<string, true> {
+  const keys = Object.keys(ids);
+  if (keys.length <= MAX_NOTIFIED_IDS) return ids;
+  return Object.fromEntries(keys.slice(-MAX_NOTIFIED_IDS).map((id) => [id, true as const]));
+}
+
 function applyTerminalEffects(job: Job, notify = true): void {
   if (job.status === 'succeeded') {
     const zeroCards =
@@ -398,15 +407,12 @@ export const useJobStore = create<JobStore>()(
       ...JOB_INITIAL_STATE,
 
       _upsertJob(job: Job) {
-        set((state) => {
-          const jobs = boundedJobs({ ...state.jobs, [job.id]: job });
-          return {
-            jobs,
-            handledTerminalIds: Object.fromEntries(
-              Object.entries(state.handledTerminalIds).filter(([id]) => id in jobs),
-            ) as Record<string, true>,
-          };
-        });
+        // handledTerminalIds is not pruned against the held rows here. A row is
+        // dropped once its result has aged out, while the marker records that the
+        // user was already told, so tying the two together let any unrelated job
+        // update revive a notice the user had already seen. The marker map is
+        // bounded where markers are added instead.
+        set((state) => ({ jobs: boundedJobs({ ...state.jobs, [job.id]: job }) }));
       },
 
       _cleanupSubscription(jobId: string) {
@@ -424,7 +430,7 @@ export const useJobStore = create<JobStore>()(
         get()._upsertJob(job);
         if (!get().handledTerminalIds[job.id]) {
           set((state) => ({
-            handledTerminalIds: { ...state.handledTerminalIds, [job.id]: true },
+            handledTerminalIds: boundedNotifiedIds({ ...state.handledTerminalIds, [job.id]: true }),
           }));
           applyTerminalEffects(job);
         }
@@ -612,10 +618,12 @@ export const useJobStore = create<JobStore>()(
       removeJob(jobId) {
         cancelEviction(jobId);
         get()._cleanupSubscription(jobId);
+        // handledTerminalIds is deliberately NOT pruned here: it records that the
+        // user has already been told about this result. Dropping it with the row
+        // makes the next hydration treat an old result as new.
         set((state) => {
           const { [jobId]: _removed, ...rest } = state.jobs;
-          const { [jobId]: _handled, ...handledRest } = state.handledTerminalIds;
-          return { jobs: rest, handledTerminalIds: handledRest };
+          return { jobs: rest };
         });
       },
 
@@ -658,14 +666,19 @@ export const useJobStore = create<JobStore>()(
             for (const job of discovered.values()) {
               if (TERMINAL_STATUSES.has(job.status)) {
                 const existing = get().jobs[job.id];
+                // Already notified and no longer held: the row was dismissed or
+                // aged out, so neither re-insert it nor announce it again.
+                if (get().handledTerminalIds[job.id] && existing === undefined) {
+                  continue;
+                }
                 if (!get().discoveryInitialized && existing === undefined) {
                   get()._upsertJob(job);
                   applyTerminalEffects(job, false);
                   set((state) => ({
-                    handledTerminalIds: {
+                    handledTerminalIds: boundedNotifiedIds({
                       ...state.handledTerminalIds,
                       [job.id]: true,
-                    },
+                    }),
                   }));
                   if (!evictionTimers.has(job.id)) {
                     scheduleEviction(job.id, () => get().removeJob(job.id));
