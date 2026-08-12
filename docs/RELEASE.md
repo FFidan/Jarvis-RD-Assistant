@@ -287,13 +287,20 @@ and each service's `requirements.txt` — then re-locking both projects and
 regenerating the lock-derived pins with `scripts/export-service-requirements.sh`.
 
 The GHCR workflow scans each verification manifest as well and prints the result
-to the job summary. That step is a report, not a gate: it reads the same live
-advisory database, and the run's digest receipts are the only artifacts a stable
-tag can promote, so failing it would discard an otherwise sound verification run
-and force a full rebuild over an advisory published minutes earlier. Read the
-report before tagging. A high or critical finding with an installable fix is
-handled like any other dependency finding — raise the floor, re-verify, and let
-the branch-level scans above block the release.
+to the job summary. That step is a gate: a critical finding that already has a
+fixed version fails the verification job, so the digest carrying it can never be
+promoted to a stable tag. Findings without a released fix are excluded, because
+a gate no rebuild can clear would only teach everyone to override it.
+
+Failing the gate costs a whole verification run. It reads the same live advisory
+database, and the run's digest receipts are the only artifacts a stable tag can
+promote, so an advisory published minutes earlier discards an otherwise sound run
+and forces a full rebuild. That trade is deliberate: no release is published over
+a severe defect that rebuilding would have fixed. Handle a failure like any other
+dependency finding — raise the floor, re-verify, and read the report in the job
+summary, which is published whether the gate passes or fails. Lower severities
+stay with the branch-level scans above, which run where a fix can still be
+committed.
 
 Reproduce the locally runnable dependency and secret scans before pushing a
 release branch and again before tagging:

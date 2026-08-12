@@ -341,8 +341,9 @@ jobs:
       # The service package is copied to the image's WORKDIR rather than
       # installed, and a script invoked by path puts only its own directory on
       # sys.path, so PYTHONPATH is what lets the checker reach it.
-      # First use downloads the layout and OCR models, so this leg is slower than
-      # the import smoke; both arm64 and amd64 run it on native runners.
+      # Converting a real document takes longer than the import smoke, but the
+      # layout and OCR models are baked into the image, so nothing is downloaded
+      # here; both arm64 and amd64 run this on native runners.
       - name: Capability check - exercise runtime paths the import cannot reach
         if: needs.preflight.outputs.mode == 'verify' && matrix.capability != ''
         timeout-minutes: 25
@@ -474,27 +475,36 @@ jobs:
           name: sbom-image-${{ matrix.slug }}
           path: sbom-${{ matrix.slug }}.cdx.json
 
-      # A report, not a gate, and `exit-code: "0"` says so deliberately. This
-      # scans a live advisory database against an image that is already built,
-      # and this job's digest receipts are the only thing a stable tag can
-      # promote; an advisory published minutes earlier would therefore discard a
-      # verification run with nothing wrong with it and force a full rebuild.
-      # Blocking dependency scans run earlier, on the branch, where a fix can
-      # still be committed: pip-audit, npm-audit and osv-scanner in the Security
-      # workflow. docs/RELEASE.md states what the operator must do with this
-      # report before tagging.
+      # A gate: a critical finding that already has a fixed version fails this
+      # job, so no digest carrying one can reach a stable tag. `ignore-unfixed`
+      # keeps the gate to what rebuilding can actually clear — an advisory with
+      # no released fix would otherwise block every run until one appeared.
+      # The cost is accepted deliberately. This scans a live advisory database
+      # against an image that is already built, and this job's digest receipts
+      # are the only thing a stable tag can promote, so a fixable critical
+      # published minutes earlier will discard a verification run with nothing
+      # else wrong with it and force a full rebuild at a raised floor.
+      # Lower severities stay with the branch-level scans, which run where a fix
+      # can still be committed: pip-audit, npm-audit and osv-scanner in the
+      # Security workflow. The Dependency Scans section of docs/RELEASE.md
+      # states what the operator must do when this gate fails.
       - name: Vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ steps.digest.outputs.ref }}
           format: table
-          severity: CRITICAL,HIGH
-          exit-code: "0"
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
           output: trivy-${{ matrix.slug }}.txt
 
+      # The scan above fails the job on a finding, which would otherwise skip
+      # this step and leave the operator with a red run and no report.
       - name: Publish the vulnerability report to the job summary
+        if: ${{ !cancelled() }}
         run: |
+          [ -f trivy-${{ matrix.slug }}.txt ] || exit 0
           {
             echo "### Trivy report — ${{ steps.digest.outputs.ref }}"
             echo '```'
