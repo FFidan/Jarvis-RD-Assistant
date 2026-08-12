@@ -292,12 +292,25 @@ def _next_page_params(payload: Any) -> dict[str, str] | None:
     return None
 
 
-def _declared_capability(raw: Mapping[str, Any]) -> Capability | None:
+def _openrouter_output_capability(raw: Mapping[str, Any]) -> Capability | None:
+    """Decide from OpenRouter's declared output modalities, or ``None`` if absent."""
+    architecture = raw.get("architecture")
+    if not isinstance(architecture, Mapping):
+        return None
+    outputs = architecture.get("output_modalities")
+    if not isinstance(outputs, list):
+        return None
+    # The router states what a model emits. A model that cannot emit text cannot
+    # serve a role here, however conventional its id looks.
+    return "chat" if "text" in {str(item) for item in outputs} else "other"
+
+
+def _declared_capability(provider_id: str, raw: Mapping[str, Any]) -> Capability | None:
     """Read the capability the entry itself declares, or ``None`` when it declares none.
 
     Reading what a provider says beats matching id prefixes: a prefix list is a
     standing bet that no vendor will ever name a family we have not heard of,
-    and that bet loses on every launch.
+    and that bet loses on every launch. Each provider declares in its own shape.
     """
     methods = raw.get("supportedGenerationMethods")
     if isinstance(methods, list):
@@ -307,6 +320,9 @@ def _declared_capability(raw: Mapping[str, Any]) -> Capability | None:
         if "embedContent" in names:
             return "embed"
         return "unknown"
+
+    if provider_id == "openrouter":
+        return _openrouter_output_capability(raw)
 
     capabilities = raw.get("capabilities")
     if isinstance(capabilities, Mapping) and "completion_chat" in capabilities:
@@ -340,7 +356,7 @@ def classify_live_model(provider_id: str, model_id: str, raw: Mapping[str, Any])
     facts, a conservative non-chat deny-list, and published chat families decide.
     Anything left over is ``"unknown"`` and is never offered for a role.
     """
-    declared = _declared_capability(raw)
+    declared = _declared_capability(provider_id, raw)
     if declared is not None:
         return declared
     # Anthropic's model list contains only chat models.
@@ -703,13 +719,15 @@ def _fetch_failure_reason(exc: BaseException) -> str:
 def _stale_or_error(provider_id: str, error: str) -> ProviderModelList:
     """Serve the previous listing (with its original timestamp) or an error entry.
 
-    Either way the result is re-cached under the failure TTL, so a failing
-    provider is retried at most once per that window rather than on every
-    models-page load.
+    A served-from-stale listing still carries the failure: keeping the entries
+    useful is not the same as calling the provider healthy, and the operator
+    needs the reason beside it. Either way the result is re-cached under the
+    failure TTL, so a failing provider is retried at most once per that window
+    rather than on every models-page load.
     """
     stale = _cached(provider_id)
     result = (
-        stale
+        replace(stale, error=error)
         if stale is not None and stale.entries
         else ProviderModelList(provider=provider_id, error=error)
     )

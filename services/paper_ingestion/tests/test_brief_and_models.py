@@ -929,6 +929,87 @@ async def test_system_models_routing_consistent_when_litellm_matches(_app, monke
 
 
 @pytest.mark.asyncio
+async def test_system_models_routing_consistent_for_a_custom_endpoint(_app, monkeypatch):
+    """A custom endpoint delivers under a different prefix than it is assigned.
+
+    Comparing the delivered model against the stored intent without normalizing
+    that difference reported a correctly applied route as permanently divergent.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    # Stored intent uses the app-facing prefix; delivery uses "openai/".
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="custom_openai/org/local-llm"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def _fake_deployments():
+        return [
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "openai/org/local-llm"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            )
+        ]
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
+
+    body = await get_system_models(request)
+
+    assert body.routing.get("smart") == "custom_openai/org/local-llm", (
+        f"routing must be reported in the assigned form; got {body.routing.get('smart')!r}"
+    )
+    assert body.consistent is True, (
+        f"a correctly delivered custom route is not divergent; routing={body.routing}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_models_routing_consistent_for_a_direct_openai_route(_app, monkeypatch):
+    """``openai/`` is a provider prefix in its own right, not only a delivery form.
+
+    Rewriting it whenever it appears would relabel every genuine OpenAI route as
+    divergent, so the prefix alone must never drive the normalization.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="openai/gpt-5"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def _fake_deployments():
+        return [
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "openai/gpt-5"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            )
+        ]
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
+
+    body = await get_system_models(request)
+
+    assert body.routing.get("smart") == "openai/gpt-5"
+    assert body.consistent is True, (
+        f"a genuine OpenAI route must stay consistent; routing={body.routing}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeypatch):
     """:latest suffix on either side must not cause false divergence (consistent=True).
 

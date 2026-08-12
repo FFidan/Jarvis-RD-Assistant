@@ -51,7 +51,7 @@ from paper_ingestion.services.model_identifiers import (
     validate_model_name,
     validate_namespaced_model_suffix,
 )
-from paper_ingestion.services.model_prefixes import is_local_ollama
+from paper_ingestion.services.model_prefixes import is_local_ollama, strip_latest_tag
 
 logger = logging.getLogger(__name__)
 
@@ -433,10 +433,7 @@ def _parse_model_target(model_name: str) -> _ModelTarget:
     ids, so their suffix is validated as ``vendor/model``. Raises ``ValueError``
     on a disallowed suffix.
     """
-    # Normalize: strip :latest -- Ollama's default implicit tag is never stored
-    # anywhere, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
-    if model_name.endswith(":latest"):
-        model_name = model_name[:-7]
+    model_name = strip_latest_tag(model_name)
     model_suffix = model_name  # the part after provider/ (or full name for Ollama)
 
     # Validate the model-name portion (no path traversal / shell chars).
@@ -625,6 +622,21 @@ def _delivery_model_for(provider: ProviderDefinition, model_name: str) -> str:
     if model_name.startswith(provider.assignment_prefix):
         return provider_model_for_delivery(provider, model_name.split("/", 1)[1])
     return model_name
+
+
+def assignment_model_for(provider: ProviderDefinition, delivered_model: str) -> str:
+    """Translate a model string LiteLLM routes back into its app-facing id.
+
+    The inverse of :func:`_delivery_model_for`. Only the provider a route was
+    assigned to may drive this: one provider's delivery prefix is another's
+    assignment prefix, so the prefix alone cannot say which form a string is in.
+    """
+    delivery_prefix = provider.provider_model_prefix
+    if delivery_prefix == provider.assignment_prefix:
+        return delivered_model
+    if not delivered_model.startswith(delivery_prefix):
+        return delivered_model
+    return provider.assignment_prefix + delivered_model[len(delivery_prefix) :]
 
 
 async def _deliver_cloud(

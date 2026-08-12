@@ -24,7 +24,7 @@ from paper_ingestion.ingestion.embedder import (
     validate_embedding_configuration,
 )
 from paper_ingestion.models import SystemModelsResponse
-from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
+from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY, provider_for_prefix
 from paper_ingestion.services.model_assignment import provider_access_configured
 from paper_ingestion.services.model_lifecycle import (
     MODEL_CATALOG,
@@ -33,7 +33,7 @@ from paper_ingestion.services.model_lifecycle import (
     build_model_statuses,
     recommendations_for_role,
 )
-from paper_ingestion.services.model_prefixes import strip_ollama_prefix
+from paper_ingestion.services.model_prefixes import strip_latest_tag, strip_ollama_prefix
 from paper_ingestion.services.provider_models import ProviderModelList, fetch_all_provider_models
 
 logger = logging.getLogger(__name__)
@@ -118,9 +118,7 @@ def _strip_latest(model: str) -> str:
     never cause a false divergence — applied to BOTH sides of every
     intent ↔ routing compare and to the installed-model set.
     """
-    if model.endswith(":latest"):
-        return model[:-7]
-    return model
+    return strip_latest_tag(model)
 
 
 def _models_match(installed_names: list[str]) -> bool:
@@ -375,6 +373,22 @@ async def _load_model_delivery_state(db_pool: asyncpg.Pool) -> dict[str, str]:
         return {}
 
 
+def _as_assigned(routed: str, intent: str) -> str:
+    """Restate *routed* in the prefix form *intent* is stored under.
+
+    A provider may be routed under one prefix and assigned under another — the
+    custom endpoint is delivered as ``openai/`` but stored as ``custom_openai/``
+    — and only the stored intent says which provider a route belongs to. The
+    delivered prefix cannot: ``openai/`` is also the real OpenAI provider's own
+    assignment prefix, so keying off it would relabel every genuine OpenAI route
+    as divergent.
+    """
+    from paper_ingestion.services.litellm_config import assignment_model_for  # noqa: PLC0415
+
+    provider = provider_for_prefix(intent.split("/", 1)[0]) if "/" in intent else None
+    return routed if provider is None else assignment_model_for(provider, routed)
+
+
 async def _load_routing_truth(current: dict[str, Any]) -> tuple[dict[str, str], bool]:
     """Read what LiteLLM actually routes now and compare against the committed intent."""
     # Provider prefix is normalized ("ollama/qwen3:8b" → "qwen3:8b") so the comparison
@@ -398,11 +412,15 @@ async def _load_routing_truth(current: dict[str, Any]) -> tuple[dict[str, str], 
             if not routed_full:
                 continue
             # Normalize: strip provider prefix so "ollama/qwen3:8b" → "qwen3:8b".
-            # Cloud models (anthropic/…, openai/…) keep the prefix because that
-            # is how `current` stores cloud model assignments too.
+            # Cloud models keep a prefix because that is how `current` stores
+            # cloud assignments too — but not always the same one, so the
+            # delivered prefix is restated in the assigned form as well.
             routed_normalized = strip_ollama_prefix(routed_full)
             # Normalize :latest so "qwen3:8b:latest" and "qwen3:8b" compare equal.
             routed_normalized = _strip_latest(routed_normalized)
+            routed_normalized = _as_assigned(
+                routed_normalized, str(current.get(f"{alias}_model") or "")
+            )
             # Multiple deployments per alias can exist mid-replace; the
             # reconciler removes stale duplicates on its next pass.
             routing[alias] = routed_normalized

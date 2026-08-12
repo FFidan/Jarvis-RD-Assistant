@@ -25,7 +25,7 @@ from jarvis_common.model_catalog import (
 )
 
 from paper_ingestion.services.llm_provider_registry import provider_for_id
-from paper_ingestion.services.model_prefixes import strip_ollama_prefix
+from paper_ingestion.services.model_prefixes import strip_latest_tag, strip_ollama_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +188,7 @@ def normalize_model_tag(tag: str) -> str:
         Canonical tag with the ``ollama/`` / ``ollama_chat/`` prefix and
         ``:latest`` suffix stripped (e.g. ``"qwen3:8b"`` or ``"mistral-nemo"``).
     """
-    value = strip_ollama_prefix(tag.strip())
-    return value.removesuffix(":latest")
+    return strip_latest_tag(strip_ollama_prefix(tag.strip()))
 
 
 def hardware_tier(vram_gb: float) -> int:
