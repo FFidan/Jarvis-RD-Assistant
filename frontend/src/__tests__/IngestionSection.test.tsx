@@ -1248,6 +1248,7 @@ describe('IngestionSection — embedding guide link', () => {
 describe('docsUrl() call sites name a real file under docs/', () => {
   const srcRoot = path.resolve(__dirname, '..');
   const docsRoot = path.resolve(__dirname, '../../../docs');
+  const DOCS_HOSTNAME = 'limitcycle-oss.github.io';
   // Matches a docsUrl call whose sole argument is a single- or double-quoted
   // string literal, capturing the quoted path in group 2.
   const CALL_PATTERN = /\bdocsUrl\(\s*(['"])((?:(?!\1).)+)\1\s*\)/g;
@@ -1284,5 +1285,15 @@ describe('docsUrl() call sites name a real file under docs/', () => {
       const exists = existsSync(path.resolve(docsRoot, docPath));
       expect(exists, `docsUrl call argument "${docPath}" has no matching file under docs/`).toBe(true);
     }
+  });
+
+  it('no product file other than docs-links.ts hardcodes the published docs hostname', () => {
+    // A raw href is invisible to the docsUrl() scan above — guard separately
+    // so a future component can't bypass docsUrl() with a literal URL.
+    const offenders = productFilesUnder(srcRoot)
+      .filter((file) => path.relative(srcRoot, file) !== path.join('lib', 'docs-links.ts'))
+      .filter((file) => readFileSync(file, 'utf8').includes(DOCS_HOSTNAME));
+
+    expect(offenders, `raw docs hostname found outside docs-links.ts: ${offenders.join(', ')}`).toEqual([]);
   });
 });

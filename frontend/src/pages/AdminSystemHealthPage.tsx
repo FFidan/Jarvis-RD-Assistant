@@ -25,6 +25,7 @@ import {
 } from '@/lib/api';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { docsUrl } from '@/lib/docs-links';
 import { ModelDiagnosticsCard } from '@/components/admin/ModelDiagnosticsCard';
 import { StorageCard } from '@/components/admin/StorageCard';
 
@@ -236,7 +237,7 @@ export function AdminSystemHealthPage() {
             </p>
           ) : (
             <p className="text-sm text-[var(--status-ok)] mb-3" data-testid="stack-summary">
-              All services running.
+              All services reachable.
             </p>
           )}
           <div className="rounded-md border overflow-x-auto" data-testid="live-services-table">
@@ -309,7 +310,7 @@ export function AdminSystemHealthPage() {
                 for local development — they flag settings that must be changed before a public
                 production deployment. See the{' '}
                 <a
-                  href="https://limitcycle-oss.github.io/jarvis-rd-assistant/DEPLOYMENT/#production-readiness-check"
+                  href={`${docsUrl('DEPLOYMENT.md')}#production-readiness-check`}
                   className="underline"
                   target="_blank"
                   rel="noopener noreferrer"
