@@ -17,7 +17,9 @@ from typing import TYPE_CHECKING, Literal, NoReturn, NotRequired, Protocol, Type
 
 import asyncpg
 import httpx
+from docling.exceptions import ConversionError as DoclingConversionError
 from jarvis_common.library import is_in_library
+from pypdfium2 import PdfiumError
 from qdrant_client.models import PointIdsList
 
 # torch is an optional GPU dependency: CPU-only / scheduler deployments must be
@@ -719,6 +721,13 @@ async def _process_pdf_content(
         return chunks, point_ids
     except EmbeddingBatchError as exc:
         await _raise_embedding_batch_failure(request, premise, exc)
+    except (DoclingConversionError, PdfiumError) as exc:
+        logger.error("PDF conversion failure for paper %d: %s", request.paper_id, exc)
+        raise PDFUserFacingError(
+            "This PDF could not be read. It may be corrupted, password-protected, "
+            "or stored as an unsupported format. Try re-uploading it or using "
+            "another copy of the paper."
+        ) from exc
     except RuntimeError as exc:
         _raise_runtime_process_failure(request.paper_id, exc)
     except httpx.HTTPStatusError as exc:

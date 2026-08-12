@@ -729,6 +729,61 @@ async def test_process_failures_carry_their_remediation_text(failure, expected_t
     assert expected_text in str(raised.value)
 
 
+def _docling_conversion_error(message: str = "cannot decode") -> Exception:
+    from docling.exceptions import ConversionError
+
+    return ConversionError(message)
+
+
+def _pdfium_decode_error(message: str = "cannot load document") -> Exception:
+    from pypdfium2 import PdfiumError
+
+    return PdfiumError(message)
+
+
+# Docling's ConversionError and pypdfium2's PdfiumError both subclass
+# RuntimeError, so before this fix they fell into the generic embedding-failure
+# handler along with real embedding errors.
+_DOCUMENT_READ_FAILURES = [
+    pytest.param(_docling_conversion_error(), id="docling-conversion-error"),
+    pytest.param(_pdfium_decode_error(), id="pdfium-decode-error"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", _DOCUMENT_READ_FAILURES)
+async def test_document_read_failure_is_not_reported_as_an_embedding_problem(failure):
+    """A decode failure must name the document stage, not the model services.
+
+    Docling raises ConversionError and pypdfium2 raises PdfiumError for an
+    unreadable PDF; both subclass RuntimeError, so a broad catch previously
+    reported them as embedding failures and sent operators to inspect healthy
+    LLM services instead of the file itself.
+    """
+    from paper_ingestion.services.pdf_workflow import PDFUserFacingError
+
+    conn = AsyncMock()
+    conn.fetchval.side_effect = _fetchval_answers(0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(side_effect=failure)
+
+    with pytest.raises(PDFUserFacingError) as raised:
+        await run_process_pdf(
+            paper_id=92,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=MagicMock(),
+        )
+
+    message = str(raised.value).lower()
+    assert "embedding" not in message
+    assert "litellm" not in message
+    assert "ollama" not in message
+    assert "read" in message or "convert" in message
+
+
 def _process_route_app(tmp_path, monkeypatch, *, process_side_effect=None, lock_available=True):
     """Wire the synchronous process route over the unmocked workflow.
 
