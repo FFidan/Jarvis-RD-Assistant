@@ -84,4 +84,9 @@ describe('ConfigEntryCard', () => {
     render(<ConfigEntryCard {...baseProps} customElement={<div data-testid="cu">CUSTOM</div>} />);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  it('renders the text/number card with the house card chrome', () => {
+    const { container } = render(<ConfigEntryCard {...baseProps} />);
+    expect(container.firstChild).toHaveClass('rounded-md', 'border-hair', 'shadow-none');
+  });
 });

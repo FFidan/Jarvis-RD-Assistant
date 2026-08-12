@@ -242,20 +242,23 @@ function LlmRouteCard({
               data-testid={`configure-toggle-${role}`}
               disabled={isPending}
               aria-expanded={configureOpen}
+              aria-controls={`local-model-controls-${role}`}
             >
               {configureOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
               Local model controls
             </button>
             {configureOpen && (
-              <NumCtxSlider
-                role={role}
-                machineId={machineId}
-                fitDetail={entry?.fit_detail}
-                hardware={hardware}
-                modelId={value}
-                supportsThinking={entry?.supports_thinking ?? false}
-                configs={configs}
-              />
+              <div id={`local-model-controls-${role}`}>
+                <NumCtxSlider
+                  role={role}
+                  machineId={machineId}
+                  fitDetail={entry?.fit_detail}
+                  hardware={hardware}
+                  modelId={value}
+                  supportsThinking={entry?.supports_thinking ?? false}
+                  configs={configs}
+                />
+              </div>
             )}
           </div>
         )}

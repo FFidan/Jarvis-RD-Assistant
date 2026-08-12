@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { HardwareInfoApi } from './hardware-fit';
 
 interface HardwareStripProps {
@@ -21,13 +22,19 @@ export function HardwareStrip({ hardware }: HardwareStripProps) {
       <button
         type="button"
         aria-expanded={expanded}
+        aria-controls="hardware-strip-details"
         className="w-full cursor-pointer rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground select-none text-left"
         onClick={() => setExpanded((v) => !v)}
         data-testid="hardware-strip"
       >
+        {expanded ? (
+          <ChevronDown className="mr-1 inline h-3 w-3" />
+        ) : (
+          <ChevronRight className="mr-1 inline h-3 w-3" />
+        )}
         <span className="font-medium text-foreground">{summary}</span>
         {expanded && (
-          <span className="ml-3 space-x-3">
+          <span id="hardware-strip-details" className="ml-3 space-x-3">
             {hardware.vram_source && (
               <span>
                 Source: <span className="text-foreground">{hardware.vram_source}</span>

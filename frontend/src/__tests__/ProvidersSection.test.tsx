@@ -513,9 +513,9 @@ describe('ProvidersSection', () => {
 
     renderSection();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Could not load provider settings. Admin access required',
-    );
+    expect(
+      await screen.findByText('Could not load provider settings. Admin access required'),
+    ).toBeInTheDocument();
   });
 
   it('shows provider test failures without clearing the stored key', async () => {

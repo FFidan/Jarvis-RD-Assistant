@@ -98,7 +98,7 @@ export function ConfigEntryCard({
   }
 
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardContent className="flex items-center gap-4 p-4">
         {editingKey === entry.key ? (
           <div className="flex-1 space-y-1">
