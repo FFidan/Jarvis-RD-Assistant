@@ -8,6 +8,7 @@ import {
   matchesModelId,
   modelPriceLabel,
 } from '@/components/shared/model-picker/model-options';
+import { docsUrl } from '@/lib/docs-links';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, fetchSystemModels, listProviders, setConfig } from '@/lib/api';
 import type {
@@ -297,7 +298,7 @@ function EmbeddingRouteCard({
         </details>
         <a
           className="inline-block text-xs text-primary underline-offset-4 hover:underline"
-          href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/changing-embedding-model/"
+          href={docsUrl('manual/changing-embedding-model.md')}
           target="_blank"
           rel="noopener noreferrer"
         >

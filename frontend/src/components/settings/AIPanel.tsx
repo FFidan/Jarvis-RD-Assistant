@@ -15,6 +15,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { dismissBanner, getFirstRunStatus } from '@/lib/api';
+import { docsUrl } from '@/lib/docs-links';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 
@@ -56,7 +57,7 @@ export function AIPanel() {
           or set <code>COMPOSE_FILE</code> to include <code>docker-compose.gpu.yml</code>, then
           confirm the NVIDIA container runtime is installed.{' '}
           <a
-            href="https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/hardware-and-models/"
+            href={docsUrl('manual/hardware-and-models.md')}
             target="_blank"
             rel="noopener noreferrer"
             className="underline whitespace-nowrap"
