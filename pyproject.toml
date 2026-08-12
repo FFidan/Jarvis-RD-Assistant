@@ -88,13 +88,15 @@ paper-ingestion-base = [
 paper-ingestion = [
     { include-group = "paper-ingestion-base" },
 ]
-# CPU flavor of paper-ingestion: identical dependency set, but torch resolves
-# from the PyTorch CPU index (no nvidia-*/triton). The direct torch pin is
-# required so the group-scoped [tool.uv.sources] entry validates; ==2.13.0
-# matches the 2.13.0+cpu wheels. Exported to constraints-cpu.txt.
+# CPU flavor of paper-ingestion: identical dependency set, but torch and
+# torchvision resolve from the PyTorch CPU index (no nvidia-*/triton). The
+# direct pins are required so both group-scoped [tool.uv.sources] entries
+# validate; ==2.13.0/==0.28.0 match the +cpu wheels. Exported to
+# constraints-cpu.txt.
 paper-ingestion-cpu = [
     { include-group = "paper-ingestion-base" },
     "torch==2.13.0",
+    "torchvision==0.28.0",
 ]
 # Shared optional (reranker) set for both flavors. Kept in its own group for the
 # same reason as paper-ingestion-base: a group must not include-group its
@@ -176,6 +178,10 @@ torch = [
     { index = "pytorch-cpu", group = "paper-ingestion-cpu" },
     { index = "pytorch-cpu", group = "paper-ingestion-optional-cpu" },
 ]
+# torchvision carries compiled kernels registered against a specific torch
+# build, so it has to come from the same index as torch in the CPU flavor.
+# Mixing indexes installs cleanly and then fails at `import torchvision`.
+torchvision = [{ index = "pytorch-cpu", group = "paper-ingestion-cpu" }]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
