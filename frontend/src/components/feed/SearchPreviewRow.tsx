@@ -10,7 +10,7 @@ import {
   zoteroPushPaper,
   zoteroResync,
 } from '@/lib/api';
-import { zoteroDesktopHref } from '@/lib/api/zotero';
+import { zoteroDesktopHref, zoteroWebHref } from '@/lib/api/zotero';
 import { useJobStore } from '@/stores/job-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -229,7 +229,15 @@ export function SearchPreviewRow({
 
           {isSavedWithZotero && zoteroItemKey && (
             <DropdownMenuItem asChild>
-              <a href="https://www.zotero.org/library" target="_blank" rel="noopener noreferrer">
+              <a
+                href={zoteroWebHref(
+                  zoteroItemKey,
+                  savedZoteroLinkage?.zotero_library_type,
+                  savedZoteroLinkage?.zotero_group_id,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 Open Zotero Web Library
               </a>
             </DropdownMenuItem>
