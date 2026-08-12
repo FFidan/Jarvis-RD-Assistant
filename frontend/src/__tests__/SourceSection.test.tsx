@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { DndContext } from '@dnd-kit/core';
 import { SortableContext } from '@dnd-kit/sortable';
 import { SourceSection } from '@/components/settings/SourceSection';
@@ -12,8 +13,11 @@ vi.mock('@/lib/api', () => ({
   fetchSources: vi.fn(),
   reorderSources: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
-const { fetchSources } = await import('@/lib/api');
+const { fetchSources, updateSource } = await import('@/lib/api');
+const { toast } = await import('sonner');
 
 type SourcePayload = Awaited<ReturnType<typeof fetchSources>>[number];
 
@@ -60,6 +64,18 @@ describe('SourceSection', () => {
     );
 
     expect(screen.getByText(/^API key: not set$/i)).toBeInTheDocument();
+  });
+
+  it('shows a toast when toggling a source is rejected by the server', async () => {
+    vi.mocked(updateSource).mockRejectedValueOnce(new Error(''));
+    const user = userEvent.setup();
+    renderSource(source());
+
+    await user.click(screen.getByRole('button', { name: /disable/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save this source setting');
+    });
   });
 });
 

@@ -15,8 +15,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteExtractionTemplate: vi.fn().mockResolvedValue({}),
   };
 });
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const { fetchExtractionTemplates, createExtractionTemplate } = await import('@/lib/api');
+const { toast } = await import('sonner');
 
 const mockTemplate = {
   id: 1,
@@ -150,6 +153,28 @@ describe('ExtractionTemplateSection', () => {
           ],
         }),
       );
+    });
+  });
+
+  it('shows a toast when saving a new template is rejected by the server', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchExtractionTemplates).mockResolvedValue([]);
+    vi.mocked(createExtractionTemplate).mockRejectedValue(new Error(''));
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Template/ })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /Add Template/ }));
+    await user.type(screen.getByLabelText('Template Name'), 'New Template');
+    await user.type(
+      screen.getByRole('textbox', { name: /fields/i }),
+      'accuracy|Accuracy|Model accuracy metric|text',
+    );
+    await user.click(screen.getByRole('button', { name: 'Create Template' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not create this extraction template');
     });
   });
 });

@@ -9,7 +9,7 @@ import { getConfigValue } from '@/components/settings/pulse/pulse-utils';
 import { fetchConfig, setConfig } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { errorMessage } from '@/lib/errors';
-import { timeToCron, cronToTime } from '@/lib/cron-utils';
+import { cronToHumanReadable, cronToTime, isTimeOnlyCron, timeToCron } from '@/lib/cron-utils';
 import type { StepNavProps } from './shared';
 
 interface AutomationStepProps extends StepNavProps {
@@ -65,7 +65,10 @@ export function AutomationStep({ stepNumber, totalSteps, onBack, onNext }: Autom
   });
 
   const handleSave = () => {
-    saveMut.mutate(timeToCron(time));
+    // Pass the stored expression so a schedule the clock picker cannot
+    // represent (multiple daily runs, hourly, etc.) is preserved rather than
+    // silently collapsed to a single daily time.
+    saveMut.mutate(timeToCron(time, persistedCron));
   };
 
   return (
@@ -97,10 +100,17 @@ export function AutomationStep({ stepNumber, totalSteps, onBack, onNext }: Autom
           />
           <span className="text-sm font-medium">Enable Pulse (overnight paper discovery)</span>
         </label>
-        <div>
-          <Label htmlFor="setup-pulse-time">Daily run time</Label>
-          <TimeSelect value={time} onChange={setTime} disabled={!pulseEnabled} />
-        </div>
+        {persistedCron !== null && !isTimeOnlyCron(persistedCron) ? (
+          <p className="text-sm text-muted-foreground">
+            Pulse is already set to run {cronToHumanReadable(persistedCron)}. This step can only
+            set a single daily time — change the full schedule later in Settings.
+          </p>
+        ) : (
+          <div>
+            <Label htmlFor="setup-pulse-time">Daily run time</Label>
+            <TimeSelect value={time} onChange={setTime} disabled={!pulseEnabled} />
+          </div>
+        )}
         <div className="flex items-center gap-3">
           <Button onClick={handleSave} disabled={saveMut.isPending}>
             Save schedule

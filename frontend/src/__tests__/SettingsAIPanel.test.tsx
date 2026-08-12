@@ -16,6 +16,11 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
+
+const { toast } = await import('sonner');
+
 const wrap = (ui: React.ReactNode) => (
   <QueryClientProvider client={createTestQueryClient()}>
     <MemoryRouter>{ui}</MemoryRouter>
@@ -64,6 +69,24 @@ describe('AIPanel (model-page hardware alerts + pointer)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
     await waitFor(() => expect(api.dismissBanner).toHaveBeenCalledWith('hw_change'));
+  });
+
+  it('shows a toast when dismissing the hardware-change notice is rejected by the server', async () => {
+    vi.mocked(api.getFirstRunStatus).mockResolvedValue({
+      ...baseSetupStatus,
+      hw_tier_changed: true,
+      hw_tier_baseline: 'ge-48',
+      hw_tier_current: '24-48',
+    } as any);
+    vi.mocked(api.dismissBanner).mockRejectedValue(new Error(''));
+    render(wrap(<AIPanel />));
+
+    await screen.findByTestId('hw-change-banner');
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not dismiss this notice');
+    });
   });
 
   it('shows the gpu-cpu-mismatch alert and suppresses the tier-changed alert', async () => {

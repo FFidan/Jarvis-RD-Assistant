@@ -20,6 +20,7 @@ import { CheckCircle2, Copy, Loader2, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getTelegramPairing, removeTelegramPairing, requestTelegramPairToken } from '@/lib/api';
 import type { TelegramPairTokenResponse } from '@/lib/api';
+import { onSaveError } from '@/lib/forms/save-error';
 
 // ---------------------------------------------------------------------------
 // Countdown hook
@@ -166,6 +167,7 @@ export function TelegramPairingSection() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pairing.userTelegram() });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
     },
+    onError: onSaveError('Could not disconnect Telegram'),
   });
 
   const handleExpired = useCallback(() => {

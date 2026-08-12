@@ -19,6 +19,7 @@ import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Trash2, Plus, Pencil, TableProperties } from 'lucide-react';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { onSaveError } from '@/lib/forms/save-error';
 import type { ExtractionTemplate } from '@/types';
 
 interface TemplateField {
@@ -68,6 +69,7 @@ export function ExtractionTemplateSection() {
       setShowAdd(false);
       setAddForm({ name: '', description: '', fields: '' });
     },
+    onError: onSaveError('Could not create this extraction template'),
   });
 
   const editMut = useMutation({
@@ -77,6 +79,7 @@ export function ExtractionTemplateSection() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.extraction.templates() });
       setEditTemplate(null);
     },
+    onError: onSaveError('Could not save changes to this extraction template'),
   });
 
   const deleteMut = useMutation({
@@ -84,6 +87,7 @@ export function ExtractionTemplateSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.extraction.templates() });
     },
+    onError: onSaveError('Could not delete this extraction template'),
   });
 
   const startEdit = (tmpl: ExtractionTemplate) => {

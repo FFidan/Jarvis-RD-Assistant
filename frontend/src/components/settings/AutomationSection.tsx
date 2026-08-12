@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchNudges, updateNudge, fetchConfig, setConfig } from '@/lib/api';
@@ -6,13 +6,15 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { TimeSelect } from '@/components/ui/time-select';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { EmptyState } from '@/components/EmptyState';
 import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { Bell, ChevronsUpDown, Check } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
-import { cronToHumanReadable, cronToTime, timeToCron } from '@/lib/cron-utils';
+import { cronToHumanReadable, cronToTime, isTimeOnlyCron, timeToCron } from '@/lib/cron-utils';
+import { onSaveError } from '@/lib/forms/save-error';
 import { TIMEZONE_OPTIONS, TIMEZONE_BY_VALUE, TIMEZONE_REGIONS } from '@/lib/timezone-data';
 import type { Nudge } from '@/types';
 
@@ -52,16 +54,11 @@ function NudgeRow({
   onTimeChange: (nudge: Nudge, val: string) => void;
   isPending: boolean;
 }) {
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => { if (timeoutRef.current !== null) clearTimeout(timeoutRef.current); }, []);
-
-  const handleTimeChange = (val: string) => {
-    if (timeoutRef.current !== null) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      onTimeChange(nudge, val);
-    }, 300);
-  };
+  // A cron expression with a list/range/step/wildcard minute or hour (multiple
+  // daily runs, or hourly) has no single clock time the picker could show —
+  // editing it would silently discard the extra runs. Show it as read-only
+  // text instead of an inert control.
+  const canEditTime = isTimeOnlyCron(nudge.cron_expression);
 
   return (
     <Card className="rounded-md border-hair shadow-none">
@@ -82,10 +79,12 @@ function NudgeRow({
           )}
           <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
             <span>{cronToHumanReadable(nudge.cron_expression)}</span>
-            <TimeSelect
-              value={cronToTime(nudge.cron_expression)}
-              onChange={handleTimeChange}
-            />
+            {canEditTime && (
+              <TimeSelect
+                value={cronToTime(nudge.cron_expression)}
+                onChange={(val) => onTimeChange(nudge, val)}
+              />
+            )}
             {nudge.last_fired_at && (
               <span>Last run: {formatDate(nudge.last_fired_at)}</span>
             )}
@@ -106,6 +105,8 @@ function NudgeRow({
 
 export function AutomationSection() {
   const queryClient = useQueryClient();
+  const tzSearchId = useId();
+  const fetchIntervalId = useId();
 
   const { data: nudges = [], isLoading, isError: nudgesError } = useQuery({
     queryKey: QUERY_KEYS.account.nudges(),
@@ -128,6 +129,7 @@ export function AutomationSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.account.nudges() });
     },
+    onError: onSaveError('Could not update this notification schedule'),
   });
 
   const configMut = useMutation({
@@ -135,6 +137,7 @@ export function AutomationSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
     },
+    onError: onSaveError('Could not save this setting'),
   });
 
   const handleToggle = (nudge: Nudge) => {
@@ -218,7 +221,7 @@ export function AutomationSection() {
             <Card className="rounded-md border-hair shadow-none mb-3">
               <CardContent className="flex items-center gap-4 p-4">
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm">Timezone</div>
+                  <h4 className="text-sm font-medium">Timezone</h4>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Your local timezone for scheduling notifications
                   </p>
@@ -242,7 +245,11 @@ export function AutomationSection() {
                   </PopoverTrigger>
                   <PopoverContent className="w-72 sm:w-80 p-0" align="end">
                     <div className="flex items-center border-b px-3">
+                      <Label htmlFor={tzSearchId} className="sr-only">
+                        Search city or timezone
+                      </Label>
                       <Input
+                        id={tzSearchId}
                         className="h-9 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
                         placeholder="Search city or timezone..."
                         value={tzSearch}
@@ -333,12 +340,16 @@ export function AutomationSection() {
           <Card className="rounded-md border-hair shadow-none">
             <CardContent className="flex items-center gap-4 p-4">
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm">Check for new papers every (hours)</div>
+                <h4 className="text-sm font-medium">Check for new papers every (hours)</h4>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   How often the background pipeline fetches new papers from all sources
                 </p>
               </div>
+              <Label htmlFor={fetchIntervalId} className="sr-only">
+                Check for new papers every (hours)
+              </Label>
               <Input
+                id={fetchIntervalId}
                 type="number"
                 min={1}
                 className="w-24 text-right"

@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import { dismissBanner, getFirstRunStatus } from '@/lib/api';
 import { docsUrl } from '@/lib/docs-links';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { onSaveError } from '@/lib/forms/save-error';
 import { Button } from '@/components/ui/button';
 
 export function AIPanel() {
@@ -33,6 +34,7 @@ export function AIPanel() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: QUERY_KEYS.setup.firstRun() });
     },
+    onError: onSaveError('Could not dismiss this notice'),
   });
 
   // GPU-on-CPU mismatch: a GPU was detected at install (baseline is a GPU tier)
