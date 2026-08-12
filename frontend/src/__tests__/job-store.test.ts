@@ -1850,6 +1850,62 @@ describe('JobStore', () => {
     expect(ourCalls()).toBe(2); // backoff ran to completion; resubscribed
   });
 
+  it('does not re-notify or resurrect a terminal job after eviction and re-hydration', async () => {
+    // Regression: eviction used to drop the notified marker along with the row,
+    // so the next hydration treated a five-minute-old result as brand new.
+    const { listJobs } = await import('@/lib/api');
+    const { toast } = await import('sonner');
+    const job = makeJob({ id: 'evicted-1', status: 'succeeded', kind: 'pulse.generate' });
+    useJobStore.setState({ discoveryInitialized: true });
+
+    useJobStore.getState()._handleTerminal(job);
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+
+    useJobStore.getState().removeJob(job.id);
+    expect(useJobStore.getState().jobs[job.id]).toBeUndefined();
+
+    vi.mocked(listJobs).mockImplementation(async (params) => (params?.status ? [] : [job]));
+    await useJobStore.getState().hydrate();
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    expect(useJobStore.getState().jobs[job.id]).toBeUndefined();
+  });
+
+  it('keeps the notified marker when other jobs move after an eviction', async () => {
+    // The marker has to survive unrelated traffic, not just an idle gap. A
+    // researcher with a running pipeline always has another job moving between
+    // an eviction and the next hydration, so pruning markers against the
+    // currently held rows would replay the notice in exactly the common case.
+    const { listJobs } = await import('@/lib/api');
+    const { toast } = await import('sonner');
+    const job = makeJob({ id: 'evicted-2', status: 'succeeded', kind: 'pulse.generate' });
+    useJobStore.setState({ discoveryInitialized: true });
+
+    useJobStore.getState()._handleTerminal(job);
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    useJobStore.getState().removeJob(job.id);
+
+    useJobStore.getState()._upsertJob(makeJob({ id: 'unrelated-1', status: 'running' }));
+    expect(useJobStore.getState().handledTerminalIds[job.id]).toBe(true);
+
+    vi.mocked(listJobs).mockImplementation(async (params) => (params?.status ? [] : [job]));
+    await useJobStore.getState().hydrate();
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    expect(useJobStore.getState().jobs[job.id]).toBeUndefined();
+  });
+
+  it('bounds the notified-marker map so sessionStorage cannot grow without limit', () => {
+    // Markers outlive the rows they refer to, so this cap is the only thing
+    // bounding what the session stores.
+    for (let i = 0; i < 150; i++) {
+      useJobStore.getState()._handleTerminal(
+        makeJob({ id: `notify-${i}`, status: 'succeeded' }),
+      );
+    }
+    expect(Object.keys(useJobStore.getState().handledTerminalIds).length).toBe(100);
+  });
+
   // ----- paper.summarize coverage/passes -> paper-detail cache -----
 
   function seedPaperDetail(paperId: number) {
