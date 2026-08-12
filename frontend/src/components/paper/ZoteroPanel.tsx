@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import {
+  ApiError,
   zoteroGetLinkage,
   zoteroPushPaper,
   zoteroResync,
 } from '@/lib/api';
-import { zoteroDesktopHref } from '@/lib/api/zotero';
+import { zoteroDesktopHref, zoteroWebHref } from '@/lib/api/zotero';
 import { useJobStore } from '@/stores/job-store';
 import { Copy, ExternalLink, RefreshCw, Send } from 'lucide-react';
 
@@ -31,7 +33,7 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
   }, []);
 
-  const { data: linkage, isLoading, isError } = useQuery({
+  const { data: linkage, isLoading, isError, error } = useQuery({
     queryKey: QUERY_KEYS.zotero.linkage(paperId),
     queryFn: () => zoteroGetLinkage(paperId),
   });
@@ -69,10 +71,15 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
 
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading Zotero status…</div>;
   if (isError) {
+    const isPermissionError = error instanceof ApiError && error.status === 403;
     return (
       <div className="space-y-3">
         <h3 className="text-sm font-semibold">Zotero</h3>
-        <p className="text-xs text-destructive">Zotero status unavailable.</p>
+        <p className="text-xs text-destructive">
+          {isPermissionError
+            ? "You don't have permission to view Zotero status for this paper."
+            : 'Zotero status is temporarily unavailable. Try again shortly.'}
+        </p>
       </div>
     );
   }
@@ -91,15 +98,22 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
               Link this paper to a project first. The project determines its Zotero collection.
             </p>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!hasProjectLinks || pushing}
-            onClick={() => pushMutation.mutate()}
-          >
-            <Send className="h-3 w-3 mr-1" />
-            {pushing ? 'Sending…' : 'Send to Zotero'}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!hasProjectLinks || pushing}
+              onClick={() => pushMutation.mutate()}
+            >
+              <Send className="h-3 w-3 mr-1" />
+              {pushing ? 'Sending…' : 'Send to Zotero'}
+            </Button>
+            {!hasProjectLinks && (
+              <Button size="sm" variant="outline" asChild>
+                <Link to="/projects">Open Projects to Link</Link>
+              </Button>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">
             Sends citation metadata first (the PDF is not attached). You can then synchronize
             annotations and highlights.
@@ -143,7 +157,15 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
               </a>
             </Button>
             <Button size="sm" variant="outline" asChild>
-              <a href="https://www.zotero.org/library" target="_blank" rel="noopener noreferrer">
+              <a
+                href={zoteroWebHref(
+                  linkage.zotero_item_key!,
+                  linkage.zotero_library_type,
+                  linkage.zotero_group_id,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 Open Zotero Web Library
               </a>
             </Button>

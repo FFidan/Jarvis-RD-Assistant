@@ -16,7 +16,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
+import { ApiError } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // --- Module mocks ---
@@ -48,10 +50,12 @@ vi.mock('@/stores/job-store', () => ({
   }),
 }));
 
-function renderPanel() {
+function renderPanel(hasProjectLinks = true) {
   const queryClient = createTestQueryClient();
   return renderWithProviders(
-    <ZoteroPanel paperId={1} hasProjectLinks />,
+    <MemoryRouter>
+      <ZoteroPanel paperId={1} hasProjectLinks={hasProjectLinks} />
+    </MemoryRouter>,
     { queryClient },
   );
 }
@@ -273,5 +277,75 @@ describe('ZoteroPanel — background job handoff', () => {
       'href',
       'zotero://select/groups/987654/items/ABCD1234',
     );
+  });
+
+  it('uses the configured group library for the web handoff', async () => {
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: 'ABCD1234',
+      zotero_citation_key: 'smith2024',
+      zotero_library_type: 'group',
+      zotero_group_id: '987654',
+    });
+    renderPanel();
+
+    expect(await screen.findByRole('link', { name: 'Open Zotero Web Library' })).toHaveAttribute(
+      'href',
+      'https://www.zotero.org/groups/987654/library',
+    );
+  });
+
+  it('offers a way to link the paper to a project when Send is disabled', async () => {
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: null,
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+    });
+    renderPanel(false);
+
+    expect(await screen.findByRole('button', { name: 'Send to Zotero' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'Open Projects to Link' })).toHaveAttribute(
+      'href',
+      '/projects',
+    );
+  });
+
+  it('does not offer the project-link affordance once the paper has a linked project', async () => {
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: null,
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+    });
+    renderPanel(true);
+
+    await screen.findByRole('button', { name: 'Send to Zotero' });
+    expect(screen.queryByRole('link', { name: 'Open Projects to Link' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ZoteroPanel — status load failure', () => {
+  beforeEach(() => {
+    mocks.getLinkage.mockReset();
+  });
+
+  it('shows a permission-specific message on a 403', async () => {
+    mocks.getLinkage.mockRejectedValue(
+      new ApiError(403, JSON.stringify({ detail: 'Forbidden' })),
+    );
+    renderPanel();
+
+    expect(
+      await screen.findByText(
+        "You don't have permission to view Zotero status for this paper.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a generic outage message for anything else', async () => {
+    mocks.getLinkage.mockRejectedValue(new ApiError(500, JSON.stringify({ detail: 'boom' })));
+    renderPanel();
+
+    expect(
+      await screen.findByText('Zotero status is temporarily unavailable. Try again shortly.'),
+    ).toBeInTheDocument();
   });
 });

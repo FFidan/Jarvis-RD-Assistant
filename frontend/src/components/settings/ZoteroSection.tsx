@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import type { ConfigEntry } from '@/types';
 import { toast } from 'sonner';
@@ -69,6 +69,7 @@ export function ZoteroSection() {
   // Sync now state
   const [isSyncing, setIsSyncing] = useState(false);
   const [libraryScopeChanged, setLibraryScopeChanged] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
@@ -77,6 +78,9 @@ export function ZoteroSection() {
         setLibraryScopeChanged(true);
       }
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
+    },
+    onError: () => {
+      toast.error('Failed to save Zotero setting.');
     },
   });
 
@@ -330,24 +334,6 @@ export function ZoteroSection() {
           </div>
         )}
 
-        {/* Better BibTeX hosts on the operator's own network */}
-        <div className="space-y-2">
-          <Label htmlFor="zotero-allowed-private-hosts">Allowed private hostnames</Label>
-          <Input
-            id="zotero-allowed-private-hosts"
-            type="text"
-            placeholder="zotero.lan, 192.168.1.50"
-            value={draftAllowedHosts ?? allowedPrivateHosts}
-            onChange={(e) => setDraftAllowedHosts(e.target.value)}
-            onBlur={handleBlurAllowedHosts}
-          />
-          <p className="text-xs text-muted-foreground">
-            Comma-separated hostnames on your own network that may serve Better BibTeX citation
-            keys. Any other host on a private address is refused.{' '}
-            <code className="font-mono">host.docker.internal</code> is always allowed.
-          </p>
-        </div>
-
         {/* Test connection */}
         <div className="flex items-center gap-3">
           <Button
@@ -456,6 +442,39 @@ export function ZoteroSection() {
                   {isSyncing ? 'Syncing…' : libraryScopeChanged ? 'Run library sync now' : 'Sync now'}
                 </Button>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Advanced: deployment-wide network setting, not per-user */}
+        <div className="space-y-2">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 text-left text-sm font-medium"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+            aria-controls="zotero-advanced-settings"
+          >
+            {advancedOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            Advanced
+          </button>
+          {advancedOpen && (
+            <div id="zotero-advanced-settings" className="space-y-2 border-t pt-4">
+              <Label htmlFor="zotero-allowed-private-hosts">Better BibTeX hosts</Label>
+              <Input
+                id="zotero-allowed-private-hosts"
+                type="text"
+                placeholder="zotero.lan, 192.168.1.50"
+                value={draftAllowedHosts ?? allowedPrivateHosts}
+                onChange={(e) => setDraftAllowedHosts(e.target.value)}
+                onBlur={handleBlurAllowedHosts}
+              />
+              <p className="text-xs text-muted-foreground">
+                Comma-separated hostnames on your own network allowed to serve Better BibTeX
+                citation keys. This permits connections to private-network destinations, so only
+                add hosts you control — it applies to every user on this deployment.{' '}
+                <code className="font-mono">host.docker.internal</code> is always allowed.
+              </p>
             </div>
           )}
         </div>
