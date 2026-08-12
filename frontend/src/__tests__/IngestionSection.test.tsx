@@ -220,6 +220,16 @@ describe('IngestionSection — hardware strip', () => {
     expect(screen.getByText(/nvidia-smi/)).toBeInTheDocument();
   });
 
+  it('pairs the hardware strip toggle with its content via aria-controls', async () => {
+    renderSection();
+    const toggle = await screen.findByTestId('hardware-strip');
+    expect(toggle).toHaveAttribute('aria-controls', 'hardware-strip-details');
+
+    fireEvent.click(toggle);
+    const detail = await screen.findByText(/nvidia-smi/);
+    expect(document.getElementById('hardware-strip-details')).toContainElement(detail);
+  });
+
   it('renders hardware strip only in AI models group context', async () => {
     renderSection();
     await waitFor(() => {
@@ -320,6 +330,23 @@ describe('IngestionSection — num_ctx slider', () => {
     await waitFor(() => {
       expect(screen.getByTestId('slider-smart')).toBeInTheDocument();
     });
+  });
+
+  it('pairs the local-model-controls toggle with its content via aria-controls', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    const toggle = screen.getByTestId('configure-toggle-smart');
+    expect(toggle).toHaveAttribute('aria-controls', 'local-model-controls-smart');
+
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(screen.getByTestId('slider-smart')).toBeInTheDocument();
+    });
+    expect(document.getElementById('local-model-controls-smart')).toContainElement(
+      screen.getByTestId('slider-smart'),
+    );
   });
 
   it('persists num_ctx via setConfig on slider commit (mouseup)', async () => {

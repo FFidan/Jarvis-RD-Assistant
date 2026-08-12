@@ -27,13 +27,14 @@ export function DiagnosticsPanel() {
         className="flex w-full items-center gap-2 p-3 text-sm font-medium hover:bg-muted/30 transition-colors"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
+        aria-controls="diagnostics-panel"
       >
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         Diagnostics
       </button>
 
       {open && (
-        <div className="border-t p-3 space-y-4">
+        <div id="diagnostics-panel" className="border-t p-3 space-y-4">
           {isLoading && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import {
   compareCloudProviders,
   fetchConfig,
@@ -367,8 +368,10 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
       : errorMessage(providersQuery.error, 'Could not load provider metadata');
     return (
       <Card className="rounded-md border-hair shadow-none">
-        <CardContent className="p-4">
-          <p role="alert" className="text-sm text-destructive">Could not load provider settings. {loadError}</p>
+        {/* QueryErrorState does not announce itself, and this replaced markup
+            that did; keep the failure audible to a screen reader. */}
+        <CardContent className="p-4" role="alert">
+          <QueryErrorState message={`Could not load provider settings. ${loadError}`} />
         </CardContent>
       </Card>
     );
