@@ -680,6 +680,19 @@ describe('ActionsSidebar', () => {
     expect(screen.queryByText(/embedding/i)).not.toBeInTheDocument();
   });
 
+  it('shows the persisted failure after a reload with no active run', () => {
+    const queryClient = createTestQueryClient();
+    renderWithProviders(
+      <MemoryRouter>
+        <ActionsSidebar paperId={42} pdfDownloaded hasChunks={false} processingFailed />
+      </MemoryRouter>,
+      { queryClient },
+    );
+
+    const label = screen.getByText('Processing');
+    expect(label.className).toContain('text-destructive');
+  });
+
   it('analyze success fires toast.success with Ask guidance and Go-to-Ask action', async () => {
     const user = userEvent.setup();
 
