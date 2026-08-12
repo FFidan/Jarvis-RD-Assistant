@@ -157,7 +157,11 @@ def test_service_policy_permits_the_compose_application_hostnames(host: str) -> 
     """
     private = ipaddress.ip_address("10.137.241.4")
     assert JARVIS_SERVICE_POLICY.allows(host, private) is True
+    # A permitted name must match exactly. The two lookalikes below bracket it on
+    # either side, so neither a prefix nor a suffix relaxation of the check can
+    # pass unnoticed.
     assert JARVIS_SERVICE_POLICY.allows(f"{host}.attacker.example", private) is False
+    assert JARVIS_SERVICE_POLICY.allows(f"attacker.example.{host}", private) is False
 
 
 async def test_candidate_order_and_retry_stay_within_one_validated_answer_set() -> None:
