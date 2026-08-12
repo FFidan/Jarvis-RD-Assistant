@@ -41,6 +41,7 @@ from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.rag.decomposition import decompose_query
 from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
 from paper_ingestion.services.litellm_api import get_litellm_deployments
+from paper_ingestion.services.model_prefixes import strip_latest_tag
 
 if TYPE_CHECKING:
     from jarvis_common.verify import QuoteVerifier
@@ -133,7 +134,7 @@ _DEFAULT_ANSWER_BUDGET = RagAnswerBudget.for_non_thinking()
 
 def _catalog_thinking_capability(model: str) -> bool | None:
     """Return a catalog thinking flag, or None when the route is unknown."""
-    routed = model.removesuffix(":latest")
+    routed = strip_latest_tag(model)
     routed_suffix = routed.split("/", 1)[-1]
     for entry in load_model_catalog():
         identifiers = {entry.id, entry.ollama_tag or entry.id}

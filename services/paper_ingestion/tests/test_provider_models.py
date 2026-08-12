@@ -515,6 +515,35 @@ async def test_failure_serves_the_stale_list_with_its_original_timestamp(
 
     assert [entry.name for entry in stale.entries] == ["kimi-k2"]
     assert stale.fetched_at == first.fetched_at
+    # Serving the old list is not the same as the provider being healthy.
+    assert stale.error is not None
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_provider_stops_reporting_the_earlier_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [1000.0]
+    monkeypatch.setattr(provider_models, "_cache_clock", lambda: now[0])
+    reachable = [True]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if not reachable[0]:
+            return httpx.Response(503, json={})
+        return httpx.Response(200, json={"data": [{"id": "kimi-k2"}]})
+
+    async with mock_http_client(handler) as client:
+        pool = FakeConfigPool()
+        await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+        reachable[0] = False
+        now[0] += provider_models._CACHE_TTL_SECONDS + 1
+        failed = await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+        reachable[0] = True
+        now[0] += provider_models._FAILURE_CACHE_TTL_SECONDS + 1
+        recovered = await fetch_provider_models("moonshot", db_pool=pool, http_client=client)
+
+    assert failed.error is not None
+    assert recovered.error is None
 
 
 @pytest.mark.asyncio
@@ -592,6 +621,21 @@ async def test_sweep_isolates_one_failing_provider() -> None:
         ("openai", "sora-2", {}, "unknown"),
         ("anthropic", "claude-opus-4-1", {}, "chat"),
         ("openrouter", "vendor/model-x", {}, "chat"),
+        # The router publishes what each model emits, and a model that cannot
+        # emit text cannot hold a role here however conventional its id looks.
+        # These ids carry no deny-list keyword, so only the declaration decides.
+        (
+            "openrouter",
+            "vendor/canvas-1",
+            {"architecture": {"output_modalities": ["image"]}},
+            "other",
+        ),
+        (
+            "openrouter",
+            "vendor/quill-1",
+            {"architecture": {"output_modalities": ["text", "image"]}},
+            "chat",
+        ),
         ("custom_openai_compatible", "org/model-y", {}, "chat"),
         ("mistral", "mistral-large-latest", {}, "chat"),
         # A provider that describes its own models is believed over the prefix
@@ -640,6 +684,26 @@ async def test_non_chat_families_are_excluded_entirely_and_counted() -> None:
     listing = await _fetch("openai", Recorder({"data": [{"id": "whisper-1"}, {"id": "gpt-5"}]}))
 
     assert [entry.name for entry in listing.entries] == ["gpt-5"]
+    assert listing.excluded["non_chat"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_cannot_emit_text_is_never_offered_for_a_role() -> None:
+    """OpenRouter's declared output modalities decide admission, not the id."""
+    listing = await _fetch(
+        "openrouter",
+        Recorder(
+            {
+                "data": [
+                    {"id": "vendor/canvas-1", "architecture": {"output_modalities": ["image"]}},
+                    {"id": "vendor/quill-1", "architecture": {"output_modalities": ["text"]}},
+                ]
+            }
+        ),
+    )
+
+    assert [entry.id for entry in listing.entries] == ["openrouter/vendor/quill-1"]
+    assert listing.entries[0].assignable is True
     assert listing.excluded["non_chat"] == 1
 
 
