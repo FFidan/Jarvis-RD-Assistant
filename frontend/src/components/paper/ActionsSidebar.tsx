@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, fetchDecks } from '@/lib/api';
+import { derivePipelineStatus } from '@/lib/paper-pipeline';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { streamAnalyze } from '@/lib/sse';
@@ -47,6 +48,8 @@ interface ActionsSidebarProps {
   hasChunks?: boolean;
   /** Whether the paper has a summary */
   hasSummary?: boolean;
+  /** Set when a persisted processing job on this paper ended in failure. */
+  processingFailed?: boolean;
   /** Briefly pulse the Process PDF button (triggered by ?action=process query param) */
   pulseProcessButton?: boolean;
   /** Briefly pulse the Analyze Paper button (triggered by ?action=analyze query param) */
@@ -83,6 +86,7 @@ export function ActionsSidebar({
   pdfDownloaded = false,
   hasChunks = false,
   hasSummary = false,
+  processingFailed = false,
   pulseProcessButton = false,
   pulseAnalyzeButton = false,
   discoveryOrigin = 'user_initiated',
@@ -351,11 +355,12 @@ export function ActionsSidebar({
       <div className="space-y-2 rounded-md border p-3">
           {ANALYZE_STEPS.map((step) => {
             // During an active analyze run, use live stepStatuses.
-            // Otherwise derive state from paper props.
+            // Otherwise derive state from paper props via the shared pipeline selector.
             let status: StepStatus = stepStatuses[step.key] || 'pending';
             if (!isAnalyzing && !Object.values(stepStatuses).some((s) => s !== 'pending')) {
+              const phase = derivePipelineStatus({ pdfDownloaded, hasChunks, hasSummary, processingFailed });
               if (step.key === 'downloading') status = pdfDownloaded ? 'completed' : 'pending';
-              else if (step.key === 'processing') status = hasChunks ? 'completed' : 'pending';
+              else if (step.key === 'processing') status = phase === 'failed' ? 'failed' : hasChunks ? 'completed' : 'pending';
               else if (step.key === 'summarizing') status = hasSummary ? 'completed' : 'pending';
             }
             const isFailed = status === 'failed';

@@ -699,6 +699,11 @@ describe('PaperDetailPage', () => {
     // PaperTOC received processingFailed=true from the live payload.
     const processingLabel = within(nav).getByText('Extracting passages…');
     expect(processingLabel.className).toContain('text-destructive');
+
+    // The actions panel's step tracker reads the same signal, so a reload
+    // cannot leave the two rails disagreeing about whether processing failed.
+    const actionsProcessingLabel = screen.getByText('Processing');
+    expect(actionsProcessingLabel.className).toContain('text-destructive');
   });
 
   it('left Pipeline rail does NOT show ✗ when processing_failed is absent (legacy/cached payload)', async () => {
