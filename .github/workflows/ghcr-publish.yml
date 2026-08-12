@@ -348,7 +348,7 @@ jobs:
         if: needs.preflight.outputs.mode == 'verify' && matrix.capability != ''
         timeout-minutes: 25
         run: |
-          docker run --rm \
+          docker run --rm --network none \
             -v "${{ github.workspace }}/scripts/image-capability-check.py:/tmp/capability.py:ro" \
             -v "${{ github.workspace }}/frontend/e2e/fixtures/sample.pdf:/tmp/sample.pdf:ro" \
             -e PYTHONPATH=/app \
