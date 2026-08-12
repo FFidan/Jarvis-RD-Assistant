@@ -832,6 +832,28 @@ def test_every_python_image_declares_an_import_smoke_target() -> None:
             assert not entry.get("smoke_import"), f"{label}: non-Python image declares smoke_import"
 
 
+def test_paper_ingestion_images_declare_a_runtime_capability_check() -> None:
+    """Every paper-ingestion flavour must exercise its native path inside the digest.
+
+    The import check cannot reach the document pipeline's converter, which is
+    built on first use, so without this the compiled vision stack is never
+    loaded before publication.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+    entries = [
+        entry
+        for entry in _build_matrix_entries(workflow)
+        if entry["image"] == "jarvis-paper-ingestion"
+    ]
+
+    assert entries, "no paper-ingestion image in the build matrix"
+    for entry in entries:
+        checks = entry.get("capability", "").split()
+        label = f"{entry['slug']} ({entry.get('arch')})"
+        assert "native-vision" in checks, f"{label}: no native-vision capability check"
+        assert "pdf" in checks, f"{label}: no PDF conversion capability check"
+
+
 def test_model_catalog_freshness_check_flags_stale_and_missing(tmp_path: Path) -> None:
     checker = ROOT / "scripts/check-model-catalog-freshness.py"
     catalog = tmp_path / "catalog.json"
