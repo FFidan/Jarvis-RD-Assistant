@@ -222,6 +222,23 @@ describe('SettingsPage', () => {
     );
   });
 
+  it('renders the Profile and Account data export subsection headings', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchAccount).mockResolvedValue({
+      id: 1,
+      email: 'user@example.com',
+      role: 'user',
+      display_name: 'Test User',
+      created_at: '2025-01-01T00:00:00Z',
+      last_login_at: null,
+    });
+    renderSettingsPage();
+    await waitFor(() => screen.getByRole('button', { name: /Profile & Email/i }));
+    await user.click(screen.getByRole('button', { name: /Profile & Email/i }));
+    expect(await screen.findByRole('heading', { name: 'Profile', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Account data export', level: 3 })).toBeInTheDocument();
+  });
+
   it('non-admin deep-link to system section redirects to default (Topics heading)', async () => {
     renderSettingsPageAs('user', '?section=sources&item=arxiv');
     await waitFor(() =>

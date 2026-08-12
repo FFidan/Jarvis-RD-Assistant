@@ -31,6 +31,14 @@ interface NumCtxSliderProps {
   configs: ConfigEntry[];
 }
 
+// Human-readable role name for the slider's accessible label (data-testid
+// already keys interactions off the raw role; this keys the a11y name).
+const ROLE_NAME: Record<NumCtxSliderProps['role'], string> = {
+  smart: 'main model',
+  fast: 'quick model',
+  embed: 'embedding model',
+};
+
 export function NumCtxSlider({
   role,
   machineId,
@@ -180,6 +188,7 @@ export function NumCtxSlider({
           </p>
         )}
         <Slider
+          aria-label={`Reading window for the ${ROLE_NAME[role]}`}
           min={0}
           max={stops.length - 1}
           step={1}
