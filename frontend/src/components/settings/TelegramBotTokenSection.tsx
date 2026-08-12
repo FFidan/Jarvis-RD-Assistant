@@ -6,7 +6,8 @@
  *  - A masked input (type=password) to enter a new token.
  *  - Client-side format hint: token must match ^\d+:[A-Za-z0-9_-]{20,}$
  *  - Save button with success/error feedback.
- *  - Persistent note that the Telegram bot must be restarted for the token to take effect.
+ *  - Persistent note on when the bot runs and when a saved token takes effect,
+ *    linking to the Telegram documentation for where to look if it isn't running.
  *
  * Backed by:
  *  GET  /api/setup/telegram-bot-token → getTelegramBotToken()
@@ -22,6 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { errorMessage } from '@/lib/errors';
+import { docsUrl } from '@/lib/docs-links';
 
 /** Validates a Telegram bot token format: <bot_id>:<token_string> */
 const BOT_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{20,}$/;
@@ -143,10 +145,25 @@ export function TelegramBotTokenSection() {
           )}
         </div>
 
-        {/* Persistent restart note */}
-        <p className="text-xs text-muted-foreground border-t border-hair pt-3">
-          The Telegram bot must be restarted by an administrator for a new token to take effect.
-        </p>
+        {/* Persistent runtime note */}
+        <div className="space-y-1 border-t border-hair pt-3 text-xs text-muted-foreground">
+          <p>
+            The Telegram bot only runs if it was enabled during installation. A saved token is
+            picked up the next time the bot starts.
+          </p>
+          <p>
+            If the bot doesn&apos;t appear to be running, see the{' '}
+            <a
+              href={docsUrl('manual/telegram.md')}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-4 hover:no-underline"
+            >
+              Telegram setup guide
+            </a>
+            .
+          </p>
+        </div>
       </CardContent>
     </Card>
   );

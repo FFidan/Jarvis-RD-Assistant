@@ -98,12 +98,15 @@ def _install_user_config(
     setup_completed=False,
     telegram_paired: bool = False,
     topics_count: int = 0,
+    telegram_token_stored: bool = False,
 ):
     conn.fetch.return_value = _user_config_rows(setup_completed=setup_completed)
-    # get_setup_status calls fetchrow twice: topics count then telegram_user_pairings count.
+    # get_setup_status calls fetchrow three times: topics count, then
+    # telegram_user_pairings count, then the stored telegram.bot_token row.
     conn.fetchrow.side_effect = [
         FakeRecord(n=topics_count),
         FakeRecord(n=1 if telegram_paired else 0),
+        FakeRecord(value=None, encrypted_value=b"ciphertext") if telegram_token_stored else None,
     ]
 
 
@@ -147,7 +150,24 @@ async def test_setup_status_telegram_configured_reads_env(_app, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_setup_status_telegram_configured_false_when_env_missing(_app, monkeypatch):
+async def test_setup_status_telegram_configured_reads_stored_token(_app, monkeypatch):
+    """A token saved through the web interface (no env token) marks the bot configured."""
+    app, conn = _app
+    _install_user_config(conn, telegram_token_stored=True)
+    _patch_probe(monkeypatch, models_ready=False)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/system/setup-status")
+
+    assert resp.status_code == 200
+    assert resp.json()["telegram_configured"] is True
+
+
+@pytest.mark.asyncio
+async def test_setup_status_telegram_configured_false_when_nothing_configured(_app, monkeypatch):
+    """False when neither the environment nor stored configuration has a token."""
     app, conn = _app
     _install_user_config(conn)
     _patch_probe(monkeypatch, models_ready=False)
