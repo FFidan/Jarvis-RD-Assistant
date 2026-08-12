@@ -168,7 +168,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                     <Input
                       id={apiKeyInputId}
                       type="password"
-                      placeholder={`Enter ${keyEnv}`}
+                      placeholder="API key"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       className="h-8 text-sm"

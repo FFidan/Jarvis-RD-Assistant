@@ -52,6 +52,10 @@ export function ConfigSlider({
       </Label>
       <Slider
         id={id}
+        // The label above is tied to the slider's outer element and also holds the
+        // current value, so it names nothing the control reports and would change
+        // on every step. The control carries its own steady name.
+        aria-label={label}
         min={min}
         max={max}
         step={step}

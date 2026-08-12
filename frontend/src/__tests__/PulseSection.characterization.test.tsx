@@ -174,6 +174,22 @@ describe('PulseSection — pre-decomposition behavioral snapshot', () => {
     expect(setConfig).toHaveBeenCalledWith('pulse.deck_size', 20);
   });
 
+  it('gives the deck size and ranking candidate sliders a name a screen reader reads', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('pulse-schedule-card')).toBeInTheDocument();
+    });
+
+    // The name has to reach the element that reports role="slider"; a name left
+    // on the surrounding row is never announced.
+    expect(screen.getByRole('slider', { name: 'Deck size' })).toBe(
+      screen.getByTestId('pulse-deck-size'),
+    );
+    expect(screen.getByRole('slider', { name: 'Ranking candidates' })).toBe(
+      screen.getByTestId('pulse-stage2-top-k'),
+    );
+  });
+
   it('commits a pulse.weights signal slider once, on release, not on every drag tick', async () => {
     renderSection();
     await waitFor(() => {
@@ -193,6 +209,33 @@ describe('PulseSection — pre-decomposition behavioral snapshot', () => {
     expect(setConfig).toHaveBeenCalledWith(
       'pulse.weights',
       expect.objectContaining({ embedding: 0.6 }),
+    );
+  });
+
+  it('saves a keyboard adjustment of a signal weight once, when focus leaves', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('pulse-weights-card')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /advanced tuning/i }));
+
+    const slider = await screen.findByTestId('weight-slider-embedding');
+    // Twenty arrow-key steps from 0 to 1. jsdom does not move a range input by
+    // itself, so each step is driven the way a browser reports one: the value
+    // changes, then the key comes back up.
+    for (let step = 1; step <= 20; step += 1) {
+      fireEvent.change(slider, { target: { value: (step * 0.05).toFixed(2) } });
+      fireEvent.keyUp(slider, { key: 'ArrowRight' });
+    }
+    expect(setConfig).not.toHaveBeenCalled();
+
+    fireEvent.blur(slider);
+    await waitFor(() => {
+      expect(setConfig).toHaveBeenCalledTimes(1);
+    });
+    expect(setConfig).toHaveBeenCalledWith(
+      'pulse.weights',
+      expect.objectContaining({ embedding: 1 }),
     );
   });
 

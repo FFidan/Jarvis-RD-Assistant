@@ -2,7 +2,7 @@
  * PulseAdvancedTuningCard — collapsible card owning signal weights, discovery seed balance,
  * and L2 negative-feedback penalty.
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useQuery, type UseMutationResult } from '@tanstack/react-query';
 import {
   Card,
@@ -64,7 +64,7 @@ interface WeightSliderRowProps {
   disabled: boolean;
   capabilityPresent: boolean;
   onChange: (key: PulseWeightKey, value: number) => void;
-  /** Fires once the user releases the slider (pointer or keyboard), not on every drag tick. */
+  /** Fires once the adjustment is over, not on every drag tick or key press. */
   onCommit: () => void;
   /** Optional status note rendered beside the label (e.g. classifier rating count). */
   statusNote?: string;
@@ -80,6 +80,17 @@ function WeightSliderRow({
   statusNote,
 }: WeightSliderRowProps) {
   const gate = CONDITIONAL_SIGNAL_GATES[weightKey];
+
+  // A keyboard user moves the slider one arrow key at a time, so saving on key
+  // release would send a write per keystroke. Both input modes save once the
+  // adjustment is over instead: on pointer release, or when focus leaves.
+  const hasUnsavedChange = useRef(false);
+  const saveIfChanged = () => {
+    if (!hasUnsavedChange.current) return;
+    hasUnsavedChange.current = false;
+    onCommit();
+  };
+
   const sliderInput = (
     <input
       type="range"
@@ -89,9 +100,12 @@ function WeightSliderRow({
       max={1}
       step={0.05}
       value={value}
-      onChange={(e) => onChange(weightKey, Number(e.target.value))}
-      onPointerUp={onCommit}
-      onKeyUp={onCommit}
+      onChange={(e) => {
+        hasUnsavedChange.current = true;
+        onChange(weightKey, Number(e.target.value));
+      }}
+      onPointerUp={saveIfChanged}
+      onBlur={saveIfChanged}
       disabled={disabled || !capabilityPresent}
       className="w-full accent-primary disabled:opacity-40"
     />
@@ -181,6 +195,17 @@ export function PulseAdvancedTuningCard({
 
   const [localLikedWeight, setLocalLikedWeight] = useSyncedState(likedWeightConfig);
   const [localProjectWeight, setLocalProjectWeight] = useSyncedState(projectWeightConfig);
+
+  // These two save on pointer release, which a keyboard user never triggers —
+  // their change would be shown and then silently dropped. Saving on blur as
+  // well covers both input modes, and the flag keeps a pointer adjustment from
+  // writing twice when focus then leaves.
+  const weightDirty = useRef({ liked: false, project: false });
+  const saveWeight = (which: 'liked' | 'project', key: string, value: number, label: string) => {
+    if (!weightDirty.current[which]) return;
+    weightDirty.current[which] = false;
+    setMut.mutate({ key, value }, { onError: onSaveError(`Could not update the ${label}`) });
+  };
   const [l2Lambda, setL2Lambda] = useSyncedState(l2LambdaConfig);
   const [localPulseWeights, setLocalPulseWeights] =
     useSyncedState<Record<PulseWeightKey, number>>(pulseWeightsServer);
@@ -436,12 +461,15 @@ export function PulseAdvancedTuningCard({
                 max={1}
                 step={0.05}
                 value={localLikedWeight}
-                onChange={(e) => setLocalLikedWeight(Number(e.target.value))}
+                onChange={(e) => {
+                  weightDirty.current.liked = true;
+                  setLocalLikedWeight(Number(e.target.value));
+                }}
                 onPointerUp={() =>
-                  setMut.mutate(
-                    { key: 'recommendation.liked_weight', value: localLikedWeight },
-                    { onError: onSaveError('Could not update the liked papers weight') },
-                  )
+                  saveWeight('liked', 'recommendation.liked_weight', localLikedWeight, 'liked papers weight')
+                }
+                onBlur={() =>
+                  saveWeight('liked', 'recommendation.liked_weight', localLikedWeight, 'liked papers weight')
                 }
                 disabled={settingsControlsDisabled}
                 className="w-full accent-primary"
@@ -465,12 +493,15 @@ export function PulseAdvancedTuningCard({
                 max={1}
                 step={0.05}
                 value={localProjectWeight}
-                onChange={(e) => setLocalProjectWeight(Number(e.target.value))}
+                onChange={(e) => {
+                  weightDirty.current.project = true;
+                  setLocalProjectWeight(Number(e.target.value));
+                }}
                 onPointerUp={() =>
-                  setMut.mutate(
-                    { key: 'recommendation.project_weight', value: localProjectWeight },
-                    { onError: onSaveError('Could not update the project context weight') },
-                  )
+                  saveWeight('project', 'recommendation.project_weight', localProjectWeight, 'project context weight')
+                }
+                onBlur={() =>
+                  saveWeight('project', 'recommendation.project_weight', localProjectWeight, 'project context weight')
                 }
                 disabled={settingsControlsDisabled}
                 className="w-full accent-primary"
