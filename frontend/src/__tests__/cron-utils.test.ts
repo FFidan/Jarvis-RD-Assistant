@@ -27,6 +27,16 @@ describe('cronToHumanReadable', () => {
   it('does not call a yearly schedule monthly', () => {
     expect(cronToHumanReadable('0 9 1 3 *')).not.toMatch(/Monthly/);
   });
+  it('does not call a March-only schedule daily', () => {
+    expect(cronToHumanReadable('0 9 * 3 *')).toBe('0 9 * 3 *');
+  });
+  it('does not call a schedule that also fires weekly monthly', () => {
+    // Cron ORs day-of-month with day-of-week: this fires on the 1st AND every Monday.
+    expect(cronToHumanReadable('0 9 1 * 1')).toBe('0 9 1 * 1');
+  });
+  it('invents no day name for a day-of-week outside the week', () => {
+    expect(cronToHumanReadable('0 9 * * 8')).toBe('0 9 * * 8');
+  });
 });
 
 describe('timeToCron', () => {
@@ -39,5 +49,8 @@ describe('timeToCron', () => {
   it('refuses to collapse a multi-run schedule', () => {
     expect(timeToCron('09:00', '0 8,20 * * *')).toBe('0 8,20 * * *');
     expect(timeToCron('09:00', '0,30 8 * * *')).toBe('0,30 8 * * *');
+  });
+  it('still moves the time of a schedule a clock time can represent', () => {
+    expect(timeToCron('09:00', '0 8 * * 1')).toBe('0 9 * * 1');
   });
 });

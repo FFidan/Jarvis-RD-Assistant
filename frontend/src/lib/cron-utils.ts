@@ -117,6 +117,10 @@ export function cronToHumanReadable(cron: string): string {
   const minute = parseInt(minStr, 10);
   if (isNaN(minute)) return cron;
 
+  // A restricted month makes the schedule yearly whatever the other fields say,
+  // and there is no short honest phrase for that, so show the expression.
+  if (monthStr !== '*') return cron;
+
   if (hourStr === '*' && !MULTI_VALUE_FIELD.test(minStr)) {
     return 'Every hour';
   }
@@ -126,9 +130,9 @@ export function cronToHumanReadable(cron: string): string {
   const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 
   if (domStr !== '*') {
-    // A restricted month makes the schedule yearly, not monthly. There is no
-    // short honest phrase for it, so fall back to showing the expression.
-    if (monthStr !== '*') return cron;
+    // Cron ORs day-of-month with day-of-week, so `0 9 1 * 1` fires on the 1st
+    // AND every Monday — more runs than a monthly phrase would admit to.
+    if (dowStr !== '*') return cron;
     return `Monthly on day ${domStr} at ${time}`;
   }
 
@@ -138,7 +142,9 @@ export function cronToHumanReadable(cron: string): string {
   if (dowStr.includes('-') || dowStr.includes(',')) return `Custom days at ${time}`;
   const dow = parseInt(dowStr, 10);
   if (isNaN(dow)) return `Custom days at ${time}`;
-  // Cron allows both 0 and 7 for Sunday.
-  const dayName = DAY_NAMES[dow % 7] ?? dowStr;
+  // Cron allows both 0 and 7 for Sunday. Anything else outside 0-6 is not a day
+  // of the week, and naming one anyway would describe runs that never happen.
+  const dayName = DAY_NAMES[dow === 7 ? 0 : dow];
+  if (dayName === undefined) return cron;
   return `Weekly on ${dayName} at ${time}`;
 }
