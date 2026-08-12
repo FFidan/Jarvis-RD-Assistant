@@ -11,7 +11,15 @@ from urllib.parse import urlparse
 
 ProviderKind = Literal["direct", "router", "self_hosted"]
 PrivacyBoundary = Literal["direct_provider", "router", "self_hosted"]
-AccountCapability = Literal["current_key", "balance", "unavailable"]
+# ``unavailable`` is the default and says nothing about the provider: JARVIS
+# simply integrates no account lookup for it. ``no_provider_api`` is a
+# researched claim that the provider publishes none, so a new registry entry
+# cannot assert provider-side absence without stating it deliberately.
+AccountCapability = Literal["current_key", "balance", "unavailable", "no_provider_api"]
+
+#: The capabilities backed by an account endpoint this deployment can call.
+ACCOUNT_FETCH_CAPABILITIES: frozenset[AccountCapability] = frozenset({"current_key", "balance"})
+
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 

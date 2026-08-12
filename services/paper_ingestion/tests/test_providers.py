@@ -344,6 +344,41 @@ async def test_list_providers_admin_returns_metadata(_app):
     assert {"label", "creator_user_id", "workspace_id", "hash"}.isdisjoint(openrouter)
 
 
+def test_provider_response_models_match_the_registry_capability_literal() -> None:
+    """Both response models restate the registry literal, so both must equal it."""
+    from typing import get_args
+
+    from paper_ingestion.routers.settings import (
+        ProviderAccountResponse,
+        ProviderMetadataResponse,
+    )
+    from paper_ingestion.services.llm_provider_registry import AccountCapability
+
+    expected = get_args(AccountCapability)
+
+    assert get_args(ProviderMetadataResponse.model_fields["account_capability"].annotation) == (
+        expected
+    )
+    assert get_args(ProviderAccountResponse.model_fields["capability"].annotation) == expected
+
+
+def test_every_account_capability_claim_has_an_implementation() -> None:
+    """_ACCOUNT_URLS is the integration truth; a claim without one advertises nothing."""
+    from paper_ingestion.services.llm_provider_registry import (
+        ACCOUNT_FETCH_CAPABILITIES,
+        PROVIDER_REGISTRY,
+    )
+    from paper_ingestion.services.provider_account import _ACCOUNT_URLS
+
+    claimed = {
+        provider.id
+        for provider in PROVIDER_REGISTRY
+        if provider.account_capability in ACCOUNT_FETCH_CAPABILITIES
+    }
+
+    assert claimed == set(_ACCOUNT_URLS)
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
 async def test_test_provider_requires_admin_session(_app):
@@ -392,6 +427,16 @@ async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(
     assert snapshot.error_code is None
     fetch_key.assert_not_awaited()
     pinned_factory.assert_not_called()
+
+
+def test_an_unknown_account_provider_is_never_parsed_as_another_provider() -> None:
+    """A provider wired up without a parser must fail closed, not borrow DeepSeek's shape."""
+    from paper_ingestion.services import provider_account
+
+    with pytest.raises(provider_account._AccountFetchError) as exc_info:
+        provider_account._allowlisted_provider_data("mistral", {"balance_infos": []})
+
+    assert str(exc_info.value) == "provider_account_unsupported"
 
 
 @pytest.mark.asyncio

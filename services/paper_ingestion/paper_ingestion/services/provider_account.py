@@ -15,6 +15,7 @@ from jarvis_common.pinned_transport import PUBLIC_ONLY, pinned_async_client
 
 from paper_ingestion.services.litellm_config import get_provider_api_key
 from paper_ingestion.services.llm_provider_registry import (
+    ACCOUNT_FETCH_CAPABILITIES,
     AccountCapability,
     ProviderDefinition,
     provider_for_id,
@@ -205,14 +206,18 @@ def _allowlisted_provider_data(
         return _allowlisted_openrouter_data(data)
     if provider_id == "moonshot":
         return _allowlisted_moonshot_balance(payload)
-    return _allowlisted_deepseek_balance(payload)
+    if provider_id == "deepseek":
+        return _allowlisted_deepseek_balance(payload)
+    # A provider wired into _ACCOUNT_URLS without a parser must fail closed:
+    # applying another provider's response shape would invent account fields.
+    raise _AccountFetchError("provider_account_unsupported")
 
 
 async def fetch_provider_account(provider_id: str, *, db_pool: Any) -> ProviderAccountSnapshot:
     """Return a capability-gated account snapshot without sharing the app HTTP client."""
     provider = provider_for_id(provider_id)
     request_url = _ACCOUNT_URLS.get(provider.id)
-    if provider.account_capability == "unavailable" or request_url is None:
+    if provider.account_capability not in ACCOUNT_FETCH_CAPABILITIES or request_url is None:
         return _snapshot(provider)
 
     try:

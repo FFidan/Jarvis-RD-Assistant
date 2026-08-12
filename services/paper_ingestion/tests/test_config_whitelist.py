@@ -299,6 +299,27 @@ def test_provider_registry_keys_have_validators():
     assert not missing
 
 
+@pytest.mark.usefixtures("fernet_key")
+def test_one_unreadable_secret_does_not_break_the_configuration_listing() -> None:
+    """A key that can no longer be decrypted must degrade to a single field.
+
+    Restores and key rotation can leave ciphertext the current key cannot read.
+    Raising here took down the whole settings page, including the panel an admin
+    would use to re-enter the value. The field must also stay distinguishable
+    from an absent one, or a broken credential reads as a missing credential.
+    """
+    from paper_ingestion.services.config_db import _resolve_config_value
+
+    key = "llm.providers.openrouter.api_key"
+    row = {"key": key, "encrypted_value": b"not-decryptable", "value": None}
+
+    resolved = _resolve_config_value(key, row)
+
+    assert resolved is not None
+    assert "not-decryptable" not in str(resolved)
+    assert _resolve_config_value(key, {"key": key, "encrypted_value": None, "value": None}) is None
+
+
 @pytest.mark.parametrize(
     "value",
     [

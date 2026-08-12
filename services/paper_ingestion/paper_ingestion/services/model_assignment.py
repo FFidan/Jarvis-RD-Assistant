@@ -61,6 +61,17 @@ async def reload_telegram_nudges() -> None:
         logger.warning("Telegram nudge-reload failed (non-fatal)", exc_info=True)
 
 
+def _config_row_present(row: Any) -> bool:
+    """A user_config row counts as present when either value column holds content.
+
+    A row cleared to the empty string is absent, matching what the readers do:
+    ``get_provider_base_url`` returns the default for a falsy value, so counting
+    ``""`` as configured would let a model save and then never deliver. The same
+    rule governs API keys, so a blank key cannot look like a working credential.
+    """
+    return bool(row.get("encrypted_value")) or bool(row.get("value"))
+
+
 async def cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bool:
     """Return True if an API key for *provider* is stored in user_config."""
     config_key = provider_for_id(provider).api_key_config_key
@@ -69,19 +80,7 @@ async def cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bo
             "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
             config_key,
         )
-    return bool(
-        row is not None and (row.get("encrypted_value") is not None or row.get("value") is not None)
-    )
-
-
-def _config_row_present(row: Any) -> bool:
-    """A user_config row counts as present when either value column holds content.
-
-    A row cleared to the empty string is absent, matching what the readers do:
-    ``get_provider_base_url`` returns the default for a falsy value, so counting
-    ``""`` as configured would let a model save and then never deliver.
-    """
-    return bool(row.get("encrypted_value")) or bool(row.get("value"))
+    return row is not None and _config_row_present(row)
 
 
 async def provider_access_configured(
