@@ -215,6 +215,26 @@ describe('ModelSelector model picker', () => {
     expect(screen.getByText('1 matching model')).toBeInTheDocument();
   });
 
+  it('caps rendered rows in a large catalogue and states the true total', async () => {
+    const bigCatalog = Array.from({ length: 400 }, (_, index) => ({
+      ...openRouterPaid,
+      id: `openrouter/test/model-${index}`,
+      name: `Model ${index}`,
+    }));
+    modelApiMocks.fetchSystemModels.mockResolvedValue({
+      ...defaultModels,
+      catalog: bigCatalog,
+    });
+    renderComponent({ value: bigCatalog[0]?.id ?? '' });
+    const user = await openPicker();
+    await user.click(screen.getByRole('button', { name: 'OpenRouter, 400 models' }));
+
+    expect(screen.getAllByTestId(/^model-row-/)).toHaveLength(150);
+    expect(
+      screen.getByText('Showing the first 150 of 400 models. Refine your search to see more.'),
+    ).toBeInTheDocument();
+  });
+
   it('searches only within the selected provider catalog', async () => {
     modelApiMocks.fetchSystemModels.mockResolvedValue({
       ...defaultModels,

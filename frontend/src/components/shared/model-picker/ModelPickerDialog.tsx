@@ -91,6 +91,8 @@ function ModelMetadata({ entry }: { entry: ModelCatalogEntry }) {
   );
 }
 
+const MAX_VISIBLE_MODEL_ROWS = 150;
+
 export function ModelPickerDialog({
   role,
   models,
@@ -297,63 +299,70 @@ export function ModelPickerDialog({
                   No models match these filters.
                 </p>
               ) : (
-                <Table className="min-w-[48rem]">
-                  <TableHeader className="sticky top-0 z-10 bg-background">
-                    <TableRow>
-                      <TableHead>Model</TableHead>
-                      <TableHead>Provider</TableHead>
-                      <TableHead>Context</TableHead>
-                      <TableHead>Price</TableHead>
-                      <TableHead className="sticky right-0 w-28 bg-background">
-                        <span className="sr-only">Choose</span>
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visibleModels.map((entry) => {
-                      const blocker = blockerFor(entry);
-                      const selected = entry.id === selectedId;
-                      const upstreamProvider = openRouterUpstream(entry);
-                      return (
-                        <TableRow key={entry.id} className="group" data-testid={`model-row-${entry.id}`}>
-                          <TableCell>
-                            <p className="font-medium">{entry.name}</p>
-                            <p className="break-all font-mono text-xs text-muted-foreground">{entry.id}</p>
-                            {entry.description && (
-                              <p className="mt-1 max-w-xl text-xs text-muted-foreground">{entry.description}</p>
-                            )}
-                            <ModelMetadata entry={entry} />
-                            {blocker && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{blocker}</p>}
-                          </TableCell>
-                          <TableCell>
-                            <span>{sourceLabel(modelSource(entry))}</span>
-                            {upstreamProvider && <span className="block text-xs text-muted-foreground">through {upstreamProvider}</span>}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">
-                            {entry.context_tokens > 0 ? entry.context_tokens.toLocaleString() : 'Not reported'}
-                          </TableCell>
-                          <TableCell className="text-xs">{modelPriceLabel(entry)}</TableCell>
-                          <TableCell className="sticky right-0 bg-background group-hover:bg-muted/50">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={selected ? 'outline' : 'default'}
-                              disabled={blocker != null || selected}
-                              onClick={() => {
-                                onSelect(entry.id);
-                                setOpen(false);
-                              }}
-                              aria-label={selected ? `${entry.name} is current` : `Use ${entry.name}`}
-                            >
-                              {selected && <Check className="mr-1 h-3.5 w-3.5" />}
-                              {selected ? 'Current' : 'Use'}
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                <>
+                  <Table className="min-w-[48rem]">
+                    <TableHeader className="sticky top-0 z-10 bg-background">
+                      <TableRow>
+                        <TableHead>Model</TableHead>
+                        <TableHead>Provider</TableHead>
+                        <TableHead>Context</TableHead>
+                        <TableHead>Price</TableHead>
+                        <TableHead className="sticky right-0 w-28 bg-background">
+                          <span className="sr-only">Choose</span>
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {visibleModels.slice(0, MAX_VISIBLE_MODEL_ROWS).map((entry) => {
+                        const blocker = blockerFor(entry);
+                        const selected = entry.id === selectedId;
+                        const upstreamProvider = openRouterUpstream(entry);
+                        return (
+                          <TableRow key={entry.id} className="group" data-testid={`model-row-${entry.id}`}>
+                            <TableCell>
+                              <p className="font-medium">{entry.name}</p>
+                              <p className="break-all font-mono text-xs text-muted-foreground">{entry.id}</p>
+                              {entry.description && (
+                                <p className="mt-1 max-w-xl text-xs text-muted-foreground">{entry.description}</p>
+                              )}
+                              <ModelMetadata entry={entry} />
+                              {blocker && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{blocker}</p>}
+                            </TableCell>
+                            <TableCell>
+                              <span>{sourceLabel(modelSource(entry))}</span>
+                              {upstreamProvider && <span className="block text-xs text-muted-foreground">through {upstreamProvider}</span>}
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {entry.context_tokens > 0 ? entry.context_tokens.toLocaleString() : 'Not reported'}
+                            </TableCell>
+                            <TableCell className="text-xs">{modelPriceLabel(entry)}</TableCell>
+                            <TableCell className="sticky right-0 bg-background group-hover:bg-muted/50">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={selected ? 'outline' : 'default'}
+                                disabled={blocker != null || selected}
+                                onClick={() => {
+                                  onSelect(entry.id);
+                                  setOpen(false);
+                                }}
+                                aria-label={selected ? `${entry.name} is current` : `Use ${entry.name}`}
+                              >
+                                {selected && <Check className="mr-1 h-3.5 w-3.5" />}
+                                {selected ? 'Current' : 'Use'}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                  {visibleModels.length > MAX_VISIBLE_MODEL_ROWS && (
+                    <p className="p-4 text-center text-sm text-muted-foreground">
+                      Showing the first {MAX_VISIBLE_MODEL_ROWS} of {visibleModels.length} models. Refine your search to see more.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </section>
