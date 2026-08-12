@@ -865,7 +865,7 @@ describe('AdminSystemHealthPage', () => {
   // Overall stack summary (H2)
   // -------------------------------------------------------------------------
 
-  it('shows "All services running" summary when all services are ok', async () => {
+  it('describes what was actually checked rather than claiming overall readiness', async () => {
     getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
     fetchStackHealthMock.mockResolvedValue(makeStackHealth(/* vectorOk= */ true));
     renderPage();
@@ -874,7 +874,8 @@ describe('AdminSystemHealthPage', () => {
       expect(screen.getByTestId('stack-summary')).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId('stack-summary')).toHaveTextContent('All services running.');
+    expect(screen.getByTestId('stack-summary')).toHaveTextContent(/reachable/i);
+    expect(screen.queryByText(/^All services running\.$/)).not.toBeInTheDocument();
   });
 
   it('shows down count in summary when a service is down', async () => {
