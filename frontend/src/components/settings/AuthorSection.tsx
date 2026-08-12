@@ -9,6 +9,7 @@ import {
   autoDetectAuthors,
   checkTrackedAuthors,
 } from '@/lib/api';
+import { onSaveError } from '@/lib/forms/save-error';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -47,6 +48,7 @@ export function AuthorSection() {
       setShowAdd(false);
       setAddForm({ author_name: '', s2_author_id: '' });
     },
+    onError: onSaveError('Could not add this author'),
   });
 
   const updateMut = useMutation({
@@ -55,6 +57,7 @@ export function AuthorSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.authors.tracked() });
     },
+    onError: onSaveError('Could not update this author'),
   });
 
   const deleteMut = useMutation({
@@ -62,6 +65,7 @@ export function AuthorSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.authors.tracked() });
     },
+    onError: onSaveError('Could not delete this author'),
   });
 
   const autoDetectMut = useMutation({
@@ -69,10 +73,12 @@ export function AuthorSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.authors.tracked() });
     },
+    onError: onSaveError('Could not auto-detect authors'),
   });
 
   const checkMut = useMutation({
     mutationFn: checkTrackedAuthors,
+    onError: onSaveError('Could not check tracked authors for new papers'),
   });
 
   const handleToggle = (author: TrackedAuthor) => {
@@ -183,7 +189,7 @@ export function AuthorSection() {
       )}
 
       {showAdd ? (
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardContent className="space-y-3 p-4">
             <div className="grid gap-2 sm:grid-cols-2">
               <div>

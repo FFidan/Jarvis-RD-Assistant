@@ -10,6 +10,7 @@ import {
   subscribeToTopic,
   unsubscribeFromTopic,
 } from '@/lib/api';
+import { onSaveError } from '@/lib/forms/save-error';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -56,11 +57,13 @@ export function TopicSection() {
   const subscribeMut = useMutation({
     mutationFn: (topicId: number) => subscribeToTopic(topicId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.subscriptions() }),
+    onError: onSaveError('Could not enable auto-add for this topic'),
   });
 
   const unsubscribeMut = useMutation({
     mutationFn: (topicId: number) => unsubscribeFromTopic(topicId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.subscriptions() }),
+    onError: onSaveError('Could not disable auto-add for this topic'),
   });
 
   const handleSubscriptionToggle = (topic: Topic, checked: boolean) => {
@@ -78,6 +81,7 @@ export function TopicSection() {
       setShowAdd(false);
       setAddForm({ name: '', query_terms: '', category: '', description: '' });
     },
+    onError: onSaveError('Could not add this topic'),
   });
 
   const updateMut = useMutation({
@@ -86,6 +90,7 @@ export function TopicSection() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.list() });
       setEditingId(null);
     },
+    onError: onSaveError('Could not update this topic'),
   });
 
   const deleteMut = useMutation({
@@ -93,6 +98,7 @@ export function TopicSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.list() });
     },
+    onError: onSaveError('Could not delete this topic'),
   });
 
   const startEdit = (topic: Topic) => {
@@ -166,33 +172,45 @@ export function TopicSection() {
                   <div className="flex flex-1 flex-col gap-2 w-full">
                     <div className="grid gap-2 sm:grid-cols-3">
                       <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Label
+                          htmlFor={`topic-edit-name-${topic.id}`}
+                          className="text-xs text-muted-foreground flex items-center gap-1"
+                        >
                           Name
                           <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.name} />
-                        </label>
+                        </Label>
                         <Input
+                          id={`topic-edit-name-${topic.id}`}
                           value={editForm.name}
                           onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                           placeholder="Name"
                         />
                       </div>
                       <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Label
+                          htmlFor={`topic-edit-terms-${topic.id}`}
+                          className="text-xs text-muted-foreground flex items-center gap-1"
+                        >
                           Query Terms
                           <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.queryTerms} />
-                        </label>
+                        </Label>
                         <Input
+                          id={`topic-edit-terms-${topic.id}`}
                           value={editForm.query_terms}
                           onChange={(e) => setEditForm({ ...editForm, query_terms: e.target.value })}
                           placeholder="Query terms (comma-separated)"
                         />
                       </div>
                       <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Label
+                          htmlFor={`topic-edit-category-${topic.id}`}
+                          className="text-xs text-muted-foreground flex items-center gap-1"
+                        >
                           Category
                           <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.category} />
-                        </label>
+                        </Label>
                         <Input
+                          id={`topic-edit-category-${topic.id}`}
                           value={editForm.category}
                           onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
                           placeholder="Category"
