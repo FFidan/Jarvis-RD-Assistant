@@ -51,7 +51,7 @@ describe('AutomationStep', () => {
     const user = userEvent.setup();
     renderStep();
 
-    expect(await screen.findByText(/Pulse is already set to run Every hour/)).toBeInTheDocument();
+    expect(await screen.findByText(/Pulse already has a schedule set: Every hour/)).toBeInTheDocument();
     expect(screen.queryByText('Daily run time')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /save schedule/i }));
@@ -60,5 +60,20 @@ describe('AutomationStep', () => {
     await waitFor(() => {
       expect(vi.mocked(setConfig)).toHaveBeenCalledWith('pulse.cron', '0 * * * *');
     });
+  });
+
+  it('shows an unparseable stored schedule as a labelled value, not embedded prose', async () => {
+    // cronToHumanReadable has no short honest phrase for an expression it
+    // cannot parse and falls back to the raw string — the sentence must
+    // still read as a displayed value rather than a broken English clause.
+    vi.mocked(fetchConfig).mockResolvedValue([
+      { key: 'pulse.cron', value: 'not-a-cron' },
+      { key: 'pulse.enabled', value: true },
+    ]);
+    renderStep();
+
+    expect(
+      await screen.findByText('Pulse already has a schedule set: not-a-cron.', { exact: false }),
+    ).toBeInTheDocument();
   });
 });

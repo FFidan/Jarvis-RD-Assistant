@@ -102,8 +102,8 @@ export function AutomationStep({ stepNumber, totalSteps, onBack, onNext }: Autom
         </label>
         {persistedCron !== null && !isTimeOnlyCron(persistedCron) ? (
           <p className="text-sm text-muted-foreground">
-            Pulse is already set to run {cronToHumanReadable(persistedCron)}. This step can only
-            set a single daily time — change the full schedule later in Settings.
+            Pulse already has a schedule set: {cronToHumanReadable(persistedCron)}. This step can
+            only set a single daily time — change the full schedule later in Settings.
           </p>
         ) : (
           <div>
