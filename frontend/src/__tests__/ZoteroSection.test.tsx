@@ -276,11 +276,12 @@ describe('ZoteroSection', () => {
       expect(screen.getByRole('button', { name: /sync now/i })).toBeDisabled();
     });
   });
-  it('saves the allowed private hostnames as a list on blur', async () => {
+  it('saves the Better BibTeX hosts as a list on blur', async () => {
     const user = userEvent.setup();
     renderSection();
 
-    const hostsInput = await screen.findByLabelText('Allowed private hostnames');
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
+    const hostsInput = await screen.findByLabelText('Better BibTeX hosts');
     expect(hostsInput).toHaveValue('zotero.lan');
 
     await user.clear(hostsInput);
@@ -292,6 +293,23 @@ describe('ZoteroSection', () => {
         'zotero.lan',
         '192.168.1.50',
       ]);
+    });
+  });
+
+  it('shows a toast when saving a Zotero setting fails', async () => {
+    const { toast } = await import('sonner');
+    vi.mocked(setConfig).mockRejectedValue(new Error('network error'));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
+    const hostsInput = await screen.findByLabelText('Better BibTeX hosts');
+    await user.clear(hostsInput);
+    await user.type(hostsInput, 'zotero.lan, newhost.example');
+    await user.tab(); // trigger blur
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to save Zotero setting.');
     });
   });
 });

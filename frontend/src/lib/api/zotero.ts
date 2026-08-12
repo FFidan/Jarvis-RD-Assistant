@@ -13,6 +13,20 @@ export function zoteroDesktopHref(
     : `zotero://select/library/items/${encodedItemKey}`;
 }
 
+// Signature and group/personal branching intentionally mirror zoteroDesktopHref
+// above so the two handoffs cannot silently diverge. itemKey is unused here —
+// the web handoff opens the library, not a single item — but keeping the same
+// parameter list lets both functions be called identically at the call site.
+export function zoteroWebHref(
+  itemKey: string,
+  libraryType?: 'user' | 'group',
+  groupId?: string | null,
+): string {
+  return libraryType === 'group' && groupId
+    ? `https://www.zotero.org/groups/${encodeURIComponent(groupId)}/library`
+    : 'https://www.zotero.org/library';
+}
+
 export async function zoteroTest(): Promise<{ success: boolean; error?: string }> {
   const r = await apiFetchJson('/api/zotero/test', zoteroTestSchema, { method: 'POST' });
   return { success: r.ok, error: r.detail };
