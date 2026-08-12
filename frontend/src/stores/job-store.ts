@@ -295,7 +295,7 @@ function boundedJobs(jobs: Record<string, Job>): Record<string, Job> {
   return Object.fromEntries([...active, ...terminal.slice(0, terminalLimit)]);
 }
 
-/** Keep the most recent markers; insertion order is preserved for string keys. */
+/** Keep the most recent markers. Job ids are UUIDs, so insertion order holds. */
 function boundedNotifiedIds(ids: Record<string, true>): Record<string, true> {
   const keys = Object.keys(ids);
   if (keys.length <= MAX_NOTIFIED_IDS) return ids;

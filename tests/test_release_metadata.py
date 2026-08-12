@@ -854,6 +854,37 @@ def test_paper_ingestion_images_declare_a_runtime_capability_check() -> None:
         assert "pdf" in checks, f"{label}: no PDF conversion capability check"
 
 
+def test_the_capability_check_actually_runs_against_the_built_digest() -> None:
+    """Declaring the capability set is not enough; the workflow must run it.
+
+    The sibling test above only pins the matrix declaration, so deleting the
+    step that consumes it would leave the checker orphaned and every published
+    image unverified while the suite stayed green.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+
+    assert "scripts/image-capability-check.py" in workflow
+    step = workflow.split("scripts/image-capability-check.py", 1)[1]
+    # The run must target the digest just built, never a floating tag, and must
+    # be reachable only in the verification mode that gates promotion.
+    assert "steps.build.outputs.digest" in step.split("- name:", 1)[0]
+    assert "matrix.capability" in workflow
+
+
+def test_the_capability_check_inputs_exist_on_disk() -> None:
+    """Both files the check bind-mounts must be present in the repository.
+
+    A bind mount whose source is missing is created as an empty directory
+    rather than refused, so a moved fixture would surface as an opaque failure
+    inside the container during a release.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+
+    for mounted in ("scripts/image-capability-check.py", "frontend/e2e/fixtures/sample.pdf"):
+        assert mounted in workflow, f"{mounted} is no longer mounted by the capability step"
+        assert (ROOT / mounted).is_file(), f"{mounted} is mounted by the release but missing"
+
+
 def test_model_catalog_freshness_check_flags_stale_and_missing(tmp_path: Path) -> None:
     checker = ROOT / "scripts/check-model-catalog-freshness.py"
     catalog = tmp_path / "catalog.json"

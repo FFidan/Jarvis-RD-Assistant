@@ -65,11 +65,15 @@ def check_malformed_pdf_rejected() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "broken.pdf"
         source.write_bytes(b"this is not a pdf")
+        from docling.exceptions import ConversionError
+        from pypdfium2 import PdfiumError
+
         try:
             _extract(source)
-        except ImportError:
-            raise  # a stack that cannot load is a failure, not a refusal
-        except Exception as exc:  # the pipeline's own refusal is the contract
+        except (ConversionError, PdfiumError) as exc:
+            # Only the document-decode failures count as a refusal. Catching any
+            # exception here would let a crash, a missing file or an unloadable
+            # stack read as if the pipeline had correctly rejected the input.
             print(f"malformed pdf rejected: {type(exc).__name__}")
             return
     raise SystemExit("malformed input was accepted")

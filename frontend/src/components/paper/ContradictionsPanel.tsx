@@ -130,7 +130,7 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
               <p className="font-medium">The latest contradiction scan failed.</p>
               <p className="mt-1">
                 Displayed contradictions may be stale.{' '}
-                {failedScan.error?.message ?? 'Contradiction scan failed.'}
+                {failedScan.error?.message || 'Contradiction scan failed.'}
               </p>
             </div>
           )}

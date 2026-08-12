@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, fetchDecks } from '@/lib/api';
-import { derivePipelineStatus } from '@/lib/paper-pipeline';
+import { isProcessingFailed } from '@/lib/paper-pipeline';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { streamAnalyze } from '@/lib/sse';
@@ -358,9 +358,13 @@ export function ActionsSidebar({
             // Otherwise derive state from paper props via the shared pipeline selector.
             let status: StepStatus = stepStatuses[step.key] || 'pending';
             if (!isAnalyzing && !Object.values(stepStatuses).some((s) => s !== 'pending')) {
-              const phase = derivePipelineStatus({ pdfDownloaded, hasChunks, hasSummary, processingFailed });
               if (step.key === 'downloading') status = pdfDownloaded ? 'completed' : 'pending';
-              else if (step.key === 'processing') status = phase === 'failed' ? 'failed' : hasChunks ? 'completed' : 'pending';
+              else if (step.key === 'processing')
+                status = isProcessingFailed({ processingFailed, hasChunks })
+                  ? 'failed'
+                  : hasChunks
+                    ? 'completed'
+                    : 'pending';
               else if (step.key === 'summarizing') status = hasSummary ? 'completed' : 'pending';
             }
             const isFailed = status === 'failed';

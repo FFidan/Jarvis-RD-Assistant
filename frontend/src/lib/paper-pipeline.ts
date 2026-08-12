@@ -1,20 +1,15 @@
 /**
- * Derive a paper's pipeline status from persisted state.
+ * Whether a paper's passage extraction should read as failed.
  *
- * Both the navigation rail and the actions panel render this. They previously
- * derived it separately, so a paper whose processing had failed appeared failed
- * in one rail and merely pending in the other after a reload.
+ * The navigation rail and the actions panel both render this step and each used
+ * to decide it independently, so a paper whose processing had failed appeared
+ * failed in one rail and merely pending in the other after a reload. A run that
+ * failed but still produced passages is not surfaced as a failure: the work the
+ * reader cares about survived.
  */
-export function derivePipelineStatus(input: {
-  pdfDownloaded: boolean;
-  hasChunks: boolean;
-  hasSummary: boolean;
+export function isProcessingFailed(input: {
   processingFailed: boolean;
-}): 'new' | 'downloaded' | 'processed' | 'summarized' | 'failed' {
-  const { pdfDownloaded, hasChunks, hasSummary, processingFailed } = input;
-  if (processingFailed && !hasChunks) return 'failed';
-  if (hasSummary) return 'summarized';
-  if (hasChunks) return 'processed';
-  if (pdfDownloaded) return 'downloaded';
-  return 'new';
+  hasChunks: boolean;
+}): boolean {
+  return input.processingFailed && !input.hasChunks;
 }

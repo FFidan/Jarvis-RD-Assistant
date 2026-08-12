@@ -317,6 +317,7 @@ jobs:
       # the import smoke; both arm64 and amd64 run it on native runners.
       - name: Capability check - exercise runtime paths the import cannot reach
         if: needs.preflight.outputs.mode == 'verify' && matrix.capability != ''
+        timeout-minutes: 25
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/scripts/image-capability-check.py:/tmp/capability.py:ro" \
