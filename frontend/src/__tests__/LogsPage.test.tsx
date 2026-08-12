@@ -226,6 +226,14 @@ describe('AdminAuditLogPage — readable AI configuration actions', () => {
           metadata: null,
           created_at: '2026-08-11T07:00:00Z',
         },
+        {
+          id: 3,
+          user_id: '1',
+          action: 'secret.remove',
+          resource: 'llm.anthropic.api_key',
+          metadata: null,
+          created_at: '2026-08-11T09:00:00Z',
+        },
       ],
       next_before_id: null,
     });
@@ -237,10 +245,13 @@ describe('AdminAuditLogPage — readable AI configuration actions', () => {
 
     expect(await screen.findByText('Model route changed')).toBeInTheDocument();
     expect(screen.getByText('Secret replaced')).toBeInTheDocument();
+    expect(screen.getByText('Secret removed')).toBeInTheDocument();
     expect(screen.getByText('llm.route.change')).toBeInTheDocument();
     expect(screen.getByText('secret.rotate')).toBeInTheDocument();
+    expect(screen.getByText('secret.remove')).toBeInTheDocument();
     expect(screen.getByText('llm.smart_model')).toBeInTheDocument();
     expect(screen.getByText('llm.providers.openrouter.api_key')).toBeInTheDocument();
+    expect(screen.getByText('llm.anthropic.api_key')).toBeInTheDocument();
   });
 
   it('keeps the server-side action-prefix filter contract', async () => {

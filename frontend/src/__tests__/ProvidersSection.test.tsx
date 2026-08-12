@@ -23,6 +23,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchProviderAccount: vi.fn(),
     fetchSystemModels: vi.fn(),
     listProviders: vi.fn(),
+    removeProviderBaseUrl: vi.fn().mockResolvedValue(undefined),
+    removeProviderKey: vi.fn().mockResolvedValue(undefined),
     setConfig: vi.fn().mockResolvedValue({ key: '', value: null }),
     testProvider: vi.fn(),
     listJobs: vi.fn().mockResolvedValue([]),
@@ -44,6 +46,8 @@ const {
   fetchProviderAccount,
   fetchSystemModels,
   listProviders,
+  removeProviderBaseUrl,
+  removeProviderKey,
   setConfig,
   testProvider,
 } = await import('@/lib/api');
@@ -337,6 +341,87 @@ describe('ProvidersSection', () => {
       );
     });
   });
+
+  it('removes a stored key only after the operator confirms', async () => {
+    const user = userEvent.setup();
+    const queryClient = renderSection();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(await screen.findByRole('button', { name: 'Remove key' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(vi.mocked(removeProviderKey)).not.toHaveBeenCalled();
+
+    await user.click(await screen.findByRole('button', { name: 'Remove key' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(removeProviderKey)).toHaveBeenCalledWith('anthropic');
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: QUERY_KEYS.config.providerAccount('anthropic'),
+    });
+  });
+
+  it('keeps the key and explains the refusal when a model route still uses it', async () => {
+    const refusal =
+      'The Main model route still uses Anthropic Claude. Point that route at another model first.';
+    vi.mocked(removeProviderKey).mockRejectedValueOnce(new Error(refusal));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Remove key' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(refusal);
+    });
+    expect(await screen.findByDisplayValue('****1234')).toBeInTheDocument();
+  });
+
+  it('offers no removal for a provider with nothing stored', async () => {
+    renderSection('openrouter');
+
+    expect(await screen.findByRole('button', { name: 'Add key' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
+  });
+
+  it('removes a stored endpoint URL through its own action', async () => {
+    vi.mocked(listProviders).mockResolvedValue(
+      PROVIDERS.map((provider) =>
+        provider.id === 'custom_openai_compatible'
+          ? { ...provider, base_url_configured: true }
+          : provider,
+      ),
+    );
+    const user = userEvent.setup();
+    renderSection('custom_openai_compatible');
+
+    await user.click(await screen.findByRole('button', { name: 'Remove endpoint' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(removeProviderBaseUrl)).toHaveBeenCalledWith('custom_openai_compatible');
+    });
+  });
+
+  it.each([
+    ['unavailable', 'JARVIS has no account lookup for this provider'],
+    ['no_provider_api', "This provider's API offers no account data"],
+  ] as const)(
+    'says who is not reporting the account for capability %s',
+    async (capability, copy) => {
+      vi.mocked(listProviders).mockResolvedValue(
+        PROVIDERS.map((provider) =>
+          provider.id === 'anthropic' ? { ...provider, account_capability: capability } : provider,
+        ),
+      );
+
+      renderSection();
+
+      expect(await screen.findByText(copy)).toBeInTheDocument();
+      expect(vi.mocked(fetchProviderAccount)).not.toHaveBeenCalled();
+    },
+  );
 
   it('refreshes the replaced provider account snapshot after saving a key', async () => {
     const user = userEvent.setup();

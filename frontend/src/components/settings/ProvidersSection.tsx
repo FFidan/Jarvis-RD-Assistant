@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
-import { CheckCircle, CircleDashed, ExternalLink, KeyRound, Loader2, Plus, ShieldAlert } from 'lucide-react';
+import { CheckCircle, CircleDashed, ExternalLink, KeyRound, Loader2, Plus, ShieldAlert, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -14,6 +15,8 @@ import {
   fetchProviderAccount,
   fetchSystemModels,
   listProviders,
+  removeProviderBaseUrl,
+  removeProviderKey,
   setConfig,
   testProvider,
 } from '@/lib/api';
@@ -32,6 +35,26 @@ interface SaveProviderConfigVariables {
   key: string;
   value: string;
 }
+
+interface RemoveProviderConfigVariables {
+  providerId: string;
+  field: EditableField;
+}
+
+const REMOVAL_COPY: Record<EditableField, { title: string; description: string; done: string }> = {
+  apiKey: {
+    title: 'Remove this provider key?',
+    description:
+      'JARVIS deletes the stored key and stops using this provider until you add another one. Revoke the key with the provider as well if it leaked.',
+    done: 'Provider key removed',
+  },
+  baseUrl: {
+    title: 'Remove this endpoint URL?',
+    description:
+      'JARVIS deletes the stored endpoint and stops sending requests to it until you add another one.',
+    done: 'Provider endpoint removed',
+  },
+};
 
 function getMaskedConfig(configs: ConfigEntry[], key: string | null | undefined): string {
   if (!key) return '';
@@ -153,8 +176,13 @@ function AccountSnapshot({
   });
   const entries = Object.entries(accountQuery.data?.data ?? {});
   const accountStatus = (() => {
+    // These two states are not interchangeable: one is a fact about the provider,
+    // the other only says JARVIS has no lookup wired up for it.
+    if (provider.account_capability === 'no_provider_api') {
+      return "This provider's API offers no account data";
+    }
     if (provider.account_capability === 'unavailable') {
-      return 'Not exposed by this provider API';
+      return 'JARVIS has no account lookup for this provider';
     }
     if (!provider.configured) return 'Add a key to check';
     if (accountQuery.isLoading) return 'Loading';
@@ -249,6 +277,7 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
   const [editing, setEditing] = useState<Record<string, Partial<Record<EditableField, boolean>>>>({});
   const [drafts, setDrafts] = useState<Record<string, DraftState>>({});
   const [testResults, setTestResults] = useState<Record<string, TestState>>({});
+  const [pendingRemoval, setPendingRemoval] = useState<EditableField | null>(null);
 
   const providers = useMemo(() => sortProviders(providersQuery.data ?? []), [providersQuery.data]);
   const configured = providers.filter((provider) => provider.configured || provider.base_url_configured);
@@ -278,6 +307,22 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
       toast.success(variables.field === 'apiKey' ? 'Provider key saved' : 'Provider endpoint saved');
     },
     onError: (error: Error) => toast.error(error.message || 'Failed to save provider setting'),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: ({ providerId, field }: RemoveProviderConfigVariables) =>
+      field === 'apiKey' ? removeProviderKey(providerId) : removeProviderBaseUrl(providerId),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.providers() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
+      queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.config.providerAccount(variables.providerId),
+      });
+      toast.success(REMOVAL_COPY[variables.field].done);
+    },
+    onError: (error: Error) =>
+      toast.error(errorMessage(error, 'Failed to remove this provider setting')),
   });
 
   const beginEdit = (provider: ProviderMetadata, field: EditableField) => {
@@ -425,6 +470,9 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
                     <Input id={`provider-key-${selected.id}`} readOnly value={getMaskedConfig(configs, selected.api_key_config_key) || (selected.configured ? 'Configured' : 'Not configured')} aria-label={`${selected.display_name} stored key status`} />
                     <Button variant="outline" onClick={() => beginEdit(selected, 'apiKey')}><KeyRound className="mr-2 h-4 w-4" />{selected.configured ? 'Replace key' : 'Add key'}</Button>
                     <Button variant="outline" onClick={() => testMutation.mutate(selected)} disabled={!selected.configured || testMutation.isPending}>{testMutation.isPending && testMutation.variables?.id === selected.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Test now</Button>
+                    {selected.configured && (
+                      <Button variant="outline" onClick={() => setPendingRemoval('apiKey')} disabled={removeMutation.isPending}><Trash2 className="mr-2 h-4 w-4" />Remove key</Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -442,6 +490,9 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Input id={`provider-base-url-${selected.id}`} readOnly value={getMaskedConfig(configs, selected.base_url_config_key) || (selected.base_url_configured ? 'Configured' : 'Not configured')} />
                       <Button variant="outline" onClick={() => beginEdit(selected, 'baseUrl')}>{selected.base_url_configured ? 'Replace endpoint' : 'Add endpoint'}</Button>
+                      {selected.base_url_configured && (
+                        <Button variant="outline" onClick={() => setPendingRemoval('baseUrl')} disabled={removeMutation.isPending}><Trash2 className="mr-2 h-4 w-4" />Remove endpoint</Button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -461,6 +512,19 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
                   </Link>
                 </div>
               )}
+              <ConfirmDialog
+                open={pendingRemoval !== null}
+                title={REMOVAL_COPY[pendingRemoval ?? 'apiKey'].title}
+                description={REMOVAL_COPY[pendingRemoval ?? 'apiKey'].description}
+                confirmLabel="Remove"
+                onConfirm={() => {
+                  if (pendingRemoval) {
+                    removeMutation.mutate({ providerId: selected.id, field: pendingRemoval });
+                  }
+                  setPendingRemoval(null);
+                }}
+                onCancel={() => setPendingRemoval(null)}
+              />
             </section>
             <AccountSnapshot
               provider={selected}
