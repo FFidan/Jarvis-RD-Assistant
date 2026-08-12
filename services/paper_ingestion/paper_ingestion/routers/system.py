@@ -105,13 +105,26 @@ async def get_setup_status(
         )
         topics_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM topics")
         paired_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM telegram_user_pairings")
+        telegram_token_row = await conn.fetchrow(
+            "SELECT value, encrypted_value FROM user_config "
+            "WHERE key = 'telegram.bot_token' AND user_id IS NULL",
+        )
 
     config: dict[str, Any] = {r["key"]: r["value"] for r in rows}
     setup_completed = coerce_bool(config.get("setup.completed"), default=False)
     telegram_paired = int(paired_row["n"]) > 0 if paired_row else False
     topics_count = int(topics_row["n"]) if topics_row else 0
 
-    telegram_configured = bool(get_paper_ingestion_settings().telegram_bot_token)
+    # A token saved through the web interface (stored in user_config) takes
+    # priority over the environment value at bot startup — see
+    # telegram_bot/config.py's DB-first token resolution. Either source having
+    # a value makes the bot "configured" once it next starts.
+    telegram_token_stored = telegram_token_row is not None and (
+        telegram_token_row["value"] is not None or telegram_token_row["encrypted_value"] is not None
+    )
+    telegram_configured = (
+        bool(get_paper_ingestion_settings().telegram_bot_token) or telegram_token_stored
+    )
 
     models_ready, models_downloading = await _probe_ollama()
 
@@ -223,7 +236,10 @@ async def delete_system_model(tag: str, request: Request) -> Response:
     if models.issues.get("current"):
         raise HTTPException(
             status_code=503,
-            detail="Cannot verify active model assignments; refusing to delete model",
+            detail=(
+                "The stored model routes could not be read just now, so this model "
+                "was left in place. Please try again in a moment."
+            ),
         )
 
     normalized_tag = normalize_model_tag(tag)
