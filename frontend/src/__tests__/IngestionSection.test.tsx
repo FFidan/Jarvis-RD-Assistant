@@ -38,7 +38,7 @@ vi.mock('@/lib/api', async () => {
 
 // Mock Radix Slider with a simple range input for testability
 vi.mock('@/components/ui/slider', () => ({
-  Slider: ({ min, max, step, value, onValueChange, onValueCommit, 'data-testid': testid }: {
+  Slider: ({ min, max, step, value, onValueChange, onValueCommit, 'data-testid': testid, 'aria-label': ariaLabel }: {
     min: number;
     max: number;
     step: number;
@@ -46,10 +46,12 @@ vi.mock('@/components/ui/slider', () => ({
     onValueChange?: (v: number[]) => void;
     onValueCommit?: (v: number[]) => void;
     'data-testid'?: string;
+    'aria-label'?: string;
   }) => (
     <input
       type="range"
       data-testid={testid ?? 'slider'}
+      aria-label={ariaLabel}
       min={min}
       max={max}
       step={step}
@@ -319,6 +321,19 @@ describe('IngestionSection — num_ctx slider', () => {
     fireEvent.click(screen.getByTestId('configure-toggle-smart'));
     await waitFor(() => {
       expect(screen.getByTestId('slider-smart')).toBeInTheDocument();
+    });
+  });
+
+  it('slider for the smart role is reachable by its label', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('configure-toggle-smart'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Reading window for the main model')).toBe(
+        screen.getByTestId('slider-smart'),
+      );
     });
   });
 

@@ -27,6 +27,7 @@ export function TimerSection() {
         <div className="space-y-2">
           <Label>Work duration: {workMinutes} min</Label>
           <Slider
+            aria-label="Work duration"
             min={15} max={60} step={5}
             value={[workMinutes]}
             onValueChange={([v]) => usePomodoroStore.setState({ workMinutes: v })}
@@ -36,6 +37,7 @@ export function TimerSection() {
         <div className="space-y-2">
           <Label>Short break: {shortBreakMinutes} min</Label>
           <Slider
+            aria-label="Short break"
             min={3} max={15} step={1}
             value={[shortBreakMinutes]}
             onValueChange={([v]) => usePomodoroStore.setState({ shortBreakMinutes: v })}
@@ -45,6 +47,7 @@ export function TimerSection() {
         <div className="space-y-2">
           <Label>Long break: {longBreakMinutes} min</Label>
           <Slider
+            aria-label="Long break"
             min={10} max={30} step={5}
             value={[longBreakMinutes]}
             onValueChange={([v]) => usePomodoroStore.setState({ longBreakMinutes: v })}
@@ -54,6 +57,7 @@ export function TimerSection() {
         <div className="space-y-2">
           <Label>Cycles before long break: {targetCycles}</Label>
           <Slider
+            aria-label="Cycles before long break"
             min={2} max={8} step={1}
             value={[targetCycles]}
             onValueChange={([v]) => usePomodoroStore.setState({ targetCycles: v })}

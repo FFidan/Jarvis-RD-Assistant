@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
@@ -6,7 +7,9 @@ import { fetchRecommendationFeedback, deleteRecommendationFeedback } from '@/lib
 import type { FeedbackListItem } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { errorMessage } from '@/lib/errors';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useConfirm } from '@/hooks/use-confirm';
+import { onSaveError } from '@/lib/forms/save-error';
 
 interface TopicGroup {
   topic_id: number;
@@ -41,6 +44,9 @@ export function RejectedTopicsPanel() {
     staleTime: 60_000,
   });
 
+  const [resetTarget, setResetTarget] = useState<TopicGroup | null>(null);
+  const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
+
   const resetMutation = useMutation({
     mutationFn: (topicId: number) => deleteRecommendationFeedback(topicId),
     onSuccess: (res) => {
@@ -49,11 +55,17 @@ export function RejectedTopicsPanel() {
         description: `${res.deleted} feedback row(s) cleared.`,
       });
     },
-    onError: (err) =>
-      toast.error('Failed to reset topic feedback', {
-        description: errorMessage(err),
-      }),
+    onError: onSaveError('Could not reset feedback for this topic'),
   });
+
+  const handleReset = async (group: TopicGroup) => {
+    setResetTarget(group);
+    const confirmed = await confirm();
+    if (confirmed) {
+      resetMutation.mutate(group.topic_id);
+    }
+    setResetTarget(null);
+  };
 
   if (isLoading) {
     return (
@@ -65,7 +77,7 @@ export function RejectedTopicsPanel() {
   }
   if (isError) {
     return (
-      <div className="text-sm text-[var(--status-bad)] py-2">
+      <div className="text-sm text-destructive py-2">
         Failed to load rejected topics.
       </div>
     );
@@ -83,28 +95,43 @@ export function RejectedTopicsPanel() {
   }
 
   return (
-    <ul className="space-y-2">
-      {groups.map((group) => (
-        <li key={group.topic_id} className="flex items-center justify-between gap-3 rounded-md border p-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <Badge variant="secondary" className="truncate">{group.topic_name}</Badge>
-            <span className="text-xs text-muted-foreground whitespace-nowrap">
-              {group.count} {group.count === 1 ? 'paper' : 'papers'} rejected
-            </span>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={resetMutation.isPending}
-            onClick={() => resetMutation.mutate(group.topic_id)}
-            aria-label={`Reset feedback for ${group.topic_name}`}
-          >
-            <RotateCcw className="h-3.5 w-3.5 mr-1" />
-            Reset
-          </Button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="space-y-2">
+        {groups.map((group) => (
+          <li key={group.topic_id} className="flex items-center justify-between gap-3 rounded-md border p-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Badge variant="secondary" className="truncate">{group.topic_name}</Badge>
+              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                {group.count} {group.count === 1 ? 'paper' : 'papers'} rejected
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={resetMutation.isPending}
+              onClick={() => handleReset(group)}
+              aria-label={`Reset feedback for ${group.topic_name}`}
+            >
+              <RotateCcw className="h-3.5 w-3.5 mr-1" />
+              Reset
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={isOpen && resetTarget !== null}
+        title="Reset feedback?"
+        description={
+          resetTarget
+            ? `This clears every rejected-paper signal for "${resetTarget.topic_name}". This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Reset"
+        variant="destructive"
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
+      />
+    </>
   );
 }

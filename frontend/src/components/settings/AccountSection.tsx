@@ -352,7 +352,7 @@ function AccountDataExportCard() {
       <CardContent className="p-5 space-y-3">
         <div className="flex items-center gap-2">
           <Download className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-semibold">Account data export</span>
+          <h3 className="text-base font-semibold">Account data export</h3>
         </div>
         <p className="text-sm text-muted-foreground">
           Download a ZIP of your account data, including papers saved to your library and your
@@ -411,7 +411,7 @@ export function AccountSection() {
         <CardContent className="p-5 space-y-5">
           <div className="flex items-center gap-2">
             <User className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-semibold">Profile</span>
+            <h3 className="text-base font-semibold">Profile</h3>
           </div>
 
           <DisplayNameRow account={account} />
