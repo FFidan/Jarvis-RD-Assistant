@@ -372,8 +372,8 @@ def _embedding_failure_message(exc: BaseException) -> str:
     if detail and base != detail:
         base = f"{base}: {detail}"
     return (
-        f"{base}. Check LiteLLM/Ollama health, embedding model availability, "
-        "and LITELLM_MASTER_KEY wiring."
+        f"{base}. Check that the embedding model is available and reachable, and "
+        "that your provider credentials are configured correctly."
     )
 
 
@@ -689,14 +689,17 @@ def _raise_runtime_process_failure(paper_id: int, exc: RuntimeError) -> NoReturn
     if torch is not None and isinstance(exc, torch.OutOfMemoryError):
         logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, exc)
         raise PDFUserFacingError(
-            "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
-            " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
+            "PDF text-extraction hit a GPU out-of-memory error. Retry once other "
+            "GPU-heavy work finishes, or ask an administrator to reduce concurrent "
+            "GPU load or process this paper on CPU."
         ) from exc
     message = str(exc)
     if "CUDA out of memory" in message or "CUDA error" in message:
         logger.error("PDF text-extraction CUDA error for paper %d: %s", paper_id, exc)
         raise PDFUserFacingError(
-            "PDF text-extraction GPU error. Lower OLLAMA_MAX_LOADED_MODELS or set TORCH_DEVICE=cpu."
+            "PDF text-extraction hit a GPU error. Retry once other GPU-heavy work "
+            "finishes, or ask an administrator to reduce concurrent GPU load or "
+            "process this paper on CPU."
         ) from exc
     logger.error("Process PDF embedding failure for paper %d: %s", paper_id, exc)
     raise PDFUserFacingError(_embedding_failure_message(exc)) from exc

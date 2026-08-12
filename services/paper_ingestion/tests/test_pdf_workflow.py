@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -505,7 +507,7 @@ async def test_run_process_pdf_wraps_embedding_failures():
 
     message = str(exc_info.value)
     assert "Embedding service error (HTTP 401): bad auth" in message
-    assert "LITELLM_MASTER_KEY" in message
+    assert "provider credentials are configured correctly" in message
 
 
 @pytest.mark.asyncio
@@ -782,6 +784,118 @@ async def test_document_read_failure_is_not_reported_as_an_embedding_problem(fai
     assert "litellm" not in message
     assert "ollama" not in message
     assert "read" in message or "convert" in message
+
+
+# A researcher reading one of these messages cannot set an environment variable
+# from the app, so naming one is unactionable. Environment variables in this
+# codebase are always SCREAMING_SNAKE_CASE with at least one underscore; that
+# shape does not otherwise occur in prose (acronyms like "GPU" or "PDF" have
+# none), so it is a safe, specific detector.
+_ENV_VAR_NAME_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+
+
+def _module_level_string_constants(tree: ast.Module) -> dict[str, ast.expr]:
+    """Map module-level ``NAME = <expr>`` targets to their assigned value node."""
+    constants: dict[str, ast.expr] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    constants[target.id] = node.value
+    return constants
+
+
+def _module_level_function_defs(
+    tree: ast.Module,
+) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Map module-level function names to their definitions."""
+    return {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _fixed_string_literals(
+    node: ast.AST,
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    _seen: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Every source-fixed string segment *node* contains.
+
+    Handles a plain literal, an f-string's non-interpolated segments, and
+    implicit/explicit string concatenation. Wherever a call to one of this
+    module's own functions appears -- including nested inside an f-string's
+    interpolated slot, as ``f"{_embedding_failure_message(exc)} ..."`` has it
+    -- recurses into that function's whole body, so a helper's literal text is
+    found even when a raise site only interpolates the helper's return value.
+    An interpolated value that is not such a call (an exception's text, a
+    paper id) is runtime data, never source text, so it is left alone: it
+    cannot itself name an environment variable because it is not written in
+    this module's source.
+    """
+    literals: list[str] = []
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            literals.append(inner.value)
+        elif (
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id in functions
+            and inner.func.id not in _seen
+        ):
+            literals.extend(
+                _fixed_string_literals(functions[inner.func.id], functions, _seen | {inner.func.id})
+            )
+    return literals
+
+
+def _message_literals_for_call(
+    arg: ast.expr,
+    constants: dict[str, ast.expr],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> list[str]:
+    """Resolve the fixed string content of one error-constructor argument.
+
+    Follows a direct module-level constant name (as
+    ``PDFSourceSupersededError(_SUPERSEDED_SOURCE_MESSAGE)`` has it) to its
+    assigned literal before the general walk.
+    """
+    if isinstance(arg, ast.Name) and arg.id in constants:
+        return _fixed_string_literals(constants[arg.id], functions)
+    return _fixed_string_literals(arg, functions)
+
+
+def test_no_user_facing_message_names_an_environment_variable():
+    """No message raised as PDFUserFacingError/PDFSourceSupersededError may name
+    an environment variable: a research scientist reading it cannot set one from
+    the app, so naming it describes an action they cannot take.
+
+    This statically enumerates every such raise site in the module's source
+    (direct literals, f-string segments, concatenation, module constants, and
+    calls to the module's own message-building helpers) rather than checking
+    only the messages today's tests happen to trigger, so a future raise site
+    that embeds a variable name fails this test too.
+    """
+    source = Path(pdf_workflow_module.__file__).read_text()
+    tree = ast.parse(source)
+    constants = _module_level_string_constants(tree)
+    functions = _module_level_function_defs(tree)
+    error_constructors = {"PDFUserFacingError", "PDFSourceSupersededError"}
+
+    offending: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id in error_constructors):
+            continue
+        if not node.args:
+            continue
+        for literal in _message_literals_for_call(node.args[0], constants, functions):
+            if _ENV_VAR_NAME_RE.search(literal):
+                offending.append(literal)
+
+    assert offending == [], f"user-facing message names an environment variable: {offending}"
 
 
 def _process_route_app(tmp_path, monkeypatch, *, process_side_effect=None, lock_available=True):
@@ -1171,7 +1285,7 @@ async def test_pdf_workflow_embedding_http_status_stays_actionable(status_code: 
 
     message = str(exc_info.value)
     assert f"{status_code}" in message
-    assert "LITELLM_MASTER_KEY" in message
+    assert "provider credentials are configured correctly" in message
     assert "http://litellm:4000" not in message
 
 
