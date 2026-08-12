@@ -95,7 +95,7 @@ def test_release_docs_match_the_exact_sha_publish_and_promotion_contract() -> No
     assert "actions/runs/${verification_run_id}" in workflow
     build_job = workflow.split("\n  build:", 1)[1].split("\n  verify:", 1)[0]
     verify_job = workflow.split("\n  verify:", 1)[1].split("\n  promote:", 1)[0]
-    promote_job = workflow.split("\n  promote:", 1)[1]
+    promote_job = workflow.split("\n  promote:", 1)[1].split("\n  promotion-gate:", 1)[0]
     assert (
         "environment: ${{ needs.preflight.outputs.mode == 'verify' && 'release' || '' }}"
         in build_job
@@ -883,6 +883,97 @@ def test_the_capability_check_inputs_exist_on_disk() -> None:
     for mounted in ("scripts/image-capability-check.py", "frontend/e2e/fixtures/sample.pdf"):
         assert mounted in workflow, f"{mounted} is no longer mounted by the capability step"
         assert (ROOT / mounted).is_file(), f"{mounted} is mounted by the release but missing"
+
+
+def test_hosted_dependency_and_inventory_tools_name_their_release() -> None:
+    """A hosted scan must run the release its local twin runs, not the newest one."""
+    security = _read(".github/workflows/security.yml")
+    sbom = _read(".github/workflows/sbom.yml")
+    scanner = _read("scripts/security-scan.py")
+
+    assert "pip-audit==2.10.1" in scanner
+    assert security.count("uvx --from pip-audit==2.10.1 pip-audit") == 3
+    assert "uvx pip-audit" not in security
+
+    assert sbom.count("uv tool run --from cyclonedx-bom==7.3.1 cyclonedx-py") == 1
+    assert sbom.count("uv tool run --from pip-licenses==5.5.5 pip-licenses") == 2
+    assert sbom.count("license-checker-rseidelsohn@5.0.1") == 2
+    assert sbom.count("@cyclonedx/cyclonedx-npm@4.2.1") == 1
+    assert "uv tool run pip-licenses" not in sbom
+    assert "npx --yes license-checker-rseidelsohn " not in sbom
+
+
+def test_release_images_build_from_the_digest_pinned_bases() -> None:
+    """A published image must not resolve its base image through a mutable tag."""
+    versions = dict(
+        line.split("=", 1)
+        for line in _read("versions.env").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+    build_job = workflow.split("\n  build:", 1)[1].split("\n  verify:", 1)[0]
+
+    for name in ("PYTHON_BASE_IMAGE", "NGINX_RUNTIME_IMAGE"):
+        assert re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", versions[name]), versions[name]
+
+    assert ". ./versions.env" in build_job
+    assert "PYTHON_BASE_IMAGE NODE_BUILD_IMAGE NGINX_RUNTIME_IMAGE" in build_job
+    assert 'grep -q "^ARG ${name}=" "$DOCKERFILE"' in build_job
+    assert "build-args: ${{ steps.build_args.outputs.resolved }}" in build_job
+    # The matrix arguments reach the build only through the same resolved list.
+    assert "MATRIX_BUILD_ARGS: ${{ matrix.build_args }}" in build_job
+    assert "build-args: ${{ matrix.build_args }}" not in build_job
+
+    # The workflow forwards a base only to a Dockerfile that declares it, and the
+    # ARG default remains the fallback for a build that never reads versions.env.
+    for dockerfile, declared in (
+        ("services/paper_ingestion/Dockerfile", "PYTHON_BASE_IMAGE"),
+        ("services/learning_engine/Dockerfile", "PYTHON_BASE_IMAGE"),
+        ("services/telegram_bot/Dockerfile", "PYTHON_BASE_IMAGE"),
+        ("frontend/Dockerfile", "NGINX_RUNTIME_IMAGE"),
+    ):
+        assert f"ARG {declared}=" in _read(dockerfile), dockerfile
+
+
+def test_the_published_image_scan_is_the_report_the_release_guide_describes() -> None:
+    """The scan's exit code and the release narrative must not drift apart.
+
+    A scan left non-blocking while the guide calls it a gate reads as coverage
+    nobody has.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+    release = " ".join(_read("docs/RELEASE.md").split())
+    verify_job = workflow.split("\n  verify:", 1)[1].split("\n  promote:", 1)[0]
+
+    assert 'exit-code: "0"' in verify_job
+    assert "A report, not a gate" in verify_job
+    assert "That step is a report, not a gate" in release
+    assert "Read the report before tagging" in release
+
+
+def test_a_partial_promotion_cannot_finish_as_a_successful_release() -> None:
+    """Only the terminal gate can state that every image reached its stable tag."""
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+
+    assert "\n  promotion-gate:" in workflow, "the terminal promotion gate is gone"
+    gate = workflow.split("\n  promotion-gate:", 1)[1]
+
+    assert "needs: [preflight, promote]" in gate
+    assert "if: ${{ always() && needs.preflight.outputs.mode == 'promote' }}" in gate
+    assert "PROMOTION: ${{ needs.promote.result }}" in gate
+    assert 'if [ "$PROMOTION" != "success" ]; then' in gate
+    assert "exit 1" in gate
+
+    promote_job = workflow.split("\n  promote:", 1)[1].split("\n  promotion-gate:", 1)[0]
+    assert "fail-fast: false" in promote_job
+    assert re.findall(r"- slug: ([a-z-]+)", promote_job) == [
+        "paper-ingestion-cpu",
+        "paper-ingestion-cuda",
+        "learning-engine",
+        "telegram-bot",
+        "dashboard",
+        "restore-uploader",
+    ]
 
 
 def test_model_catalog_freshness_check_flags_stale_and_missing(tmp_path: Path) -> None:

@@ -253,6 +253,34 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.source_commit }}
 
+      # Build from the digest-pinned bases in versions.env. The Dockerfile ARG
+      # defaults name a bare tag so a developer build without this file still
+      # works, but a tag is mutable, so a published image built from the default
+      # is not reproducible. Only the bases a Dockerfile actually declares are
+      # forwarded, so no image receives a build argument it never consumes.
+      # The matrix values are folded in here, rather than concatenated into the
+      # build step's input alongside this output, so that an entry carrying no
+      # matrix arguments cannot leave a blank line in the list.
+      - name: Resolve the build arguments
+        id: build_args
+        env:
+          DOCKERFILE: ${{ matrix.file }}
+          MATRIX_BUILD_ARGS: ${{ matrix.build_args }}
+        run: |
+          set -a
+          . ./versions.env
+          set +a
+          {
+            echo "resolved<<BUILD_ARGS"
+            for name in PYTHON_BASE_IMAGE NODE_BUILD_IMAGE NGINX_RUNTIME_IMAGE; do
+              if grep -q "^ARG ${name}=" "$DOCKERFILE"; then
+                printf '%s=%s\n' "$name" "${!name}"
+              fi
+            done
+            printf '%s\n' "$MATRIX_BUILD_ARGS" | sed '/^$/d'
+            echo "BUILD_ARGS"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
 
@@ -271,7 +299,7 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           platforms: ${{ matrix.platform }}
-          build-args: ${{ matrix.build_args }}
+          build-args: ${{ steps.build_args.outputs.resolved }}
           sbom: ${{ needs.preflight.outputs.mode == 'verify' }}
           outputs: ${{ needs.preflight.outputs.mode == 'verify' && format('type=image,name=ghcr.io/limitcycle-oss/{0},push-by-digest=true,name-canonical=true,push=true', matrix.image) || 'type=cacheonly' }}
 
@@ -446,6 +474,15 @@ jobs:
           name: sbom-image-${{ matrix.slug }}
           path: sbom-${{ matrix.slug }}.cdx.json
 
+      # A report, not a gate, and `exit-code: "0"` says so deliberately. This
+      # scans a live advisory database against an image that is already built,
+      # and this job's digest receipts are the only thing a stable tag can
+      # promote; an advisory published minutes earlier would therefore discard a
+      # verification run with nothing wrong with it and force a full rebuild.
+      # Blocking dependency scans run earlier, on the branch, where a fix can
+      # still be committed: pip-audit, npm-audit and osv-scanner in the Security
+      # workflow. docs/RELEASE.md states what the operator must do with this
+      # report before tagging.
       - name: Vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
@@ -536,3 +573,31 @@ jobs:
           fi
           echo "Promoted ${source_ref}@${source_digest} to ${target_ref}." \
             >> "$GITHUB_STEP_SUMMARY"
+
+  promotion-gate:
+    name: Promotion gate
+    needs: [preflight, promote]
+    # `promote` runs with fail-fast disabled so one broken image cannot abandon
+    # the others half-promoted, which means the surviving legs stay green and
+    # only this job can state whether the release published in full.
+    # always() is required: without it a failed promotion skips the gate instead
+    # of failing it. `needs.promote.result` is the aggregate of every matrix leg,
+    # so it is 'success' only when all of them promoted; the mode guard keeps the
+    # gate out of build-only and verification runs, where `promote` never starts.
+    # A 'skipped' result in promote mode is a failure too — that is the shape a
+    # release takes when nothing was promoted at all.
+    if: ${{ always() && needs.preflight.outputs.mode == 'promote' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify every image promoted
+        env:
+          PROMOTION: ${{ needs.promote.result }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.release_version }}
+        run: |
+          if [ "$PROMOTION" != "success" ]; then
+            echo "::error::promotion did not complete for every image" \
+                 "(result=$PROMOTION); this release is partially published"
+            exit 1
+          fi
+          echo "Every image promoted to ${RELEASE_VERSION}." >> "$GITHUB_STEP_SUMMARY"
