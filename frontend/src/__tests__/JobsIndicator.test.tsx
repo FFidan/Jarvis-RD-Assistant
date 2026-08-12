@@ -67,11 +67,12 @@ describe('JobsIndicator', () => {
     expect(indicator.style.transform).toBe('translateX(-50%)');
   });
 
-  it('labels contradiction scan jobs', async () => {
+  it('labels a library-wide contradiction scan job', async () => {
     setupStore({
       'job-contradictions': makeJob({
         id: 'job-contradictions',
         kind: 'contradictions.scan',
+        payload: {},
       }),
     });
 
@@ -80,6 +81,23 @@ describe('JobsIndicator', () => {
     await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
 
     expect(screen.getByText('Scanning Contradictions')).toBeInTheDocument();
+  });
+
+  it('labels a paper-scoped contradiction scan job distinctly from the library-wide scan', async () => {
+    setupStore({
+      'job-contradictions-paper': makeJob({
+        id: 'job-contradictions-paper',
+        kind: 'contradictions.scan',
+        payload: { paper_id: 42 },
+      }),
+    });
+
+    render(<JobsIndicator />);
+
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
+
+    expect(screen.getByText('Scanning Paper Contradictions')).toBeInTheDocument();
+    expect(screen.queryByText('Scanning Contradictions')).toBeNull();
   });
 
   it('labels a partially completed whole-library job and exposes its incomplete counts', async () => {

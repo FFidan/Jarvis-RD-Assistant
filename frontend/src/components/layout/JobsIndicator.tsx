@@ -88,7 +88,9 @@ function JobRow({ job, onCancel, onRemove }: JobRowProps) {
   return (
     <div className="flex flex-col gap-1 py-2 border-b last:border-b-0">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium truncate">{kindLabel(job.kind)}</span>
+        <span className="text-sm font-medium truncate">
+          {kindLabel(job.kind, { paperScoped: job.payload?.paper_id != null })}
+        </span>
         <div className="flex items-center gap-1 shrink-0">
           {isCancelling ? (
             <span className="text-xs text-[var(--status-warn)]">Cancelling…</span>
