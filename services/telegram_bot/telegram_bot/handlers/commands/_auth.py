@@ -73,7 +73,7 @@ def auth_required(func: Any) -> Any:
                 if update.message is not None:
                     await update.message.reply_text(
                         "🔗 Link your JARVIS account first: open the dashboard → "
-                        "Settings → Integrations → Telegram, then run /pair <token>."
+                        "Settings → Integrations → Telegram, then run /pair <code>."
                     )
                 return
             if context.user_data is not None:

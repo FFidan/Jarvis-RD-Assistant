@@ -382,7 +382,16 @@ export function ZoteroSection() {
                   <ScheduleSelect
                     id="zotero-poll-schedule"
                     value={pollCron}
-                    onChange={(cron) => setMut.mutate({ key: 'zotero.poll_cron', value: cron })}
+                    onChange={(cron) => {
+                      // Both controls write zotero.poll_cron, and only this one
+                      // commits on choice. Dropping any half-typed custom
+                      // expression stops Save from putting it back afterwards.
+                      setDraftPollCron(null);
+                      setMut.mutate(
+                        { key: 'zotero.poll_cron', value: cron },
+                        { onError: onSaveError('Could not update the sync schedule') },
+                      );
+                    }}
                     disabled={setMut.isPending}
                   />
                 </div>

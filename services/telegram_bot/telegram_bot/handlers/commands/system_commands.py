@@ -49,7 +49,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if update.message is not None:
             await update.message.reply_text(
                 "🔗 Link your JARVIS account first: open the dashboard → "
-                "Settings → Integrations → Telegram, then run /pair <token>."
+                "Settings → Integrations → Telegram, then run /pair <code>."
             )
         return
     if context.user_data is not None:

@@ -21,6 +21,14 @@ import { MemoryRouter } from 'react-router-dom';
 import { PulseSection } from '@/components/settings/PulseSection';
 import type { PulseStats } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { toast } from 'sonner';
+
+// Counted, not just observed: a failed save must produce exactly one message.
+// A mutation-level handler alongside the per-call ones fires in addition to
+// them, so the researcher sees the same failure reported twice.
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn(), message: vi.fn() },
+}));
 
 // ---------------------------------------------------------------------------
 // Module mocks — same strategy as PulseSection.test.tsx
@@ -237,6 +245,25 @@ describe('PulseSection — pre-decomposition behavioral snapshot', () => {
       'pulse.weights',
       expect.objectContaining({ embedding: 1 }),
     );
+  });
+
+  it('reports a failed save once, naming the setting, not twice', async () => {
+    // An Error with no text, so the message under test is the call site's own
+    // label rather than whatever the server said.
+    vi.mocked(setConfig).mockRejectedValueOnce(new Error(''));
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('pulse-schedule-card')).toBeInTheDocument();
+    });
+
+    const slider = screen.getByTestId('pulse-deck-size');
+    fireEvent.change(slider, { target: { value: '20' } });
+    fireEvent.mouseUp(slider);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    });
+    expect(toast.error).toHaveBeenCalledWith('Could not update the deck size');
   });
 
   it('shows a stored schedule the clock picker cannot represent as read-only text', async () => {

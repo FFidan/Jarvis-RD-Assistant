@@ -869,6 +869,11 @@ def test_the_capability_check_actually_runs_against_the_built_digest() -> None:
     # be reachable only in the verification mode that gates promotion.
     assert "steps.build.outputs.digest" in step.split("- name:", 1)[0]
     assert "matrix.capability" in workflow
+    # Offline is the whole point of baking the document models into the image.
+    # Without this, dropping the flag would let a rebuild that lost the models
+    # download them during the check and still report the image as capable.
+    docker_run = workflow.rsplit("docker run", 1)[1].split("- name:", 1)[0]
+    assert "--network none" in docker_run
 
 
 def test_the_capability_check_inputs_exist_on_disk() -> None:

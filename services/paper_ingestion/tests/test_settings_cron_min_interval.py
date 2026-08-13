@@ -23,7 +23,7 @@ from paper_ingestion.services.config_validators import _validate_cron, _validate
     ],
 )
 def test_pulse_cron_rejects_sub_hourly_schedule(expr: str):
-    """H17: _validate_cron rejects cron expressions that fire more than once per hour (D5-10)."""
+    """_validate_cron rejects cron expressions that fire more than once per hour."""
     with pytest.raises(ValueError, match="no more than once per hour"):
         _validate_cron(expr)
 

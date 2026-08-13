@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { toast } from 'sonner';
 import {
   fetchConfig,
   setConfig,
@@ -86,14 +85,11 @@ export function PulseSection() {
   const hasNetworkx = capabilities?.networkx === true;
   const hasSklearn = capabilities?.scikit_learn === true;
 
+  // No mutation-level onError: every call site names the setting it was saving.
+  // A handler here would not replace those, it would fire in addition to them.
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() }),
-    onError: (err: Error) => {
-      toast.error('Failed to update Pulse settings', {
-        description: err.message,
-      });
-    },
   });
 
   const settingsUnavailable = configLoading || configError || configs === undefined;

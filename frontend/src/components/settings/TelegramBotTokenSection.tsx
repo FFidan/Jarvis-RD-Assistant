@@ -148,11 +148,11 @@ export function TelegramBotTokenSection() {
         {/* Persistent runtime note */}
         <div className="space-y-1 border-t border-hair pt-3 text-xs text-muted-foreground">
           <p>
-            The Telegram bot only runs if it was enabled during installation. A saved token is
-            picked up the next time the bot starts.
+            The Telegram bot runs only if it was enabled when this instance was set up. A saved
+            token is picked up the next time the bot starts.
           </p>
           <p>
-            If the bot doesn&apos;t appear to be running, see the{' '}
+            If it was never enabled, or the bot doesn&apos;t appear to be running, see the{' '}
             <a
               href={docsUrl('manual/telegram.md')}
               target="_blank"

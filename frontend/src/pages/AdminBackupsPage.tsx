@@ -379,7 +379,7 @@ export function AdminBackupsPage() {
     isLoading: statusLoading,
     isError: statusError,
   } = useQuery({
-    queryKey: ['admin', 'backups', 'status'],
+    queryKey: QUERY_KEYS.admin.backupStatus(),
     queryFn: getBackupStatus,
     refetchInterval: 30_000,
     placeholderData: keepPreviousData,
@@ -396,7 +396,7 @@ export function AdminBackupsPage() {
   });
 
   const inbox = useQuery({
-    queryKey: ['admin', 'backups', 'inbox'],
+    queryKey: QUERY_KEYS.admin.backupInbox(),
     queryFn: getInboxRestorePoints,
     placeholderData: keepPreviousData,
   });
@@ -574,7 +574,7 @@ export function AdminBackupsPage() {
 
       <OffHostUploadSection
         onUploaded={() =>
-          void queryClient.invalidateQueries({ queryKey: ['admin', 'backups', 'inbox'] })
+          void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.backupInbox() })
         }
       />
 

@@ -98,7 +98,7 @@ describe('TelegramBotTokenSection', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(/only runs if it was enabled during installation/i),
+        screen.getByText(/runs only if it was enabled when this instance was set up/i),
       ).toBeInTheDocument(),
     );
     expect(screen.getByRole('link', { name: /telegram setup guide/i })).toBeInTheDocument();

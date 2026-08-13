@@ -70,6 +70,8 @@ export const QUERY_KEYS = {
     restoreStatus: () => ["admin", "restore-status"] as const,
     restorePoints: () => ["admin", "restore-points"] as const,
     backupRetention: () => ["admin", "backups", "retention"] as const,
+    backupStatus: () => ["admin", "backups", "status"] as const,
+    backupInbox: () => ["admin", "backups", "inbox"] as const,
   },
 
   // ── Citation graph ────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
  *
  * Shows:
  *  - Current pairing status (paired / unpaired)
- *  - Button to request a 15-minute pairing token
+ *  - Button to request a 15-minute pairing code
  *  - Token display with copy button and live countdown
  *  - Unpair button when paired
  *
@@ -261,7 +261,7 @@ export function TelegramPairingSection() {
             {requestToken.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : null}
-            Generate pairing token
+            Generate pairing code
           </Button>
         </div>
       )}
