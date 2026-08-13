@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/hardware-and-models/" class="md-nav__link">
         
   
@@ -2250,9 +2278,8 @@ the bot stores durable chat ownership in <code>telegram_user_pairings</code> (se
 flow — the token is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
-<code>/pair</code>. The legacy dashboard-code pairing path is no longer active.
-The legacy <code>TELEGRAM_CHAT_ID</code> environment variable is not an authorization or
-delivery fallback. Pairing records are the only user-to-chat identity source.</p>
+<code>/pair</code>. The legacy dashboard-code pairing path is no longer active. Pairing
+records are the only user-to-chat identity source.</p>
 <h3 id="paper-visibility-and-user_library">Paper visibility and <code>user_library</code><a class="headerlink" href="#paper-visibility-and-user_library" title="Permanent link">&para;</a></h3>
 <p>The paper schema (see <code>db/init.sql</code>) separates provenance from authorization:</p>
 <ul>

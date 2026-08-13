@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../hardware-and-models/" class="md-nav__link">
         
   
@@ -2125,7 +2153,7 @@
 
 <h1 id="the-jarvis-research-command">The <code>jarvis-research</code> command<a class="headerlink" href="#the-jarvis-research-command" title="Permanent link">&para;</a></h1>
 <p><code>jarvis-research</code> is the lifecycle command for a JARVIS install. The installer
-(<code>./setup.sh</code> or <code>scripts/jarvis-setup.sh</code>) puts a small launcher on your PATH
+(<code>./setup.sh</code>) puts a small launcher on your PATH
 at <code>~/.local/bin/jarvis-research</code> and records your checkout as the managed
 install, so you can run day-to-day operations from any directory.</p>
 <p>The launcher carries no logic of its own: it finds your most recently installed
@@ -2314,6 +2342,11 @@ post-advance half explicitly, <code>jarvis-research update --resume &lt;tag&gt;<
 those remaining steps. The command refuses to resume if the checkout moved to
 an unexpected commit.</p>
 <h3 id="updating-from-a-release-before-v122">Updating from a release before v1.2.2<a class="headerlink" href="#updating-from-a-release-before-v122" title="Permanent link">&para;</a></h3>
+<p>Maintained in-place update support starts at v1.2.0. The procedure below is the
+required one-time bridge for v1.2.0 and v1.2.1. It is also preserved as a
+separate immutable legacy bridge from v1.1.3, but v1.1.3 is no longer in the
+maintained source matrix and a direct jump from v1.1.3 to the current release is
+not supported.</p>
 <p>Installations first set up before v1.1.3 need one extra step before the bootstrap
 below. v1.1.3 added an SMTP password to the deployment's Docker secrets, and no
 updater before v1.2.4 created that file, so <code>docker compose up</code> aborts with

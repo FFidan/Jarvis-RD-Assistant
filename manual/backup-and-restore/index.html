@@ -1042,6 +1042,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../hardware-and-models/" class="md-nav__link">
         
   
@@ -2274,8 +2302,9 @@ application with <code>jarvis-research update</code>, then retry the data restor
 use a database restore as an image rollback mechanism.</p>
 <hr />
 <h2 id="recovering-a-fresh-server-in-the-browser">Recovering a fresh server in the browser<a class="headerlink" href="#recovering-a-fresh-server-in-the-browser" title="Permanent link">&para;</a></h2>
-<p>You need one complete, signed off-site archive set and the matching backup
-encryption key. The set includes <code>manifest_&lt;timestamp&gt;.json</code> and
+<p>Portable fresh-host restore starts with a complete, signed archive set created
+by JARVIS v1.2.0 or later and the matching backup encryption key. The set
+includes <code>manifest_&lt;timestamp&gt;.json</code> and
 <code>manifest_&lt;timestamp&gt;.json.hmac</code>. JARVIS checks the key and archive set before
 it replaces data.</p>
 <ol>
@@ -2302,8 +2331,10 @@ it replaces data.</p>
 </ol>
 <!-- screenshot: Restore from another JARVIS section showing a staged backup set with Complete, Secrets, and Key ready badges -->
 
-<p>An unsigned off-site set is not accepted on a fresh host. After updating an old
-installation, download a new signed restore point for disaster recovery.</p>
+<p>An earlier or unsigned off-site set is not accepted as portable fresh-host
+recovery. After updating an old installation, create and download a new complete
+signed restore point for disaster recovery. Older unsigned points retain only
+the deliberate same-host path below.</p>
 <hr />
 <h2 id="headless-fresh-host-recovery">Headless fresh-host recovery<a class="headerlink" href="#headless-fresh-host-recovery" title="Permanent link">&para;</a></h2>
 <p>Use this fallback only when the new server cannot be reached with a browser.

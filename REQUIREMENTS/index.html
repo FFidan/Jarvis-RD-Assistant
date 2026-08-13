@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/hardware-and-models/" class="md-nav__link">
         
   
@@ -2251,7 +2279,7 @@ Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).</p>
 <h2 id="telegram">Telegram<a class="headerlink" href="#telegram" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Bot Token required — create via <a href="https://t.me/BotFather">@BotFather</a></li>
-<li>Pair each user via the web dashboard: go to <strong>Settings → Integrations → Telegram</strong>, copy the pairing token shown there, then send <code>/pair &lt;token&gt;</code> to your bot in Telegram. No Chat ID lookup is needed.</li>
+<li>Pair each user via the web dashboard: go to <strong>Settings → Integrations → Telegram</strong>, generate the pairing code shown there, then send <code>/pair &lt;code&gt;</code> to your bot in Telegram. No Chat ID lookup is needed.</li>
 <li><code>telegram_bot</code> service starts only when the <code>telegram</code> profile is enabled</li>
 <li><strong>Nudge/digest scheduling</strong> uses a single global timezone (<code>user.timezone</code> in Settings). Per-user timezone scheduling is a tracked future enhancement; in multi-user deployments all nudges fire on the single configured timezone.</li>
 </ul>
@@ -2342,7 +2370,7 @@ Observability variables (Langfuse): <a href="https://github.com/limitcycle-oss/j
 <h2 id="secrets-database">Secrets &amp; Database<a class="headerlink" href="#secrets-database" title="Permanent link">&para;</a></h2>
 <p>Host credentials use Docker Secrets; database-backed integration credentials
 are encrypted under <code>JARVIS_CONFIG_KEY</code>. Initialise host secrets with
-<code>bash scripts/init-secrets.sh</code> (or <code>scripts/jarvis-setup.sh</code>). Full table:
+<code>bash scripts/init-secrets.sh</code> or run <code>./setup.sh</code>. Full table:
 <a href="../DEPLOYMENT/">docs/DEPLOYMENT.md</a>.</p>
 <p>Fresh installs: <code>db/init.sql</code>. Migration history: <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md"><code>db/migrations/README.md</code></a>.</p>
 <h2 id="optional-reranker">Optional Reranker<a class="headerlink" href="#optional-reranker" title="Permanent link">&para;</a></h2>

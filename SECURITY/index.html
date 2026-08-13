@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/hardware-and-models/" class="md-nav__link">
         
   
@@ -2593,10 +2621,7 @@ calls. This header is only honored when all three guards pass:</p>
 <p>The bot resolves the <code>user_id</code> it injects from <code>telegram_user_pairings</code> — the
 durable record written when a user runs <code>/pair &lt;token&gt;</code> in the bot. This is
 the bot's sole identity mechanism; it does not rely on a fixed chat-id
-environment variable. The <code>TELEGRAM_CHAT_ID</code> environment variable is an inert
-tombstone — read once at startup only to choose a log line, never to address
-or authorize a message — and may be removed in a future cleanup. The
-<code>telegram.owner_chat_id</code> config key is active: the scheduler reads it to
+environment variable. The <code>telegram.owner_chat_id</code> config key is active: the scheduler reads it to
 resolve the deployment owner's Telegram chat ID for timezone-based nudge
 scheduling and job failure-alert delivery (see
 <code>services/telegram_bot/telegram_bot/scheduler.py</code>).</p>

@@ -1042,6 +1042,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../hardware-and-models/" class="md-nav__link">
         
   
@@ -1240,6 +1268,56 @@
     <span class="md-ellipsis">
       
         Admin: configuring the bot token — Settings → Integrations → Bot Token
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inline-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inline actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pulse-delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pulse delivery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shared-focus-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared focus sessions
       
     </span>
   </a>
@@ -1871,6 +1949,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inline-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inline actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pulse-delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pulse delivery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shared-focus-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared focus sessions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-pages" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1965,6 +2093,137 @@ an operator must enable the profile and start the service on the JARVIS host.</p
 <p>If the <code>telegram</code> Compose profile is disabled, the bot service does not start
 and pairing codes cannot be consumed. Re-run setup with Telegram selected, or
 enable the persisted profile on the host, before asking users to pair.</p>
+<hr />
+<h2 id="commands">Commands<a class="headerlink" href="#commands" title="Permanent link">&para;</a></h2>
+<p>The bot publishes the same command catalog to Telegram's autocomplete menu and
+to <code>/help</code>. Commands that read or change research data require a paired account.
+Arguments in square brackets are optional; arguments in angle brackets are
+required.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/papers [query]</code></td>
+<td>List recent papers, or search when a query is supplied</td>
+</tr>
+<tr>
+<td><code>/briefing</code></td>
+<td>Show the current briefing</td>
+</tr>
+<tr>
+<td><code>/next</code></td>
+<td>Show the first recommendation from the current Pulse deck</td>
+</tr>
+<tr>
+<td><code>/inbox</code></td>
+<td>Show unread saved papers for triage</td>
+</tr>
+<tr>
+<td><code>/pulse_now</code></td>
+<td>Queue Pulse generation now</td>
+</tr>
+<tr>
+<td><code>/review</code></td>
+<td>Start a flashcard review</td>
+</tr>
+<tr>
+<td><code>/stats</code></td>
+<td>Show learning statistics</td>
+</tr>
+<tr>
+<td><code>/cancel</code></td>
+<td>Cancel the active flashcard review; this conversation-only command is intentionally absent from Telegram's global menu</td>
+</tr>
+<tr>
+<td><code>/projects</code></td>
+<td>List active projects</td>
+</tr>
+<tr>
+<td><code>/newproject &lt;name&gt;</code></td>
+<td>Create a project</td>
+</tr>
+<tr>
+<td><code>/tasks</code></td>
+<td>List in-progress tasks</td>
+</tr>
+<tr>
+<td><code>/done &lt;id&gt;</code></td>
+<td>Mark a task complete</td>
+</tr>
+<tr>
+<td><code>/focus [minutes]</code></td>
+<td>Start a shared focus session; the default is 25 minutes and the accepted range is 1–480</td>
+</tr>
+<tr>
+<td><code>/pair &lt;code&gt;</code></td>
+<td>Pair this Telegram chat to a JARVIS account</td>
+</tr>
+<tr>
+<td><code>/unpair</code></td>
+<td>Unlink this chat from its account</td>
+</tr>
+<tr>
+<td><code>/whoami</code></td>
+<td>Show the paired account</td>
+</tr>
+<tr>
+<td><code>/help</code></td>
+<td>Show this command help in Telegram</td>
+</tr>
+<tr>
+<td><code>/start</code></td>
+<td>Show the welcome message, or pairing guidance for an unpaired chat</td>
+</tr>
+</tbody>
+</table>
+<p><code>/pulse_now</code> acknowledges that generation was queued; it does not claim the deck
+is already finished. The job appears in the Web jobs indicator for the same
+account, even when Telegram started it or it completes between browser polls.
+Use <code>/next</code> or open Pulse after the job completes.</p>
+<h3 id="inline-actions">Inline actions<a class="headerlink" href="#inline-actions" title="Permanent link">&para;</a></h3>
+<p>The buttons below appear only where the corresponding object and state make the
+action valid:</p>
+<ul>
+<li>Paper lists and detail views can offer Read more, Save, Star or Unstar,
+  Reading, Done, Skip, Trash, Restore, and Trash and reject.</li>
+<li>Pulse and discovered-paper cards can record positive or negative feedback.
+  Scheduled Pulse delivery uses Up, Down, and Save on each card.</li>
+<li>Project rows can open project details, and task rows can mark a task done.</li>
+<li>Review reminders and <code>/review</code> can start a review, reveal the answer, and rate
+  recall as Again, Hard, Good, or Easy.</li>
+</ul>
+<p>All actions are scoped to the paired JARVIS user. A button reports a failure
+instead of silently claiming that the backend change succeeded.</p>
+<hr />
+<h2 id="pulse-delivery">Pulse delivery<a class="headerlink" href="#pulse-delivery" title="Permanent link">&para;</a></h2>
+<p>Telegram shows the same ranked Pulse deck as the Web interface, limited to the
+first five cards for mobile readability. It labels whether the deck is current
+or from an earlier date, reports its age when earlier, and states when ranking
+used reduced signals. Each card reports its available evidence state: verified,
+a High/Medium/Low confidence label, unverified, or not reported. These are
+evidence-availability labels, not independent fact checking.</p>
+<p>The five-card limit does not change ranking or create a separate Telegram deck.
+The same paper can appear on another day when source results, relevance, and
+feedback are unchanged; daily novelty is not guaranteed.</p>
+<hr />
+<h2 id="shared-focus-sessions">Shared focus sessions<a class="headerlink" href="#shared-focus-sessions" title="Permanent link">&para;</a></h2>
+<p><code>/focus [minutes]</code> starts the same per-user focus interval shown by the Web
+TopBar timer. The Web interface observes Telegram starts and can pause, resume,
+or stop that session. Starting another interval while one is active is refused,
+and completion time is recorded once even if both clients observe it.</p>
+<p>While the interval is active or paused, JARVIS suppresses scheduled morning
+briefings, paper digests, review reminders, deadline warnings, Pulse delivery,
+and author alerts for that user. The focus-completion notice and operator-error
+messages remain available. If the bot cannot confirm focus state, scheduled
+delivery stays suppressed rather than breaking the pause promise.</p>
+<p>Work and break durations, break cycles, and browser notification permission are
+device-local preferences. The active focus interval and its accounting are
+shared server state.</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
 <ul>

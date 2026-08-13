@@ -1205,6 +1205,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../hardware-and-models/" class="md-nav__link">
         
   
@@ -1999,6 +2027,10 @@
 <h2 id="the-pulse-deck">The Pulse deck<a class="headerlink" href="#the-pulse-deck" title="Permanent link">&para;</a></h2>
 <h3 id="pulsedeck">PulseDeck<a class="headerlink" href="#pulsedeck" title="Permanent link">&para;</a></h3>
 <p>The deck is a collection of <strong>PulseCards</strong>, each representing a recommended paper. Cards are generated in the background by a scheduled job (configured in Settings → Automation or Settings → Pulse) and are available when you open the page. If no deck has been generated yet, a prompt invites you to generate one manually.</p>
+<p>The optional Telegram delivery reads this same ranked deck and shows its first
+five cards for a shorter mobile presentation. It does not run a second ranking
+policy. A paper can appear again on another day when relevance, source results,
+and your feedback are unchanged; Pulse does not promise daily novelty.</p>
 <h3 id="pulsecard">PulseCard<a class="headerlink" href="#pulsecard" title="Permanent link">&para;</a></h3>
 <p>Each card in the deck shows:</p>
 <ul>
@@ -2011,6 +2043,11 @@
 <p>Clicking the <strong>Why?</strong> indicator on a card opens the <strong>WhyPopover</strong>, which explains the relevance score for that card — which of your research topics matched, what signals drove the recommendation (e.g. topic keyword overlap, citation proximity, past ratings), and the numerical relevance score.</p>
 <h3 id="stalebadge">StaleBadge<a class="headerlink" href="#stalebadge" title="Permanent link">&para;</a></h3>
 <p>If today's deck has not been regenerated and the one shown is from an earlier day, a <strong>StaleBadge</strong> appears in the deck header (not on individual cards) to signal that the recommendations may not reflect your most recent reading activity or topic configuration. Clicking it opens a sheet with per-source diagnostics and a <strong>Generate now</strong> button to request a fresh deck.</p>
+<p>Telegram carries the same distinction in plain text: it identifies a current or
+earlier deck and its age, states when ranking used reduced signals, and labels
+each card's evidence check as verified, a reported confidence level,
+unverified, or not reported. These labels describe available evidence; they do
+not independently establish that a paper's claims are correct.</p>
 <hr />
 <h2 id="generating-a-new-deck">Generating a new deck<a class="headerlink" href="#generating-a-new-deck" title="Permanent link">&para;</a></h2>
 <p>Click the <strong>Generate new deck</strong> button to request a fresh Pulse deck. Generation runs as a <strong>background job</strong>; the page shows a progress indicator while the job is running. Depending on the number of papers in your library and the complexity of your topics, generation may take a few seconds to a minute.</p>

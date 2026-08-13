@@ -16,7 +16,7 @@
         <link rel="prev" href="../analytics/">
       
       
-        <link rel="next" href="../hardware-and-models/">
+        <link rel="next" href="../changing-embedding-model/">
       
       
         
@@ -1353,6 +1353,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#automatic-sync-schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic sync schedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#verify-zotero-works" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1438,6 +1449,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -2378,6 +2417,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#automatic-sync-schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic sync schedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#verify-zotero-works" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2511,7 +2561,10 @@
 <ul>
 <li><strong>Main model (smart)</strong> — writes your summaries, cards, and Ask answers.</li>
 <li><strong>Quick model (fast)</strong> — scores and triages papers.</li>
-<li><strong>Embedding model (embed)</strong> — powers search; it is fixed, and changing it requires re-indexing your library.</li>
+<li><strong>Embedding model (embed)</strong> — powers search and is dimension-locked to its
+  Qdrant collection. It is not changed with the Main or Quick picker; follow
+  <a href="../changing-embedding-model/">Changing the embedding model</a> for the required
+  backup, benchmark, and re-embedding workflow.</li>
 <li><strong>Reading window (num_ctx)</strong> — how much of each paper the AI reads at once.</li>
 </ul>
 <p>Your choice applies automatically — there is no separate "save and restart" step. Operator-level tuning knobs (such as the reading window and the thinking toggle) sit behind a per-model <strong>Configure</strong> disclosure so the everyday controls stay uncluttered.</p>
@@ -2522,7 +2575,7 @@
 <p>If a model card shows a <strong>pending — applying automatically</strong> badge, your choice was saved but the model service is temporarily unavailable (for example, it is still starting up or its database is unreachable). JARVIS keeps your selection and retries delivery automatically — roughly every 30 seconds — and applies it the moment the model service recovers, with no restart or further action needed from you. In the meantime, summaries and answers continue to use the previously active model, so nothing silently breaks. A badge that persists for many minutes means the model service is stuck unhealthy; check the Health indicators.</p>
 <h3 id="providers-routing">Providers &amp; Routing<a class="headerlink" href="#providers-routing" title="Permanent link">&para;</a></h3>
 <p>Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses <strong>Add cloud provider</strong> for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.</p>
-<p>Provider settings are deployment-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.</p>
+<p>Provider settings are deployment-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and a blank save does not delete an existing key. A stored key or endpoint can also be removed rather than only overwritten; removal is refused while a model route still depends on that provider, and it is recorded in the audit log distinctly from a replacement. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.</p>
 <p>Adding a key does not make cloud the default. It only makes matching cloud models assignable in the <strong>Main model (smart)</strong> and <strong>Quick model (fast)</strong> controls above. Leave all provider keys blank to keep the deployment local-only.</p>
 <h3 id="advanced-backend-hardware-diagnostics">Advanced: backend &amp; hardware diagnostics<a class="headerlink" href="#advanced-backend-hardware-diagnostics" title="Permanent link">&para;</a></h3>
 <p>The <strong>AI models</strong> page is the authoritative place to assign the <strong>Main model (smart)</strong> and <strong>Quick model (fast)</strong> roles. The advanced diagnostics panel below those role cards is read-only for routing: it explains the current hardware/runtime state and points you back to the role cards when a model assignment should change.</p>
@@ -2570,7 +2623,12 @@ in <code>.env</code> or <code>docker inspect</code> output.</p>
 </ul>
 <p>Repeated negative feedback for a topic dampens its positive similarity contribution to future recommendations. It never increases a negative-similarity score.</p>
 <h3 id="timer">Timer<a class="headerlink" href="#timer" title="Permanent link">&para;</a></h3>
-<p>Configure the Pomodoro-style session timer available in the TopBar: work interval, break interval, and long-break interval.</p>
+<p>Configure the Pomodoro-style timer available in the TopBar: work interval,
+break interval, and long-break interval. Those preferences and break cycles are
+local to this browser. The active focus interval itself is stored per user, so
+starting it from the Web interface or Telegram shows the same remaining session
+in the other client. Pause, resume, stop, and completed-time accounting use that
+shared server state.</p>
 <h3 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h3>
 <p>Configure the Langfuse observability integration for tracing LLM calls. This setting is <strong>hardware- and opt-in gated</strong> — it requires a running Langfuse instance and is only active when explicitly enabled.</p>
 <h3 id="sign-in-method">Sign-in Method<a class="headerlink" href="#sign-in-method" title="Permanent link">&para;</a></h3>
@@ -2605,12 +2663,30 @@ visibility</a>.</p>
 <li><strong>Personal library</strong> — your own Zotero account. Most people want this.</li>
 <li><strong>Group library</strong> — a shared Zotero group. You will also need the group's <strong>numeric Group ID</strong> (the number in the group URL, e.g. <code>zotero.org/groups/987654/...</code>).</li>
 </ul>
-<p>Sending a paper to Zotero pushes its <strong>citation metadata</strong> (title, authors, DOI, abstract). The PDF file itself is <strong>not attached</strong>.</p>
+<p>Each JARVIS account uses one active Zotero library at a time. Changing the User
+ID, Library Type, or Group ID disconnects the item and collection references
+from the previous library. It does not remove local papers, projects, notes, or
+analysis history. The next export creates or finds the corresponding objects in
+the newly selected library.</p>
+<p>Sending a paper to Zotero pushes its <strong>citation metadata</strong> (title, authors, DOI,
+abstract). The PDF file itself is <strong>not attached</strong>. The item is filed into a
+Zotero collection matching each JARVIS project linked to the paper. Existing
+items found by DOI are filed into those collections instead of duplicated.</p>
+<h4 id="automatic-sync-schedule">Automatic sync schedule<a class="headerlink" href="#automatic-sync-schedule" title="Permanent link">&para;</a></h4>
+<p>Turn on <strong>Automatically import new papers clipped into Zotero</strong> to have JARVIS
+pull new items from your library on a schedule. Choose how often from plain
+options — hourly, every few hours, daily at a time, or weekly on a day. For a
+schedule the options cannot express, open <strong>Advanced</strong> and enter a five-field
+cron expression directly. A schedule that would run more often than every
+fifteen minutes is refused.</p>
 <h4 id="verify-zotero-works">Verify Zotero works<a class="headerlink" href="#verify-zotero-works" title="Permanent link">&para;</a></h4>
 <ol>
 <li>Enter your <strong>API Key</strong> and <strong>User ID</strong> (and <strong>Group ID</strong> for a group library).</li>
 <li>Click <strong>Test connection</strong>. A green "Connected" message confirms the credentials are valid; a red message names the problem (wrong key, missing user ID, or unreachable Group ID).</li>
-<li>Open any paper's <a href="../paper-detail/">Paper Detail</a> page and click <strong>Send to Zotero</strong>. The item then appears in your Zotero library, and the panel offers a <strong>View in Zotero</strong> link.</li>
+<li>Link a paper to a project, open its <a href="../paper-detail/">Paper Detail</a> page, and
+   click <strong>Send to Zotero</strong>. The job indicator shows the export until it
+   finishes. The item then appears in a collection named after the project, and
+   the panel offers a <strong>View in Zotero</strong> link.</li>
 </ol>
 <hr />
 <h2 id="vi-research">§VI — Research<a class="headerlink" href="#vi-research" title="Permanent link">&para;</a></h2>

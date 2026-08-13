@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/hardware-and-models/" class="md-nav__link">
         
   
@@ -1721,7 +1749,7 @@
 <p>This directory is the ledger for incremental schema migrations applied on top of <code>db/init.sql</code>.</p>
 <p>The repository's squashed baseline schema version is <code>101</code>; it is fully captured
 in <code>db/init.sql</code>. A fresh database starts at that baseline and then applies the
-incremental files below. The current schema version is <code>111</code>, also recorded in
+incremental files below. The current schema version is <code>113</code>, also recorded in
 <code>db/SCHEMA_VERSION</code>.</p>
 <p>New migrations land here numbered sequentially (<code>0102_&lt;descriptive&gt;.sql</code> and up)
 and are applied via <code>run_migrations</code>
@@ -1784,6 +1812,16 @@ and are applied via <code>run_migrations</code>
 <td><code>0111</code></td>
 <td><code>0111_full_digest_local_ids.sql</code></td>
 <td>Identify locally uploaded papers by their full content digest, deriving the new identifier from the stored source URL where the short form is unambiguous.</td>
+</tr>
+<tr>
+<td><code>0112</code></td>
+<td><code>0112_durable_focus_sessions.sql</code></td>
+<td>Store one authoritative active or paused focus interval per user so Web and Telegram share transitions and once-only accounting.</td>
+</tr>
+<tr>
+<td><code>0113</code></td>
+<td><code>0113_restore_zotero_project_collections.sql</code></td>
+<td>Restore the per-project Zotero collection cache used by project-linked citation exports.</td>
 </tr>
 </tbody>
 </table>

@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/hardware-and-models/" class="md-nav__link">
         
   
@@ -2152,6 +2180,15 @@ interpreter, and has no import target. This proves the dependency set only.
 That the containers actually start, read their configuration, and report
 healthy is proven by the cold-install and upgrade checks below, before any
 stable tag exists.</p>
+<p>Each paper-ingestion leg also converts a sample PDF inside the image it just
+built, which loads the compiled vision stack that an import cannot reach. Every
+architecture runs it, because an architecture-specific compiled dependency is
+exactly what it exists to catch. The document pipeline downloads its layout and
+OCR models the first time it converts, so this step needs the model host to be
+reachable while the release runs and takes noticeably longer than the rest of
+the leg. A failure naming a download or the step timeout is an infrastructure
+condition, like a rate-limited registry: re-dispatch the run rather than looking
+for a regression in the diff.</p>
 <p>Only after that run succeeds, use the SHA images for the credential-free install
 and supported upgrade checks:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>first-run-smoke.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span><span class="se">\</span>
@@ -2188,11 +2225,6 @@ identical re-dispatches supersede each other, while runs differing in <code>leg<
 </thead>
 <tbody>
 <tr>
-<td><code>v1.1.3</code></td>
-<td><code>bootstrap</code></td>
-<td><code>current-merge-pending</code></td>
-</tr>
-<tr>
 <td><code>v1.2.0</code></td>
 <td><code>bootstrap</code></td>
 <td><code>current-merge-pending</code></td>
@@ -2209,6 +2241,11 @@ identical re-dispatches supersede each other, while runs differing in <code>leg<
 </tr>
 <tr>
 <td><code>v1.2.3</code></td>
+<td><code>bootstrap</code></td>
+<td><code>current-merge-pending</code></td>
+</tr>
+<tr>
+<td><code>v1.2.4</code></td>
 <td><code>direct</code></td>
 <td><code>current-merge-pending</code></td>
 </tr>
@@ -2224,6 +2261,13 @@ supported source enters through the bootstrap. It names explicit tags rather tha
 deriving them, so refresh it while preparing each release — the release being
 published becomes the new <code>direct</code> row, the previous <code>direct</code> row becomes a
 <code>bootstrap</code> row, and any source that has left support is dropped.</p>
+<p>These checks enforce three separate compatibility floors. Maintained in-place
+updates start at v1.2.0. The immutable v1.2.2 bootstrap remains documented as a
+separate legacy bridge from v1.1.3, but v1.1.3 is not a maintained source row and
+direct v1.1.3-to-current updates are not supported. Portable fresh-host restore
+starts with complete, signed backup sets created by v1.2.0 or later. Earlier or
+unsigned sets retain only the constrained same-host recovery paths described in
+the backup guide; they are not universally portable.</p>
 <p>The supported window is deliberate: the <code>bootstrap</code> rows reach back at most
 four releases behind the <code>direct</code> row. When adding a release to the table
 would leave more than four <code>bootstrap</code> rows, the oldest row leaves support
@@ -2337,16 +2381,30 @@ for an advisory that has none. Raising a floor means raising it in every manifes
 that declares it — the root <code>pyproject.toml</code>, <code>libs/jarvis_common/pyproject.toml</code>,
 and each service's <code>requirements.txt</code> — then re-locking both projects and
 regenerating the lock-derived pins with <code>scripts/export-service-requirements.sh</code>.</p>
-<p>Reproduce all three scans locally before pushing a release branch and again
-before tagging:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">for</span><span class="w"> </span>c<span class="w"> </span><span class="k">in</span><span class="w"> </span>services/*/constraints.txt<span class="p">;</span><span class="w"> </span><span class="k">do</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>uvx<span class="w"> </span>pip-audit<span class="w"> </span>--no-deps<span class="w"> </span>--disable-pip<span class="w"> </span>-r<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$c</span><span class="s2">&quot;</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">done</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>python3<span class="w"> </span>scripts/check_npm_audit.py
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>-o<span class="w"> </span>/tmp/osv-scanner<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span>https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>chmod<span class="w"> </span>+x<span class="w"> </span>/tmp/osv-scanner<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>/tmp/osv-scanner<span class="w"> </span>scan<span class="w"> </span>--recursive<span class="w"> </span>.
+<p>The GHCR workflow scans each verification manifest as well and prints the result
+to the job summary. That step is a gate: a critical finding that already has a
+fixed version fails the verification job, so the digest carrying it can never be
+promoted to a stable tag. Findings without a released fix are excluded, because
+a gate no rebuild can clear would only teach everyone to override it.</p>
+<p>Failing the gate costs a whole verification run. It reads the same live advisory
+database, and the run's digest receipts are the only artifacts a stable tag can
+promote, so an advisory published minutes earlier discards an otherwise sound run
+and forces a full rebuild. That trade is deliberate: no release is published over
+a severe defect that rebuilding would have fixed. Handle a failure like any other
+dependency finding — raise the floor, re-verify, and read the report in the job
+summary, which is published whether the gate passes or fails. Lower severities
+stay with the branch-level scans above, which run where a fix can still be
+committed.</p>
+<p>Reproduce the locally runnable dependency and secret scans before pushing a
+release branch and again before tagging:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>make<span class="w"> </span>security-scan
 </code></pre></div>
+<p>The target pins the same osv-scanner and gitleaks artifacts as the hosted
+workflow, keeps them outside the repository, and verifies both downloaded
+artifacts and executable bytes on every run. It also runs the three pinned
+Python dependency inputs and the checked npm audit policy. It supports Linux
+x86_64; on another workstation, use the hosted Security workflow. A local pass
+does not replace the hosted Security aggregate or CodeQL evidence.</p>
 <h2 id="changelog-generation">Changelog Generation<a class="headerlink" href="#changelog-generation" title="Permanent link">&para;</a></h2>
 <p><code>CHANGELOG.md</code> is written by hand, in user-facing prose grouped under <code>### Added</code>,
 <code>### Fixed</code>, and <code>### Changed</code>. <a href="https://github.com/orhun/git-cliff">git-cliff</a>,

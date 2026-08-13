@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/hardware-and-models/" class="md-nav__link">
         
   
@@ -2987,6 +3015,13 @@ Tailscale handles the browser sign-in. JARVIS never handles those credentials.</
 named HTTPS address for JARVIS's exact health marker. A missing client,
 cancelled sign-in, or failed Serve command leaves localhost working but exits
 nonzero so an unfinished private route is not reported as complete.</p>
+<p>Installations configured before v1.2.0 may still have HTTPS 443 pointing at
+the old raw listener on port 3001. <code>jarvis-research doctor</code> and the update
+summary inspect Serve state without changing it. When the complete node-wide
+configuration is a single 443 route to that legacy port, they print a targeted
+retarget command. Run it only after confirming that the existing route belongs
+to this JARVIS installation; shared or custom Serve configurations require
+manual inspection and are never reset automatically.</p>
 <p><code>--public-origin https://&lt;host&gt;</code> remains the non-interactive/manual adapter for
 an HTTPS proxy that the operator already configured. Setup does not install or
 configure that proxy, but it verifies the exact JARVIS health marker and exits
@@ -3451,9 +3486,10 @@ not a Caddy setting.</p>
 <p><code>setup.sh</code> supports <code>--non-interactive</code> for CI pipelines and cloud-init scripts. Run <code>./setup.sh --help</code> for the full flag reference.</p>
 <p>Use <code>./setup.sh --non-interactive</code> for a complete unattended installation: it
 owns access-mode selection, prerequisites, TLS profiles, and route verification.
-<code>scripts/jarvis-setup.sh</code> is a local-only compatibility bootstrap for older CI
-jobs. It serves plain HTTP on localhost, does not configure remote access or TLS,
-and expects host prerequisites to be present.</p>
+<code>scripts/jarvis-setup.sh</code> is a deprecated compatibility forwarder for older
+local-development automation. It delegates to the same <code>setup.sh</code>
+development-profile path and accepts only <code>--skip-disk-check</code>; new automation
+should call <code>setup.sh</code> directly.</p>
 <h3 id="pre-flight-check">Pre-flight check<a class="headerlink" href="#pre-flight-check" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>./setup.sh<span class="w"> </span>--check
 </code></pre></div>
@@ -3526,25 +3562,26 @@ dashboard URL does not. Once signed in as an admin, invite additional users at
 <code>https://jarvis.example.com/admin/users</code>.</p>
 <hr />
 <h2 id="update-workflow">Update Workflow<a class="headerlink" href="#update-workflow" title="Permanent link">&para;</a></h2>
-<p>Installations running v1.2.2 or later use the lifecycle command:</p>
+<p>Maintained in-place update support starts at v1.2.0. Installations running
+v1.2.2 or later use the lifecycle command:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>jarvis-research<span class="w"> </span>update
 </code></pre></div>
 <p>It verifies the target release, protects data-changing migrations with a signed
 restore point, and can resume an interrupted run. The <a href="../manual/cli/#how-update-works">command-line
 guide</a> is the canonical update runbook.</p>
-<p>An installation running v1.1.3, v1.2.0 or v1.2.1 needs the <a href="../manual/cli/#updating-from-a-release-before-v122">v1.2.2 update
+<p>A maintained installation running v1.2.0 or v1.2.1 needs the <a href="../manual/cli/#updating-from-a-release-before-v122">v1.2.2 update
 bootstrap</a> once. It loads the
 v1.2.2 lifecycle command before the migration check so the required signed
 restore point includes both databases, uploaded PDFs and the data-coupled
-secrets. The same guide describes the constrained manual fallback and rollback
-rules.</p>
+secrets. The same immutable bootstrap remains available as a separate legacy
+bridge from v1.1.3, which is outside the maintained update window. The command
+guide describes that bridge, the constrained manual fallback, and rollback
+rules; direct v1.1.3-to-current update is not promised.</p>
 <h3 id="upgrade-notes">Upgrade notes<a class="headerlink" href="#upgrade-notes" title="Permanent link">&para;</a></h3>
 <p><strong>Telegram pairing (breaking change).</strong> The Telegram bot now identifies chats
-exclusively via the <code>/pair</code> token flow. To pair: open the dashboard → Settings
-→ Integrations → Telegram, copy the one-time token, and send <code>/pair &lt;token&gt;</code>
-to the bot. The legacy <code>TELEGRAM_CHAT_ID</code> environment variable and the
-dashboard-code pairing path (<code>/start PAIR_&lt;code&gt;</code>) no longer work — any
-existing <code>TELEGRAM_CHAT_ID</code> value can be removed from <code>.env</code> after pairing.</p>
+exclusively via the <code>/pair</code> code flow. To pair: open the dashboard → Settings
+→ Integrations → Telegram, generate a one-time code, and send <code>/pair &lt;code&gt;</code>
+to the bot. The retired <code>/start PAIR_&lt;code&gt;</code> pairing path no longer works.</p>
 <p><strong>Telegram owner-override network.</strong> The bot calls service endpoints with
 <code>X-Owner-User-Id</code> to make per-user requests, trusted only from
 <code>OWNER_OVERRIDE_ALLOWED_CIDRS</code>. The bundled compose stack sets this
@@ -3670,6 +3707,11 @@ reconciliation. Use the linked runbook even when the web app cannot start.</p>
 <td>Re-run setup, accept <strong>Overwrite</strong>, and choose LAN diagnostics; if it still fails, allow port 3001 only on the trusted LAN interface.</td>
 </tr>
 <tr>
+<td><code>jarvis-research doctor</code> reports a legacy Tailscale target</td>
+<td>A pre-v1.2.0 Serve route may still target raw port 3001 instead of trusted port 3003</td>
+<td>Confirm that the node-wide HTTPS 443 route belongs to this installation, then run the exact targeted command printed by doctor. Do not reset shared Serve state.</td>
+</tr>
+<tr>
 <td><code>setup.sh</code> Cloudflare Tunnel mode stops at the Zero-Trust warning</td>
 <td>You have not acknowledged that a tunnel exposes the instance</td>
 <td>Configure your Cloudflare Zero-Trust access policy first, then type <code>I understand</code>. For unattended setup, use <code>--profile=tunnel</code> with <code>--tunnel-ack</code>, <code>--tunnel-hostname</code>, and <code>--tunnel-token-file</code>. The old environment hand-edit is no longer used.</td>
@@ -3692,12 +3734,12 @@ reconciliation. Use the linked runbook even when the web app cannot start.</p>
 <tr>
 <td>Embedding dimension mismatch on startup</td>
 <td>Qdrant collection dimension doesn't match the active embedding model</td>
-<td>Set <code>EMBEDDING_MODEL_NAME=qwen3-embedding:4b</code> and <code>EMBEDDING_DIMENSION=2560</code>, pull the model, then run <code>REEMBED_RECREATE_COLLECTION=true REEMBED_SNAPSHOT_CONFIRMED=true python -m scripts.reembed</code> if the collection dimension is still wrong.</td>
+<td>Stop and follow <a href="../manual/changing-embedding-model/">Changing the embedding model</a>. It covers the required snapshot, exact configuration alignment, deliberate collection recreation, and verification.</td>
 </tr>
 <tr>
 <td>Re-embedding too slow</td>
 <td><code>scripts/reembed.py</code> defaults to the HTTP-bound LiteLLM path</td>
-<td>Switch to local backend: <code>REEMBED_BACKEND=local python -m scripts.reembed</code> (requires sentence-transformers). Benchmark first with <code>REEMBED_BENCHMARK=true</code>.</td>
+<td>Benchmark before migrating and use the exact recovery guidance in <a href="../manual/changing-embedding-model/">Changing the embedding model</a>. The local backend requires sentence-transformers.</td>
 </tr>
 <tr>
 <td><code>password authentication failed for user "jarvis"</code> after changing <code>POSTGRES_PASSWORD</code></td>

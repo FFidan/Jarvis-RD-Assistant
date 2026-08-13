@@ -1037,6 +1037,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/changing-embedding-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changing the embedding model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/hardware-and-models/" class="md-nav__link">
         
   
@@ -1740,34 +1768,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#frontend-supply-chain-advisories" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frontend supply-chain advisories
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Frontend supply-chain advisories">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#react-router-rsc-mode-csrf-ghsa-qwww-vcr4-c8h2-not-reachable" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        react-router RSC-mode CSRF (GHSA-qwww-vcr4-c8h2) — not reachable
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#further-known-residual-risks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2435,34 +2435,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#frontend-supply-chain-advisories" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frontend supply-chain advisories
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Frontend supply-chain advisories">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#react-router-rsc-mode-csrf-ghsa-qwww-vcr4-c8h2-not-reachable" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        react-router RSC-mode CSRF (GHSA-qwww-vcr4-c8h2) — not reachable
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#further-known-residual-risks" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2726,13 +2698,6 @@ toolchain is updated to a version with a known CVE.</p>
 <li><strong><code>requirements-optional.txt</code> floor-pins are informational only.</strong> The hashed security boundary lives in <code>constraints-optional.txt</code>, pinned with sha256 hashes verified at install (<code>pip install --require-hashes</code>). <code>requirements-optional.txt</code> is auto-generated from <code>pyproject.toml</code> and may not be hand-edited (the <code>check-python-deps</code> pre-commit hook enforces parity).</li>
 <li><strong>Vector <code>docker.sock</code> access; <code>cap_drop: [ALL]</code> is defense-in-depth only.</strong> The vector log shipper mounts <code>/var/run/docker.sock:ro</code>; <code>cap_drop: [ALL]</code> removes Linux capabilities but socket access is governed by uid/gid, so vector can still <code>docker inspect</code> other containers. The proper fix is structural (swap <code>docker.sock</code> for a syslog/fluent-bit forwarder, or run vector outside the docker network) — deferred as it would touch the logging architecture. Reopen when a log-routing redesign is in scope.</li>
 </ul>
-<hr />
-<h2 id="frontend-supply-chain-advisories">Frontend supply-chain advisories<a class="headerlink" href="#frontend-supply-chain-advisories" title="Permanent link">&para;</a></h2>
-<h3 id="react-router-rsc-mode-csrf-ghsa-qwww-vcr4-c8h2-not-reachable">react-router RSC-mode CSRF (GHSA-qwww-vcr4-c8h2) — not reachable<a class="headerlink" href="#react-router-rsc-mode-csrf-ghsa-qwww-vcr4-c8h2-not-reachable" title="Permanent link">&para;</a></h3>
-<p><strong>Finding:</strong> <code>osv-scanner</code> / <code>npm audit</code> flag <code>react-router</code> 7.18.2 (pulled by <code>react-router-dom</code>) under GHSA-qwww-vcr4-c8h2 — a CSRF bypass that can execute a router action before a 400 response is returned, in React Router's RSC (React Server Components) mode.</p>
-<p><strong>Why accepted:</strong> the frontend is a client-only SPA that uses <code>react-router-dom</code> declarative routing exclusively. The RSC packages, server-action pipeline, and the APIs the advisory concerns are never imported or configured, so the vulnerable code path is unreachable in this deployment. No compatible fix is installable either: the advisory is patched in react-router core 8.3.0, but <code>react-router-dom</code> — the app's actual routing dependency — has published no v8 release, so it cannot pull the patched core, and downgrading below 7.12.0 drops required features. The suppression is scoped to this one advisory id in <code>frontend/osv-scanner.toml</code>.</p>
-<p><strong>Reopen / removal trigger:</strong> remove the suppression and this entry when the frontend adopts react-router &gt;= 8.3.0 (or a back-ported patched v7 release appears), or immediately if the app ever introduces React Router RSC mode or server actions. Suppression review date: 2026-10-15.</p>
-<p><em>The companion brace-expansion advisory (GHSA-mh99-v99m-4gvg), previously suppressed here, was resolved in v1.2.3 by pinning the transitive dev-only v1 line to 1.1.17; its suppression is removed.</em></p>
 <hr />
 <h2 id="further-known-residual-risks">Further known residual risks<a class="headerlink" href="#further-known-residual-risks" title="Permanent link">&para;</a></h2>
 <h3 id="apipapersprocess_batch-uses-an-underscore-in-the-path"><code>/api/papers/process_batch</code> uses an underscore in the path<a class="headerlink" href="#apipapersprocess_batch-uses-an-underscore-in-the-path" title="Permanent link">&para;</a></h3>
