@@ -1564,6 +1564,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#outbound-connection-pinning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outbound Connection Pinning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#cloud-llm-provider-settings-at-rest" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2139,6 +2150,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#outbound-connection-pinning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outbound Connection Pinning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#cloud-llm-provider-settings-at-rest" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2578,6 +2600,15 @@ explicitly set in the environment. An explicit env var always wins.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="outbound-connection-pinning">Outbound Connection Pinning<a class="headerlink" href="#outbound-connection-pinning" title="Permanent link">&para;</a></h3>
+<p>Requests that leave the deployment — PDF downloads, custom model providers,
+Better BibTeX, SMTP, and LiteLLM custom-provider traffic — connect to the
+address that the guard above validated, instead of resolving the name a second
+time when the socket opens. This removes the window between the check and the
+connection, in which a name could resolve to an allowed address for the check
+and a different one for the request. Certificate and hostname verification are
+unchanged, so a pinned connection still presents and verifies the original
+hostname.</p>
 <h3 id="cloud-llm-provider-settings-at-rest">Cloud LLM Provider Settings at Rest<a class="headerlink" href="#cloud-llm-provider-settings-at-rest" title="Permanent link">&para;</a></h3>
 <p>Cloud provider settings entered in Settings are deployment-wide admin settings.
 Existing providers keep their backward-compatible flat keys (<code>llm.anthropic.api_key</code>,
