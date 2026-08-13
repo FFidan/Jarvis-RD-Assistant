@@ -101,8 +101,8 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     token = args[0].strip() if args else ""
     if not token:
         await message.reply_text(
-            "Usage: <code>/pair &lt;token&gt;</code>\n\n"
-            "Generate a token from the JARVIS web dashboard under "
+            "Usage: <code>/pair &lt;code&gt;</code>\n\n"
+            "Generate a code from the JARVIS web dashboard under "
             "Settings → Integrations → Telegram.",
             parse_mode="HTML",
         )
@@ -144,7 +144,7 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         token,
                     )
                     await message.reply_text(
-                        "Pairing token expired (15-minute window).\n"
+                        "Pairing code expired (15-minute window).\n"
                         "Please generate a new one from Settings → Integrations."
                     )
                     return
@@ -302,7 +302,7 @@ async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text(
             "This chat is <b>not paired</b> to a JARVIS account.\n\n"
             "Generate a pairing code from Settings → Integrations and run "
-            "<code>/pair &lt;token&gt;</code>.",
+            "<code>/pair &lt;code&gt;</code>.",
             parse_mode="HTML",
         )
         return

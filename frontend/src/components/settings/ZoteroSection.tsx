@@ -363,7 +363,7 @@ export function ZoteroSection() {
             <div>
               <Label htmlFor="zotero-poll-enabled" className="text-sm font-medium">Enable Zotero → JARVIS sync</Label>
               <p className="text-xs text-muted-foreground">
-                Automatically import new papers clipped into Zotero into JARVIS (checked hourly).
+                Automatically import new papers clipped into Zotero into JARVIS on the schedule below.
               </p>
             </div>
             <Switch

@@ -87,7 +87,7 @@ function TokenDisplay({ token, expiresAt, onExpired }: {
     <div className="rounded-md border border-hair bg-muted/30 p-4 space-y-3">
       <div>
         <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-          Pairing token
+          Pairing code
         </p>
         <div className="flex items-center gap-2">
           <code className={`font-mono text-lg tracking-widest select-all ${isExpired ? 'text-muted-foreground line-through' : ''}`}>
@@ -99,7 +99,7 @@ function TokenDisplay({ token, expiresAt, onExpired }: {
             className="h-7 w-7 shrink-0"
             onClick={handleCopy}
             disabled={isExpired}
-            title="Copy token"
+            title="Copy code"
           >
             <Copy className="h-3.5 w-3.5" />
           </Button>
@@ -115,7 +115,7 @@ function TokenDisplay({ token, expiresAt, onExpired }: {
       </p>
       <div className="flex items-center gap-2 text-xs">
         {isExpired ? (
-          <span className="text-destructive">Token expired — generate a new one.</span>
+          <span className="text-destructive">Code expired — generate a new one.</span>
         ) : (
           <span className="text-muted-foreground">
             Expires in{' '}
