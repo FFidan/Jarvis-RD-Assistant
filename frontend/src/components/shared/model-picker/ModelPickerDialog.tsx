@@ -122,6 +122,16 @@ export function ModelPickerDialog({
     }),
     [models, providerLists],
   );
+  // One pass over the catalogue rather than one per source rail entry, which on
+  // a large catalogue is the difference between a linear and a quadratic render.
+  const countsBySource = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of models) {
+      const key = modelSource(entry);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [models]);
   const upstreams = useMemo(
     () => Array.from(new Set(models.map(openRouterUpstream).filter((item): item is string => item != null))).sort(),
     [models],
@@ -201,7 +211,7 @@ export function ModelPickerDialog({
               </button>
             )}
             {sources.map((item) => {
-              const count = models.filter((entry) => modelSource(entry) === item).length;
+              const count = countsBySource.get(item) ?? 0;
               return (
                 <button
                   key={item}
@@ -233,9 +243,8 @@ export function ModelPickerDialog({
               </div>
               <div className="flex flex-wrap gap-2">
                 {source === 'openrouter' && upstreams.length > 0 && (
+                  <>
                   <label className="sr-only" htmlFor={`model-upstream-${role}`}>Upstream provider</label>
-                )}
-                {source === 'openrouter' && upstreams.length > 0 && (
                   <select
                     id={`model-upstream-${role}`}
                     value={upstream}
@@ -245,6 +254,7 @@ export function ModelPickerDialog({
                     <option value="all">All upstreams</option>
                     {upstreams.map((item) => <option key={item} value={item}>{item}</option>)}
                   </select>
+                  </>
                 )}
                 <label className="sr-only" htmlFor={`model-price-${role}`}>Price</label>
                 <select

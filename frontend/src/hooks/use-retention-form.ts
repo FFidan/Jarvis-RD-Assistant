@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { getRetention, putRetention, type RetentionConfig } from '@/lib/api/backups';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 function parseRetentionLimit(raw: string): number | null {
   const trimmed = raw.trim();
@@ -18,7 +19,7 @@ export function useRetentionForm() {
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const query = useQuery({
-    queryKey: ['admin', 'backups', 'retention'],
+    queryKey: QUERY_KEYS.admin.backupRetention(),
     queryFn: getRetention,
   });
 
@@ -34,7 +35,7 @@ export function useRetentionForm() {
     mutationFn: putRetention,
     onSuccess: (data) => {
       toast.success('Retention policy saved.');
-      queryClient.setQueryData(['admin', 'backups', 'retention'], data);
+      queryClient.setQueryData(QUERY_KEYS.admin.backupRetention(), data);
       setKeepLastNValue(data.keep_last_n?.toString() ?? '');
       setMaxAgeDaysValue(data.max_age_days?.toString() ?? '');
       setDirty(false);

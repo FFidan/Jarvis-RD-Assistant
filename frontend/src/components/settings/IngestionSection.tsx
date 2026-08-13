@@ -381,7 +381,7 @@ export function IngestionSection({ filterGroups, modelPickerRequest }: Ingestion
     staleTime: 60_000,
   });
   const { data: providers = [] } = useQuery({
-    queryKey: ['settings', 'providers'],
+    queryKey: QUERY_KEYS.config.providers(),
     queryFn: listProviders,
     enabled: wantsModels,
   });

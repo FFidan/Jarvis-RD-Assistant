@@ -29,6 +29,7 @@ import {
   type InboxRestorePoint,
   type RestoreSource,
 } from '@/lib/api/backups';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useRestoreRecoveryController } from '@/hooks/use-restore-recovery-controller';
 import { useRetentionForm } from '@/hooks/use-retention-form';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
@@ -389,7 +390,7 @@ export function AdminBackupsPage() {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['admin', 'restore-points'],
+    queryKey: QUERY_KEYS.admin.restorePoints(),
     queryFn: getRestorePoints,
     placeholderData: keepPreviousData,
   });
@@ -405,7 +406,7 @@ export function AdminBackupsPage() {
     onSuccess: () => {
       toast.success('Backup requested. The backup runs in the background.');
       setConfirming(false);
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.restorePoints() });
     },
     onError: (e: unknown) => {
       toast.error(e instanceof Error ? e.message : 'Could not request a backup.');
@@ -418,7 +419,7 @@ export function AdminBackupsPage() {
     onSuccess: () => {
       toast.success('Delete requested. The restore point will be removed shortly.');
       setDeleteConfirmTs(null);
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.restorePoints() });
     },
     onError: (e: unknown) => {
       toast.error(e instanceof Error ? e.message : 'Could not delete the restore point.');

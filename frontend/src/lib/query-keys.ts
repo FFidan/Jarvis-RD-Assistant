@@ -67,6 +67,9 @@ export const QUERY_KEYS = {
     auditLog: (actionPrefix: string) => ["admin", "audit-log", actionPrefix] as const,
     users: () => ["admin", "users"] as const,
     systemHealth: () => ["admin", "system-health"] as const,
+    restoreStatus: () => ["admin", "restore-status"] as const,
+    restorePoints: () => ["admin", "restore-points"] as const,
+    backupRetention: () => ["admin", "backups", "retention"] as const,
   },
 
   // ── Citation graph ────────────────────────────────────────────────────────

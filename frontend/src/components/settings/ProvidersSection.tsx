@@ -289,15 +289,19 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
   const providerLists = modelsQuery.data?.provider_lists ?? {};
   const catalog = modelsQuery.data?.catalog ?? [];
 
+  // Saving or removing a credential changes what the routing plane can resolve,
+  // so both paths refresh the same four views.
+  const refreshProviderViews = (providerId: string) => {
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.providers() });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.providerAccount(providerId) });
+  };
+
   const saveMutation = useMutation({
     mutationFn: ({ key, value }: SaveProviderConfigVariables) => setConfig(key, value),
     onSuccess: (_result, variables) => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.providers() });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
-      queryClient.invalidateQueries({
-        queryKey: QUERY_KEYS.config.providerAccount(variables.providerId),
-      });
+      refreshProviderViews(variables.providerId);
       setEditing((previous) => ({
         ...previous,
         [variables.providerId]: { ...previous[variables.providerId], [variables.field]: false },
@@ -308,19 +312,14 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
       }));
       toast.success(variables.field === 'apiKey' ? 'Provider key saved' : 'Provider endpoint saved');
     },
-    onError: (error: Error) => toast.error(error.message || 'Failed to save provider setting'),
+    onError: onSaveError('Could not save this provider setting'),
   });
 
   const removeMutation = useMutation({
     mutationFn: ({ providerId, field }: RemoveProviderConfigVariables) =>
       field === 'apiKey' ? removeProviderKey(providerId) : removeProviderBaseUrl(providerId),
     onSuccess: (_result, variables) => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.providers() });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
-      queryClient.invalidateQueries({
-        queryKey: QUERY_KEYS.config.providerAccount(variables.providerId),
-      });
+      refreshProviderViews(variables.providerId);
       toast.success(REMOVAL_COPY[variables.field].done);
     },
     onError: onSaveError('Could not remove this provider setting'),

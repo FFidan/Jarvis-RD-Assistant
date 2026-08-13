@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 import httpx
 
@@ -22,16 +22,7 @@ ScheduledNotificationKind = Literal[
     "author_alert",
 ]
 
-SCHEDULED_NOTIFICATION_KINDS = frozenset(
-    {
-        "daily_summary",
-        "paper_digest",
-        "review_reminder",
-        "deadline_warning",
-        "research_pulse",
-        "author_alert",
-    }
-)
+SCHEDULED_NOTIFICATION_KINDS = frozenset(get_args(ScheduledNotificationKind))
 
 
 @dataclass(frozen=True, slots=True)

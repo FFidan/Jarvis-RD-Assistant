@@ -13,6 +13,7 @@ import {
   loadRestoreRecovery,
   saveRestoreRecovery,
 } from '@/lib/restore-recovery';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 
 const EXPIRED_RECOVERY_MESSAGE =
@@ -61,7 +62,7 @@ export function useRestoreRecoveryController() {
 
   const trackingRestore = restoringTimestamp !== null || recovery !== null;
   const statusQuery = useQuery({
-    queryKey: ['admin', 'restore-status'],
+    queryKey: QUERY_KEYS.admin.restoreStatus(),
     queryFn: () => getRestoreStatus(recovery?.status_token),
     refetchInterval: trackingRestore ? 3000 : false,
     retry: false,
@@ -103,7 +104,7 @@ export function useRestoreRecoveryController() {
       } else {
         toast.success('Restore complete. Your data has been restored.');
       }
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.restorePoints() });
       setRestoringTimestamp(null);
       discardRecovery();
     } else if (status.state === 'failed') {
@@ -121,7 +122,7 @@ export function useRestoreRecoveryController() {
     }: StartRestoreRequest) =>
       requestRestore(timestamp, 'RESTORE', source, allowMissingPdfs, allowUnknownSchema),
     onSuccess: (data, { timestamp }) => {
-      queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] });
+      queryClient.removeQueries({ queryKey: QUERY_KEYS.admin.restoreStatus() });
       const nextRecovery: RestoreRecoveryRecord = {
         version: 1,
         restore_id: data.restore_id,
@@ -202,7 +203,7 @@ export function useRestoreRecoveryController() {
     acknowledgementOpen,
     acknowledgementPending: acknowledgementMutation.isPending,
     acknowledgeQuarantine,
-    dismissFailed: () => queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] }),
+    dismissFailed: () => queryClient.removeQueries({ queryKey: QUERY_KEYS.admin.restoreStatus() }),
     dismissManual: () => setManualStepsNotice(null),
     manualStepsNotice,
     pollError: statusQuery.isError,
