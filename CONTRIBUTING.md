@@ -62,7 +62,7 @@ review.
 
 ## Setting Up a Development Environment
 
-**Prerequisites:** Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, and [`uv`](https://docs.astral.sh/uv/) (Python package manager).
+**Prerequisites:** Python 3.12+, Node.js 22 (see `.nvmrc`), Docker Engine 24+ with Compose v2, and [`uv`](https://docs.astral.sh/uv/) (Python package manager).
 
 Install `uv` if you don't have it:
 
@@ -74,9 +74,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ```bash
 ./setup.sh --build-local   # interactive; builds the app images from your source
-# or
-./scripts/jarvis-setup.sh   # non-interactive — reads env vars / defaults
 ```
+
+`setup.sh` is the one installer. `scripts/jarvis-setup.sh` remains only as a deprecated compatibility shim that forwards to `./setup.sh --non-interactive --profile=dev` (it accepts only `--skip-disk-check`); use `./setup.sh` directly.
 
 > A plain `./setup.sh` **pulls** the prebuilt application images from the registry, so your local
 > code changes would not run. Contributors must pass **`--build-local`** (and `./update.sh --build-local`
@@ -129,6 +129,10 @@ This mirrors the CI `lint-test` + `frontend` jobs end-to-end:
 
 You can also run each sub-check individually (targets: `lint`, `typecheck`,
 `frontend-check`, `test`).
+
+`make security-scan` is a separate target (not part of `make check`) that
+reproduces the local dependency and secret-scanning subset of the hosted
+Security workflow; run it before cutting a release.
 
 ### Fast vs. live-DB test suites
 

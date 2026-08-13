@@ -696,10 +696,9 @@ rules; direct v1.1.3-to-current update is not promised.
 ### Upgrade notes
 
 **Telegram pairing (breaking change).** The Telegram bot now identifies chats
-exclusively via the `/pair` token flow. To pair: open the dashboard → Settings
-→ Integrations → Telegram, copy the one-time token, and send `/pair <token>`
-to the bot. The retired dashboard-code pairing path (`/start PAIR_<code>`) no
-longer works.
+exclusively via the `/pair` code flow. To pair: open the dashboard → Settings
+→ Integrations → Telegram, generate a one-time code, and send `/pair <code>`
+to the bot. The retired `/start PAIR_<code>` pairing path no longer works.
 
 **Telegram owner-override network.** The bot calls service endpoints with
 `X-Owner-User-Id` to make per-user requests, trusted only from

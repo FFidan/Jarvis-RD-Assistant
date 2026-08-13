@@ -74,7 +74,7 @@ If a model card shows a **pending — applying automatically** badge, your choic
 
 Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses **Add cloud provider** for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.
 
-Provider settings are deployment-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.
+Provider settings are deployment-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and a blank save does not delete an existing key. A stored key or endpoint can also be removed rather than only overwritten; removal is refused while a model route still depends on that provider, and it is recorded in the audit log distinctly from a replacement. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.
 
 Adding a key does not make cloud the default. It only makes matching cloud models assignable in the **Main model (smart)** and **Quick model (fast)** controls above. Leave all provider keys blank to keep the deployment local-only.
 
@@ -205,6 +205,15 @@ Sending a paper to Zotero pushes its **citation metadata** (title, authors, DOI,
 abstract). The PDF file itself is **not attached**. The item is filed into a
 Zotero collection matching each JARVIS project linked to the paper. Existing
 items found by DOI are filed into those collections instead of duplicated.
+
+#### Automatic sync schedule
+
+Turn on **Automatically import new papers clipped into Zotero** to have JARVIS
+pull new items from your library on a schedule. Choose how often from plain
+options — hourly, every few hours, daily at a time, or weekly on a day. For a
+schedule the options cannot express, open **Advanced** and enter a five-field
+cron expression directly. A schedule that would run more often than every
+fifteen minutes is refused.
 
 #### Verify Zotero works
 

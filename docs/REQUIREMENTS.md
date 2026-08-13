@@ -113,7 +113,7 @@ Default `litellm/config.yaml` enables Ollama-backed aliases only.
 ## Telegram
 
 - Bot Token required — create via [@BotFather](https://t.me/BotFather)
-- Pair each user via the web dashboard: go to **Settings → Integrations → Telegram**, copy the pairing token shown there, then send `/pair <token>` to your bot in Telegram. No Chat ID lookup is needed.
+- Pair each user via the web dashboard: go to **Settings → Integrations → Telegram**, generate the pairing code shown there, then send `/pair <code>` to your bot in Telegram. No Chat ID lookup is needed.
 - `telegram_bot` service starts only when the `telegram` profile is enabled
 - **Nudge/digest scheduling** uses a single global timezone (`user.timezone` in Settings). Per-user timezone scheduling is a tracked future enhancement; in multi-user deployments all nudges fire on the single configured timezone.
 
