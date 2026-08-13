@@ -27,12 +27,43 @@ several unchecked or duplicated control paths with smaller, tested owners.
   finishes, including fast Pulse jobs that complete between polls.
 - **A checked Telegram command reference.** Bot registration, Telegram's command
   menu, `/help`, and the manual now derive from the same command catalog.
+- **A sync schedule anyone can set.** The Zotero library sync schedule is chosen
+  from plain options — hourly, every few hours, daily at a time, or weekly on a
+  day — instead of being typed as a five-field expression. The expression field
+  remains under Advanced for schedules the options cannot express, and a
+  schedule that would run more often than every fifteen minutes is refused.
+- **Stored provider credentials can be removed.** A saved key or endpoint can be
+  cleared from the interface rather than only overwritten, the removal is
+  refused while a model route still depends on that provider, and it is recorded
+  in the audit log distinctly from a replacement.
 - **A local security scan.** `make security-scan` reproduces the local dependency
   and secret-scanning subset of the hosted Security workflow. Downloaded scanner
   artifacts stay outside the repository and are hash-verified on every use.
 
 ### Fixed
 
+- **Documents can be processed on processor-only installations.** The published
+  images for machines without a graphics accelerator paired the document reader
+  with a build of its companion library that could not load beside it, so the
+  first document a researcher opened failed while every service still reported
+  healthy. Both now come from the same source. Before any image may be released
+  it must load that stack, convert a real document and refuse a corrupt one,
+  inside the exact image being published and with no network access at all.
+- **The Telegram bot can reach the rest of the deployment.** The outbound
+  address policy introduced in this release did not list the deployment's own
+  service names, so every command and every scheduled message failed before a
+  connection was opened. The service names the software dials are now permitted,
+  a name that merely resembles one is still refused, and a first-run check makes
+  one real call between containers so this cannot pass unnoticed again.
+- **Document models ship inside the image.** The reader previously downloaded
+  several hundred megabytes the first time a researcher opened a document, which
+  stalled that first document and never completed at all on a deployment without
+  internet access. The models are now built in.
+- **A setting that fails to save says so.** Eighteen controls across the author,
+  topic, extraction-template, automation, source, model and Telegram panels
+  changed the screen and stayed silent when the server rejected the change,
+  leaving the old value on display as though it had been stored. Every panel now
+  reports a rejected save the same way.
 - **Ask behaves predictably with reasoning-capable models.** Thinking is off
   unless explicitly enabled, one answer budget now governs both prompt fitting
   and the model request, and known response-hygiene failures produce actionable
@@ -96,6 +127,18 @@ several unchecked or duplicated control paths with smaller, tested owners.
   patch their real module owners, the unused fixed Telegram chat setting and
   global Zotero schedule are gone, and unique lifecycle browser cases run in the
   blocking mocked suite.
+- **The model catalogue stays responsive as it grows.** The picker renders a
+  fixed number of matches and says how many of how many are shown, so typing
+  costs the same on a catalogue of four hundred models as on one of a dozen.
+- **Settings behaves the same way throughout.** Sliders commit once when
+  released rather than on every step, every control carries a name a screen
+  reader announces, clearing a topic's feedback asks first like the other
+  irreversible actions, and the status page states what it actually checked
+  rather than claiming everything is running.
+- **A severe, fixable vulnerability blocks a release.** The published-image scan
+  now fails the verification run when it finds a critical problem that a rebuild
+  would fix, so such an image cannot reach a stable tag. Findings with no
+  available fix stay out of the gate and remain in the report.
 - **Dependency floors and locks include current security fixes** for GitPython
   and the frontend's transitive identifier generator; local and hosted scans
   reject a return to their affected versions.
