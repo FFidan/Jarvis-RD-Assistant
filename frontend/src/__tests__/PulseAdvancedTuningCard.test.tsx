@@ -124,7 +124,12 @@ describe('PulseAdvancedTuningCard — recommendation.enabled toggle', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /advanced tuning/i }));
     fireEvent.click(screen.getByTestId('recommendation-enabled-toggle'));
-    expect(mutate).toHaveBeenCalledWith({ key: 'recommendation.enabled', value: false });
+    // The second argument is what reports a rejected save. Asserting it here
+    // stops this toggle from quietly losing the message its neighbours have.
+    expect(mutate).toHaveBeenCalledWith(
+      { key: 'recommendation.enabled', value: false },
+      { onError: expect.any(Function) },
+    );
   });
 
   it('does not call mutate when controls are disabled', () => {
