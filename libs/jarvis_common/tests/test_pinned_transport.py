@@ -178,6 +178,39 @@ async def test_candidate_order_and_retry_stay_within_one_validated_answer_set() 
     assert backend.hosts == ["2001:4860:4860::8888", "8.8.8.8"]
 
 
+async def test_candidate_fallback_survives_a_connect_timeout_on_the_first_address() -> None:
+    """A blackholed first candidate raises ConnectTimeout; the loop tries the next.
+
+    ConnectTimeout is a TimeoutException, not a ConnectError, so catching only
+    ConnectError would abort the connect and never reach the reachable address.
+    """
+
+    class _TimeoutFirst(httpcore.AsyncNetworkBackend):
+        def __init__(self) -> None:
+            self.hosts: list[str] = []
+
+        async def connect_tcp(self, host: str, port: int, **kwargs):  # type: ignore[no-untyped-def]
+            self.hosts.append(host)
+            if host == "2001:4860:4860::8888":
+                raise httpcore.ConnectTimeout("blackholed")
+            return object()
+
+        async def connect_unix_socket(self, path: str, **kwargs):  # type: ignore[no-untyped-def]
+            return object()
+
+        async def sleep(self, seconds: float) -> None:
+            return None
+
+    backend = _TimeoutFirst()
+
+    async def resolver(host: str, port: int) -> list[tuple[int, str]]:
+        return [(socket.AF_INET6, "2001:4860:4860::8888"), (socket.AF_INET, "8.8.8.8")]
+
+    transport = PinnedNetworkBackend(PUBLIC_ONLY, resolver=resolver, backend=backend)
+    await transport.connect_tcp("provider.example", 443)
+    assert backend.hosts == ["2001:4860:4860::8888", "8.8.8.8"]
+
+
 async def test_literal_ip_resolution_does_not_call_system_dns(monkeypatch) -> None:
     loop = asyncio.get_running_loop()
 

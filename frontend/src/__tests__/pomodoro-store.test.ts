@@ -290,4 +290,33 @@ describe('PomodoroStore', () => {
     expect(state.sessionId).toBeNull();
     expect(state.completedSession).toEqual({ durationSeconds: 60 });
   });
+
+  it('does not re-mint a completion while one is already pending', () => {
+    const start = 1_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(start);
+    usePomodoroStore.setState({
+      phase: 'work',
+      sessionId: 77,
+      serverSource: 'web',
+      startedAt: start,
+      pausedAt: null,
+      totalPausedMs: 0,
+      phaseDurationMs: 60_000,
+      pendingOperation: null,
+    });
+
+    // A server-backed work phase expires: the first tick mints exactly one
+    // completion operation and stays in 'work' until the server confirms.
+    vi.spyOn(Date, 'now').mockReturnValue(start + 60_000 + 1);
+    usePomodoroStore.getState().tick();
+    const first = usePomodoroStore.getState().pendingOperation;
+    expect(first).toMatchObject({ kind: 'complete', sessionId: 77, mode: 'elapsed' });
+    expect(usePomodoroStore.getState().phase).toBe('work');
+
+    // A second tick before the round-trip returns must reuse the pending op,
+    // not create a new one — otherwise a duplicate completion fires each second.
+    vi.spyOn(Date, 'now').mockReturnValue(start + 60_000 + 2000);
+    usePomodoroStore.getState().tick();
+    expect(usePomodoroStore.getState().pendingOperation).toBe(first);
+  });
 });

@@ -858,6 +858,21 @@ def test_provider_specific_documented_metadata_is_normalized_with_api_provenance
     assert entry.field_sources["capabilities"]["kind"] == "api_reported"
 
 
+def test_boolean_context_length_is_rejected_not_coerced_to_one() -> None:
+    """A provider reporting a bool where a context length is expected yields 0.
+
+    ``isinstance(True, int)`` is True, so accepting it would emit
+    ``context_tokens: true`` — which fails the frontend's strict numeric schema
+    and blanks the entire models response over one bad live entry.
+    """
+    entries, _excluded = provider_models._build_entries(
+        provider_for_id("moonshot"),
+        [("kimi-test", {"context_length": True})],
+        datetime(2026, 8, 11, tzinfo=UTC),
+    )
+    assert entries[0].context_tokens == 0
+
+
 def test_inferred_chat_assignment_is_not_mislabeled_as_api_reported_capability() -> None:
     entry = provider_models.live_model_entry(
         "openai",

@@ -69,6 +69,34 @@ describe('ScheduleSelect', () => {
     expect(seen[seen.length - 1]).toBe(cron);
   });
 
+  it('remembers the run time across a detour through a preset without one', async () => {
+    // Daily 14:00 -> Every hour (no time field) -> Daily must restore 14:00, not
+    // fall back to the 09:00 default. lastDay/lastHours already do this for their
+    // fields; without the same memory for the time, returning silently rewrites it.
+    const seen: string[] = [];
+    function Harness() {
+      const [value, setValue] = useState('0 14 * * *');
+      return (
+        <ScheduleSelect
+          value={value}
+          onChange={(next) => {
+            seen.push(next);
+            setValue(next);
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+
+    await userEvent.click(screen.getByRole('combobox', { name: /frequency/i }));
+    await userEvent.click(await screen.findByRole('option', { name: /^Every hour$/i }));
+
+    await userEvent.click(screen.getByRole('combobox', { name: /frequency/i }));
+    await userEvent.click(await screen.findByRole('option', { name: /^Daily$/i }));
+
+    expect(seen[seen.length - 1]).toBe('0 14 * * *');
+  });
+
   it('gives the hour-step select an accessible name', () => {
     render(<ScheduleSelect value="0 */4 * * *" onChange={vi.fn()} />);
     expect(screen.getByRole('combobox', { name: /hours/i })).toBeInTheDocument();

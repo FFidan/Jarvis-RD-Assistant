@@ -153,16 +153,22 @@ export const usePomodoroStore = create<PomodoroState>()(
             const session: CompletedSession = {
               durationSeconds: state.phaseDurationMs / 1000,
             };
-            const completionOperation: FocusOperation | null = state.sessionId === null
-              ? null
-              : {
+            if (state.sessionId !== null) {
+              // A server-backed completion is authoritative. The first tick past
+              // expiry mints it and stays in 'work' until the server confirms;
+              // the pending-op guard stops later ticks re-minting and firing a
+              // duplicate completion every second until applyServerSession moves
+              // the phase on.
+              if (state.pendingOperation !== null) return;
+              set({
+                secondsRemaining: 0,
+                pendingOperation: {
                   id: nextOperationId++,
                   kind: 'complete',
                   sessionId: state.sessionId,
                   mode: 'elapsed',
-                };
-            if (completionOperation !== null) {
-              set({ secondsRemaining: 0, pendingOperation: completionOperation });
+                },
+              });
               return;
             }
             if (state.attachedItem) {
@@ -185,7 +191,7 @@ export const usePomodoroStore = create<PomodoroState>()(
                 cyclesCompleted: newCycles,
                 completedSession: session,
                 lastWorkElapsedMs: workElapsedMs,
-                pendingOperation: completionOperation,
+                pendingOperation: null,
               });
             } else {
               // Short break
@@ -199,7 +205,7 @@ export const usePomodoroStore = create<PomodoroState>()(
                 cyclesCompleted: newCycles,
                 completedSession: session,
                 lastWorkElapsedMs: workElapsedMs,
-                pendingOperation: completionOperation,
+                pendingOperation: null,
               });
             }
           } else if (state.phase === 'short-break') {

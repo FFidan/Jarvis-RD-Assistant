@@ -439,7 +439,10 @@ def _live_context_tokens(provider_id: Provider, raw: Mapping[str, Any]) -> int:
         "openrouter": ("context_length", "context_window"),
     }.get(provider_id, ())
     value = next((raw.get(name) for name in field_names if name in raw), 0)
-    return value if isinstance(value, int) and 0 < value <= 10_000_000 else 0
+    # ``type(value) is int`` rather than ``isinstance``: a JSON ``true`` is an
+    # int subclass, and letting it through emits ``context_tokens: true``, which
+    # fails the frontend's strict numeric schema and blanks the whole response.
+    return value if type(value) is int and 0 < value <= 10_000_000 else 0
 
 
 def _live_display_name(provider_id: Provider, raw: Mapping[str, Any]) -> str:

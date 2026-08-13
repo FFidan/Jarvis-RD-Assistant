@@ -197,7 +197,7 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
         socket_options: Iterable[Any] | None = None,
     ) -> httpcore.AsyncNetworkStream:
         addresses = _validate_addresses(host, await self._resolver(host, port), self._policy)
-        last_error: httpcore.ConnectError | None = None
+        last_error: httpcore.ConnectError | httpcore.ConnectTimeout | None = None
         for _family, address in addresses:
             try:
                 return await self._backend.connect_tcp(
@@ -207,7 +207,10 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
                     local_address=local_address,
                     socket_options=socket_options,
                 )
-            except httpcore.ConnectError as exc:
+            # A blackholed candidate raises ConnectTimeout, which is a
+            # TimeoutException and not a ConnectError; catch it too so a dead
+            # first address (e.g. an unreachable IPv6) falls through to the next.
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
                 last_error = exc
         raise httpcore.ConnectError("Unable to connect to destination") from last_error
 

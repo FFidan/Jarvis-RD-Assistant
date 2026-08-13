@@ -91,12 +91,18 @@ export function ScheduleSelect({ value, onChange, disabled, id }: ScheduleSelect
   const schedule = parseSchedule(value);
   const frequencyId = id ? `${id}-frequency` : 'schedule-frequency';
 
-  const currentTime = schedule.kind === 'daily' || schedule.kind === 'weekly' ? schedule.time : DEFAULT_TIME;
+  // Remember the run time, day and hour-step the control last actually held.
+  // Only some presets carry each field, so leaving one and coming back would
+  // otherwise fall through to the constant defaults below, silently rewriting
+  // whatever value was there before. Daily and weekly are the presets that
+  // carry a time, so it needs the same memory the day and hour-step already have.
+  const timePreset = schedule.kind === 'daily' || schedule.kind === 'weekly';
+  const [lastTime, setLastTime] = useState(timePreset ? schedule.time : DEFAULT_TIME);
+  if (timePreset && schedule.time !== lastTime) {
+    setLastTime(schedule.time);
+  }
+  const currentTime = timePreset ? schedule.time : lastTime;
 
-  // Remember the day and hour-step the control last actually held. Weekly and
-  // "every N hours" are the only presets that carry these fields, so leaving
-  // one of them and coming back would otherwise fall through to the constant
-  // defaults below, silently rewriting whatever value was there before.
   const [lastDay, setLastDay] = useState(schedule.kind === 'weekly' ? schedule.day : DEFAULT_DAY);
   if (schedule.kind === 'weekly' && schedule.day !== lastDay) {
     setLastDay(schedule.day);
