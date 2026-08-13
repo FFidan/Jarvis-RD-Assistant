@@ -425,8 +425,6 @@ export function PulseAdvancedTuningCard({
                   aria-label="Recommendations enabled"
                   data-testid="recommendation-enabled-toggle"
                   aria-checked={!!recommendationEnabled}
-                  // Kept as a single-argument mutate call: PulseAdvancedTuningCard.test.tsx
-                  // asserts this exact call shape and is outside this change's scope.
                   onClick={() =>
                     setMut.mutate({ key: 'recommendation.enabled', value: !recommendationEnabled })
                   }

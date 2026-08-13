@@ -68,10 +68,13 @@ several unchecked or duplicated control paths with smaller, tested owners.
 - **Upgrade diagnosis is read-only.** Lifecycle commands distinguish a possible
   old Tailscale Serve target from custom or shared state and print a targeted,
   operator-confirmed repair command without resetting or changing Serve state.
-- **Ordinary prose no longer trips the reasoning-token release blocker,** while
-  actual hidden-control markers remain blocking. Raw Compose commands are also
-  quiet when optional certificate settings are unset, and local model targets
-  use one parser for primary and fallback routes.
+- **The answer-quality benchmark no longer rejects ordinary prose.** Only a real
+  hidden-reasoning control marker counts as a leak, so an answer that happens to
+  discuss its own reasoning in plain words is scored normally.
+- **Raw Compose commands are quiet when optional certificate settings are
+  unset,** rather than warning about variables the deployment does not use.
+- **Local model targets use one parser for primary and fallback routes,** so a
+  fallback resolves exactly like the primary route it stands in for.
 
 ### Changed
 

@@ -744,8 +744,8 @@ def _pdfium_decode_error(message: str = "cannot load document") -> Exception:
 
 
 # Docling's ConversionError and pypdfium2's PdfiumError both subclass
-# RuntimeError, so before this fix they fell into the generic embedding-failure
-# handler along with real embedding errors.
+# RuntimeError, so they must be caught ahead of the generic handler or they
+# are reported to the researcher as embedding failures.
 _DOCUMENT_READ_FAILURES = [
     pytest.param(_docling_conversion_error(), id="docling-conversion-error"),
     pytest.param(_pdfium_decode_error(), id="pdfium-decode-error"),
