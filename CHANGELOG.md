@@ -142,6 +142,11 @@ several unchecked or duplicated control paths with smaller, tested owners.
 - **Dependency floors and locks include current security fixes** for GitPython
   and the frontend's transitive identifier generator; local and hosted scans
   reject a return to their affected versions.
+- **Every service image is rebuilt on a patched distribution base.** The Python
+  service images and the dashboard image move to current Debian 12 and Alpine
+  bases, clearing critical OpenSSL and GnuTLS advisories that the previous pins
+  still carried. The published-image scan above is what holds them current: it
+  refuses to release an image carrying a critical problem a rebuild would fix.
 
 ## v1.2.4 (2026-08-07)
 

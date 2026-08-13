@@ -136,6 +136,17 @@ explicitly set in the environment. An explicit env var always wins.
 | `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the Telegram bot's own pinned address as a `/32` (tracks `JARVIS_TELEGRAM_BOT_IP`, which setup derives from `JARVIS_NET_SUBNET`; default `10.137.241.250`), so no other container on the bridge can send the header. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
 | `ALLOW_PRIVATE_SMTP_HOST` | Default `false`. When `false`, the SMTP host is validated at config-save AND at magic-link send time and rejected if it resolves to a private/loopback/link-local/reserved address (SSRF guard). Set `true` ONLY if you run a legitimate **internal SMTP relay** on a private address/hostname — otherwise magic-link delivery to that relay is refused. | No (set only for an internal relay) |
 
+### Outbound Connection Pinning
+
+Requests that leave the deployment — PDF downloads, custom model providers,
+Better BibTeX, SMTP, and LiteLLM custom-provider traffic — connect to the
+address that the guard above validated, instead of resolving the name a second
+time when the socket opens. This removes the window between the check and the
+connection, in which a name could resolve to an allowed address for the check
+and a different one for the request. Certificate and hostname verification are
+unchanged, so a pinned connection still presents and verifies the original
+hostname.
+
 ### Cloud LLM Provider Settings at Rest
 
 Cloud provider settings entered in Settings are deployment-wide admin settings.

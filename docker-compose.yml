@@ -317,7 +317,7 @@ services:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
       args:
-        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim-bookworm}
         INSTALL_OPTIONAL: ${INSTALL_OPTIONAL:-false}
         TORCH_VARIANT: ${TORCH_VARIANT:-cpu}
     restart: unless-stopped
@@ -417,7 +417,7 @@ services:
       context: .
       dockerfile: services/learning_engine/Dockerfile
       args:
-        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim-bookworm}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     hostname: learning-engine-1
@@ -476,7 +476,7 @@ services:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
       args:
-        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim-bookworm}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     hostname: telegram-bot-1
@@ -533,7 +533,7 @@ services:
       context: ./frontend
       args:
         NODE_BUILD_IMAGE: ${NODE_BUILD_IMAGE:-node:22.22.2-alpine3.23@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f}
-        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginxinc/nginx-unprivileged:1.27-alpine3.21}
+        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginxinc/nginx-unprivileged:1.31-alpine3.24}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     ports:

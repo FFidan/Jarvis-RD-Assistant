@@ -1,4 +1,4 @@
-ARG PYTHON_BASE_IMAGE=python:3.12.9-slim
+ARG PYTHON_BASE_IMAGE=python:3.12-slim-bookworm
 
 # --- Stage 1: build jarvis_common as a wheel so we can install it WITHOUT
 # breaking --require-hashes in the runtime stage. The runtime install uses

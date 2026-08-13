@@ -1,7 +1,7 @@
 # Off-host DR upload ingress — stdlib-only, no pip install (trust-boundary
 # component that receives the encrypted archive set + operator key so those bytes
 # never transit the app). See uploader.py for the boundary rationale.
-ARG PYTHON_BASE_IMAGE=python:3.12.9-slim
+ARG PYTHON_BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${PYTHON_BASE_IMAGE}
 WORKDIR /app
 COPY uploader.py .
