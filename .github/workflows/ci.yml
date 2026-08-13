@@ -54,7 +54,7 @@ jobs:
       - name: Set up Node (for pyright)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: "24"
+          node-version-file: ".nvmrc"
 
       - name: Pyright (type check)
         # Resolves imports against the uv-synced .venv created above; pyrightconfig.json
@@ -253,7 +253,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: "24"
+          node-version-file: ".nvmrc"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -290,7 +290,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: "24"
+          node-version-file: ".nvmrc"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

@@ -1,15 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { toast } from 'sonner';
 import {
   fetchConfig,
   setConfig,
   fetchPulseStats,
+  fetchFeedbackSummary,
   getSystemCapabilities,
-  apiFetch,
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
-import type { ConfigEntry, PulseStats } from '@/types';
+import type { ConfigEntry, FeedbackSummary, PulseStats } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { RejectedTopicsPanel } from '@/components/settings/RejectedTopicsPanel';
 import { PulseScheduleCard } from './pulse/PulseScheduleCard';
@@ -20,21 +19,10 @@ import { PulseRunStatusCard } from './pulse/PulseRunStatusCard';
 // FavoriteTopicsPanel — small inline query component (not extracted: it's <30 LOC)
 // ---------------------------------------------------------------------------
 
-interface FeedbackSummaryItem {
-  paper_id: number;
-  title: string;
-  count: number;
-}
-
-interface FeedbackSummary {
-  top_positive: FeedbackSummaryItem[];
-  top_negative: FeedbackSummaryItem[];
-}
-
 function FavoriteTopicsPanel() {
   const { data } = useQuery<FeedbackSummary>({
     queryKey: QUERY_KEYS.pulseHealth.feedback(),
-    queryFn: () => apiFetch<FeedbackSummary>('/api/analytics/feedback-summary'),
+    queryFn: fetchFeedbackSummary,
     staleTime: 5 * 60_000,
   });
   if (!data?.top_positive.length) return null;
@@ -97,14 +85,11 @@ export function PulseSection() {
   const hasNetworkx = capabilities?.networkx === true;
   const hasSklearn = capabilities?.scikit_learn === true;
 
+  // No mutation-level onError: every call site names the setting it was saving.
+  // A handler here would not replace those, it would fire in addition to them.
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() }),
-    onError: (err: Error) => {
-      toast.error('Failed to update Pulse settings', {
-        description: err.message,
-      });
-    },
   });
 
   const settingsUnavailable = configLoading || configError || configs === undefined;

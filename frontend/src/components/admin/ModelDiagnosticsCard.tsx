@@ -13,9 +13,11 @@
  * POST /api/settings/ai/redetect → redetectHW()
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAISettings, redetectHW } from '@/lib/api';
+import { fetchSystemModels, getAISettings, redetectHW } from '@/lib/api';
+import type { SystemModelsResponse } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
+import { normalizeModelId } from '@/components/shared/model-picker/model-options';
 
 export function ModelDiagnosticsCard() {
   const qc = useQueryClient();
@@ -23,6 +25,15 @@ export function ModelDiagnosticsCard() {
   const { data, isLoading, error: loadError } = useQuery({
     queryKey: QUERY_KEYS.aiSettings.settings(),
     queryFn: getAISettings,
+    staleTime: 30_000,
+  });
+  const {
+    data: systemModels,
+    isLoading: routesLoading,
+    error: routesError,
+  } = useQuery({
+    queryKey: QUERY_KEYS.config.systemModels(),
+    queryFn: ({ signal }) => fetchSystemModels(signal),
     staleTime: 30_000,
   });
 
@@ -112,6 +123,8 @@ export function ModelDiagnosticsCard() {
             </table>
           </div>
 
+          <ActiveRouteTable data={systemModels} isLoading={routesLoading} error={routesError} />
+
           {(data?.candidate_issues?.length ?? 0) > 0 && (
             <details
               data-testid="candidate-issues"
@@ -130,6 +143,79 @@ export function ModelDiagnosticsCard() {
               </p>
             </details>
           )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function routeModel(data: SystemModelsResponse, role: 'fast' | 'smart' | 'embed'): string {
+  if (role === 'embed') return data.embedding_contract?.model ?? data.current.embed_model ?? 'Not reported';
+  return data.current[`${role}_model`] ?? 'Not configured';
+}
+
+function routeState(
+  data: SystemModelsResponse,
+  role: 'fast' | 'smart' | 'embed',
+  configured: string,
+  serving: string | undefined,
+): string {
+  if (data.delivery[role] === 'pending_restart') return 'Pending model-service recovery';
+  if (!serving) return 'Runtime unavailable';
+  return normalizeModelId(serving) === normalizeModelId(configured)
+    ? 'Matches assignment'
+    : 'Runtime differs from assignment';
+}
+
+function ActiveRouteTable({
+  data,
+  isLoading,
+  error,
+}: {
+  data: SystemModelsResponse | undefined;
+  isLoading: boolean;
+  error: Error | null;
+}) {
+  return (
+    <section aria-labelledby="active-model-routes-heading" className="space-y-2">
+      <div>
+        <h3 id="active-model-routes-heading" className="text-sm font-semibold">Active model routes</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Read-only configured and runtime delivery state. Change assignments in Settings - AI models.
+        </p>
+      </div>
+      {isLoading && <p className="text-sm text-muted-foreground">Loading active routes...</p>}
+      {error && <p className="text-sm text-destructive">Active route status is unavailable.</p>}
+      {data && (
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full text-sm" data-testid="active-model-routes">
+            <thead>
+              <tr className="border-b bg-muted/50">
+                <th className="px-4 py-2 text-left font-medium">Route</th>
+                <th className="px-4 py-2 text-left font-medium">Assigned model</th>
+                <th className="px-4 py-2 text-left font-medium">Runtime</th>
+                <th className="px-4 py-2 text-left font-medium">Delivery</th>
+              </tr>
+            </thead>
+            <tbody>
+              {([
+                ['fast', 'Quick'],
+                ['smart', 'Main'],
+                ['embed', 'Embedding'],
+              ] as const).map(([role, label]) => {
+                const configured = routeModel(data, role);
+                const serving = data.routing[role];
+                return (
+                  <tr key={role} className="border-b last:border-0">
+                    <th scope="row" className="px-4 py-2 text-left font-medium">{label}</th>
+                    <td className="px-4 py-2 font-mono">{configured}</td>
+                    <td className="px-4 py-2 font-mono">{serving ?? 'Not reported'}</td>
+                    <td className="px-4 py-2">{routeState(data, role, configured, serving)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </section>

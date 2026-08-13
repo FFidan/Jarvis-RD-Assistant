@@ -1,12 +1,9 @@
 import { useNavigate } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { Clock, Pause, Play, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { logFocusSession } from '@/lib/api';
 
 type TimerPhase = 'idle' | 'work' | 'short-break' | 'long-break';
 
@@ -37,13 +34,8 @@ export function HeaderPomodoro() {
   const pause = usePomodoroStore((s) => s.pause);
   const resume = usePomodoroStore((s) => s.resume);
   const attachedItem = usePomodoroStore((s) => s.attachedItem);
+  const focusSyncPending = usePomodoroStore((s) => Boolean(s.pendingOperation));
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-
-  const logMutation = useMutation({
-    mutationFn: logFocusSession,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
-  });
 
   if (phase === 'idle') return null;
 
@@ -66,18 +58,13 @@ export function HeaderPomodoro() {
     }
   };
 
-  // Stop & dismiss — end the session off the My-Day page, logging any
-  // elapsed work time so the focus tally stays accurate.
+  // Stop and dismiss. The store asks the server to measure and record the
+  // interval; this component only provides immediate interaction feedback.
   const handleStop = (e: React.MouseEvent) => {
     e.stopPropagation();
     const result = usePomodoroStore.getState().stopAndLog();
     if (result && result.durationSeconds >= 1) {
-      logMutation.mutate({
-        duration_hours: result.durationSeconds / 3600,
-        task_id: result.taskId,
-        paper_id: result.paperId,
-      });
-      toast.success(`Logged ${Math.round(result.durationSeconds / 60)} min of focus`);
+      toast.success(`Focus stopped after ${Math.round(result.durationSeconds / 60)} min`);
     } else if (result) {
       toast.message('Pomodoro stopped');
     }
@@ -107,6 +94,7 @@ export function HeaderPomodoro() {
                 size="icon"
                 className="h-5 w-5"
                 onClick={handleTogglePause}
+                disabled={focusSyncPending}
                 aria-label={isPaused ? 'Resume Pomodoro' : 'Pause Pomodoro'}
                 data-touch-target
               >
@@ -118,6 +106,7 @@ export function HeaderPomodoro() {
               size="icon"
               className="h-5 w-5"
               onClick={handleStop}
+              disabled={focusSyncPending}
               aria-label="Stop Pomodoro"
               data-touch-target
             >

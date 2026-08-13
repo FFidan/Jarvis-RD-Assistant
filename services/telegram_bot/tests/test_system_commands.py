@@ -28,7 +28,7 @@ def _make_pool(*, pairing_row=None):
 
 _make_context = partial(
     make_ptb_context,
-    config=make_bot_config(BotConfig, telegram_chat_id=None),
+    config=make_bot_config(BotConfig),
 )
 
 

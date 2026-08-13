@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -109,7 +110,7 @@ async def get_litellm_deployments() -> list[LiteLLMDeployment]:
     litellm_cfg = get_litellm_config()
     try:
         ensure_outbound_egress_allowed("LiteLLM deployment listing")
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(
                 f"{litellm_cfg.base_url}/v1/model/info",
                 headers=build_litellm_headers(litellm_cfg),
@@ -166,7 +167,7 @@ async def _post_model_new(alias: str, litellm_params: dict[str, Any]) -> str | N
     api_key = litellm_params.get("api_key")
     try:
         ensure_outbound_egress_allowed("LiteLLM deployment creation")
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=_HTTP_TIMEOUT) as client:
             resp = await client.post(
                 f"{litellm_cfg.base_url}/model/new",
                 json=payload,
@@ -212,7 +213,7 @@ async def _post_model_delete(deployment_id: str) -> None:
     litellm_cfg = get_litellm_config()
     try:
         ensure_outbound_egress_allowed("LiteLLM deployment deletion")
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=_HTTP_TIMEOUT) as client:
             resp = await client.post(
                 f"{litellm_cfg.base_url}/model/delete",
                 json={"id": deployment_id},

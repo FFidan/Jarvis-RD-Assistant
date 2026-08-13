@@ -454,7 +454,10 @@ export function PdfReaderPane({ paperId }: PdfReaderPaneProps) {
         />
       )}
 
-      <div className="overflow-hidden rounded-md border border-hair" data-testid="pdf-reader-surface">
+      <div
+        className="relative h-[70vh] overflow-hidden rounded-md border border-hair"
+        data-testid="pdf-reader-surface"
+      >
         <PdfLoader
           document={pdfUrl}
           workerSrc={workerUrl}
@@ -469,7 +472,6 @@ export function PdfReaderPane({ paperId }: PdfReaderPaneProps) {
               enableAreaSelection={() => false}
               selectionTip={<SelectionTip onCreate={(input) => createMut.mutate(input)} />}
               utilsRef={() => {}}
-              style={{ height: '70vh', position: 'relative' }}
             >
               <HighlightRenderer onEdit={setEditingId} />
             </PdfHighlighter>

@@ -3,11 +3,8 @@
 Applies unapplied SQL migrations from a migrations directory on startup using
 an advisory transaction lock so concurrent instances don't race.
 
-Originally lived in ``paper_ingestion.migrations_runner``; moved here as part
-of the consolidation so non-paper-ingestion services (learning_engine,
-future broker workers) can run the same migration logic without depending on
-``paper_ingestion``. The old import path is preserved by a thin re-export
-shim.
+This library-level owner lets every service run the same migration logic
+without depending on the paper-ingestion package.
 """
 
 from __future__ import annotations
@@ -33,7 +30,7 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
 
 # Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
 # sync with that file, which is the single source of the baseline floor.
-_REQUIRED_CODE_SCHEMA_FALLBACK = 111
+_REQUIRED_CODE_SCHEMA_FALLBACK = 113
 
 
 def _log_migration_notice(_connection: object, message: object) -> None:

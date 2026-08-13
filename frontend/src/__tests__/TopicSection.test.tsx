@@ -5,6 +5,9 @@ import { MemoryRouter } from 'react-router-dom';
 import { TopicSection } from '@/components/settings/TopicSection';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
   return {
@@ -19,8 +22,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-const { fetchTopics, fetchMySubscriptions, subscribeToTopic, unsubscribeFromTopic } =
+const { fetchTopics, fetchMySubscriptions, subscribeToTopic, unsubscribeFromTopic, createTopic } =
   await import('@/lib/api');
+const { toast } = await import('sonner');
 
 const TOPIC = {
   id: 1,
@@ -138,5 +142,27 @@ describe('TopicSection load failures', () => {
     renderSection();
     expect(await screen.findByText('Failed to load topic subscriptions.')).toBeInTheDocument();
     expect(screen.getByText('Diffusion Models')).toBeInTheDocument();
+  });
+});
+
+describe('TopicSection save failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchTopics).mockResolvedValue([TOPIC]);
+    vi.mocked(fetchMySubscriptions).mockResolvedValue([]);
+  });
+
+  it('shows an error toast when adding a topic fails', async () => {
+    vi.mocked(createTopic).mockRejectedValue(new Error('Topic name already exists'));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Add Topic' }));
+    await user.type(screen.getByPlaceholderText('e.g. Transformers'), 'Diffusion Models');
+    await user.click(screen.getByRole('button', { name: 'Add Topic' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Topic name already exists');
+    });
   });
 });

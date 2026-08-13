@@ -4,8 +4,9 @@
  * Restore is a destructive, cross-tenant host operation (DROPs both DBs,
  * overwrites live secrets) and the app container cannot run pg_restore or reach
  * the live secrets dir — so this panel only SHOWS the host commands from
- * docs/DEPLOYMENT.md. It never executes anything.
+ * docs/manual/backup-and-restore.md. It never executes anything.
  */
+import { docsUrl } from '@/lib/docs-links';
 
 const STEPS: { title: string; note?: string; code: string }[] = [
   {
@@ -71,12 +72,12 @@ export function RestoreRunbook() {
           documented fallback: it is destructive and runs on the host, not in the app. Download the
           archives above, then run these commands on the deployment host. See the{' '}
           <a
-            href="https://limitcycle-oss.github.io/jarvis-rd-assistant/DEPLOYMENT/#restore"
+            href={docsUrl('manual/backup-and-restore.md')}
             className="underline"
             target="_blank"
             rel="noopener noreferrer"
           >
-            Deployment Guide → Restore
+            Backup and Restore Guide
           </a>{' '}
           for the full procedure.
         </p>

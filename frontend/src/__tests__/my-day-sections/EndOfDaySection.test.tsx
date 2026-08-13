@@ -78,9 +78,9 @@ describe('EndOfDaySection shutdown ritual', () => {
   it('renders the 3 structured prompts', async () => {
     renderEod();
     expect(await screen.findByText(/End of day/i)).toBeInTheDocument();
-    expect(screen.getByLabelText('One thing that worked')).toBeInTheDocument();
-    expect(screen.getByLabelText("What's still blocking me")).toBeInTheDocument();
-    expect(screen.getByLabelText('First move tomorrow')).toBeInTheDocument();
+    expect(screen.getByLabelText('One thing that worked')).toHaveAttribute('name', 'worked');
+    expect(screen.getByLabelText("What's still blocking me")).toHaveAttribute('name', 'blocked');
+    expect(screen.getByLabelText('First move tomorrow')).toHaveAttribute('name', 'first_move');
   });
 
   it('prefills the "worked" placeholder from the day signals (mechanical)', async () => {
@@ -131,6 +131,6 @@ describe('EndOfDaySection shutdown ritual', () => {
     const user = userEvent.setup();
     renderEod();
     await user.click(await screen.findByRole('button', { name: /\+ anything else/i }));
-    expect(screen.getByLabelText('Anything else')).toBeInTheDocument();
+    expect(screen.getByLabelText('Anything else')).toHaveAttribute('name', 'note');
   });
 });

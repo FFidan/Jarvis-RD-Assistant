@@ -80,6 +80,14 @@ nonzero until the selected Tailscale address passes its health check.
 Run `./setup.sh --tailscale` to select this choice without the access chooser.
 On an existing installation, also accept the overwrite prompt or add
 `--overwrite-env` so the route actually changes.
+
+`jarvis-research doctor` and update summaries inspect Tailscale Serve without
+changing it. If the complete node-wide configuration is exactly one HTTPS 443
+route to the pre-v1.2.0 raw listener, they print a targeted retarget command.
+Run that command only after confirming the route belongs to this installation.
+Shared, unreadable, or custom Serve state remains untouched; JARVIS never uses
+`serve reset` as an upgrade repair.
+
 `--public-origin https://host.example` remains the advanced route for an HTTPS
 proxy you manage yourself. Setup does not configure that proxy; it checks the
 exact JARVIS health marker and exits nonzero until the address works.

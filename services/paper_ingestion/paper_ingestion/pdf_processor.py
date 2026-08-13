@@ -7,10 +7,8 @@ page-bounded chunking + embedding storage.
 
 import asyncio
 import fcntl
-import ipaddress
 import logging
 import os
-import socket
 import stat
 import threading
 import uuid
@@ -64,7 +62,6 @@ MAX_PDF_PAGES = 500  # Reject PDFs with excessive page counts (anti-bomb)
 
 # CGNAT shared address space (RFC 6598) — not reachable from the public internet
 # but not flagged by ip.is_private/is_reserved on all Python versions.
-_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 # Sentinel: resolve the live module-level PDF_STORAGE_PATH at call time rather
 # than freezing it as a default-arg value (keeps monkeypatch.setattr working).
@@ -472,22 +469,9 @@ async def _validate_pdf_url(url: str) -> None:
     if hostname not in ALLOWED_PDF_DOMAINS and not (dev_mode and hostname in DEV_HTTP_ALLOWLIST):
         raise ValueError(f"Domain '{hostname}' is not allowed for PDF downloads")
 
-    # Resolve hostname and block private IPs
-    # Run DNS resolution in thread pool to avoid blocking the event loop
-    try:
-        loop = asyncio.get_running_loop()
-        addr_info = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
-    except socket.gaierror:
-        raise ValueError(f"Cannot resolve hostname: {hostname}") from None
-
-    for family, _type, _proto, _canonname, sockaddr in addr_info:
-        ip = ipaddress.ip_address(sockaddr[0])
-        if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local or ip in _CGNAT:
-            raise ValueError(f"URL resolves to private/reserved IP: {ip}")
-
-    # NOTE: DNS rebinding is mitigated by the narrow ALLOWED_PDF_DOMAINS allowlist
-    # (arxiv.org only). Pinning resolved IPs would require custom httpx transport
-    # and complex HTTPS/SNI handling — not warranted for this threat model.
+    # The shared pinned transport resolves and validates immediately before its
+    # TCP connection. Do not resolve here: validating one DNS answer and later
+    # connecting through a hostname would recreate the rebinding race.
 
 
 async def _resolve_validated_pdf_url(

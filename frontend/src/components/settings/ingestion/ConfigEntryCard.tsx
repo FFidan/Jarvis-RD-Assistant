@@ -10,7 +10,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Pencil, Check, X } from 'lucide-react';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import type { ConfigEntry } from '@/types';
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 
 export interface ConfigEntryMeta {
   label: string;
@@ -57,6 +57,8 @@ export function ConfigEntryCard({
   onSaveEdit,
   onCancelEdit,
 }: ConfigEntryCardProps) {
+  const controlId = useId();
+
   if (customElement !== undefined) {
     return (
       <>
@@ -79,12 +81,13 @@ export function ConfigEntryCard({
       <Card className="rounded-md border-hair shadow-none">
         <CardContent className="flex items-center justify-between p-4">
           <div>
-            <Label className="text-sm font-medium">{meta.label}</Label>
+            <Label htmlFor={controlId} className="text-sm font-medium">{meta.label}</Label>
             {meta.description && (
               <p className="text-xs text-muted-foreground">{meta.description}</p>
             )}
           </div>
           <Switch
+            id={controlId}
             checked={entry.value === 'true' || entry.value === true}
             onCheckedChange={(checked) => onMutate(entry.key, String(checked))}
             disabled={isMutPending}
@@ -95,7 +98,7 @@ export function ConfigEntryCard({
   }
 
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardContent className="flex items-center gap-4 p-4">
         {editingKey === entry.key ? (
           <div className="flex-1 space-y-1">

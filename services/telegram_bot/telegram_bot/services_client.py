@@ -6,9 +6,7 @@ Each function is a pure transport + parse layer: it builds the canonical
 and returns parsed JSON.  **No business logic** lives here.
 
 Callers are responsible for:
-- Resolving ``user_id`` to a concrete ``int`` before calling.  The sole
-  exception is ``log_focus_session``, whose best-effort scheduled callback may
-  pass ``None`` when its stored job data has no owner id.
+- Resolving ``user_id`` to a concrete ``int`` before calling.
 - Catching ``httpx.HTTPStatusError`` / ``httpx.HTTPError`` for user-facing error
   messages (handlers) or silent-skip logic (orchestration).
 """
@@ -16,13 +14,17 @@ Callers are responsible for:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import httpx
+from pydantic import ValidationError
 
 from telegram_bot.config import BotConfig, _owner_headers
+from telegram_bot.focus_contract import FocusSession, FocusTransition
+from telegram_bot.pulse_contract import PulseDeck, PulseGenerateJob
 
 __all__ = [
+    "PulsePayloadError",
     "fetch_projects",
     "fetch_project",
     "fetch_project_tasks",
@@ -35,6 +37,13 @@ __all__ = [
     "fetch_stats",
     "fetch_next_review_card",
     "submit_review_rating",
+    "fetch_active_focus_session",
+    "fetch_pending_telegram_focus_completion",
+    "start_focus_session",
+    "pause_focus_session",
+    "resume_focus_session",
+    "complete_focus_session",
+    "acknowledge_telegram_focus_completion",
     "log_focus_session",
     "fetch_new_paper_count",
     "check_authors",
@@ -47,6 +56,10 @@ __all__ = [
     "trigger_pulse_generation",
     "fetch_weekly_digest",
 ]
+
+
+class PulsePayloadError(ValueError):
+    """Sanitized boundary error for a malformed Pulse response."""
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +376,137 @@ async def log_focus_session(
     resp.raise_for_status()
 
 
+def _parse_focus_session(payload: object) -> FocusSession:
+    """Validate one focus payload without exposing malformed values."""
+    try:
+        return FocusSession.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError("Learning Engine returned an invalid focus session") from exc
+
+
+def _parse_focus_transition(payload: object) -> FocusTransition:
+    """Validate one focus transition without exposing malformed values."""
+    try:
+        return FocusTransition.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError("Learning Engine returned an invalid focus transition") from exc
+
+
+async def fetch_active_focus_session(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> FocusSession | None:
+    """Return the user's open focus interval, or its just-completed transition."""
+    resp = await http.get(
+        f"{config.learning_engine_url}/api/executive/focus/active",
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    return None if payload is None else _parse_focus_session(payload)
+
+
+async def fetch_pending_telegram_focus_completion(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> FocusSession | None:
+    """Return one durable, not-yet-acknowledged Telegram completion."""
+    resp = await http.get(
+        f"{config.learning_engine_url}/api/executive/focus/telegram/pending",
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    return None if payload is None else _parse_focus_session(payload)
+
+
+async def start_focus_session(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    duration_seconds: int,
+) -> FocusSession:
+    """Start one server-owned Telegram focus interval."""
+    resp = await http.post(
+        f"{config.learning_engine_url}/api/executive/focus/start",
+        json={"duration_seconds": duration_seconds, "source": "telegram"},
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return _parse_focus_session(resp.json())
+
+
+async def pause_focus_session(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    session_id: int,
+) -> FocusTransition:
+    """Pause a focus interval idempotently."""
+    resp = await http.post(
+        f"{config.learning_engine_url}/api/executive/focus/{session_id}/pause",
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return _parse_focus_transition(resp.json())
+
+
+async def resume_focus_session(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    session_id: int,
+) -> FocusTransition:
+    """Resume a focus interval idempotently."""
+    resp = await http.post(
+        f"{config.learning_engine_url}/api/executive/focus/{session_id}/resume",
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return _parse_focus_transition(resp.json())
+
+
+async def complete_focus_session(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    session_id: int,
+    mode: Literal["elapsed", "stop"],
+) -> FocusTransition:
+    """Complete a focus interval idempotently."""
+    resp = await http.post(
+        f"{config.learning_engine_url}/api/executive/focus/{session_id}/complete",
+        json={"mode": mode},
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return _parse_focus_transition(resp.json())
+
+
+async def acknowledge_telegram_focus_completion(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    session_id: int,
+) -> FocusTransition:
+    """Acknowledge a completion only after Telegram accepted the message."""
+    resp = await http.post(
+        f"{config.learning_engine_url}/api/executive/focus/{session_id}/telegram-notified",
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return _parse_focus_transition(resp.json())
+
+
 # ---------------------------------------------------------------------------
 # Paper Ingestion — feed / author checks
 # ---------------------------------------------------------------------------
@@ -537,7 +681,7 @@ async def fetch_pulse_today(
     user_id: int,
     *,
     limit: int | None = None,
-) -> dict[str, Any] | None:
+) -> PulseDeck | None:
     """GET {paper_ingestion}/api/pulse/today[?limit=].
 
     Returns the raw deck payload, or ``None`` when no deck exists for today
@@ -553,18 +697,24 @@ async def fetch_pulse_today(
         timeout=30.0,
     )
     resp.raise_for_status()
-    result: dict[str, Any] | None = resp.json()
-    return result
+    payload: Any = resp.json()
+    if payload is None:
+        return None
+    try:
+        return PulseDeck.model_validate(payload)
+    except ValidationError:
+        raise PulsePayloadError("Pulse response did not match the expected contract") from None
 
 
 async def trigger_pulse_generation(
     http: httpx.AsyncClient,
     config: BotConfig,
     user_id: int,
-) -> None:
+) -> PulseGenerateJob:
     """POST {paper_ingestion}/api/pulse/generate.
 
-    Fire-and-forget; enqueues an on-demand Pulse deck generation job.
+    Return the validated job identity so the enqueue cannot silently become an
+    untrackable or malformed operation.
     """
     resp = await http.post(
         f"{config.paper_ingestion_url}/api/pulse/generate",
@@ -572,6 +722,10 @@ async def trigger_pulse_generation(
         timeout=15.0,
     )
     resp.raise_for_status()
+    try:
+        return PulseGenerateJob.model_validate(resp.json())
+    except ValidationError:
+        raise PulsePayloadError("Pulse job response did not match the expected contract") from None
 
 
 async def fetch_weekly_digest(

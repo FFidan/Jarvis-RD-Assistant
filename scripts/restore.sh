@@ -2112,7 +2112,7 @@ if [ -r "$MANIFEST" ]; then
     if [ -z "$CODE_MAX" ]; then
       CODE_MAX="$(tr -dc '0-9' < "${SCHEMA_VERSION_FILE:-${MIG_DIR%/migrations}/SCHEMA_VERSION}" 2>/dev/null || true)"
       [ -n "$CODE_MAX" ] || CODE_MAX="$(tr -dc '0-9' < /app/db/SCHEMA_VERSION 2>/dev/null || true)"
-      [ -n "$CODE_MAX" ] || CODE_MAX=111
+      [ -n "$CODE_MAX" ] || CODE_MAX=113
     fi
     if [ -n "$CODE_MAX" ] && [ "$MANIFEST_SCHEMA" -gt "$CODE_MAX" ]; then
       fail_before_destruction "backup is newer than this deployment (schema ${MANIFEST_SCHEMA} > code ${CODE_MAX}); upgrade JARVIS before restoring"

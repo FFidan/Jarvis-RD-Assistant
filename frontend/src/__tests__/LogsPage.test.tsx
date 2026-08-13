@@ -20,6 +20,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...orig,
     listJobs: vi.fn().mockResolvedValue([]),
+    listAuditLog: vi.fn().mockResolvedValue({ entries: [], next_before_id: null }),
     getPulseSourceHealth: vi.fn().mockResolvedValue([]),
     getPulseSourceHistory: vi.fn().mockResolvedValue({}),
   };
@@ -30,6 +31,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // ---------------------------------------------------------------------------
 
 import { LogsPage } from '@/pages/LogsPage';
+import { AdminAuditLogPage } from '@/pages/AdminAuditLogPage';
 import { EventsTab } from '@/components/logs/EventsTab';
 import { CorrelationGroup } from '@/components/logs/CorrelationGroup';
 import { useUIStore } from '@/stores/ui-store';
@@ -37,9 +39,11 @@ import { ErrorSparkLine, buildSparkBuckets } from '@/components/logs/ErrorSparkL
 import { listEvents } from '@/lib/logs';
 import type { SystemEvent } from '@/lib/logs';
 import { formatTimestamp, formatTime } from '@/lib/relative-time';
+import { listAuditLog } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 const mockListEvents = vi.mocked(listEvents);
+const mockListAuditLog = vi.mocked(listAuditLog);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -147,13 +151,14 @@ describe('EventsTab — preset selection', () => {
     expect(screen.getByTestId('preset-select')).toBeInTheDocument();
   });
 
-  it('shows all four named presets', () => {
+  it('shows all named presets', () => {
     renderEventsTab();
     const select = screen.getByTestId('preset-select');
     expect(within(select).getByText('Last 1h errors')).toBeInTheDocument();
     expect(within(select).getByText("Today's slow queries")).toBeInTheDocument();
     expect(within(select).getByText('Failed jobs (24h)')).toBeInTheDocument();
     expect(within(select).getByText('Telegram orchestrator runs')).toBeInTheDocument();
+    expect(within(select).getByText('AI routing and providers')).toBeInTheDocument();
   });
 
   it('selecting "Last 1h errors" triggers an events fetch with level=error', async () => {
@@ -186,6 +191,80 @@ describe('EventsTab — preset selection', () => {
       const calls = mockListEvents.mock.calls;
       const lastCall = calls[calls.length - 1]?.[0];
       expect(lastCall).toMatchObject({ q: 'telegram' });
+    });
+  });
+
+  it('selecting "AI routing and providers" scopes the existing Events query', async () => {
+    renderEventsTab();
+    await userEvent.selectOptions(screen.getByTestId('preset-select'), 'ai-routing-providers');
+    await waitFor(() => {
+      const calls = mockListEvents.mock.calls;
+      const lastCall = calls[calls.length - 1]?.[0];
+      expect(lastCall).toMatchObject({ category: 'config', q: 'llm/' });
+    });
+  });
+});
+
+describe('AdminAuditLogPage — readable AI configuration actions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListAuditLog.mockResolvedValue({
+      entries: [
+        {
+          id: 2,
+          user_id: '1',
+          action: 'llm.route.change',
+          resource: 'llm.smart_model',
+          metadata: { role: 'smart' },
+          created_at: '2026-08-11T08:00:00Z',
+        },
+        {
+          id: 1,
+          user_id: '1',
+          action: 'secret.rotate',
+          resource: 'llm.providers.openrouter.api_key',
+          metadata: null,
+          created_at: '2026-08-11T07:00:00Z',
+        },
+        {
+          id: 3,
+          user_id: '1',
+          action: 'secret.remove',
+          resource: 'llm.anthropic.api_key',
+          metadata: null,
+          created_at: '2026-08-11T09:00:00Z',
+        },
+      ],
+      next_before_id: null,
+    });
+  });
+
+  it('adds readable labels while preserving raw action and resource values', async () => {
+    const queryClient = createTestQueryClient();
+    renderWithProviders(<AdminAuditLogPage />, { queryClient });
+
+    expect(await screen.findByText('Model route changed')).toBeInTheDocument();
+    expect(screen.getByText('Secret replaced')).toBeInTheDocument();
+    expect(screen.getByText('Secret removed')).toBeInTheDocument();
+    expect(screen.getByText('llm.route.change')).toBeInTheDocument();
+    expect(screen.getByText('secret.rotate')).toBeInTheDocument();
+    expect(screen.getByText('secret.remove')).toBeInTheDocument();
+    expect(screen.getByText('llm.smart_model')).toBeInTheDocument();
+    expect(screen.getByText('llm.providers.openrouter.api_key')).toBeInTheDocument();
+    expect(screen.getByText('llm.anthropic.api_key')).toBeInTheDocument();
+  });
+
+  it('keeps the server-side action-prefix filter contract', async () => {
+    const queryClient = createTestQueryClient();
+    renderWithProviders(<AdminAuditLogPage />, { queryClient });
+
+    await userEvent.type(screen.getByLabelText('Filter by action prefix'), 'llm.route');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(mockListAuditLog).toHaveBeenLastCalledWith(
+        expect.objectContaining({ actionPrefix: 'llm.route' }),
+      );
     });
   });
 });

@@ -47,6 +47,7 @@ const CARD = {
   evidence: null,
   fsrs_state: {},
   due_at: new Date(Date.now() - 86400_000).toISOString(),
+  stale: false,
   created_at: new Date(Date.now() - 7 * 86400_000).toISOString(),
   updated_at: new Date(Date.now() - 4 * 86400_000).toISOString(),
 };

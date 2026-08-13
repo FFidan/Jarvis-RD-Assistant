@@ -25,6 +25,7 @@ import {
   initialNavMode,
   type NavMode,
 } from '@/stores/nav-prefs-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -94,6 +95,13 @@ function renderSidebar({
     </MemoryRouter>,
     { queryClient },
   );
+}
+
+function resetResearchMilestones() {
+  useResearchMilestoneStore.setState({
+    completed: { save: false, analyze: false },
+    advancedCueDismissed: false,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +384,7 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    resetResearchMilestones();
   });
 
   it('fresh profile (no navMode key, tour not dismissed) defaults to simple mode', () => {
@@ -399,11 +408,12 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     spy.mockRestore();
   });
 
-  it('shows only the 5 essentials and the toggle — no in-rail "More" disclosure', () => {
+  it('shows the documented research-loop essentials and the toggle', () => {
     renderSidebar({ role: 'user', navMode: 'simple' });
 
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'My Day' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Discover' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Library' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Ask$/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Learning Cards' })).toBeInTheDocument();
@@ -412,16 +422,15 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     // in-rail "More" disclosure (it would duplicate the footer toggle).
     expect(screen.queryByTestId('nav-more')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Discover' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Projects' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Pulse Deck' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Analytics' })).not.toBeInTheDocument();
 
-    // ≤7 visible nav links total (5 essentials + footer Settings).
-    expect(screen.getAllByRole('link').length).toBeLessThanOrEqual(7);
+    // ≤8 visible nav links total (6 essentials + footer Settings).
+    expect(screen.getAllByRole('link').length).toBeLessThanOrEqual(8);
 
     // The full nav is one toggle away.
-    expect(screen.getByTestId('nav-mode-toggle')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show all features' })).toBeInTheDocument();
   });
 
   it('non-essential and admin destinations are absent from the simple rail (reachable in full)', () => {
@@ -447,7 +456,7 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     fireEvent.click(screen.getByTestId('nav-mode-toggle'));
 
     expect(useNavPrefsStore.getState().navMode).toBe('full');
-    expect(screen.getByTestId('nav-mode-toggle')).toHaveTextContent('Simple view');
+    expect(screen.getByRole('button', { name: 'Simple view' })).toHaveTextContent('Simple view');
     expect(screen.getByText('Today')).toBeInTheDocument();
     expect(screen.getByText('Read')).toBeInTheDocument();
     expect(screen.getByText('Learn')).toBeInTheDocument();
@@ -455,6 +464,60 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     expect(screen.getByRole('link', { name: 'Projects' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
     expect(screen.queryByTestId('nav-more')).not.toBeInTheDocument();
+  });
+
+  it('exposes every desktop tour target in simple mode for both roles', () => {
+    const { unmount } = renderSidebar({ role: 'user', navMode: 'simple' });
+    expect(document.querySelector('[data-tour-id="sidebar-discover"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour-id~="sidebar-library"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour-id~="sidebar-analyze"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour-id="sidebar-ask"]')).not.toBeNull();
+    unmount();
+
+    renderSidebar({ role: 'admin', navMode: 'simple' });
+    expect(document.querySelector('[data-tour-id="sidebar-discover"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour-id~="sidebar-library"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour-id~="sidebar-analyze"]')).not.toBeNull();
+    expect(document.querySelector('[data-tour-id="sidebar-ask"]')).not.toBeNull();
+  });
+
+  it('shows one dismissible advanced-workspace cue only after a completed milestone', () => {
+    const { rerender } = renderSidebar({ role: 'user', navMode: 'simple' });
+    expect(screen.queryByTestId('advanced-workspace-cue')).not.toBeInTheDocument();
+
+    useResearchMilestoneStore.getState().recordMilestone('save');
+    rerender(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Projects');
+    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Extraction');
+    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Knowledge Graph');
+    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Citation Graph');
+    expect(screen.getAllByTestId('advanced-workspace-cue')).toHaveLength(1);
+  });
+
+  it('persists cue dismissal from its keyboard-accessible button', () => {
+    useResearchMilestoneStore.getState().recordMilestone('analyze');
+    renderSidebar({ role: 'user', navMode: 'simple' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss workspace feature tip' }));
+
+    expect(screen.queryByTestId('advanced-workspace-cue')).not.toBeInTheDocument();
+    expect(useResearchMilestoneStore.getState().advancedCueDismissed).toBe(true);
+  });
+
+  it('dismisses the cue when Show all features opens the full rail', () => {
+    useResearchMilestoneStore.getState().recordMilestone('save');
+    renderSidebar({ role: 'user', navMode: 'simple' });
+
+    fireEvent.click(screen.getByTestId('nav-mode-toggle'));
+
+    expect(screen.queryByTestId('advanced-workspace-cue')).not.toBeInTheDocument();
+    expect(useResearchMilestoneStore.getState().advancedCueDismissed).toBe(true);
+    expect(useNavPrefsStore.getState().navMode).toBe('full');
   });
 });
 

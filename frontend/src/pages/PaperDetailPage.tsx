@@ -7,9 +7,10 @@
  *             ContradictionsPanel) — preserved functionally from previous layout.
  *
  * Both rails collapse to Sheet on small screens.
- * The § Pipeline rail's failure state comes from the paper-detail payload's
- * `processing_failed` (latest paper.process/analyze job status='failed') —
- * the same persisted signal ActionsSidebar polls via getJob.
+ * The § Pipeline rail and the actions panel's step tracker both read the
+ * paper-detail payload's `processing_failed` flag and apply the same shared
+ * `isProcessingFailed` rule to it, so a reload cannot show one rail failed and
+ * the other pending.
  */
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -239,6 +240,7 @@ export function PaperDetailPage() {
           pdfDownloaded={paper.pdf_downloaded}
           hasChunks={chunks.length > 0}
           hasSummary={summary !== null}
+          processingFailed={processingFailed}
           pulseProcessButton={processPulse}
           pulseAnalyzeButton={analyzePulse}
           discoveryOrigin={paper.discovery_origin ?? 'user_initiated'}

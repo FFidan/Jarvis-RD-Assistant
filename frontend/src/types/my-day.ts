@@ -49,10 +49,30 @@ export interface MyDayResponse {
   project_pulse: ProjectPulseItem[];
 }
 
+export interface ActiveFocusSession {
+  id: number;
+  state: 'active' | 'paused' | 'completed';
+  source: 'web' | 'telegram';
+  duration_seconds: number;
+  remaining_seconds: number;
+  started_at: string;
+  paused_at: string | null;
+  paused_seconds: number;
+  completed_at: string | null;
+  recorded_seconds: number;
+  task_id: number | null;
+  paper_id: number | null;
+}
+
+export interface FocusSessionTransition {
+  session: ActiveFocusSession;
+  changed: boolean;
+}
+
 export interface YesterdayTask {
   id: number;
   title: string;
-  status: string;
+  status: TaskStatus;
 }
 
 export interface YesterdaySummary {
@@ -70,7 +90,7 @@ export interface Thread {
   anchor: string | null;
   progress: number; // 0..1
   last_at: string;
-  status: string; // open | done | archived
+  status: 'open' | 'done' | 'archived';
   created_at: string;
 }
 
@@ -80,10 +100,10 @@ export interface ThreadSeedResponse {
 }
 
 export interface JournalPrompts {
-  first_move?: string;
-  worked?: string;
-  blocked?: string;
-  note?: string;
+  first_move?: string | null;
+  worked?: string | null;
+  blocked?: string | null;
+  note?: string | null;
 }
 
 export interface JournalEntry {

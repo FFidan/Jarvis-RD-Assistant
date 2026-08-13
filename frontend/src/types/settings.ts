@@ -101,7 +101,7 @@ export interface SystemCapabilities {
 export interface AccountResponse {
   id: number;
   email: string;
-  role: string;
+  role: 'user' | 'admin';
   display_name: string | null;
   created_at: string;
   last_login_at: string | null;

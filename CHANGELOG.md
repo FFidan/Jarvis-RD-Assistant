@@ -10,6 +10,139 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.5 (2026-08-13)
+
+This release makes the research loop consistent across the Web interface,
+Telegram, fresh installations, and maintained upgrades. It also replaces
+several unchecked or duplicated control paths with smaller, tested owners.
+
+### Added
+
+- **One focus session across Web and Telegram.** Starting a focus session in
+  either client now updates the same durable timer. The session survives client
+  restarts, records completed time once, and pauses scheduled Telegram digests,
+  reminders, alerts, and warnings until focus ends.
+- **Cross-client job visibility.** Work started from Telegram or another browser
+  appears in the Web job indicator and refreshes the affected view when it
+  finishes, including fast Pulse jobs that complete between polls.
+- **A checked Telegram command reference.** Bot registration, Telegram's command
+  menu, `/help`, and the manual now derive from the same command catalog.
+- **A sync schedule anyone can set.** The Zotero library sync schedule is chosen
+  from plain options — hourly, every few hours, daily at a time, or weekly on a
+  day — instead of being typed as a five-field expression. The expression field
+  remains under Advanced for schedules the options cannot express, and a
+  schedule that would run more often than every fifteen minutes is refused.
+- **Stored provider credentials can be removed.** A saved key or endpoint can be
+  cleared from the interface rather than only overwritten, the removal is
+  refused while a model route still depends on that provider, and it is recorded
+  in the audit log distinctly from a replacement.
+- **A local security scan.** `make security-scan` reproduces the local dependency
+  and secret-scanning subset of the hosted Security workflow. Downloaded scanner
+  artifacts stay outside the repository and are hash-verified on every use.
+
+### Fixed
+
+- **Documents can be processed on processor-only installations.** The published
+  images for machines without a graphics accelerator paired the document reader
+  with a build of its companion library that could not load beside it, so the
+  first document a researcher opened failed while every service still reported
+  healthy. Both now come from the same source. Before any image may be released
+  it must load that stack, convert a real document and refuse a corrupt one,
+  inside the exact image being published and with no network access at all.
+- **The Telegram bot can reach the rest of the deployment.** The outbound
+  address policy introduced in this release did not list the deployment's own
+  service names, so every command and every scheduled message failed before a
+  connection was opened. The service names the software dials are now permitted,
+  a name that merely resembles one is still refused, and a first-run check makes
+  one real call between containers so this cannot pass unnoticed again.
+- **Document models ship inside the image.** The reader previously downloaded
+  several hundred megabytes the first time a researcher opened a document, which
+  stalled that first document and never completed at all on a deployment without
+  internet access. The models are now built in.
+- **A setting that fails to save says so.** Eighteen controls across the author,
+  topic, extraction-template, automation, source, model and Telegram panels
+  changed the screen and stayed silent when the server rejected the change,
+  leaving the old value on display as though it had been stored. Every panel now
+  reports a rejected save the same way.
+- **Ask behaves predictably with reasoning-capable models.** Thinking is off
+  unless explicitly enabled, one answer budget now governs both prompt fitting
+  and the model request, and known response-hygiene failures produce actionable
+  retry and administrator guidance instead of a generic error.
+- **Outbound connections stay bound to the address that policy checked.** PDF
+  downloads, custom model providers, Better BibTeX, SMTP, and LiteLLM custom
+  provider traffic pin validated DNS results through the socket connection while
+  preserving normal certificate and hostname verification.
+- **Telegram Pulse reports what it is showing.** Telegram labels current, older,
+  reduced-signal, empty, and unverified results without changing backend ranking.
+  It shows the first five cards from the same ranked deck as the Web interface;
+  the same paper can still appear on another day when the inputs are unchanged.
+- **Zotero exports stay with their research projects.** Sending a paper creates
+  or reuses a collection for each linked project, including when an existing
+  item is found by DOI. The Web interface follows the queued export through to
+  completion, and a failed collection or DOI lookup can no longer be reported
+  as an unfiled or duplicate success. Switching between personal and group
+  libraries clears only the previous library's remote identifiers; local papers
+  and analysis history remain intact.
+- **Historical migrations run in ordinary pull-request checks.** One shared
+  schema-101 fixture now proves the complete migration path instead of allowing
+  a synthetic or uncollected test to go green.
+- **Setup and delivery reject blank SMTP identities consistently.** Required
+  host and sender fields are normalized at setup, secret loading, readiness,
+  probing, and delivery boundaries.
+- **Saving metadata-only papers no longer creates failed analysis jobs.** Web,
+  batch, and Pulse saves now schedule analysis only when the paper has a remote
+  PDF or a local PDF file; the paper still enters the researcher's library when
+  only bibliographic metadata is available.
+- **The in-app PDF reader works under the production security policy.** Its
+  same-origin PDF blob is permitted by the dashboard policy, and Ask routing
+  metadata is decoded without producing misleading malformed-stream warnings.
+- **Upgrade diagnosis is read-only.** Lifecycle commands distinguish a possible
+  old Tailscale Serve target from custom or shared state and print a targeted,
+  operator-confirmed repair command without resetting or changing Serve state.
+- **The answer-quality benchmark no longer rejects ordinary prose.** Only a real
+  hidden-reasoning control marker counts as a leak, so an answer that happens to
+  discuss its own reasoning in plain words is scored normally.
+- **Raw Compose commands are quiet when optional certificate settings are
+  unset,** rather than warning about variables the deployment does not use.
+- **Local model targets use one parser for primary and fallback routes,** so a
+  fallback resolves exactly like the primary route it stands in for.
+
+### Changed
+
+- **Successful Web API responses are decoded at runtime.** Named schemas now
+  guard every JSON domain before state changes, including job events and results;
+  the generic unchecked response cast has been removed.
+- **Large PDF and backup workflows have smaller state owners.** PDF preparation,
+  persistence, and cleanup keep their lock and transaction order, while restore
+  recovery and retention editing now live in independently tested controllers.
+- **First-use navigation teaches the real loop.** Discover is present in the
+  simple navigation, and milestone-based guidance covers Discover, Save,
+  Analyze, and Ask on wide and narrow layouts using React 19-compatible tour
+  dependencies. A researcher's tour dismissal is respected across browsers.
+- **Installation has one implementation.** New installs use `setup.sh`; the old
+  development command is a strict deprecated forwarder. Rollback now requires a
+  complete setup-owned credential snapshot before it changes access services.
+- **Expired compatibility branches and inert configuration were removed.** The
+  browser keeps API-key exchange but no longer stores or sends raw keys, tests
+  patch their real module owners, the unused fixed Telegram chat setting and
+  global Zotero schedule are gone, and unique lifecycle browser cases run in the
+  blocking mocked suite.
+- **The model catalogue stays responsive as it grows.** The picker renders a
+  fixed number of matches and says how many of how many are shown, so typing
+  costs the same on a catalogue of four hundred models as on one of a dozen.
+- **Settings behaves the same way throughout.** Sliders commit once when
+  released rather than on every step, every control carries a name a screen
+  reader announces, clearing a topic's feedback asks first like the other
+  irreversible actions, and the status page states what it actually checked
+  rather than claiming everything is running.
+- **A severe, fixable vulnerability blocks a release.** The published-image scan
+  now fails the verification run when it finds a critical problem that a rebuild
+  would fix, so such an image cannot reach a stable tag. Findings with no
+  available fix stay out of the gate and remain in the report.
+- **Dependency floors and locks include current security fixes** for GitPython
+  and the frontend's transitive identifier generator; local and hosted scans
+  reject a return to their affected versions.
+
 ## v1.2.4 (2026-08-07)
 
 This release repairs two paths that were broken for people running the software

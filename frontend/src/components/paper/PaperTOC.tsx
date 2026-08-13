@@ -8,6 +8,7 @@
  *  § Pipeline — read-only processing status derived from existing paper data.
  */
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
+import { isProcessingFailed } from '@/lib/paper-pipeline';
 import { cn } from '@/lib/utils';
 
 // ---- Types ----------------------------------------------------------------
@@ -22,7 +23,7 @@ export interface PipelineStatus {
   pdfDownloaded: boolean;
   chunkCount: number;
   hasSummary: boolean;
-  /** Set when B-EMBED surfaces a terminal processing failure on the paper. */
+  /** Set when the paper's most recent processing run ended in failure. */
   processingFailed?: boolean;
 }
 
@@ -87,8 +88,10 @@ export function PaperTOC({
 }: PaperTOCProps) {
   const { pdfDownloaded, chunkCount, hasSummary, processingFailed = false } = pipeline;
 
-  // Pipeline step derivation — mirrors ActionsSidebar step-status logic.
-  // processingFailed marks the processing step as failed (set by B-EMBED terminal failure).
+  // The processing step's failure rule is shared with the actions panel so the
+  // two rails cannot drift apart again; the remaining steps read directly from
+  // the paper's persisted counts.
+  const processingHasFailed = isProcessingFailed({ processingFailed, hasChunks: chunkCount > 0 });
   const summarizing = pdfDownloaded && chunkCount > 0 && !hasSummary;
 
   return (
@@ -150,7 +153,7 @@ export function PaperTOC({
           <PipelineStep
             done={chunkCount > 0}
             inProgress={pdfDownloaded && chunkCount === 0 && !processingFailed}
-            failed={processingFailed && chunkCount === 0}
+            failed={processingHasFailed}
             label={chunkCount > 0 ? `${chunkCount} passages` : 'Extracting passages…'}
           />
           <PipelineStep

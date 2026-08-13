@@ -9,8 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 /**
  * Handles the magic-link landing URL.
  *
- * URL shape: /auth/verify#token=<urlsafe-32>. The old query-token shape is
- * still accepted so links issued before this change keep working.
+ * URL shape: /auth/verify#token=<urlsafe-32>.
  *
  * Behavior:
  * - On mount, POST the token to /api/auth/verify.
@@ -76,7 +75,7 @@ export function __resetVerifyDedupeForTests(): void {
 }
 
 export function AuthVerifyPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   const { loginWithSession, isAuthenticated, isSessionValid } = useAuthStore();
@@ -85,19 +84,17 @@ export function AuthVerifyPage() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tokenRef = useRef(
     new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
-      .get('token') ?? searchParams.get('token'),
+      .get('token'),
   );
 
   useEffect(() => {
-    const tokenInAddress =
-      new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
-        .get('token') ?? searchParams.get('token');
+    const tokenInAddress = new URLSearchParams(
+      location.hash.startsWith('#') ? location.hash.slice(1) : location.hash,
+    ).get('token');
     if (!tokenInAddress) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('token');
     // Replacing the search params also clears the fragment. Keep the token in
     // memory just long enough to exchange it, never in browser history.
-    setSearchParams(next, { replace: true });
+    setSearchParams({}, { replace: true });
     // The initial URL is captured exactly once; subsequent router updates must
     // not replace the in-memory single-use token.
     // eslint-disable-next-line react-hooks/exhaustive-deps

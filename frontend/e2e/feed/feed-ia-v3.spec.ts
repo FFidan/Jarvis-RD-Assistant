@@ -91,7 +91,7 @@ const LIBRARY_PAPER = {
   has_chunks: false,
   has_summary: false,
   priority_level: null,
-  discovery_origin: null,
+  discovery_origin: 'user_initiated',
 };
 
 // ── route stubs ───────────────────────────────────────────────────────────

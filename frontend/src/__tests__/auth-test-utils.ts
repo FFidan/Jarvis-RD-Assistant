@@ -4,7 +4,6 @@ import { useAuthStore } from '@/stores/auth-store';
 export const LOGGED_OUT_AUTH = {
   isAuthenticated: false,
   authTime: null,
-  apiKey: null,
   user: null,
   lastError: null,
 } satisfies Partial<ReturnType<typeof useAuthStore.getState>>;

@@ -3,7 +3,7 @@
  *
  * Shows:
  *  - Current pairing status (paired / unpaired)
- *  - Button to request a 15-minute pairing token
+ *  - Button to request a 15-minute pairing code
  *  - Token display with copy button and live countdown
  *  - Unpair button when paired
  *
@@ -20,6 +20,7 @@ import { CheckCircle2, Copy, Loader2, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getTelegramPairing, removeTelegramPairing, requestTelegramPairToken } from '@/lib/api';
 import type { TelegramPairTokenResponse } from '@/lib/api';
+import { onSaveError } from '@/lib/forms/save-error';
 
 // ---------------------------------------------------------------------------
 // Countdown hook
@@ -86,7 +87,7 @@ function TokenDisplay({ token, expiresAt, onExpired }: {
     <div className="rounded-md border border-hair bg-muted/30 p-4 space-y-3">
       <div>
         <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-          Pairing token
+          Pairing code
         </p>
         <div className="flex items-center gap-2">
           <code className={`font-mono text-lg tracking-widest select-all ${isExpired ? 'text-muted-foreground line-through' : ''}`}>
@@ -98,7 +99,7 @@ function TokenDisplay({ token, expiresAt, onExpired }: {
             className="h-7 w-7 shrink-0"
             onClick={handleCopy}
             disabled={isExpired}
-            title="Copy token"
+            title="Copy code"
           >
             <Copy className="h-3.5 w-3.5" />
           </Button>
@@ -114,7 +115,7 @@ function TokenDisplay({ token, expiresAt, onExpired }: {
       </p>
       <div className="flex items-center gap-2 text-xs">
         {isExpired ? (
-          <span className="text-destructive">Token expired — generate a new one.</span>
+          <span className="text-destructive">Code expired — generate a new one.</span>
         ) : (
           <span className="text-muted-foreground">
             Expires in{' '}
@@ -166,6 +167,7 @@ export function TelegramPairingSection() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pairing.userTelegram() });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
     },
+    onError: onSaveError('Could not disconnect Telegram'),
   });
 
   const handleExpired = useCallback(() => {
@@ -259,7 +261,7 @@ export function TelegramPairingSection() {
             {requestToken.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : null}
-            Generate pairing token
+            Generate pairing code
           </Button>
         </div>
       )}

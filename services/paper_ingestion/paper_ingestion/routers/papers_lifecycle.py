@@ -54,17 +54,17 @@ async def save_paper(
     user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Save a paper to the Reading List (``state := 'to_read'``)."""
-    already_processed = False
+    should_analyze = False
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(
             conn, paper_id, user_id, allowed=("inbox", "done", "to_read", "reading")
         )
         await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
-        already_processed = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM paper_chunks WHERE paper_id = $1)", paper_id
+        should_analyze = paper_id in await papers_service.find_papers_needing_analysis(
+            conn, [paper_id]
         )
-    if not already_processed:
+    if should_analyze:
         try:
             from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 

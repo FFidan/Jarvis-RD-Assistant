@@ -5,9 +5,8 @@
 - DDL on `user_config`, `topics`, `tracked_authors`, `paper_sources`, `scheduled_nudges`
 - Any new code reading `user_config.value` in any service
 
-The `settings_service` package is split into submodules
-([settings_service.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/settings_service.py)
-re-exports them): `config_metadata` (allow-list + key classification),
+Settings behavior is owned directly by concern-specific modules:
+`config_metadata` (allow-list + key classification),
 `config_validators` (validators), `config_db` (row I/O), `config_write`
 (write orchestration), `model_assignment`, `scheduler_effects`, `provider_test`,
 `analytics_queries`, `data_export`.
@@ -23,8 +22,10 @@ who writes it, who reads it, and current wiring status (Active / Partial / Unwir
 **Out of scope.**
 - Per-paper user state (`paper_user_state` columns) — covered by the
   paper-lifecycle redesign spec.
-- Pomodoro timer settings (`usePomodoroStore` Zustand) — UI-local only,
-  never persisted server-side.
+- Focus-session interval state — owned by the Learning Engine's per-user
+  `focus_sessions` rows and shared by Web and Telegram. Device preferences such
+  as work/break durations and local break-cycle progress remain in
+  `usePomodoroStore`.
 - Authentication (`JARVIS_API_KEY` from Docker Secret / env fallback /
   `auth-store`) — bootstrap, not user-controllable.
 - HTTP request/response Pydantic shapes — covered by service-local models,
@@ -99,7 +100,7 @@ validation and is an intentional non-regression: the omission is by design, not 
 | `zotero.library_type` | `"user"` (implicit on push) | `_validate_library_type` (`"user"` / `"group"`) | [zotero_service.py:89](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L89) | |
 | `zotero.group_id` | (none) | `_validate_group_id` (positive int or null) | `zotero_service.py` (consumed when `library_type="group"`) | `null` clears the field. `ZoteroClient` requires a non-null id at construction time when `library_type="group"`. |
 | `zotero.poll_enabled` | `False` | `_validate_bool` | `scheduler.py` per-user polling readiness | Per-user gate for scheduled Zotero polling. The scheduler job itself always runs; per-run fan-out only includes users with `poll_enabled=true` and usable Zotero credentials. |
-| `zotero.poll_cron` | (no default; cron string when set) | `_validate_zotero_cron` | [scheduler.py:103](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/scheduler.py#L103) | On write, `apply_zotero_cron` ([scheduler_effects.py:113](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113)) reschedules the `zotero_library_sync` job |
+| `zotero.poll_cron` | (no default; cron string when set) | `_validate_zotero_cron` | `scheduler.py` per-user polling readiness | On write, `reconcile_zotero_poll_job` reconciles that user's polling job from the saved configuration |
 | `zotero.auto_push_on_star` | `False` (key absent → off) | `_validate_bool` | star handler in [routers/papers.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/routers/papers.py) — on `starred=False→True` transition AND key truthy AND project link present, enqueues existing `zotero.push` job | Default-off; idempotent on already-starred state. |
 | `fsrs.desired_retention` | `0.9` ([init.sql:49](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/init.sql#L49)) | `_validate_fsrs_retention` (range `(0, 1)`) | Per-review fetch in `_build_fsrs_manager_from_db` ([learning_engine/routers/review.py](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/learning_engine/learning_engine/routers/review.py)) — fresh `FSRSManager` built inside the review transaction | Live-edit reactive |
 | `fsrs.learning_steps` | `[1, 10]` ([init.sql:50](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/init.sql#L50)) | `_validate_fsrs_learning_steps` (`list[int]`, length 1–10, all positive) | Per-review fetch in `_build_fsrs_manager_from_db`; passed to fsrs `Scheduler(learning_steps=[timedelta(minutes=m) for m in steps])` | Default `[1, 10]` matches the fsrs library default |
@@ -222,7 +223,7 @@ Defined in `_CONFIG_VALIDATORS` ([config_validators.py:231-271](https://github.c
 | `_validate_optional_header_str` | `smtp.from_name` | Empty string or `null` clears; otherwise ≤ 255 printable chars, no `\r`/`\n`/`\x00` |
 | `_validate_library_type` | `zotero.library_type` | `"user"` or `"group"` |
 | `_validate_group_id` | `zotero.group_id` | Positive int or null |
-| `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab` (no sub-hourly limit, unlike Pulse) |
+| `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab`. Schedules faster than once every 15 minutes rejected |
 | `_validate_langfuse_dashboard_url` | `observability.langfuse_dashboard_url` | Empty / `https://` / loopback `http://` URL; rejects other schemes |
 | `_validate_fsrs_retention` | `fsrs.desired_retention` | Number in open range `(0, 1)`; rejects bool, 0, 1, and out-of-range floats |
 | `_validate_fsrs_learning_steps` | `fsrs.learning_steps` | `list[int]`, length 1–10, all strictly positive (minutes). Default `[1, 10]` matches the fsrs library default |
@@ -242,12 +243,44 @@ Some keys trigger work beyond the row write:
 |---|---|
 | `llm.{smart,fast,embed}_model` | `update_litellm_model` delivers via the LiteLLM admin DB: `GET /v1/model/info` to resolve the current deployment, `POST /model/new` for the replacement (tuned params carried), then `POST /model/delete` for the old DB row (`litellm_config.py`; YAML is never written — the model name is validated against injection). The `embed` alias is dimension-locked and refused at runtime. While LiteLLM runs DB-less the write commits with `delivery: "pending_restart"` and the boot reconciler re-delivers (see contract 05 §5.5) |
 | `pulse.cron` | `scheduler.reschedule_job("pulse_overnight", trigger=...)` + bounds check + DB rollback if `next_run_time` is invalid (`apply_pulse_cron`, [scheduler_effects.py:53](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53)) |
-| `zotero.poll_cron` | `scheduler.reschedule_job("zotero_library_sync", trigger=...)` (best-effort; if job not yet registered, warning only) (`apply_zotero_cron`, [scheduler_effects.py:113](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113)) |
+| `zotero.poll_cron` | `scheduler.reconcile_zotero_poll_job(...)` updates or removes the saved user's job after the row write; startup reconciliation remains authoritative |
 | `user.timezone` | Best-effort `POST /internal/reload-nudges` to telegram_bot (`reload_telegram_nudges`, [model_assignment.py:21](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/model_assignment.py#L21)) |
 | Any `_ENCRYPTED_KEYS` member | `value` column NULL'd; ciphertext written to `encrypted_value` BYTEA via `encrypt_secret`, in `write_config` ([config_write.py:132](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/config_write.py#L132)) |
 | `_SOURCE_JSONB_COLUMNS` `"config"` | `dynamic_update` JSON-encodes the value before write |
 
 GET responses for `_ENCRYPTED_KEYS` return `mask_secret(plaintext)`; GET for `_SECRET_KEYS \ _ENCRYPTED_KEYS` returns `"****"` if non-null. Plaintext **never** leaves the API.
+
+### 5.1 Removing a stored provider credential
+
+`PUT /api/config/{key}` rejects a blank value, so a provider credential can be
+replaced but not withdrawn through that surface. Two dedicated routes delete the
+stored row instead. Both are admin-only browser routes (`verify_api_key` +
+`require_admin`), rate-limited to 5 requests per minute, and return `204` with no
+body on success.
+
+| Route | Deletes | Refusals | Audit + side effects |
+|---|---|---|---|
+| `DELETE /api/providers/{provider}/key` | The registry's `api_key_config_key` row, system-scoped (`user_id IS NULL`) | `400` unknown provider; `409` while a model route still resolves to this provider; `503` when the assignment rows cannot be read | `secret.remove` audit event on the deleted key; provider model-list cache invalidated |
+| `DELETE /api/providers/{provider}/base-url` | The registry's `base_url_config_key` row, system-scoped | `400` unknown provider **or** a provider that stores no endpoint URL; `409` and `503` as above | Same |
+
+Three properties of the refusals are part of the contract:
+
+- **Route identity comes from the assignment prefix, not the delivery prefix.**
+  `llm.{smart,fast,embed}_model` store the app-facing prefix, which for the custom
+  endpoint (`custom_openai/`) differs from what LiteLLM is handed (`openai/`).
+  Resolving identity from the delivery prefix would read a custom-endpoint route as
+  OpenAI's and clear a credential that is still in use.
+- **The `409` refuses rather than reassigns.** Nothing in this service rewrites a
+  model route, and doing so here would bypass the assignment validation the write
+  path applies. The message names the affected route (Main / Quick / Embedding) so
+  the operator knows what to repoint first.
+- **The assignment read is fail-closed.** An unreadable assignment table is not
+  evidence that no route uses the credential, so the removal is refused with `503`
+  and no row is deleted.
+
+`secret.remove` is deliberately distinct from the `secret.rotate` event a `PUT`
+emits: an audit reader must be able to tell a replaced credential from a withdrawn
+one. Both actions are labelled in the admin audit log view.
 
 ---
 
@@ -355,10 +388,14 @@ The implementation MUST satisfy these. Testable.
 | `_validate_fsrs_retention` / `_validate_fsrs_learning_steps` | services/paper_ingestion/paper_ingestion/services/config_validators.py:213-228 | Range `(0,1)` for retention; `list[int]` length 1–10 positive for learning_steps |
 | `write_config` | services/paper_ingestion/paper_ingestion/services/config_write.py:132 | Allow-list + validator + encrypted-vs-plain write + side-effect dispatch |
 | `apply_pulse_cron` | services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:53 | Reschedules live `pulse_overnight` job; bounds-checks; DB+scheduler rollback on invalid next_run_time |
-| `apply_zotero_cron` | services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:113 | Best-effort `zotero_library_sync` reschedule on poll_cron PUT |
+| `reconcile_zotero_poll_job` | services/paper_ingestion/paper_ingestion/scheduler.py | Reconciles one user's Zotero polling job from current saved settings |
 | `reload_telegram_nudges` | services/paper_ingestion/paper_ingestion/services/model_assignment.py:21 | POST `/internal/reload-nudges` to telegram_bot |
 | `update_litellm_model` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:477 | Delivers a role→model change via LiteLLM's admin DB (`GET /v1/model/info` + `POST /model/new` + `POST /model/delete`); no-ops when the alias already routes the requested signature; refuses re-routing the dimension-locked `embed` alias; raises RuntimeError on delivery failure (reconciler retries) |
 | `get_provider_api_key` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:149 | Decrypts cloud-provider key from user_config |
+| `remove_provider_key` / `remove_provider_base_url` | services/paper_ingestion/paper_ingestion/routers/settings.py:532, 551 | Admin-only, rate-limited DELETE routes returning 204; both delegate to `_remove_provider_setting` |
+| `_remove_provider_setting` | services/paper_ingestion/paper_ingestion/routers/settings.py:485 | Deletes the system-scoped provider row after the route check, invalidates the provider model cache, and writes a `secret.remove` audit event |
+| `_model_route_using` | services/paper_ingestion/paper_ingestion/routers/settings.py:461 | Resolves the blocking route label from the stored assignment prefix; raises 503 when `_load_current_model_assignments` reports a read failure |
+| `ACTION_LABELS` | frontend/src/pages/AdminAuditLogPage.tsx:40 | Maps `secret.rotate` and `secret.remove` to distinct audit-log labels |
 | `pulse.weights` / lookback / grace load | services/paper_ingestion/paper_ingestion/pulse/profile.py:221-242 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1]; reads `pulse.lookback_days` (default 7) + `pulse.startup_grace_seconds` (default 0.0) |
 | `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs a fresh `FSRSManager` inside the review transaction |
 | `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/setup.py (get_status) | Reads `setup.completed` from `user_config`; returned in pre-auth `/api/setup/status`; unified `OnboardingGate` keys on this field |

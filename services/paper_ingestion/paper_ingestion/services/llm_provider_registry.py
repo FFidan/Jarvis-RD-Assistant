@@ -11,6 +11,15 @@ from urllib.parse import urlparse
 
 ProviderKind = Literal["direct", "router", "self_hosted"]
 PrivacyBoundary = Literal["direct_provider", "router", "self_hosted"]
+# ``unavailable`` is the default and says nothing about the provider: JARVIS
+# simply integrates no account lookup for it. ``no_provider_api`` is a
+# researched claim that the provider publishes none, so a new registry entry
+# cannot assert provider-side absence without stating it deliberately.
+AccountCapability = Literal["current_key", "balance", "unavailable", "no_provider_api"]
+
+#: The capabilities backed by an account endpoint this deployment can call.
+ACCOUNT_FETCH_CAPABILITIES: frozenset[AccountCapability] = frozenset({"current_key", "balance"})
+
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
@@ -31,6 +40,8 @@ class ProviderDefinition:
     default_base_url: str | None = None
     delivery_prefix: str | None = None
     supports_assignment: bool = True
+    dashboard_url: str | None = None
+    account_capability: AccountCapability = "unavailable"
 
     @property
     def assignment_prefix(self) -> str:
@@ -54,6 +65,7 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="Careful long-context synthesis and writing.",
         data_note="Selected prompts and source excerpts are sent to Anthropic when assigned.",
+        dashboard_url="https://console.anthropic.com/",
     ),
     ProviderDefinition(
         id="openai",
@@ -65,6 +77,7 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="General reasoning, structured extraction, and synthesis.",
         data_note="Selected prompts and source excerpts are sent to OpenAI when assigned.",
+        dashboard_url="https://platform.openai.com/api-keys",
     ),
     ProviderDefinition(
         id="google",
@@ -76,6 +89,11 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="Multimodal-capable models and fast lower-cost tiers.",
         data_note="Selected prompts and source excerpts are sent to Google when assigned.",
+        dashboard_url="https://aistudio.google.com/app/apikey",
+        # The Gemini API an API key authenticates against serves models and
+        # generation only; usage and billing live in Google Cloud behind
+        # different credentials, so no account lookup exists to integrate.
+        account_capability="no_provider_api",
     ),
     ProviderDefinition(
         id="openrouter",
@@ -87,6 +105,8 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="router",
         best_for="Trying many hosted models through one router account.",
         data_note="Requests pass through OpenRouter and then the selected upstream provider.",
+        dashboard_url="https://openrouter.ai/settings/keys",
+        account_capability="current_key",
     ),
     ProviderDefinition(
         id="deepseek",
@@ -98,6 +118,8 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="Cost-conscious reasoning and extraction candidates.",
         data_note="Selected prompts and source excerpts are sent to DeepSeek when assigned.",
+        dashboard_url="https://platform.deepseek.com/api_keys",
+        account_capability="balance",
     ),
     ProviderDefinition(
         id="mistral",
@@ -109,6 +131,7 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="European provider option and efficient chat models.",
         data_note="Selected prompts and source excerpts are sent to Mistral when assigned.",
+        dashboard_url="https://console.mistral.ai/api-keys",
     ),
     ProviderDefinition(
         id="moonshot",
@@ -120,6 +143,8 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="Long-context Kimi models and multilingual synthesis.",
         data_note="Selected prompts and source excerpts are sent to Moonshot when assigned.",
+        dashboard_url="https://platform.kimi.ai/console/api-keys",
+        account_capability="balance",
     ),
     ProviderDefinition(
         id="zai",
@@ -131,6 +156,7 @@ PROVIDER_REGISTRY: tuple[ProviderDefinition, ...] = (
         privacy_boundary="direct_provider",
         best_for="GLM long-context and reasoning-capable candidates.",
         data_note="Selected prompts and source excerpts are sent to Z.ai when assigned.",
+        dashboard_url="https://z.ai/manage-apikey/apikey-list",
     ),
     ProviderDefinition(
         id="custom_openai_compatible",

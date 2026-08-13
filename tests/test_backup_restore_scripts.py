@@ -862,6 +862,8 @@ def test_litellm_entrypoint_holds_start_and_stops_a_faux_provider(tmp_path: Path
         "LITELLM_SECRET_DIR": str(secrets),
         "LITELLM_WATCH_INTERVAL_SECONDS": "0.05",
         "FAUX_LITELLM_PORT": str(port),
+        "ENVIRONMENT": "test",
+        "JARVIS_TEST_LITELLM_LAUNCHER": str(faux_litellm),
     }
     with _litellm_entrypoint_process(env) as proc:
         time.sleep(0.2)

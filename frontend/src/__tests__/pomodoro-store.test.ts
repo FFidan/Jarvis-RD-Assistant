@@ -214,4 +214,109 @@ describe('PomodoroStore', () => {
     usePomodoroStore.getState().clearCompletedSession();
     expect(usePomodoroStore.getState().completedSession).toBeNull();
   });
+
+  it('restores a Telegram-started server session after a browser reload', () => {
+    usePomodoroStore.getState().applyServerSession({
+      id: 41,
+      state: 'active',
+      source: 'telegram',
+      duration_seconds: 1500,
+      remaining_seconds: 1200,
+      started_at: '2026-08-09T12:00:00+00:00',
+      paused_at: null,
+      paused_seconds: 0,
+      completed_at: null,
+      recorded_seconds: 0,
+      task_id: null,
+      paper_id: null,
+    });
+
+    const state = usePomodoroStore.getState();
+    expect(state.phase).toBe('work');
+    expect(state.sessionId).toBe(41);
+    expect(state.serverSource).toBe('telegram');
+    expect(state.secondsRemaining).toBe(1200);
+  });
+
+  it('derives pause and resume operations from the same server session', () => {
+    usePomodoroStore.getState().applyServerSession({
+      id: 42,
+      state: 'paused',
+      source: 'web',
+      duration_seconds: 1500,
+      remaining_seconds: 900,
+      started_at: '2026-08-09T12:00:00+00:00',
+      paused_at: '2026-08-09T12:10:00+00:00',
+      paused_seconds: 30,
+      completed_at: null,
+      recorded_seconds: 0,
+      task_id: 7,
+      paper_id: null,
+    });
+
+    expect(usePomodoroStore.getState().pausedAt).not.toBeNull();
+    usePomodoroStore.getState().resume();
+    expect(usePomodoroStore.getState().pendingOperation).toMatchObject({
+      kind: 'resume',
+      sessionId: 42,
+    });
+  });
+
+  it('records one local completion signal only after the server completes work', () => {
+    usePomodoroStore.setState({
+      phase: 'work',
+      sessionId: 43,
+      serverSource: 'telegram',
+      startedAt: Date.now() - 60_000,
+      phaseDurationMs: 60_000,
+    });
+    usePomodoroStore.getState().applyServerSession({
+      id: 43,
+      state: 'completed',
+      source: 'telegram',
+      duration_seconds: 60,
+      remaining_seconds: 0,
+      started_at: '2026-08-09T12:00:00+00:00',
+      paused_at: null,
+      paused_seconds: 0,
+      completed_at: '2026-08-09T12:01:00+00:00',
+      recorded_seconds: 60,
+      task_id: null,
+      paper_id: null,
+    });
+
+    const state = usePomodoroStore.getState();
+    expect(state.phase).toBe('short-break');
+    expect(state.sessionId).toBeNull();
+    expect(state.completedSession).toEqual({ durationSeconds: 60 });
+  });
+
+  it('does not re-mint a completion while one is already pending', () => {
+    const start = 1_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(start);
+    usePomodoroStore.setState({
+      phase: 'work',
+      sessionId: 77,
+      serverSource: 'web',
+      startedAt: start,
+      pausedAt: null,
+      totalPausedMs: 0,
+      phaseDurationMs: 60_000,
+      pendingOperation: null,
+    });
+
+    // A server-backed work phase expires: the first tick mints exactly one
+    // completion operation and stays in 'work' until the server confirms.
+    vi.spyOn(Date, 'now').mockReturnValue(start + 60_000 + 1);
+    usePomodoroStore.getState().tick();
+    const first = usePomodoroStore.getState().pendingOperation;
+    expect(first).toMatchObject({ kind: 'complete', sessionId: 77, mode: 'elapsed' });
+    expect(usePomodoroStore.getState().phase).toBe('work');
+
+    // A second tick before the round-trip returns must reuse the pending op,
+    // not create a new one — otherwise a duplicate completion fires each second.
+    vi.spyOn(Date, 'now').mockReturnValue(start + 60_000 + 2000);
+    usePomodoroStore.getState().tick();
+    expect(usePomodoroStore.getState().pendingOperation).toBe(first);
+  });
 });

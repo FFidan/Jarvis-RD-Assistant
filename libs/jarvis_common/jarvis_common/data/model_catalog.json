@@ -351,7 +351,19 @@
     "kv_cache_bytes_per_token": null,
     "default_num_ctx": 8192,
     "max_num_ctx": 200000,
-    "supports_thinking": false
+    "supports_thinking": false,
+    "field_sources": {
+      "description": {
+        "kind": "reviewed_catalog",
+        "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        "reviewed_at": "2026-08-07"
+      },
+      "context_tokens": {
+        "kind": "reviewed_catalog",
+        "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+        "reviewed_at": "2026-08-07"
+      }
+    }
   },
   {
     "id": "anthropic/claude-haiku-4-5",

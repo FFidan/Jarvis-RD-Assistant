@@ -13,7 +13,6 @@ import sys
 import time
 from typing import Any
 
-import httpx
 from jarvis_common.crypto import reload_fernet_on_sighup
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.maintenance import (
@@ -23,12 +22,14 @@ from jarvis_common.maintenance import (
     secrets_rotated_since,
     skip_for_maintenance,
 )
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.sentry import maybe_init_sentry
 from jarvis_common.settings import get_core_settings
 from telegram import BotCommand, Update
 from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
 from telegram.request import HTTPXRequest
 
+from telegram_bot.command_catalog import menu_command_specs
 from telegram_bot.config import BotConfig, create_db_pool
 from telegram_bot.handlers import (
     get_review_conversation_handler,
@@ -114,7 +115,8 @@ async def post_init(application: Application) -> None:
     ensure_outbound_egress_allowed("Telegram bot startup")
     config: BotConfig = application.bot_data["config"]
     application.bot_data["db_pool"] = await create_db_pool(config.database_url)
-    application.bot_data["http_client"] = httpx.AsyncClient(
+    application.bot_data["http_client"] = pinned_async_client(
+        JARVIS_SERVICE_POLICY,
         timeout=30.0,
         headers=(
             {"X-API-Key": config.jarvis_api_key.get_secret_value()} if config.jarvis_api_key else {}
@@ -155,25 +157,7 @@ async def post_init(application: Application) -> None:
 
     # Register bot commands for the Telegram "/" autocomplete menu
     await application.bot.set_my_commands(
-        [
-            BotCommand("start", "Start the bot"),
-            BotCommand("help", "Show help"),
-            BotCommand("papers", "List recent papers"),
-            BotCommand("briefing", "Daily briefing"),
-            BotCommand("next", "Next paper recommendation"),
-            BotCommand("inbox", "Show your unread papers"),
-            BotCommand("pulse_now", "Run Pulse discovery now"),
-            BotCommand("review", "Start flashcard review"),
-            BotCommand("stats", "Learning statistics"),
-            BotCommand("projects", "List active projects"),
-            BotCommand("newproject", "Create a new project"),
-            BotCommand("tasks", "List in-progress tasks"),
-            BotCommand("done", "Mark task complete"),
-            BotCommand("focus", "Start a focus session"),
-            BotCommand("pair", "Pair this chat to your JARVIS account"),
-            BotCommand("unpair", "Unlink this chat from your account"),
-            BotCommand("whoami", "Show which account this chat is paired to"),
-        ]
+        [BotCommand(spec.name, spec.description) for spec in menu_command_specs()]
     )
 
     logger.info("Bot initialized: db_pool, http_client, scheduler, and internal API ready")

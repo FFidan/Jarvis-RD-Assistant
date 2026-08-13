@@ -5,7 +5,7 @@
  *  1. Renders "A bot token is configured" when getTelegramBotToken returns has_token=true.
  *  2. Renders "No bot token set" when getTelegramBotToken returns has_token=false.
  *  3. Entering a valid token and clicking Save calls saveTelegramBotToken with the value.
- *  4. Shows the persistent restart note at all times.
+ *  4. Shows the persistent runtime note (and its documentation link) at all times.
  *  5. Shows a format error when the token doesn't match the expected pattern.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -35,7 +35,6 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => 'test-key'),
       logout: vi.fn(),
     })),
   },
@@ -93,15 +92,16 @@ describe('TelegramBotTokenSection', () => {
     );
   });
 
-  it('shows the persistent restart note', async () => {
+  it('shows the persistent runtime note and a link to the Telegram guide', async () => {
     mockGet.mockResolvedValue(fixtures.noToken);
     await renderSection();
 
     await waitFor(() =>
       expect(
-        screen.getByText(/telegram bot must be restarted by an administrator/i),
+        screen.getByText(/runs only if it was enabled when this instance was set up/i),
       ).toBeInTheDocument(),
     );
+    expect(screen.getByRole('link', { name: /telegram setup guide/i })).toBeInTheDocument();
   });
 
   it('calls saveTelegramBotToken with the entered token on Save', async () => {

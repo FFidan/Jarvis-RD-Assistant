@@ -4,7 +4,7 @@
  * LIMITATION (read before trusting this file):
  * The production auth model for browser sessions is magic-link → a
  * `jarvis_session` cookie validated server-side. The existing e2e harness,
- * however, gates on an API *key* persisted in `sessionStorage['jarvis-auth']`
+ * however, gates on distinct cookie-session identities persisted in session storage
  * (see `e2e/helpers/setup.ts::seedAuthedSession`) and the mocked suite stubs
  * the backend entirely. A faithful two-real-user browser test would require
  * a live backend with two provisioned magic-link sessions — high friction and
@@ -22,19 +22,22 @@
  * Tagged `@cross-user`; excluded from `test:e2e:mocked` (explicit file list)
  * and runnable only via `npm --prefix frontend run test:e2e:cross-user`.
  */
-import { expect, test } from '@playwright/test';
+import { expect, test, type BrowserContext } from '@playwright/test';
 
 const FEED_PATH = '/';
 
 /** Seed a distinct auth state into a context's first page load. */
-async function seedDistinctAuth(context, apiKey: string): Promise<void> {
-  await context.addInitScript((key: string) => {
+async function seedDistinctAuth(
+  context: BrowserContext,
+  user: { id: number; email: string; role: 'user' },
+): Promise<void> {
+  await context.addInitScript((identity) => {
     const state = {
-      state: { isAuthenticated: true, authTime: Date.now(), apiKey: key },
+      state: { isAuthenticated: true, authTime: Date.now(), user: identity },
       version: 0,
     };
     window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
-  }, apiKey);
+  }, user);
 }
 
 test.describe('@cross-user two-context data isolation (scaffolding)', () => {
@@ -44,8 +47,8 @@ test.describe('@cross-user two-context data isolation (scaffolding)', () => {
     const ctxA = await browser.newContext();
     const ctxB = await browser.newContext();
     try {
-      await seedDistinctAuth(ctxA, 'isolation-key-user-a');
-      await seedDistinctAuth(ctxB, 'isolation-key-user-b');
+      await seedDistinctAuth(ctxA, { id: 1, email: 'a@example.test', role: 'user' });
+      await seedDistinctAuth(ctxB, { id: 2, email: 'b@example.test', role: 'user' });
 
       const pageA = await ctxA.newPage();
       const pageB = await ctxB.newPage();
@@ -53,19 +56,19 @@ test.describe('@cross-user two-context data isolation (scaffolding)', () => {
       await pageA.goto(FEED_PATH);
       await pageB.goto(FEED_PATH);
 
-      // Each context must hold ONLY its own seeded credential — no bleed
+      // Each context must hold only its own seeded identity — no bleed
       // through shared storage. This part is a hard assertion.
-      const keyA = await pageA.evaluate(() =>
+      const userA = await pageA.evaluate(() =>
         JSON.parse(window.sessionStorage.getItem('jarvis-auth') ?? '{}')?.state
-          ?.apiKey,
+          ?.user,
       );
-      const keyB = await pageB.evaluate(() =>
+      const userB = await pageB.evaluate(() =>
         JSON.parse(window.sessionStorage.getItem('jarvis-auth') ?? '{}')?.state
-          ?.apiKey,
+          ?.user,
       );
-      expect(keyA).toBe('isolation-key-user-a');
-      expect(keyB).toBe('isolation-key-user-b');
-      expect(keyA).not.toBe(keyB);
+      expect(userA?.id).toBe(1);
+      expect(userB?.id).toBe(2);
+      expect(userA).not.toEqual(userB);
 
       // Content disjointness is only meaningful against a per-user live
       // backend. Against the mocked backend both see identical fixtures, so

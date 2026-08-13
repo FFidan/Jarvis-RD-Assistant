@@ -1,30 +1,25 @@
 /**
- * Fetch-based API client with X-API-Key authentication.
+ * Fetch-based API client for the HttpOnly cookie session.
  * No axios dependency — uses the native fetch API.
  *
- * SECURITY: Every request includes the X-API-Key header from the auth store.
- * nginx does NOT inject API keys — the browser must send them.
+ * SECURITY: Requests include cookies through `credentials: 'include'`; no raw
+ * credential is read from browser state or attached by this shared client.
  * On 401 (auth invalid / expired), the user is logged out + toasted. 403
  * (permission denied for an authenticated user) does NOT trigger logout —
  * it surfaces as a per-request error so role-gated routes don't bounce the
  * whole session.
  *
  * This module holds the shared primitives every domain submodule depends on:
- * `apiFetch`, `apiFetchRaw`, `ApiError`, the auth-header helper, the
- * auto-logout handler (+ its debounce singleton), the blob-download helper,
+ * decoded JSON, explicit status-only, and raw response boundaries; `ApiError`;
+ * the auto-logout handler (+ its debounce singleton), the blob-download helper,
  * and the stack-health helpers/types. Domain submodules import from HERE,
  * never from the barrel `./index`, to keep the index↔domain graph acyclic.
  */
 
 import { toast } from 'sonner';
+import { z } from 'zod';
 import { useAuthStore } from '@/stores/auth-store';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
-
-/** Build auth headers from the current session API key. */
-export function authHeaders(): Record<string, string> {
-  const apiKey = useAuthStore.getState().getApiKey();
-  return apiKey ? { 'X-API-Key': apiKey } : {};
-}
 
 export let _sessionExpiredToastShownAt = 0;
 
@@ -64,8 +59,22 @@ export class ApiError extends Error {
   }
 }
 
+/** A successful response did not match the endpoint's declared runtime schema. */
+export class ApiPayloadError extends Error {
+  public readonly endpoint: string;
+  public readonly fields: string[];
+
+  constructor(endpoint: string, fields: readonly string[]) {
+    const normalizedFields = [...new Set(fields.length > 0 ? fields : ['response'])];
+    super(`Invalid response from ${endpoint} at ${normalizedFields.join(', ')}`);
+    this.name = 'ApiPayloadError';
+    this.endpoint = endpoint;
+    this.fields = normalizedFields;
+  }
+}
+
 /**
- * Unified abort/error handler shared by apiFetch and apiFetchRaw.
+ * Unified abort/error handler shared by decoded, status-only, and raw requests.
  *
  * If the error is an AbortError and the timeout controller fired (not the
  * caller's own signal), we translate it into a friendly ApiError(0, …).
@@ -87,7 +96,7 @@ function _handleFetchError(
 }
 
 /**
- * Shared fetch core for apiFetch and apiFetchRaw.
+ * Shared fetch core for decoded, status-only, and raw requests.
  *
  * Owns the 5-min timeout controller, caller-signal combination, cookie
  * credentials, auth headers, the !res.ok error path (auto-logout + ApiError +
@@ -112,7 +121,6 @@ async function _doFetch(url: string, init?: RequestInit): Promise<Response> {
       // :5173 hitting backend on :3001) still carry the cookie.
       credentials: init?.credentials ?? 'include',
       headers: {
-        ...authHeaders(),
         ...init?.headers,
       },
     });
@@ -141,7 +149,12 @@ async function _doFetch(url: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+/** Fetch successful JSON and validate it before returning data to a caller. */
+export async function apiFetchJson<S extends z.ZodType>(
+  url: string,
+  schema: S,
+  init?: RequestInit,
+): Promise<z.output<S>> {
   const res = await _doFetch(url, {
     ...init,
     headers: {
@@ -149,10 +162,45 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
+  return decodeResponseJson(res, url, schema);
+}
+
+/** Decode a response already fetched through a specialized transport. */
+export async function decodeResponseJson<S extends z.ZodType>(
+  res: Response,
+  endpoint: string,
+  schema: S,
+): Promise<z.output<S>> {
   if (res.status === 204) {
-    return undefined as T;
+    throw new ApiPayloadError(endpoint, ['response']);
   }
-  return res.json();
+
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new ApiPayloadError(endpoint, ['response']);
+  }
+
+  const result = schema.safeParse(payload);
+  if (!result.success) {
+    const fields = result.error.issues.map((issue) =>
+      issue.path.length > 0 ? issue.path.map(String).join('.') : 'response',
+    );
+    throw new ApiPayloadError(endpoint, fields);
+  }
+  return result.data;
+}
+
+/** Fetch a successful status-only response and intentionally ignore its body. */
+export async function apiFetchVoid(url: string, init?: RequestInit): Promise<void> {
+  await _doFetch(url, {
+    ...init,
+    headers: {
+      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...init?.headers,
+    },
+  });
 }
 
 /** Fetch that returns the raw Response (for blob downloads). */
@@ -163,7 +211,7 @@ export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Resp
 /** Health check helper — returns true if service responds ok. */
 export async function checkHealth(path: string): Promise<boolean> {
   try {
-    await apiFetch(path);
+    await apiFetchVoid(path);
     return true;
   } catch {
     return false;
@@ -259,12 +307,15 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
   // sum — comfortably under STACK_HEALTH_DEADLINE_MS. allSettled so one rejected
   // probe never drops the others' results.
   const [internal, piOk, leOk] = await Promise.all([
-    apiFetch<{
-      status: string;
-      checks: Record<string, string>;
-      maintenance?: boolean;
-      version?: string;
-    }>('/health/paper_ingestion/internal').then(
+    apiFetchJson(
+      '/health/paper_ingestion/internal',
+      z.looseObject({
+        status: z.string(),
+        checks: z.record(z.string(), z.string()),
+        maintenance: z.boolean().optional(),
+        version: z.string().optional(),
+      }),
+    ).then(
       (payload) => ({
         checks: payload.checks ?? {},
         maintenance: payload.maintenance,
@@ -279,11 +330,12 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
       (err: unknown) => {
         if (err instanceof ApiError && err.status === 503) {
           try {
-            const parsed = JSON.parse(err.body) as {
-              checks?: Record<string, string>;
-              maintenance?: boolean;
-              version?: string;
-            };
+            const raw: unknown = JSON.parse(err.body);
+            const parsed = z.looseObject({
+              checks: z.record(z.string(), z.string()).optional(),
+              maintenance: z.boolean().optional(),
+              version: z.string().optional(),
+            }).parse(raw);
             return {
               checks: parsed.checks ?? {},
               maintenance: parsed.maintenance,
@@ -357,7 +409,7 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
 /**
  * Fetch full health status for all stack components, with a hard deadline.
  *
- * The underlying probes (apiFetch / checkHealth) share the 5-min request
+ * The underlying probes share the five-minute request
  * timeout, so a network black-hole could otherwise leave the health UI stuck
  * on "Checking…" for minutes. We race the real probe against a
  * {@link STACK_HEALTH_DEADLINE_MS} timer: if the probe doesn't settle in time,

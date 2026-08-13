@@ -5,7 +5,12 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { ExternalLink, Loader2, MoreHorizontal, RefreshCw, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SearchPreviewResult } from '@/types';
-import { zoteroGetLinkage, zoteroPushPaper, zoteroResync } from '@/lib/api';
+import {
+  zoteroGetLinkage,
+  zoteroPushPaper,
+  zoteroResync,
+} from '@/lib/api';
+import { zoteroDesktopHref, zoteroWebHref } from '@/lib/api/zotero';
 import { useJobStore } from '@/stores/job-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -65,8 +70,7 @@ export function SearchPreviewRow({
     queryFn: () => zoteroGetLinkage(paperId as number),
     enabled:
       paperId != null &&
-      initialZoteroItemKey == null &&
-      (observeZoteroLinkage || trackedZoteroJob != null),
+      (initialZoteroItemKey != null || observeZoteroLinkage || trackedZoteroJob != null),
   });
 
   const zoteroItemKey =
@@ -209,8 +213,32 @@ export function SearchPreviewRow({
 
           {isSavedWithZotero && zoteroItemKey && (
             <DropdownMenuItem asChild>
-              <a href={`zotero://select/library/items/${zoteroItemKey}`} target="_blank" rel="noopener noreferrer">
-                View in Zotero
+              <a
+                href={zoteroDesktopHref(
+                  zoteroItemKey,
+                  savedZoteroLinkage?.zotero_library_type,
+                  savedZoteroLinkage?.zotero_group_id,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open in Zotero desktop
+              </a>
+            </DropdownMenuItem>
+          )}
+
+          {isSavedWithZotero && zoteroItemKey && (
+            <DropdownMenuItem asChild>
+              <a
+                href={zoteroWebHref(
+                  zoteroItemKey,
+                  savedZoteroLinkage?.zotero_library_type,
+                  savedZoteroLinkage?.zotero_group_id,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Zotero Web Library
               </a>
             </DropdownMenuItem>
           )}

@@ -536,6 +536,45 @@ class FocusSessionResponse(BaseModel):
     recorded_hours: float
 
 
+class FocusSessionStartRequest(BaseModel):
+    """Start one server-authoritative focus interval."""
+
+    duration_seconds: int = Field(..., ge=60, le=28_800)
+    source: Literal["web", "telegram"]
+    task_id: int | None = None
+    paper_id: int | None = None
+
+
+class FocusSessionCompleteRequest(BaseModel):
+    """Complete naturally after elapsed time or stop at the current elapsed time."""
+
+    mode: Literal["elapsed", "stop"]
+
+
+class ActiveFocusSessionResponse(BaseModel):
+    """Durable focus state returned to both clients."""
+
+    id: int
+    state: Literal["active", "paused", "completed"]
+    source: Literal["web", "telegram"]
+    duration_seconds: int
+    remaining_seconds: int
+    started_at: datetime
+    paused_at: datetime | None
+    paused_seconds: float
+    completed_at: datetime | None
+    recorded_seconds: float
+    task_id: int | None
+    paper_id: int | None
+
+
+class FocusSessionTransitionResponse(BaseModel):
+    """A focus transition and whether this request changed durable state."""
+
+    session: ActiveFocusSessionResponse
+    changed: bool
+
+
 class MyDayTaskItem(BaseModel):
     """A single task entry in the my-day response."""
 

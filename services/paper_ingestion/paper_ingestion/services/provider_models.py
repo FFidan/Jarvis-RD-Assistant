@@ -8,13 +8,20 @@ import logging
 import re
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from decimal import Decimal, DecimalException
 from typing import Any, Literal, cast, get_args
 
 import httpx
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
-from jarvis_common.model_catalog import ModelCatalogEntry, Provider, Role
+from jarvis_common.model_catalog import (
+    MetadataField,
+    MetadataFieldSource,
+    ModelCatalogEntry,
+    Provider,
+    Role,
+)
 
 from paper_ingestion.services.litellm_config import (
     get_provider_api_key,
@@ -39,6 +46,7 @@ __all__ = [
     "classify_live_model",
     "fetch_all_provider_models",
     "fetch_provider_models",
+    "invalidate_provider_model_cache",
     "live_entry_for_model",
     "models_url_for",
     "reset_provider_model_cache",
@@ -58,6 +66,10 @@ _MAX_MODEL_ID_CHARS = 128
 # endpoint chooses the payload, so cap the bytes read and the pages followed
 # before any of it becomes Python objects.
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+_TOKENS_PER_MILLION = Decimal(1_000_000)
+_MAX_PRICE_INPUT_CHARS = 64
+_MAX_PRICE_SIGNIFICANT_DIGITS = 32
+_MAX_PRICE_ADJUSTED_EXPONENT = 100
 _MAX_PAGES = 20
 _PER_PROVIDER_TIMEOUT_SECONDS = 8.0
 # httpx's timeout bounds each read, not the whole exchange, so a server dripping
@@ -76,6 +88,7 @@ _ID_KEYS = ("id", "name", "model")
 _LIST_KEYS = ("data", "models", "list")
 
 Capability = Literal["chat", "embed", "other", "unknown"]
+ProviderPricing = tuple[str | None, str | None, str | None]
 
 _EMBED_MARKER = "embed"
 # Conservative deny-list of non-chat model families, matched case-insensitively
@@ -182,6 +195,18 @@ def reset_provider_model_cache() -> None:
     _locks.clear()
 
 
+async def invalidate_provider_model_cache(provider_id: str) -> None:
+    """Discard one provider listing after its connection settings change.
+
+    Waiting for the provider lock prevents an in-flight request made with the
+    previous credential or endpoint from repopulating the cache after it was
+    invalidated.
+    """
+    lock = _locks.setdefault(provider_id, asyncio.Lock())
+    async with lock:
+        _cache.pop(provider_id, None)
+
+
 def models_url_for(provider: ProviderDefinition, base_url: str | None) -> str | None:
     """Return the model-list URL for *provider*, or ``None`` when it has none.
 
@@ -267,12 +292,25 @@ def _next_page_params(payload: Any) -> dict[str, str] | None:
     return None
 
 
-def _declared_capability(raw: Mapping[str, Any]) -> Capability | None:
+def _openrouter_output_capability(raw: Mapping[str, Any]) -> Capability | None:
+    """Decide from OpenRouter's declared output modalities, or ``None`` if absent."""
+    architecture = raw.get("architecture")
+    if not isinstance(architecture, Mapping):
+        return None
+    outputs = architecture.get("output_modalities")
+    if not isinstance(outputs, list):
+        return None
+    # The router states what a model emits. A model that cannot emit text cannot
+    # serve a role here, however conventional its id looks.
+    return "chat" if "text" in {str(item) for item in outputs} else "other"
+
+
+def _declared_capability(provider_id: str, raw: Mapping[str, Any]) -> Capability | None:
     """Read the capability the entry itself declares, or ``None`` when it declares none.
 
     Reading what a provider says beats matching id prefixes: a prefix list is a
     standing bet that no vendor will ever name a family we have not heard of,
-    and that bet loses on every launch.
+    and that bet loses on every launch. Each provider declares in its own shape.
     """
     methods = raw.get("supportedGenerationMethods")
     if isinstance(methods, list):
@@ -282,6 +320,9 @@ def _declared_capability(raw: Mapping[str, Any]) -> Capability | None:
         if "embedContent" in names:
             return "embed"
         return "unknown"
+
+    if provider_id == "openrouter":
+        return _openrouter_output_capability(raw)
 
     capabilities = raw.get("capabilities")
     if isinstance(capabilities, Mapping) and "completion_chat" in capabilities:
@@ -315,7 +356,7 @@ def classify_live_model(provider_id: str, model_id: str, raw: Mapping[str, Any])
     facts, a conservative non-chat deny-list, and published chat families decide.
     Anything left over is ``"unknown"`` and is never offered for a role.
     """
-    declared = _declared_capability(raw)
+    declared = _declared_capability(provider_id, raw)
     if declared is not None:
         return declared
     # Anthropic's model list contains only chat models.
@@ -335,29 +376,201 @@ def live_model_entry(
     provider_id: Provider,
     model_id: str,
     *,
-    assignment_id: str,
     fetched_at: datetime | None,
-    capability: Capability,
+    pricing: ProviderPricing = (None, None, None),
+    raw: Mapping[str, Any] | None = None,
 ) -> ModelCatalogEntry:
     """Build a catalog entry for one live-listed provider model."""
+    capability = classify_live_model(provider_id, model_id, raw or {})
     roles, assignable, notes = _CAPABILITY_RULING[capability]
+    input_price, output_price, price_source = pricing
+    raw = raw or {}
+    display_name = _live_display_name(provider_id, raw) or model_id
+    context_tokens = _live_context_tokens(provider_id, raw)
+    description = _live_description(provider_id, raw)
+    lifecycle = _live_lifecycle(provider_id, raw)
+    capabilities = _live_capabilities(provider_id, raw)
+    field_sources: dict[MetadataField, MetadataFieldSource] = {}
+    fetched_at_text = fetched_at.isoformat() if fetched_at else ""
+    for name, value in (
+        ("context_tokens", context_tokens),
+        ("description", description),
+        ("capabilities", capabilities),
+        ("lifecycle", lifecycle),
+        ("input_price_per_million", input_price),
+        ("output_price_per_million", output_price),
+    ):
+        if value not in (None, "", (), 0):
+            field_sources[cast(MetadataField, name)] = {
+                "kind": "api_reported",
+                "fetched_at": fetched_at_text,
+            }
     return ModelCatalogEntry(
-        id=assignment_id,
-        name=model_id,
+        id=f"{provider_for_id(provider_id).assignment_prefix}{model_id}",
+        name=display_name,
         provider=provider_id,
         ollama_tag=None,
         roles=roles,
         vram_gb=0.0,
         disk_gb=0.0,
-        context_tokens=0,
+        context_tokens=context_tokens,
         license="Provider terms apply",
         tier=0,
-        description="Offered by this provider's live model list.",
+        description=description or "Offered by this provider's live model list.",
         notes=notes,
         last_reviewed=fetched_at.date().isoformat() if fetched_at else "",
         phase="advanced",
         assignable=assignable,
+        input_price_per_million=input_price,
+        output_price_per_million=output_price,
+        price_source=price_source,
+        capabilities=capabilities,
+        lifecycle=lifecycle,
+        field_sources=field_sources,
     )
+
+
+def _live_context_tokens(provider_id: Provider, raw: Mapping[str, Any]) -> int:
+    """Return a documented provider context limit, otherwise zero."""
+    field_names = {
+        "google": ("inputTokenLimit",),
+        "mistral": ("max_context_length",),
+        "moonshot": ("context_length",),
+        "openrouter": ("context_length", "context_window"),
+    }.get(provider_id, ())
+    value = next((raw.get(name) for name in field_names if name in raw), 0)
+    # ``type(value) is int`` rather than ``isinstance``: a JSON ``true`` is an
+    # int subclass, and letting it through emits ``context_tokens: true``, which
+    # fails the frontend's strict numeric schema and blanks the whole response.
+    return value if type(value) is int and 0 < value <= 10_000_000 else 0
+
+
+def _live_display_name(provider_id: Provider, raw: Mapping[str, Any]) -> str:
+    """Return a bounded provider display name when the documented field is present."""
+    field_name = {
+        "anthropic": "display_name",
+        "google": "displayName",
+        "openrouter": "name",
+    }.get(provider_id)
+    value = raw.get(field_name) if field_name is not None else None
+    if not isinstance(value, str):
+        return ""
+    candidate = value.strip()
+    if not 0 < len(candidate) <= 256 or candidate.startswith("models/"):
+        return ""
+    return candidate
+
+
+def _live_description(provider_id: Provider, raw: Mapping[str, Any]) -> str:
+    """Return a bounded documented description without treating arbitrary values as text."""
+    value = raw.get("description") if provider_id in {"google", "openrouter"} else None
+    return value.strip() if isinstance(value, str) and 0 < len(value.strip()) <= 4_000 else ""
+
+
+def _live_capabilities(provider_id: Provider, raw: Mapping[str, Any]) -> tuple[str, ...]:
+    """Normalize only provider-reported capability fields into display labels."""
+    values: list[str] = []
+    if provider_id == "openrouter" and isinstance(architecture := raw.get("architecture"), Mapping):
+        for field_name in ("input_modalities", "output_modalities"):
+            value = architecture.get(field_name)
+            if isinstance(value, list):
+                values.extend(item for item in value if isinstance(item, str) and len(item) <= 64)
+    elif provider_id == "google":
+        methods = raw.get("supportedGenerationMethods")
+        if isinstance(methods, list):
+            values.extend(item for item in methods if isinstance(item, str) and len(item) <= 64)
+        if raw.get("thinking") is True:
+            values.append("thinking")
+    elif provider_id == "mistral" and isinstance(capabilities := raw.get("capabilities"), Mapping):
+        values.extend(
+            name.removeprefix("completion_").replace("_", " ")
+            for name, enabled in capabilities.items()
+            if enabled is True and isinstance(name, str) and len(name) <= 64
+        )
+    elif provider_id == "moonshot":
+        values.extend(_moonshot_capabilities(raw))
+    return tuple(dict.fromkeys(values))
+
+
+def _moonshot_capabilities(raw: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return Moonshot's documented boolean capability flags as labels."""
+    field_labels = {
+        "supports_image_in": "image input",
+        "supports_video_in": "video input",
+        "supports_reasoning": "reasoning",
+    }
+    return tuple(label for field, label in field_labels.items() if raw.get(field) is True)
+
+
+def _live_lifecycle(provider_id: Provider, raw: Mapping[str, Any]) -> str | None:
+    """Expose only explicit lifecycle signals instead of guessing from model names."""
+    if provider_id == "mistral" and raw.get("archived") is True:
+        return "deprecated"
+    if provider_id == "openrouter" and raw.get("status") in {"active", "deprecated"}:
+        return cast(str, raw["status"])
+    expiration = raw.get("expiration_date") if provider_id == "openrouter" else None
+    if isinstance(expiration, str) and 0 < len(expiration) <= 32:
+        return f"expires {expiration}"
+    return None
+
+
+def _merge_live_with_reviewed(
+    live: ModelCatalogEntry, reviewed: ModelCatalogEntry
+) -> ModelCatalogEntry:
+    """Merge model metadata while preserving reviewed routing and valid live facts."""
+    sources: dict[MetadataField, MetadataFieldSource] = {
+        field_name: source
+        for field_name, source in reviewed.field_sources.items()
+        if source.get("kind") != "reviewed_catalog"
+        or (bool(source.get("source_url")) and bool(source.get("reviewed_at")))
+    }
+    sources.update(live.field_sources)
+    return replace(
+        reviewed,
+        name=live.name if live.name != live.id.rsplit("/", 1)[-1] else reviewed.name,
+        context_tokens=live.context_tokens or reviewed.context_tokens,
+        description=live.description
+        if live.field_sources.get("description", {}).get("kind") == "api_reported"
+        else reviewed.description,
+        input_price_per_million=live.input_price_per_million or reviewed.input_price_per_million,
+        output_price_per_million=live.output_price_per_million or reviewed.output_price_per_million,
+        price_source=live.price_source or reviewed.price_source,
+        capabilities=live.capabilities or reviewed.capabilities,
+        lifecycle=live.lifecycle or reviewed.lifecycle,
+        field_sources=sources,
+    )
+
+
+def _normalize_openrouter_price(value: object) -> str | None:
+    """Convert one documented OpenRouter per-token price into a per-million string."""
+    if not isinstance(value, str) or len(value) > _MAX_PRICE_INPUT_CHARS:
+        return None
+    try:
+        price = Decimal(value)
+        significant_digits = len(price.as_tuple().digits)
+        if (
+            significant_digits > _MAX_PRICE_SIGNIFICANT_DIGITS
+            or abs(price.adjusted()) > _MAX_PRICE_ADJUSTED_EXPONENT
+        ):
+            return None
+        normalized = format((price * _TOKENS_PER_MILLION).normalize(), "f")
+    except (DecimalException, ValueError):
+        return None
+    if not price.is_finite() or price < 0:
+        return None
+    return normalized.rstrip("0").rstrip(".") if "." in normalized else normalized
+
+
+def _openrouter_pricing(raw: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """Return verified OpenRouter pricing only when both documented rates are usable."""
+    pricing = raw.get("pricing")
+    if not isinstance(pricing, Mapping):
+        return None, None, None
+    input_price = _normalize_openrouter_price(pricing.get("prompt"))
+    output_price = _normalize_openrouter_price(pricing.get("completion"))
+    if input_price is None or output_price is None:
+        return None, None, None
+    return input_price, output_price, "openrouter"
 
 
 def _validation_error(provider: ProviderDefinition, model_id: str) -> str | None:
@@ -374,7 +587,9 @@ def _validation_error(provider: ProviderDefinition, model_id: str) -> str | None
     return None
 
 
-_CATALOG_IDS: frozenset[str] = frozenset(normalize_model_tag(entry.id) for entry in MODEL_CATALOG)
+_CATALOG_BY_ID: dict[str, ModelCatalogEntry] = {
+    normalize_model_tag(entry.id): entry for entry in MODEL_CATALOG
+}
 
 
 def _build_entries(
@@ -398,20 +613,21 @@ def _build_entries(
             continue
         assignment_id = f"{provider.assignment_prefix}{model_id}"
         normalized = normalize_model_tag(assignment_id)
-        if normalized in _CATALOG_IDS or normalized in seen:
+        if normalized in seen:
             continue
         seen.add(normalized)
         if capability == "unknown":
             excluded["unknown"] += 1
-        entries.append(
-            live_model_entry(
-                catalog_provider,
-                model_id,
-                assignment_id=assignment_id,
-                fetched_at=fetched_at,
-                capability=capability,
-            )
+        pricing = _openrouter_pricing(raw) if provider.id == "openrouter" else (None, None, None)
+        live = live_model_entry(
+            catalog_provider,
+            model_id,
+            fetched_at=fetched_at,
+            pricing=pricing,
+            raw=raw,
         )
+        reviewed = _CATALOG_BY_ID.get(normalized)
+        entries.append(_merge_live_with_reviewed(live, reviewed) if reviewed is not None else live)
     return tuple(entries), excluded
 
 
@@ -506,13 +722,15 @@ def _fetch_failure_reason(exc: BaseException) -> str:
 def _stale_or_error(provider_id: str, error: str) -> ProviderModelList:
     """Serve the previous listing (with its original timestamp) or an error entry.
 
-    Either way the result is re-cached under the failure TTL, so a failing
-    provider is retried at most once per that window rather than on every
-    models-page load.
+    A served-from-stale listing still carries the failure: keeping the entries
+    useful is not the same as calling the provider healthy, and the operator
+    needs the reason beside it. Either way the result is re-cached under the
+    failure TTL, so a failing provider is retried at most once per that window
+    rather than on every models-page load.
     """
     stale = _cached(provider_id)
     result = (
-        stale
+        replace(stale, error=error)
         if stale is not None and stale.entries
         else ProviderModelList(provider=provider_id, error=error)
     )

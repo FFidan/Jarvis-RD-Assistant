@@ -7,6 +7,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.maintenance import outbound_quarantine_active
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.settings import get_secrets_settings, get_telegram_settings
 
 from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
@@ -49,7 +50,7 @@ async def reload_telegram_nudges() -> None:
         if outbound_quarantine_active():
             logger.info("skip Telegram nudge reload: outbound quarantine awaiting review")
             return
-        async with httpx.AsyncClient() as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY) as client:
             resp = await client.post(
                 f"{telegram_url}/internal/reload-nudges",
                 headers={"X-API-Key": api_key},
@@ -60,6 +61,17 @@ async def reload_telegram_nudges() -> None:
         logger.warning("Telegram nudge-reload failed (non-fatal)", exc_info=True)
 
 
+def _config_row_present(row: Any) -> bool:
+    """A user_config row counts as present when either value column holds content.
+
+    A row cleared to the empty string is absent, matching what the readers do:
+    ``get_provider_base_url`` returns the default for a falsy value, so counting
+    ``""`` as configured would let a model save and then never deliver. The same
+    rule governs API keys, so a blank key cannot look like a working credential.
+    """
+    return bool(row.get("encrypted_value")) or bool(row.get("value"))
+
+
 async def cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bool:
     """Return True if an API key for *provider* is stored in user_config."""
     config_key = provider_for_id(provider).api_key_config_key
@@ -68,19 +80,7 @@ async def cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bo
             "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
             config_key,
         )
-    return bool(
-        row is not None and (row.get("encrypted_value") is not None or row.get("value") is not None)
-    )
-
-
-def _config_row_present(row: Any) -> bool:
-    """A user_config row counts as present when either value column holds content.
-
-    A row cleared to the empty string is absent, matching what the readers do:
-    ``get_provider_base_url`` returns the default for a falsy value, so counting
-    ``""`` as configured would let a model save and then never deliver.
-    """
-    return bool(row.get("encrypted_value")) or bool(row.get("value"))
+    return row is not None and _config_row_present(row)
 
 
 async def provider_access_configured(

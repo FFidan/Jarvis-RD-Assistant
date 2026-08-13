@@ -6,7 +6,9 @@ and that locally-built images carry explicit pull semantics.
 """
 
 import json
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -42,6 +44,85 @@ GHCR_PREFIX = "ghcr.io/limitcycle-oss/"
 def compose():
     compose_path = Path(__file__).parent.parent / "docker-compose.yml"
     return yaml.safe_load(compose_path.read_text())
+
+
+def test_raw_compose_config_has_no_optional_acme_warnings() -> None:
+    """Unset optional ACME values must be quiet without Makefile defaults."""
+    env = os.environ.copy()
+    env.pop("LETSENCRYPT_DOMAIN", None)
+    env.pop("LETSENCRYPT_EMAIL", None)
+    result = subprocess.run(
+        ["docker", "compose", "config"],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "LETSENCRYPT_DOMAIN" not in result.stderr
+    assert "LETSENCRYPT_EMAIL" not in result.stderr
+
+
+def _bootstrap_command(compose: dict) -> str:
+    command = compose["services"]["ollama-bootstrap"]["command"]
+    assert isinstance(command, list) and len(command) == 1
+    return command[0].replace("$$", "$")
+
+
+def _pull_stub(tmp_path: Path, body: str) -> dict[str, str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ollama = bin_dir / "ollama"
+    ollama.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    ollama.chmod(0o755)
+    sleep = bin_dir / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    sleep.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["OLLAMA_MODELS"] = "research-model"
+    env["COUNT_FILE"] = str(tmp_path / "count")
+    return env
+
+
+def test_ollama_bootstrap_retries_a_transient_pull(compose, tmp_path: Path) -> None:
+    env = _pull_stub(
+        tmp_path,
+        'count=$(cat "$COUNT_FILE" 2>/dev/null || echo 0)\n'
+        "count=$((count + 1))\n"
+        'printf "%s" "$count" > "$COUNT_FILE"\n'
+        '[ "$count" -gt 1 ]\n',
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", _bootstrap_command(compose)],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "count").read_text(encoding="utf-8") == "2"
+
+
+def test_ollama_bootstrap_fails_after_bounded_retries(compose, tmp_path: Path) -> None:
+    env = _pull_stub(
+        tmp_path,
+        'count=$(cat "$COUNT_FILE" 2>/dev/null || echo 0)\n'
+        "count=$((count + 1))\n"
+        'printf "%s" "$count" > "$COUNT_FILE"\n'
+        "exit 1\n",
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", _bootstrap_command(compose)],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "research-model" in result.stdout + result.stderr
+    assert (tmp_path / "count").read_text(encoding="utf-8") == "3"
 
 
 def test_telegram_bot_has_langfuse_init_secrets(compose):
@@ -143,6 +224,32 @@ def test_dashboard_has_no_tls_material_or_generator(compose):
     assert "USER root" not in dockerfile
     assert re.search(r"^USER nginx$", dockerfile, re.MULTILINE)
     assert not (REPO_ROOT / "frontend" / "scripts" / "generate-certs.sh").exists()
+
+
+def test_dashboard_builder_pin_matches_every_build_entrypoint(compose):
+    """The tested Node builder must reach direct and Compose builds unchanged."""
+    versions = dict(
+        line.split("=", 1)
+        for line in (REPO_ROOT / "versions.env").read_text().splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    node_image = versions["NODE_BUILD_IMAGE"]
+    dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text()
+    compose_arg = compose["services"]["dashboard"]["build"]["args"]["NODE_BUILD_IMAGE"]
+
+    assert re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", node_image), node_image
+    assert f"ARG NODE_BUILD_IMAGE={node_image}" in dockerfile
+    assert compose_arg == f"${{NODE_BUILD_IMAGE:-{node_image}}}"
+
+
+def test_service_images_create_the_runtime_user_non_interactively() -> None:
+    for dockerfile_path in (
+        "services/paper_ingestion/Dockerfile",
+        "services/learning_engine/Dockerfile",
+        "services/telegram_bot/Dockerfile",
+    ):
+        dockerfile = (REPO_ROOT / dockerfile_path).read_text()
+        assert 'adduser --disabled-password --no-create-home --gecos "" appuser' in dockerfile
 
 
 def test_backup_lifecycle_mutex_volume_is_writable_only_by_the_sidecar(compose):
@@ -390,12 +497,16 @@ def test_installer_scripts_pull_every_published_service(compose):
     # Every entry point that brings the stack up must materialise those images from the
     # shared list rather than keeping its own copy — a hand-maintained second list is
     # exactly how a service silently falls back to being built.
-    for script in ("setup.sh", "update.sh", "scripts/jarvis-setup.sh"):
+    for script in ("setup.sh", "update.sh"):
         text = (REPO_ROOT / script).read_text()
         assert "PUBLISHED_SERVICES_BASE" in text, (
             f"{script} starts the stack but does not pull the shared published set — "
             "any image it leaves missing would be silently BUILT by `up`"
         )
+
+    forwarder = (REPO_ROOT / "scripts" / "jarvis-setup.sh").read_text()
+    assert 'exec "${REPO_ROOT}/setup.sh" "${setup_args[@]}"' in forwarder
+    assert "PUBLISHED_SERVICES_BASE" not in forwarder
 
 
 def _env_keys(svc) -> set[str]:

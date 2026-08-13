@@ -26,6 +26,7 @@ They are never written to the YAML or any other file.
 import asyncio
 import logging
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from jarvis_common.crypto import resolve_secret_row
@@ -50,7 +51,7 @@ from paper_ingestion.services.model_identifiers import (
     validate_model_name,
     validate_namespaced_model_suffix,
 )
-from paper_ingestion.services.model_prefixes import is_local_ollama
+from paper_ingestion.services.model_prefixes import is_local_ollama, strip_latest_tag
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,15 @@ logger = logging.getLogger(__name__)
 # /model/delete pairs (an interleave could delete a deployment another request
 # just created).
 _config_lock = asyncio.Lock()  # pyright: ignore[reportUnusedVariable]  # imported from routers/settings.py
+
+
+class ThinkingPreferenceState(Enum):
+    """Persisted thinking preference without collapsing absence or read failure."""
+
+    ABSENT = "absent"
+    EXPLICIT_DISABLED = "explicit_disabled"
+    EXPLICIT_ENABLED = "explicit_enabled"
+    READ_FAILED = "read_failed"
 
 
 ROLE_TO_ALIAS: dict[str, str] = {
@@ -189,18 +199,36 @@ async def get_provider_base_url(provider: str, db_pool: Any) -> str | None:
     return value or definition.default_base_url
 
 
+def _parse_thinking_preference(value: object) -> ThinkingPreferenceState:
+    """Normalize one persisted preference without collapsing absence or read failure."""
+    if isinstance(value, bool):
+        return (
+            ThinkingPreferenceState.EXPLICIT_DISABLED
+            if value
+            else ThinkingPreferenceState.EXPLICIT_ENABLED
+        )
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes"):
+            return ThinkingPreferenceState.EXPLICIT_DISABLED
+        if normalized in ("false", "0", "no"):
+            return ThinkingPreferenceState.EXPLICIT_ENABLED
+    return ThinkingPreferenceState.READ_FAILED
+
+
 async def _get_thinking_disabled(
     model_name: str,
     machine_id: str,
     db_pool: Any,
-) -> bool:
-    """Return True if the user has disabled thinking mode for *model_name* on *machine_id*.
+) -> ThinkingPreferenceState:
+    """Return the explicit persisted state for a model's thinking preference.
 
     Reads ``llm.{machine_id}.thinking_disabled.{model_name}`` from user_config.
-    Returns False if the key is absent, db_pool is None, or any error occurs.
+    Absence and read failure are intentionally distinct because absence applies
+    the product default while a failed read must preserve carried routing state.
     """
     if not machine_id or db_pool is None:
-        return False
+        return ThinkingPreferenceState.READ_FAILED
     config_key = f"llm.{machine_id}.thinking_disabled.{model_name}"
     try:
         async with db_pool.acquire() as conn:
@@ -209,13 +237,15 @@ async def _get_thinking_disabled(
                 config_key,
             )
         if row is None:
-            return False
-        val = row["value"]
-        if isinstance(val, bool):
-            return val
-        if isinstance(val, str):
-            return val.lower() in ("true", "1", "yes")
-        return bool(val)
+            return ThinkingPreferenceState.ABSENT
+        preference = _parse_thinking_preference(row["value"])
+        if preference is ThinkingPreferenceState.READ_FAILED:
+            logger.warning(
+                "Invalid thinking preference for model %r on machine %r",
+                model_name,
+                machine_id,
+            )
+        return preference
     except Exception:
         logger.warning(
             "Could not read thinking_disabled key for %r on machine %r",
@@ -223,7 +253,7 @@ async def _get_thinking_disabled(
             machine_id,
             exc_info=True,
         )
-        return False
+        return ThinkingPreferenceState.READ_FAILED
 
 
 async def _get_num_ctx(
@@ -403,10 +433,7 @@ def _parse_model_target(model_name: str) -> _ModelTarget:
     ids, so their suffix is validated as ``vendor/model``. Raises ``ValueError``
     on a disallowed suffix.
     """
-    # Normalize: strip :latest -- Ollama's default implicit tag is never stored
-    # anywhere, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
-    if model_name.endswith(":latest"):
-        model_name = model_name[:-7]
+    model_name = strip_latest_tag(model_name)
     model_suffix = model_name  # the part after provider/ (or full name for Ollama)
 
     # Validate the model-name portion (no path traversal / shell chars).
@@ -432,7 +459,7 @@ async def _resolve_effective_overrides(
     db_pool: Any,
     num_ctx: int | None,
     thinking_disabled: bool | None,
-) -> tuple[int | None, bool | None]:
+) -> tuple[int | None, ThinkingPreferenceState | None]:
     """Resolve the effective per-machine num_ctx + thinking-disabled overrides.
 
     num_ctx is an Ollama runtime option (None for cloud aliases); thinking is
@@ -457,23 +484,31 @@ async def _resolve_effective_overrides(
         if entry_bare == bare_model or _entry.id == model_name:
             catalog_entry = _entry
             break
-    effective_thinking_disabled: bool | None = None
+    effective_thinking_preference: ThinkingPreferenceState | None = None
     if catalog_entry is not None and catalog_entry.supports_thinking:
-        effective_thinking_disabled = thinking_disabled
-        if effective_thinking_disabled is None:
-            effective_thinking_disabled = await _get_thinking_disabled(
+        if thinking_disabled is None:
+            effective_thinking_preference = await _get_thinking_disabled(
                 model_name,
                 machine_id,
                 db_pool,
             )
-        if effective_thinking_disabled:
+        else:
+            effective_thinking_preference = (
+                ThinkingPreferenceState.EXPLICIT_DISABLED
+                if thinking_disabled
+                else ThinkingPreferenceState.EXPLICIT_ENABLED
+            )
+        if effective_thinking_preference in (
+            ThinkingPreferenceState.ABSENT,
+            ThinkingPreferenceState.EXPLICIT_DISABLED,
+        ):
             logger.info(
                 "Thinking mode disabled for model %r on machine %r (alias %r)",
                 model_name,
                 machine_id,
                 alias,
             )
-    return effective_num_ctx, effective_thinking_disabled
+    return effective_num_ctx, effective_thinking_preference
 
 
 def _resolve_new_model(alias: str, target: _ModelTarget, base_params: dict[str, Any]) -> str:
@@ -589,6 +624,21 @@ def _delivery_model_for(provider: ProviderDefinition, model_name: str) -> str:
     return model_name
 
 
+def assignment_model_for(provider: ProviderDefinition, delivered_model: str) -> str:
+    """Translate a model string LiteLLM routes back into its app-facing id.
+
+    The inverse of :func:`_delivery_model_for`. Only the provider a route was
+    assigned to may drive this: one provider's delivery prefix is another's
+    assignment prefix, so the prefix alone cannot say which form a string is in.
+    """
+    delivery_prefix = provider.provider_model_prefix
+    if delivery_prefix == provider.assignment_prefix:
+        return delivered_model
+    if not delivered_model.startswith(delivery_prefix):
+        return delivered_model
+    return provider.assignment_prefix + delivered_model[len(delivery_prefix) :]
+
+
 async def _deliver_cloud(
     alias: str,
     cloud_provider: str,
@@ -597,7 +647,7 @@ async def _deliver_cloud(
     db_entries: list[LiteLLMDeployment],
     yaml_entries: list[LiteLLMDeployment],
     db_pool: Any,
-    effective_thinking_disabled: bool | None,
+    effective_thinking_preference: ThinkingPreferenceState | None,
 ) -> bool:
     """Deliver a cloud-provider model + its Fernet-decrypted key.
 
@@ -621,7 +671,13 @@ async def _deliver_cloud(
         new_params["api_key"] = api_key
     if api_base is not None:
         new_params["api_base"] = api_base
-    if effective_thinking_disabled:
+    if effective_thinking_preference is ThinkingPreferenceState.READ_FAILED:
+        if "think" in base_params:
+            new_params["think"] = base_params["think"]
+    elif effective_thinking_preference in (
+        ThinkingPreferenceState.ABSENT,
+        ThinkingPreferenceState.EXPLICIT_DISABLED,
+    ):
         new_params["think"] = False
 
     desired_model = str(new_params["model"])
@@ -645,8 +701,7 @@ def _local_new_params(
     base_params: dict[str, Any],
     base_entry: LiteLLMDeployment | None,
     effective_num_ctx: int | None,
-    effective_thinking_disabled: bool | None,
-    thinking_disabled: bool | None,
+    effective_thinking_preference: ThinkingPreferenceState | None,
 ) -> dict[str, Any]:
     """Build the litellm_params payload for a local/Ollama delivery."""
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
@@ -662,11 +717,15 @@ def _local_new_params(
     # carried api_base — forcing the Ollama URL would break that transport.
     if effective_num_ctx is not None and is_local_ollama(new_model):
         new_params["num_ctx"] = effective_num_ctx
-    if effective_thinking_disabled:
+    if effective_thinking_preference in (
+        ThinkingPreferenceState.ABSENT,
+        ThinkingPreferenceState.EXPLICIT_DISABLED,
+    ):
         new_params["think"] = False
-    elif thinking_disabled is False:
-        # Explicit re-enable: remove the think flag, preserving everything else.
+    elif effective_thinking_preference is ThinkingPreferenceState.EXPLICIT_ENABLED:
+        # Explicit re-enable removes the carried default-off flag.
         new_params.pop("think", None)
+    # READ_FAILED and non-thinking models preserve the carried routing params.
     return new_params
 
 
@@ -727,8 +786,7 @@ async def _deliver_local(
     yaml_entries: list[LiteLLMDeployment],
     db_pool: Any,
     effective_num_ctx: int | None,
-    effective_thinking_disabled: bool | None,
-    thinking_disabled: bool | None,
+    effective_thinking_preference: ThinkingPreferenceState | None,
 ) -> bool:
     """Deliver a local/Ollama deployment.
 
@@ -743,8 +801,7 @@ async def _deliver_local(
         base_params,
         base_entry,
         effective_num_ctx,
-        effective_thinking_disabled,
-        thinking_disabled,
+        effective_thinking_preference,
     )
     if _local_is_noop(alias, new_params, db_entries, yaml_entries):
         return False
@@ -791,7 +848,7 @@ async def update_litellm_model(
 
     # Stage 3 — effective per-machine num_ctx / thinking overrides (pending
     # settings writes win over persisted DB state; num_ctx is local/Ollama-only).
-    effective_num_ctx, effective_thinking_disabled = await _resolve_effective_overrides(
+    effective_num_ctx, effective_thinking_preference = await _resolve_effective_overrides(
         target, alias, machine_id, db_pool, num_ctx, thinking_disabled
     )
 
@@ -816,7 +873,7 @@ async def update_litellm_model(
             db_entries,
             yaml_entries,
             db_pool,
-            effective_thinking_disabled,
+            effective_thinking_preference,
         )
     return await _deliver_local(
         alias,
@@ -827,30 +884,14 @@ async def update_litellm_model(
         yaml_entries,
         db_pool,
         effective_num_ctx,
-        effective_thinking_disabled,
-        thinking_disabled,
+        effective_thinking_preference,
     )
 
 
 def _smart_fallback_normalize(fast_model: str) -> tuple[str, str | None]:
-    """Strip the implicit :latest tag, detect a cloud prefix, and validate.
-
-    The prefix is resolved BEFORE validation because router and self-hosted ids
-    namespace their suffix; validating the remainder first rejects every one of
-    them.
-    """
-    if fast_model.endswith(":latest"):
-        fast_model = fast_model[:-7]
-    if "/" not in fast_model:
-        validate_model_name(fast_model)
-        return fast_model, None
-    prefix, suffix = fast_model.split("/", 1)
-    provider = provider_for_prefix(prefix)
-    if provider is not None and provider.kind in NAMESPACED_PROVIDER_KINDS:
-        validate_namespaced_model_suffix(suffix)
-    else:
-        validate_model_name(suffix)
-    return fast_model, provider.id if provider is not None else None
+    """Select the fallback fields from the canonical parsed model target."""
+    target = _parse_model_target(fast_model)
+    return target.new_name, target.cloud_provider
 
 
 def _warn_smart_fallback_pinned(fast_model: str, reason: str) -> None:

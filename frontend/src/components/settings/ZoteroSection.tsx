@@ -1,15 +1,17 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setConfig, zoteroTest, zoteroPollNow } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
-import { splitCron } from '@/lib/cron-utils';
+import { onSaveError } from '@/lib/forms/save-error';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { ScheduleSelect } from '@/components/ui/schedule-select';
+import { CheckCircle, XCircle, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import type { ConfigEntry } from '@/types';
 import { toast } from 'sonner';
@@ -53,13 +55,13 @@ export function ZoteroSection() {
   const pollCron = getConfigValue(configs, 'zotero.poll_cron') || '';
   const allowedPrivateHosts = getAllowedPrivateHosts(configs).join(', ');
 
-  // Local draft state for text inputs (saved on blur)
+  // Local draft state for text inputs the user types. Committed together by
+  // the section's explicit Save button, not per field on blur.
   const [draftApiKey, setDraftApiKey] = useState<string | null>(null);
   const [draftUserId, setDraftUserId] = useState<string | null>(null);
   const [draftGroupId, setDraftGroupId] = useState<string | null>(null);
   const [draftPollCron, setDraftPollCron] = useState<string | null>(null);
   const [draftAllowedHosts, setDraftAllowedHosts] = useState<string | null>(null);
-  const [pollCronError, setPollCronError] = useState<string | null>(null);
 
   // Test connection state
   const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
@@ -68,6 +70,7 @@ export function ZoteroSection() {
   // Sync now state
   const [isSyncing, setIsSyncing] = useState(false);
   const [libraryScopeChanged, setLibraryScopeChanged] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
@@ -77,50 +80,33 @@ export function ZoteroSection() {
       }
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
     },
+    onError: onSaveError('Failed to save Zotero setting.'),
   });
 
-  const handleBlurApiKey = () => {
+  // Whether any typed field has an unsaved edit, for the Save button's enabled state.
+  const hasDraftChanges =
+    (draftApiKey !== null && draftApiKey !== apiKey) ||
+    (draftUserId !== null && draftUserId !== userId) ||
+    (draftGroupId !== null && draftGroupId !== groupIdRaw) ||
+    (draftPollCron !== null && draftPollCron !== pollCron) ||
+    (draftAllowedHosts !== null && draftAllowedHosts !== allowedPrivateHosts);
+
+  const handleSave = () => {
     if (draftApiKey !== null && draftApiKey !== apiKey) {
       setMut.mutate({ key: 'zotero.api_key', value: draftApiKey });
     }
-    setDraftApiKey(null);
-  };
-
-  const handleBlurUserId = () => {
     if (draftUserId !== null && draftUserId !== userId) {
       setMut.mutate({ key: 'zotero.user_id', value: draftUserId });
     }
-    setDraftUserId(null);
-  };
-
-  const handleBlurGroupId = () => {
-    const currentGroupId = groupIdRaw;
-    if (draftGroupId !== null && draftGroupId !== currentGroupId) {
+    if (draftGroupId !== null && draftGroupId !== groupIdRaw) {
       const parsed = draftGroupId === '' ? null : Number.parseInt(draftGroupId, 10);
       if (draftGroupId === '' || (parsed !== null && Number.isInteger(parsed) && parsed > 0)) {
         setMut.mutate({ key: 'zotero.group_id', value: parsed });
       }
     }
-    setDraftGroupId(null);
-  };
-
-  const handleBlurPollCron = () => {
-    if (draftPollCron !== null) {
-      try {
-        splitCron(draftPollCron);
-        setPollCronError(null);
-        if (draftPollCron !== pollCron) {
-          setMut.mutate({ key: 'zotero.poll_cron', value: draftPollCron });
-        }
-        setDraftPollCron(null);
-      } catch {
-        setPollCronError('Must be 5 space-separated fields (e.g. 0 * * * *)');
-        // keep draft visible so the user can correct it; do NOT save
-      }
+    if (draftPollCron !== null && draftPollCron !== pollCron) {
+      setMut.mutate({ key: 'zotero.poll_cron', value: draftPollCron });
     }
-  };
-
-  const handleBlurAllowedHosts = () => {
     if (draftAllowedHosts !== null && draftAllowedHosts !== allowedPrivateHosts) {
       const hosts = draftAllowedHosts
         .split(',')
@@ -128,6 +114,10 @@ export function ZoteroSection() {
         .filter((h) => h !== '');
       setMut.mutate({ key: 'zotero.allowed_private_hosts', value: hosts });
     }
+    setDraftApiKey(null);
+    setDraftUserId(null);
+    setDraftGroupId(null);
+    setDraftPollCron(null);
     setDraftAllowedHosts(null);
   };
 
@@ -197,10 +187,12 @@ export function ZoteroSection() {
   }
 
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <p className="text-sm text-muted-foreground">
-          Connect JARVIS to your Zotero library to push papers and copy citation keys.
+          Connect JARVIS to your Zotero library to push papers and copy citation keys. Linked
+          projects determine the Zotero collection, and citation metadata is sent before
+          annotations or highlights are synchronized.
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -213,7 +205,6 @@ export function ZoteroSection() {
             placeholder="Enter your Zotero API key"
             value={draftApiKey ?? apiKey}
             onChange={(e) => setDraftApiKey(e.target.value)}
-            onBlur={handleBlurApiKey}
             autoComplete="off"
           />
           <p className="text-xs text-muted-foreground">
@@ -230,6 +221,13 @@ export function ZoteroSection() {
           </p>
         </div>
 
+        {testResult?.success && (
+          <p className="text-xs text-muted-foreground">
+            Next, link a paper to a project and use <Link to="/projects" className="text-primary underline">Projects</Link>{' '}
+            to organize its Zotero collection.
+          </p>
+        )}
+
         {/* Library ID */}
         <div className="space-y-2">
           <Label htmlFor="zotero-user-id">User ID</Label>
@@ -239,7 +237,6 @@ export function ZoteroSection() {
             placeholder="e.g. 1234567"
             value={draftUserId ?? userId}
             onChange={(e) => setDraftUserId(e.target.value)}
-            onBlur={handleBlurUserId}
           />
           <p className="text-xs text-muted-foreground">
             Found at{' '}
@@ -256,8 +253,8 @@ export function ZoteroSection() {
         </div>
 
         {/* Library Type */}
-        <div className="space-y-2">
-          <Label>Library Type</Label>
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium leading-none">Library Type</legend>
           <div className="flex gap-4">
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
@@ -286,7 +283,7 @@ export function ZoteroSection() {
             Personal library = your own Zotero account (most people). Group library = a shared
             Zotero group — you&apos;ll also need its numeric Group ID.
           </p>
-        </div>
+        </fieldset>
 
         {/* Group ID — visible only when library type is "group" */}
         {libraryType === 'group' && (
@@ -300,7 +297,6 @@ export function ZoteroSection() {
               placeholder="e.g. 987654"
               value={draftGroupId ?? groupIdRaw}
               onChange={(e) => setDraftGroupId(e.target.value)}
-              onBlur={handleBlurGroupId}
             />
             <p className="text-xs text-muted-foreground">
               The numeric group ID from the Zotero group library URL
@@ -319,24 +315,6 @@ export function ZoteroSection() {
             </p>
           </div>
         )}
-
-        {/* Better BibTeX hosts on the operator's own network */}
-        <div className="space-y-2">
-          <Label htmlFor="zotero-allowed-private-hosts">Allowed private hostnames</Label>
-          <Input
-            id="zotero-allowed-private-hosts"
-            type="text"
-            placeholder="zotero.lan, 192.168.1.50"
-            value={draftAllowedHosts ?? allowedPrivateHosts}
-            onChange={(e) => setDraftAllowedHosts(e.target.value)}
-            onBlur={handleBlurAllowedHosts}
-          />
-          <p className="text-xs text-muted-foreground">
-            Comma-separated hostnames on your own network that may serve Better BibTeX citation
-            keys. Any other host on a private address is refused.{' '}
-            <code className="font-mono">host.docker.internal</code> is always allowed.
-          </p>
-        </div>
 
         {/* Test connection */}
         <div className="flex items-center gap-3">
@@ -366,12 +344,13 @@ export function ZoteroSection() {
         {/* Auto-push on star */}
         <div className="flex items-center justify-between">
           <div>
-            <Label className="text-sm font-medium">Auto-push on star</Label>
+            <Label htmlFor="zotero-auto-push" className="text-sm font-medium">Auto-push on star</Label>
             <p className="text-xs text-muted-foreground">
               Automatically push a paper to Zotero when you star it.
             </p>
           </div>
           <Switch
+            id="zotero-auto-push"
             checked={autoPush}
             onCheckedChange={handleAutoPushChange}
             disabled={setMut.isPending}
@@ -382,12 +361,13 @@ export function ZoteroSection() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <Label className="text-sm font-medium">Enable Zotero → JARVIS sync</Label>
+              <Label htmlFor="zotero-poll-enabled" className="text-sm font-medium">Enable Zotero → JARVIS sync</Label>
               <p className="text-xs text-muted-foreground">
-                Automatically import new papers clipped into Zotero into JARVIS (checked hourly).
+                Automatically import new papers clipped into Zotero into JARVIS on the schedule below.
               </p>
             </div>
             <Switch
+              id="zotero-poll-enabled"
               checked={pollEnabled}
               onCheckedChange={handlePollEnabledChange}
               disabled={setMut.isPending}
@@ -398,29 +378,22 @@ export function ZoteroSection() {
             <div className="space-y-4 pl-1 border-l-2 border-muted ml-1">
               {/* Poll cron schedule */}
               {pollEnabled && (
-                <div className="space-y-1 pl-4">
-                  <Label htmlFor="zotero-poll-cron" className="text-sm">Sync schedule (cron)</Label>
-                  <Input
-                    id="zotero-poll-cron"
-                    type="text"
-                    placeholder="0 * * * *"
-                    value={draftPollCron ?? pollCron}
-                    onChange={(e) => {
-                      setDraftPollCron(e.target.value);
-                      if (pollCronError) setPollCronError(null);
+                <div className="pl-4">
+                  <ScheduleSelect
+                    id="zotero-poll-schedule"
+                    value={pollCron}
+                    onChange={(cron) => {
+                      // Both controls write zotero.poll_cron, and only this one
+                      // commits on choice. Dropping any half-typed custom
+                      // expression stops Save from putting it back afterwards.
+                      setDraftPollCron(null);
+                      setMut.mutate(
+                        { key: 'zotero.poll_cron', value: cron },
+                        { onError: onSaveError('Could not update the sync schedule') },
+                      );
                     }}
-                    onBlur={handleBlurPollCron}
-                    className={`font-mono text-sm${pollCronError ? ' border-destructive focus-visible:ring-destructive' : ''}`}
-                    aria-invalid={pollCronError !== null}
-                    aria-describedby={pollCronError ? 'zotero-poll-cron-error' : undefined}
+                    disabled={setMut.isPending}
                   />
-                  {pollCronError ? (
-                    <p id="zotero-poll-cron-error" className="text-xs text-destructive" role="alert">
-                      {pollCronError}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">Default: hourly (0 * * * *)</p>
-                  )}
                 </div>
               )}
 
@@ -436,7 +409,7 @@ export function ZoteroSection() {
                   variant="outline"
                   size="sm"
                   onClick={handleSyncNow}
-                  disabled={isSyncing || pollCronError !== null}
+                  disabled={isSyncing}
                 >
                   {isSyncing ? (
                     <Loader2 className="h-3 w-3 mr-1 animate-spin" />
@@ -446,6 +419,65 @@ export function ZoteroSection() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Advanced: deployment-wide network setting, not per-user */}
+        <div className="space-y-2">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 text-left text-sm font-medium"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+            aria-controls="zotero-advanced-settings"
+          >
+            {advancedOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            Advanced
+          </button>
+          {advancedOpen && (
+            <div id="zotero-advanced-settings" className="space-y-4 border-t pt-4">
+              {pollEnabled && (
+                <div className="space-y-2">
+                  <Label htmlFor="zotero-poll-cron">Custom sync schedule (cron)</Label>
+                  <Input
+                    id="zotero-poll-cron"
+                    type="text"
+                    placeholder="0 * * * *"
+                    value={draftPollCron ?? pollCron}
+                    onChange={(e) => setDraftPollCron(e.target.value)}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    For a schedule the picker above can&apos;t express. Saved with the Save
+                    button below.
+                  </p>
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="zotero-allowed-private-hosts">Better BibTeX hosts</Label>
+                <Input
+                  id="zotero-allowed-private-hosts"
+                  type="text"
+                  placeholder="zotero.lan, 192.168.1.50"
+                  value={draftAllowedHosts ?? allowedPrivateHosts}
+                  onChange={(e) => setDraftAllowedHosts(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Comma-separated hostnames on your own network allowed to serve Better BibTeX
+                  citation keys. This permits connections to private-network destinations, so only
+                  add hosts you control — it applies to every user on this deployment.{' '}
+                  <code className="font-mono">host.docker.internal</code> is always allowed.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Section-level Save for the typed fields above (API key, User ID, Group ID,
+            custom cron, Better BibTeX hosts) — none of them save on blur. */}
+        <div className="flex items-center gap-3 border-t pt-4">
+          <Button onClick={handleSave} disabled={setMut.isPending || !hasDraftChanges}>
+            {setMut.isPending ? 'Saving…' : 'Save'}
+          </Button>
         </div>
       </CardContent>
     </Card>

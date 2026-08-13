@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 import asyncpg
+from cryptography.fernet import InvalidToken
 from jarvis_common.crypto import (
     decrypt_secret,
     encrypt_secret,
@@ -24,6 +25,12 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# Stands in for the masked preview when a stored secret cannot be read back.
+# It is displayed to the administrator, so it names the remedy rather than the
+# cause, and it is deliberately not ``None``: an absent row already means "never
+# configured", and reusing it would hide a broken credential as a missing one.
+_UNREADABLE_SECRET = "Unreadable — replace this value"
 
 
 async def _fetch_effective_config_row(
@@ -117,8 +124,19 @@ def _resolve_config_value(key: str, row: Any) -> Any:
     if key in _ENCRYPTED_KEYS:
         enc = row.get("encrypted_value")
         if enc is not None:
-            # Decrypt then mask — never expose plaintext over the API
-            plaintext = decrypt_secret(enc.decode("ascii"))
+            try:
+                # Decrypt then mask — never expose plaintext over the API
+                plaintext = decrypt_secret(enc.decode("ascii"))
+            except (InvalidToken, UnicodeDecodeError):
+                # One stored value the current key cannot read, which a restore
+                # can leave behind. It must not take down the configuration
+                # listing the administrator needs in order to replace it. A
+                # missing or malformed configuration key is a different, global
+                # failure and is deliberately still raised. Never fall through
+                # to masking the stored bytes — that would present ciphertext
+                # as a working value.
+                logger.warning("Stored secret for %s could not be decrypted", key, exc_info=True)
+                return _UNREADABLE_SECRET
             return mask_secret(plaintext)
         raw = row.get("value")
         if raw is not None:

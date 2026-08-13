@@ -1,4 +1,10 @@
 (function () {
+  // Zod's object-schema fast path probes `Function()` before falling back.
+  // Production's strict CSP rejects that probe, so select Zod's supported
+  // interpreter path before the application bundle imports the library.
+  globalThis.__zod_globalConfig = globalThis.__zod_globalConfig || {};
+  globalThis.__zod_globalConfig.jitless = true;
+
   var html = document.documentElement;
   try {
     var raw = localStorage.getItem('jarvis-theme');

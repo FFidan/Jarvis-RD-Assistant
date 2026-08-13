@@ -16,7 +16,8 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
-from telegram_bot.formatters import format_paper_card, truncate
+from telegram_bot.formatters import format_pulse_card, format_pulse_deck_status, truncate
+from telegram_bot.notification_policy import ScheduledNotificationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +85,7 @@ async def _deliver_pulse_to_chat(
         returns per-user Pulse data.
     """
     try:
-        body = await services_client.fetch_pulse_today(http_client, config, user_id)
-        # /api/pulse/today returns HTTP 200 + JSON null when no deck exists for
-        # today (empty state, not an error). Coalesce null/non-dict to {} so the
-        # cards lookup below never dereferences None.
-        deck = body if isinstance(body, dict) else {}
+        deck = await services_client.fetch_pulse_today(http_client, config, user_id)
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             await _send(
@@ -105,32 +102,36 @@ async def _deliver_pulse_to_chat(
         await _send(bot, chat_id, "⚠️ Pulse fetch failed — try again later.")
         return
 
-    cards = deck.get("cards") or []
-    if not cards:
+    if deck is None:
         await _send(
             bot,
             chat_id,
             "\U0001f4ed No Pulse cards today — run /pulse_now to generate a fresh deck.",
         )
         return
+    if not deck.cards:
+        if deck.empty_reason == "no_data_yet":
+            await _send(
+                bot,
+                chat_id,
+                f"{format_pulse_deck_status(deck)}: no papers are available yet. "
+                "Run /pulse_now after your sources collect papers.",
+            )
+        else:
+            await _send(
+                bot,
+                chat_id,
+                "No Pulse cards are available — run /pulse_now to generate a fresh deck.",
+            )
+        return
 
-    await _send(bot, chat_id, f"\U0001f4e1 <b>Pulse — {len(cards)} scored paper(s)</b>")
-    for card in cards[:PULSE_TELEGRAM_TOP_N]:
-        paper_id = card.get("paper_id")
-        if paper_id is None:
-            continue
-        paper = {
-            "title": card.get("paper_title", "Untitled"),
-            "authors": card.get("paper_authors") or [],
-            "url": card.get("paper_url") or "",
-            "tldr": card.get("reasoning") or "",
-            "source_type": "pulse",
-        }
+    await _send(bot, chat_id, f"<b>{format_pulse_deck_status(deck)}</b>")
+    for card in deck.cards[:PULSE_TELEGRAM_TOP_N]:
         await _send(
             bot,
             chat_id,
-            truncate(format_paper_card(paper)),
-            reply_markup=_pulse_keyboard(int(paper_id)),
+            truncate(format_pulse_card(card.model_dump())),
+            reply_markup=_pulse_keyboard(card.paper_id),
         )
 
 
@@ -139,6 +140,8 @@ async def run_research_pulse(
     db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
+    *,
+    delivery_policy: ScheduledNotificationPolicy | None = None,
 ) -> None:
     """Fetch today's Pulse deck and deliver the top cards to Telegram.
 
@@ -165,4 +168,8 @@ async def run_research_pulse(
         return
 
     for pairing in pairings:
+        if delivery_policy is not None and await delivery_policy.suppresses(
+            pairing.user_id, "research_pulse"
+        ):
+            continue
         await _deliver_pulse_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)

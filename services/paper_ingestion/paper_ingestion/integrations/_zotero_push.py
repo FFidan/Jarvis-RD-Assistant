@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
@@ -21,6 +22,14 @@ logger = logging.getLogger("paper_ingestion.integrations.zotero_service")
 # A push is a handful of Zotero API calls; anything waiting longer than this is
 # queued behind a stuck holder and is better failed than left holding a slot.
 _PUSH_LOCK_TIMEOUT_SECONDS = 60
+
+
+@dataclass(frozen=True, slots=True)
+class ZoteroItemRef:
+    """The local paper and remote Zotero key reconciled as one identity."""
+
+    paper_id: int
+    zotero_key: str
 
 
 @asynccontextmanager
@@ -63,33 +72,30 @@ async def _resolve_project_collection_keys(
     linked project. Mirrors the create-branch loop; idempotent via ensure_collection."""
     collection_keys: list[str] = []
     for project_id in project_ids:
-        try:
-            project = await conn.fetchrow(
-                """
-                SELECT id, name, zotero_collection_key
-                FROM projects
-                WHERE id = $1
-                  AND ($2::bigint IS NULL OR user_id IS NOT DISTINCT FROM $2)
-                """,
+        project = await conn.fetchrow(
+            """
+            SELECT id, name, zotero_collection_key
+            FROM projects
+            WHERE id = $1
+              AND ($2::bigint IS NULL OR user_id IS NOT DISTINCT FROM $2)
+            """,
+            project_id,
+            owner_user_id,
+        )
+        if not project:
+            raise RuntimeError(
+                f"Linked project {project_id} is unavailable for Zotero collection filing"
+            )
+        if project["zotero_collection_key"]:
+            col_key = project["zotero_collection_key"]
+        else:
+            col_key = await client.ensure_collection(project["name"])
+            await conn.execute(
+                "UPDATE projects SET zotero_collection_key = $1 WHERE id = $2",
+                col_key,
                 project_id,
-                owner_user_id,
             )
-            if not project:
-                continue
-            if project["zotero_collection_key"]:
-                col_key = project["zotero_collection_key"]
-            else:
-                col_key = await client.ensure_collection(project["name"])
-                await conn.execute(
-                    "UPDATE projects SET zotero_collection_key = $1 WHERE id = $2",
-                    col_key,
-                    project_id,
-                )
-            collection_keys.append(col_key)
-        except Exception:
-            logger.warning(
-                "Zotero collection setup failed for project %d", project_id, exc_info=True
-            )
+        collection_keys.append(col_key)
     return collection_keys
 
 
@@ -185,26 +191,20 @@ def _build_creators(authors: list[Any]) -> list[dict[str, str]]:
 async def _reconcile_existing_item(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     client: Any,
-    paper: Any,
+    item: ZoteroItemRef,
     project_ids: list[int],
     owner_user_id: int | None,
 ) -> None:
     """File an already-pushed Zotero item into any newly linked project collections."""
-    paper_id = paper["id"]
     collection_keys = await _resolve_project_collection_keys(
         conn, client, project_ids, owner_user_id
     )
     if collection_keys:
-        try:
-            await client.add_item_to_collections(paper["zotero_item_key"], collection_keys)
-        except Exception:
-            logger.warning(
-                "Zotero collection reconcile failed for paper %d", paper_id, exc_info=True
-            )
+        await client.add_item_to_collections(item.zotero_key, collection_keys)
     logger.debug(
         "Paper %d already in Zotero (%s); collections reconciled",
-        paper_id,
-        paper["zotero_item_key"],
+        item.paper_id,
+        item.zotero_key,
     )
 
 
@@ -212,17 +212,14 @@ async def _lookup_existing_by_doi(client: Any, paper: Any) -> str | None:
     """Return an existing Zotero item key matched by the paper's DOI, or None."""
     if not paper["doi"]:
         return None
-    try:
-        existing_item = await client.search_by_doi(paper["doi"])
-        if existing_item:
-            logger.info(
-                "Paper %d already in Zotero by DOI, reusing key %s",
-                paper["id"],
-                existing_item["key"],
-            )
-            return existing_item["key"]
-    except Exception:
-        logger.warning("Zotero DOI search failed for paper %d", paper["id"], exc_info=True)
+    existing_item = await client.search_by_doi(paper["doi"])
+    if existing_item:
+        logger.info(
+            "Paper %d already in Zotero by DOI, reusing key %s",
+            paper["id"],
+            existing_item["key"],
+        )
+        return existing_item["key"]
     return None
 
 
@@ -408,7 +405,13 @@ async def _push_paper_with_conn(
         # Already pushed for this owner: reconcile collections (resync clears the
         # key first, so a forced re-push falls through to the create branch instead).
         if paper["zotero_item_key"]:
-            await _reconcile_existing_item(conn, client, paper, project_ids, owner_user_id)
+            await _reconcile_existing_item(
+                conn,
+                client,
+                ZoteroItemRef(paper_id, paper["zotero_item_key"]),
+                project_ids=project_ids,
+                owner_user_id=owner_user_id,
+            )
             return
 
         # DOI deduplication — reuse an existing Zotero item if found; otherwise create one.
@@ -417,6 +420,14 @@ async def _push_paper_with_conn(
             zotero_key = await _create_zotero_item(conn, client, paper, project_ids, owner_user_id)
             if zotero_key is None:
                 return
+        else:
+            await _reconcile_existing_item(
+                conn,
+                client,
+                ZoteroItemRef(paper_id, zotero_key),
+                project_ids=project_ids,
+                owner_user_id=owner_user_id,
+            )
 
         # Persist the Zotero item key in the per-user link table (the global
         # papers.zotero_* columns are no longer written — linkage is per-(paper,user)).

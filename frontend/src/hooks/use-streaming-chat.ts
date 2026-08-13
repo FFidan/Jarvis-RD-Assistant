@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { streamSSE } from '@/lib/sse';
+import { getStreamErrorCopy, streamSSE, type StreamError } from '@/lib/sse';
 import { escapeMarkdownInline } from '@/lib/markdown-escape';
 import {
   useChatStore,
@@ -31,7 +31,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   const [phase, setPhase] = useState<Phase>('idle');
   const [sources, setSources] = useState<Source[]>([]);
   const [modelUsed, setModelUsed] = useState<string | null>(null);
-  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<StreamError | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   // D.3 — AbortController is now stored in the module-level activeStreams map
   // (keyed by chatId) so streams survive component unmount during navigation.
@@ -135,8 +135,12 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           } else if (event.type === 'done') {
             setModelUsed(event.model_used ?? null);
           } else if (event.type === 'error') {
-            setStreamError(event.message || 'Unknown streaming error');
-            appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(event.message || 'Unknown error')}`);
+            const error: StreamError = {
+              message: event.message || 'Unknown streaming error',
+              ...(event.code ? { code: event.code } : {}),
+            };
+            setStreamError(error);
+            appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(getStreamErrorCopy(error))}`);
           }
         }
       } catch (err) {
@@ -145,8 +149,9 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           : false;
         if (!isAbort) {
           const msg = err instanceof Error ? err.message : String(err);
-          setStreamError(msg);
-          appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(msg)}`);
+          const error: StreamError = { message: msg, code: 'stream_transport_error' };
+          setStreamError(error);
+          appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(getStreamErrorCopy(error))}`);
         }
         // D.2 — if stopped before any token arrived, discard the empty placeholder
         // (cast: TS narrows phaseRef.current to its initial 'idle' literal from useRef<Phase>(phase) inference)

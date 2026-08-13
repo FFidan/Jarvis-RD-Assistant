@@ -120,12 +120,13 @@ rollback_unverified_access_config() {
   # A reconfiguration may already have recreated the dashboard and its selected
   # edge. Roll back that JARVIS-owned runtime before reporting the route failure;
   # restoring files alone would leave the previous route pointed at new settings.
-  local _rollback_snapshot=.env.pre-setup.bak _rollback_secret_snapshot=""
-  if [ -f "${_SETUP_TRANSACTION_DIR:-}/active" ]; then
-    _rollback_snapshot="${_SETUP_TRANSACTION_DIR}/old.env"
-    _rollback_secret_snapshot="${_SETUP_TRANSACTION_DIR}/secrets"
-  fi
-  if [ "${_ENV_SNAPSHOT_TAKEN:-0}" -eq 1 ] && [ -f "$_rollback_snapshot" ]; then
+  local _rollback_snapshot="${_SETUP_TRANSACTION_DIR:-}/old.env"
+  local _rollback_secret_snapshot="${_SETUP_TRANSACTION_DIR:-}/secrets"
+  if [ "${_ENV_SNAPSHOT_TAKEN:-0}" -eq 1 ]; then
+    if [ ! -f "${_SETUP_TRANSACTION_DIR:-}/active" ]; then
+      warn "The private setup transaction is unavailable; runtime rollback was not attempted."
+      return 1
+    fi
     _ACCESS_ROLLBACK_ATTEMPTED=1
     if rollback_access_runtime \
         "${_PREVIOUS_ACCESS_MODE:-}" "${_PREVIOUS_COMPOSE_PROFILES:-}" \
@@ -133,7 +134,7 @@ rollback_unverified_access_config() {
         "${_PREVIOUS_DASHBOARD_HOST_PORT:-3001}" "${ACCESS_MODE_LABEL:-localhost}" \
         "${COMPOSE_PROFILES_VALUE:-}" "${DASHBOARD_TRUSTED_HOST_PORT_RESOLVED:-3003}" \
         "${_REPLACEMENT_TAILSCALE_ATTEMPTED:-0}" "${NON_INTERACTIVE:-1}" \
-        "$_rollback_snapshot" .env secrets/cloudflare_tunnel_token.txt "$SCRIPT_DIR" \
+        "$_rollback_snapshot" .env secrets "$SCRIPT_DIR" \
         "$_rollback_secret_snapshot"; then
       _STACK_STARTED=1
       if [ -n "${_SETUP_TRANSACTION_DIR:-}" ] \
@@ -162,12 +163,8 @@ rollback_unverified_access_config() {
       done < <(access_edge_retirements "${ACCESS_MODE_LABEL:-localhost}" \
         "${COMPOSE_PROFILES_VALUE:-}" '' '')
       warn "Then restore and verify the previous configuration:"
-      if [ -n "$_rollback_secret_snapshot" ]; then
-        warn "  cp .jarvis-setup-transaction/old.env .env"
-        warn "  bash -c '. ./scripts/setup_lib.sh; restore_setup_secret_snapshot .jarvis-setup-transaction/secrets ./secrets'"
-      else
-        warn "  cp .env.pre-setup.bak .env"
-      fi
+      warn "  cp .jarvis-setup-transaction/old.env .env"
+      warn "  bash -c '. ./scripts/setup_lib.sh; restore_setup_secret_snapshot .jarvis-setup-transaction/secrets ./secrets'"
       warn "  bash scripts/init-secrets.sh"
       warn "  docker compose up -d --no-build --force-recreate --no-deps dashboard"
       while IFS='|' read -r _recovery_edge _recovery_service; do
@@ -664,6 +661,19 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 # shellcheck source=scripts/setup_lib.sh
 source "${SCRIPT_DIR}/scripts/setup_lib.sh"
+
+# existing_env_value KEY — print the current value of KEY from .env, or nothing
+# if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
+# as absent (the `=.\+` requires at least one char after `=`). The value is
+# emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
+# survive intact; a trailing CR from a Windows-edited (CRLF) .env is stripped so
+# the value round-trips byte-clean.
+existing_env_value() {
+  [ -f .env ] || return 1
+  grep -qE "^$1=.+" .env 2>/dev/null || return 1
+  grep "^$1=" .env | head -n 1 | cut -d'=' -f2- | tr -d '\r'
+}
+
 COMPOSE_MIN=2.24.4
 _SETUP_TRANSACTION_DIR="${SCRIPT_DIR}/.jarvis-setup-transaction"
 # An exported Compose selector outranks this checkout's .env and can otherwise
@@ -961,7 +971,7 @@ recover_interrupted_setup_transaction() {
   if rollback_access_runtime "$old_mode" "$old_profiles" "$old_port" \
       "$old_origin" "$old_dashboard_port" "$new_mode" "$new_profiles" \
       "$new_port" "$tailscale_attempted" "$NON_INTERACTIVE" \
-      "$transaction_dir/old.env" .env secrets/cloudflare_tunnel_token.txt \
+      "$transaction_dir/old.env" .env secrets \
       "$SCRIPT_DIR" "$transaction_dir/secrets"; then
     cp "$transaction_dir/old.env" .env.pre-setup.bak \
       && chmod 600 .env.pre-setup.bak || {
@@ -1844,18 +1854,6 @@ fi
 # first-class preflight (non-fatal; the stack runs on CPU otherwise).
 preflight_nvidia_toolkit
 
-# existing_env_value KEY — print the current value of KEY from .env, or nothing
-# if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
-# as absent (the `=.\+` requires at least one char after `=`). The value is
-# emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
-# survive intact; a trailing CR from a Windows-edited (CRLF) .env is stripped so
-# the value round-trips byte-clean.
-existing_env_value() {
-  [ -f .env ] || return 1
-  grep -qE "^$1=.+" .env 2>/dev/null || return 1
-  grep "^$1=" .env | head -n 1 | cut -d'=' -f2- | tr -d '\r'
-}
-
 # Reconfiguration is a replacement of the selected access edge, not an
 # additive merge. Keep the prior identity long enough to retire only the edge
 # this JARVIS setup previously owned after the replacement is verified.
@@ -2112,9 +2110,9 @@ if [ -f .env ]; then
       [ -n "$_keep_api_key" ] \
         || die "JARVIS_API_KEY is missing from the existing .env." \
                "Restore the original .env or backup before re-running setup"
-      _keep_key_file="$(materialize_api_key_file "$_keep_api_key")" \
+      _keep_key_file="$(materialize_api_key_file "$_keep_api_key" "$SCRIPT_DIR")" \
         || die "Could not write the local API-key file." \
-               "Check permissions on ${HOME}/.config/jarvis, then re-run ./setup.sh"
+               "Check permissions on your JARVIS CLI config directory, then re-run ./setup.sh"
     fi
 
     case "$_keep_configured:$_keep_setup_completed" in
@@ -3205,8 +3203,8 @@ _STACK_STARTED=1
 # -----------------------------------------------------------------------------
 # The health gate is the shared always-on base plus each active group's own
 # service (registry extra_health_svcs): a group deliberately started is a group
-# whose health is verified. The base is shared with scripts/jarvis-setup.sh via
-# mandatory_health_services (setup_lib.sh), so the two entry points cannot drift.
+# whose health is verified. mandatory_health_services keeps the fresh-install
+# and existing-install paths on the same registry-backed contract.
 read -ra MANDATORY_SVCS <<< "$(mandatory_health_services "$MANDATORY_HEALTH_BASE" ${ACTIVE_PROFILES[@]+"${ACTIVE_PROFILES[@]}"})"
 
 printf '\n'
@@ -3597,9 +3595,9 @@ fi
 
 if [ "$NI_MODE" = "single" ]; then
   # Single-user mode: API key auth is enabled.
-  _KEY_FILE="$(materialize_api_key_file "$JARVIS_API_KEY")" \
+  _KEY_FILE="$(materialize_api_key_file "$JARVIS_API_KEY" "$SCRIPT_DIR")" \
     || die "Could not write the local API-key file." \
-           "Check permissions on ${HOME}/.config/jarvis, then re-run ./setup.sh"
+           "Check permissions on your JARVIS CLI config directory, then re-run ./setup.sh"
   printf '  API key:      written to %s\n' "$_KEY_FILE"
   printf '  %sTo retrieve:%s grep JARVIS_API_KEY .env\n' "$C_BOLD" "$C_RESET"
   printf '  Sign in:      open the dashboard and enter your API key.\n'
@@ -3623,7 +3621,7 @@ printf '%s   Next steps%s\n' "$C_BOLD" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 if [ "$NI_MODE" = "single" ]; then
   printf '  1. Open the dashboard: %s\n' "$DASHBOARD_URL"
-  printf '  2. Log in with your API key (stored in ~/.config/jarvis/api-key).\n'
+  printf '  2. Log in with your API key (stored in %s).\n' "$_KEY_FILE"
 else
   # Dependency order: the first admin is bootstrapped by the token-bearing setup
   # link (no SMTP, no existing account) BEFORE anything that presupposes an admin

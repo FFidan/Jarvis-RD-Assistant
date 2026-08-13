@@ -14,6 +14,11 @@ The **Pulse** page at `/pulse` shows your daily recommendation deck — a curate
 
 The deck is a collection of **PulseCards**, each representing a recommended paper. Cards are generated in the background by a scheduled job (configured in Settings → Automation or Settings → Pulse) and are available when you open the page. If no deck has been generated yet, a prompt invites you to generate one manually.
 
+The optional Telegram delivery reads this same ranked deck and shows its first
+five cards for a shorter mobile presentation. It does not run a second ranking
+policy. A paper can appear again on another day when relevance, source results,
+and your feedback are unchanged; Pulse does not promise daily novelty.
+
 ### PulseCard
 
 Each card in the deck shows:
@@ -31,6 +36,12 @@ Clicking the **Why?** indicator on a card opens the **WhyPopover**, which explai
 ### StaleBadge
 
 If today's deck has not been regenerated and the one shown is from an earlier day, a **StaleBadge** appears in the deck header (not on individual cards) to signal that the recommendations may not reflect your most recent reading activity or topic configuration. Clicking it opens a sheet with per-source diagnostics and a **Generate now** button to request a fresh deck.
+
+Telegram carries the same distinction in plain text: it identifies a current or
+earlier deck and its age, states when ranking used reduced signals, and labels
+each card's evidence check as verified, a reported confidence level,
+unverified, or not reported. These labels describe available evidence; they do
+not independently establish that a paper's claims are correct.
 
 ---
 

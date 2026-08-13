@@ -138,3 +138,27 @@ def test_unset_smtp_fields_remain_allowed(monkeypatch) -> None:
 
     assert settings.smtp_host is None
     assert settings.smtp_from is None
+
+
+@pytest.mark.parametrize("env_name", ["SMTP_HOST", "SMTP_FROM"])
+def test_required_smtp_whitespace_is_unset(monkeypatch, env_name: str) -> None:
+    _isolated_env(monkeypatch, **{env_name: "  \t "})
+    assert getattr(SecretsSettings(), env_name.lower()) is None
+
+
+def test_required_smtp_env_values_are_stripped(monkeypatch) -> None:
+    _isolated_env(
+        monkeypatch,
+        SMTP_HOST="  smtp.example.com  ",
+        SMTP_FROM="  bot@example.com  ",
+    )
+    settings = SecretsSettings()
+    assert settings.smtp_host.get_secret_value() == "smtp.example.com"
+    assert settings.smtp_from.get_secret_value() == "bot@example.com"
+
+
+def test_required_smtp_whitespace_file_is_unset(monkeypatch, tmp_path: Path) -> None:
+    secret_file = tmp_path / "smtp-host"
+    secret_file.write_text("  \n\t", encoding="utf-8")
+    _isolated_env(monkeypatch, SMTP_HOST_FILE=str(secret_file))
+    assert SecretsSettings().smtp_host is None

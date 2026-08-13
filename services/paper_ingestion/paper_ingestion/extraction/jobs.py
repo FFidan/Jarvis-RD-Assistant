@@ -15,6 +15,7 @@ import httpx
 from jarvis_common.jobs import ProgressContext
 
 from paper_ingestion._state import get_services
+from paper_ingestion.extraction import core
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,6 @@ async def _extraction_single_job(
     """Extract structured fields for one paper/template pair."""
     from jarvis_common.db_helpers import assert_paper_ownership  # noqa: PLC0415
 
-    from paper_ingestion.extraction import extract_fields_for_paper  # noqa: PLC0415
-
     paper_id = int(payload["paper_id"])
     template_id = int(payload["template_id"])
     user_id = payload.get("user_id")
@@ -45,7 +44,7 @@ async def _extraction_single_job(
 
     await ctx.update_progress(0.1, "Extracting fields")
     services = get_services()
-    result = await extract_fields_for_paper(
+    result = await core.extract_fields_for_paper(
         http_client,
         pool,
         paper_id,
@@ -73,8 +72,6 @@ async def _extraction_batch_job(
     """
     from jarvis_common.db_helpers import assert_paper_ownership  # noqa: PLC0415
 
-    from paper_ingestion.extraction import batch_extract  # noqa: PLC0415
-
     paper_ids: list[int] = list(payload.get("paper_ids", []))
     template_id: int = int(payload["template_id"])
     user_id = payload.get("user_id")
@@ -88,7 +85,7 @@ async def _extraction_batch_job(
     embedder = services.embedder
     verifier = services.verifier
 
-    result = await batch_extract(
+    result = await core.batch_extract(
         http_client,
         pool,
         paper_ids,

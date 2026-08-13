@@ -157,6 +157,7 @@ describe('SettingsRail — Sources section', () => {
     // There must be exactly one button labelled "Sources"
     const sourcesButtons = screen.getAllByRole('button', { name: 'Sources' });
     expect(sourcesButtons).toHaveLength(1);
+    expect(screen.getByRole('navigation', { name: 'Settings navigation' })).toHaveClass('bg-paper');
   });
 });
 

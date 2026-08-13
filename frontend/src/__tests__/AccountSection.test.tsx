@@ -5,7 +5,7 @@
  *  - Profile render (display_name, email, role, dates)
  *  - display_name edit (save + cancel)
  *  - Email-change flow (request → sent banner; cancel path)
- *  - #confirm_email_token fragment (plus legacy query form) → confirmation + token stripped
+ *  - #confirm_email_token fragment → confirmation + token stripped
  *  - Error states for both mutations
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -219,7 +219,7 @@ describe('AccountSection', () => {
     await waitFor(() => expect(screen.getByText(/Email already in use/i)).toBeInTheDocument());
   });
 
-  // --- #confirm_email_token fragment flow + legacy query compatibility ---
+  // --- #confirm_email_token fragment flow ---
 
   it('calls confirmEmailChange from a fragment and strips the bearer from the address', async () => {
     mockConfirmEmailChange.mockImplementation(() => new Promise(() => {}));
@@ -231,16 +231,9 @@ describe('AccountSection', () => {
     });
   });
 
-  it('still calls confirmEmailChange when the legacy query parameter is present', async () => {
-    mockConfirmEmailChange.mockResolvedValue({ ...ACCOUNT, email: 'confirmed@example.com' });
-    renderAccountSection('?confirm_email_token=test-tok-123');
-
-    await waitFor(() => expect(mockConfirmEmailChange).toHaveBeenCalledWith('test-tok-123'));
-  });
-
   it('shows success banner after successful email confirmation', async () => {
     mockConfirmEmailChange.mockResolvedValue({ ...ACCOUNT, email: 'confirmed@example.com' });
-    renderAccountSection('?confirm_email_token=test-tok-123');
+    renderAccountSection('#confirm_email_token=test-tok-123');
 
     await waitFor(() =>
       expect(screen.getByText(/Email address updated to/i)).toBeInTheDocument(),
@@ -250,7 +243,7 @@ describe('AccountSection', () => {
 
   it('shows error banner when confirmEmailChange rejects', async () => {
     mockConfirmEmailChange.mockRejectedValue(new Error('Token expired'));
-    renderAccountSection('?confirm_email_token=bad-tok');
+    renderAccountSection('#confirm_email_token=bad-tok');
 
     await waitFor(() =>
       expect(screen.getByText(/Token expired/i)).toBeInTheDocument(),

@@ -255,7 +255,6 @@ def _make_config(
     """Build a minimal BotConfig for the integration suite."""
     return BotConfig(
         telegram_token="dummy-token",
-        telegram_chat_id=None,
         database_url="postgres://unused",
         learning_engine_url=le_url,
         paper_ingestion_url=pi_url,

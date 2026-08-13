@@ -138,13 +138,18 @@ SCRATCH=""
 TLS_ARTIFACTS_ACTIVE=0
 TLS_CERTS_PREEXISTING=0
 
-# project_resource_ids PROJECT KIND — exact Compose-labeled resource IDs.
+# project_resource_ids PROJECT KIND — exact Compose-owned resources plus
+# detached lifecycle guards carrying the separate ownership label.
 project_resource_ids() {
   local project="$1" kind="$2"
   case "$kind" in
     containers)
-      "$REAL_DOCKER" ps -aq \
-        --filter "label=com.docker.compose.project=${project}" 2>/dev/null ;;
+      {
+        "$REAL_DOCKER" ps -aq \
+          --filter "label=com.docker.compose.project=${project}" 2>/dev/null
+        "$REAL_DOCKER" ps -aq \
+          --filter "label=${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}" 2>/dev/null
+      } | sort -u ;;
     volumes)
       "$REAL_DOCKER" volume ls -q \
         --filter "label=com.docker.compose.project=${project}" 2>/dev/null ;;
@@ -189,7 +194,7 @@ project_resource_label() {
   case "$kind" in
     containers)
       "$REAL_DOCKER" inspect --format \
-        '{{ index .Config.Labels "com.docker.compose.project" }}' "$resource" ;;
+        '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "dev.limitcycle.jarvis.lifecycle-project" }}' "$resource" ;;
     volumes|networks)
       "$REAL_DOCKER" inspect --format \
         '{{ index .Labels "com.docker.compose.project" }}' "$resource" ;;
@@ -223,6 +228,13 @@ assert_project_resources_owned() {
     for resource in $ids; do
       seen=1
       label="$(project_resource_label "$kind" "$resource" 2>/dev/null || true)"
+      if [ "$kind" = containers ]; then
+        case "$label" in
+          "$project|"|"|$project"|"$project|$project") continue ;;
+        esac
+      elif [ "$label" = "$project" ]; then
+        continue
+      fi
       if [ -z "$label" ] || [ "$label" != "$project" ]; then
         err "${kind%?} '${resource}' has project label '${label:-missing}', expected '${project}'."
         return 1

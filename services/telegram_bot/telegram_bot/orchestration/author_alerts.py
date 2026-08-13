@@ -10,6 +10,7 @@ from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_author_alert
+from telegram_bot.notification_policy import ScheduledNotificationPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,8 @@ async def run_author_alerts(
     db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
+    *,
+    delivery_policy: ScheduledNotificationPolicy | None = None,
 ) -> None:
     """Check tracked authors against recent papers and send alerts.
 
@@ -47,6 +50,10 @@ async def run_author_alerts(
         return
 
     for pairing in pairings:
+        if delivery_policy is not None and await delivery_policy.suppresses(
+            pairing.user_id, "author_alert"
+        ):
+            continue
         try:
             result = await services_client.check_authors(http_client, config, pairing.user_id)
         except Exception:

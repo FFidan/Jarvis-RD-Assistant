@@ -6,8 +6,6 @@ Edge case: missing template_id raises KeyError before batch_extract is called.
 
 from __future__ import annotations
 
-import sys
-import types
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -41,13 +39,6 @@ class _FakeCtx:
         return False
 
 
-def _install_fake_batch_extract(monkeypatch, result) -> None:
-    """Stub app.extraction so batch_extract returns a controlled result."""
-    fake_mod = types.ModuleType("paper_ingestion.extraction")
-    fake_mod.batch_extract = AsyncMock(return_value=result)  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "paper_ingestion.extraction", fake_mod)
-
-
 def _install_fake_app(monkeypatch, *, embedder=None, verifier=None) -> None:
     """Populate svc so job handlers can resolve embedder/verifier."""
     from paper_ingestion.extraction import jobs as jobs_mod  # noqa: PLC0415
@@ -76,7 +67,8 @@ async def test_extraction_batch_happy_path(monkeypatch):
         total=13,
         status="cancelled",
     )
-    _install_fake_batch_extract(monkeypatch, fake_result)
+    batch_extract = AsyncMock(return_value=fake_result)
+    monkeypatch.setattr("paper_ingestion.extraction.core.batch_extract", batch_extract)
     embedder = MagicMock()
     verifier = MagicMock()
     _install_fake_app(monkeypatch, embedder=embedder, verifier=verifier)
@@ -99,14 +91,8 @@ async def test_extraction_batch_happy_path(monkeypatch):
     )
 
     # batch_extract should have been called once with pool, http_client, ids, template_id
-    # Use sys.modules directly: `import pkg.mod` after the real module was already loaded
-    # returns the real module via package attribute lookup, bypassing the sys.modules stub.
-    import sys as _sys
-
-    extraction_mod = _sys.modules["paper_ingestion.extraction"]  # always the stub
-
-    extraction_mod.batch_extract.assert_awaited_once()
-    call_args = extraction_mod.batch_extract.await_args
+    batch_extract.assert_awaited_once()
+    call_args = batch_extract.await_args
     assert call_args.args[2] == [10, 20, 30, 40, 50, 60, 70, 80]
     assert call_args.args[3] == 3
     assert call_args.kwargs["embedder"] is embedder
@@ -119,15 +105,14 @@ async def test_extraction_batch_missing_template_id(monkeypatch):
     from paper_ingestion.extraction.jobs import _extraction_batch_job
 
     # batch_extract should never be called
-    fake_mod = types.ModuleType("paper_ingestion.extraction")
-    fake_mod.batch_extract = AsyncMock()  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "paper_ingestion.extraction", fake_mod)
+    batch_extract = AsyncMock()
+    monkeypatch.setattr("paper_ingestion.extraction.core.batch_extract", batch_extract)
     _install_fake_app(monkeypatch)
 
     with pytest.raises(KeyError):
         await _extraction_batch_job(MagicMock(), MagicMock(), {"paper_ids": [1, 2]}, _FakeCtx())
 
-    fake_mod.batch_extract.assert_not_awaited()
+    batch_extract.assert_not_awaited()
 
 
 @pytest.mark.asyncio

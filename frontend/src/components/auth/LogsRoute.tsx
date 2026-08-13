@@ -9,18 +9,12 @@ interface LogsRouteProps {
 /**
  * Route guard for /logs.
  *
- * Accepts admin users (magic-link sessions with role === 'admin') and legacy
- * api-key sessions where a raw API key is held in the store (user === null but
- * apiKey !== null). Both session types are authorised by the backend for the
- * /logs endpoints. AdminOnlyRoute is intentionally NOT reused here because it
- * also guards /admin/* which must remain stricter (admin role required).
+ * Accepts authenticated admin users. API-key login mints the same owner session
+ * cookie and user record as magic-link login, so there is no raw-key-only state.
  */
 export function LogsRoute({ children }: LogsRouteProps) {
   const user = useAuthStore((s) => s.user);
-  const apiKey = useAuthStore((s) => s.apiKey);
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-
-  const allowed = user?.role === 'admin' || (user === null && isAuthenticated && apiKey !== null);
+  const allowed = user?.role === 'admin';
 
   if (!allowed) {
     return <Navigate to="/" replace />;

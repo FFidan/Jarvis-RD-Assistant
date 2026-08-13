@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { useSortable } from '@dnd-kit/sortable';
@@ -8,7 +8,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { onSaveError } from '@/lib/forms/save-error';
 import { GripVertical, Key, Pencil, Check, X } from 'lucide-react';
 import type { SourceConfig } from '@/types';
 
@@ -50,6 +52,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
   const queryClient = useQueryClient();
   const [editingKey, setEditingKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const apiKeyInputId = useId();
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: source.source_type,
@@ -67,6 +70,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources.list() });
     },
+    onError: onSaveError('Could not save this source setting'),
   });
 
   const handleToggle = () => {
@@ -158,9 +162,13 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
+                    <Label htmlFor={apiKeyInputId} className="sr-only">
+                      API key
+                    </Label>
                     <Input
+                      id={apiKeyInputId}
                       type="password"
-                      placeholder={`Enter ${keyEnv}`}
+                      placeholder="API key"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       className="h-8 text-sm"

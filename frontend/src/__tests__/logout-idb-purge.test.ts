@@ -51,7 +51,6 @@ describe('logout IDB cache purge (P1c)', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'test-key-32chars-xxxxxxxxxxxx',
       user: null,
       lastError: null,
     });
@@ -83,7 +82,6 @@ describe('logout IDB cache purge (P1c)', () => {
 
     // Auth state must be cleared regardless of IDB purge failure.
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
-    expect(useAuthStore.getState().apiKey).toBeNull();
     expect(useAuthStore.getState().user).toBeNull();
   });
 

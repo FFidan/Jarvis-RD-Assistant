@@ -199,11 +199,12 @@ async def test_le_j04_list_jobs_scoped_to_owner(
 ):
     """GET /api/jobs returns only the caller's jobs; ?status= query param filters.
 
-    Two sub-assertions:
+    Three sub-assertions:
       1. Owner-scoping: user A's list excludes user B's jobs.
       2. status-filter propagation: ?status=queued returns only queued jobs from
          the caller's set (regression test for the status kwarg being passed
          through to jobs_lib.list_jobs).
+      3. status=active returns queued and running jobs without terminal history.
 
     # Verified: libs/jarvis_common/jarvis_common/jobs_router.py:102
     (build_jobs_router constructs list_jobs with user_id filter via
@@ -217,6 +218,9 @@ async def test_le_j04_list_jobs_scoped_to_owner(
     job_a_done = await _insert_le_job(
         contract_conn, contract_two_users.user_a_id, status="succeeded"
     )
+    job_a_running = await _insert_le_job(
+        contract_conn, contract_two_users.user_a_id, status="doing"
+    )
     job_b = await _insert_le_job(contract_conn, contract_two_users.user_b_id, status="todo")
 
     # Owner-scoping: user A's list excludes user B's job
@@ -225,7 +229,7 @@ async def test_le_j04_list_jobs_scoped_to_owner(
 
     assert resp_all.status_code == 200, resp_all.text[:300]
     ids_all = [j["id"] for j in resp_all.json()]
-    assert job_a_queued in ids_all and job_a_done in ids_all, (
+    assert job_a_queued in ids_all and job_a_running in ids_all and job_a_done in ids_all, (
         f"User A's own jobs missing from own list: queued={job_a_queued in ids_all} "
         f"done={job_a_done in ids_all}"
     )
@@ -244,6 +248,16 @@ async def test_le_j04_list_jobs_scoped_to_owner(
         f"status=queued filter did NOT exclude user A's done job {job_a_done}: {ids_queued}"
     )
     assert job_b not in ids_queued, "IDOR leak under status filter"
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp_active = await c.get("/api/jobs?status=active")
+
+    assert resp_active.status_code == 200, resp_active.text[:300]
+    ids_active = [j["id"] for j in resp_active.json()]
+    assert job_a_queued in ids_active
+    assert job_a_running in ids_active
+    assert job_a_done not in ids_active
+    assert job_b not in ids_active, "IDOR leak under active-status filter"
 
 
 # ---------------------------------------------------------------------------

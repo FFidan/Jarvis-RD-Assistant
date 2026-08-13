@@ -196,7 +196,7 @@ sync_data_key() {
 sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
 # JARVIS_SETUP_TOKEN gates the first-run setup wizard's WRITE endpoints while no
 # admin exists (closes the unauthenticated first-admin-takeover window). setup.sh
-# and scripts/jarvis-setup.sh print it in the #setup_token= URL fragment of the
+# prints it in the #setup_token= URL fragment of the
 # click-to-finish link (a fragment never reaches the server/logs); the wizard
 # also accepts it pasted on a second device.
 sync_secret JARVIS_SETUP_TOKEN jarvis_setup_token.txt "openssl rand -hex 32"

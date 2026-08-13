@@ -58,7 +58,7 @@ New here? The **[Quick start guide](docs/manual/quickstart.md)** walks you from 
 - On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 - Setup checks Docker, Compose, OpenSSL, Python, ports, disk, and hardware. On supported hosts it can install missing packages after showing the commands and asking permission. `./setup.sh --check` runs the same preflight without making changes.
 - **Windows:** use WSL2 + Docker Desktop
-- **Non-interactive installs:** use `./setup.sh --non-interactive` for the full installer. `scripts/jarvis-setup.sh` is a local-only compatibility bootstrap for older CI jobs; it does not configure TLS or remote access.
+- **Non-interactive installs:** use `./setup.sh --non-interactive` for the full installer. `scripts/jarvis-setup.sh` is a deprecated compatibility forwarder for older local-development automation; new automation should call `setup.sh` directly.
 
 `setup.sh` generates the repository-controlled secrets and configuration, pulls
 the selected images and Ollama models, waits for the services, and prints one
@@ -167,7 +167,8 @@ covers first sign-in, family invitations, passkeys, and everyday use.
 
 ## Updating JARVIS
 
-Installations running v1.2.0 or later use the normal lifecycle command:
+Maintained in-place update support starts at v1.2.0. Installations already
+running v1.2.2 or later use the normal lifecycle command:
 
 ```bash
 jarvis-research update
@@ -175,8 +176,10 @@ jarvis-research update
 
 This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.
 
-For an installation still running v1.1.3, v1.2.0 or v1.2.1, run the v1.2.2
-bootstrap once from the installation directory:
+For a maintained installation still running v1.2.0 or v1.2.1, run the v1.2.2
+bootstrap once from the installation directory. The same immutable bridge is
+also available as a separate legacy route from v1.1.3, which is outside the
+maintained update window:
 
 ```bash
 (
@@ -228,7 +231,7 @@ See [SECURITY.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/mai
 
 ## Development
 
-### Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, [`uv`](https://docs.astral.sh/uv/).
+### Prerequisites: Python 3.12+, Node.js 22.22.2 (the tested version in `.nvmrc`), Docker Engine 24+ with Compose v2, [`uv`](https://docs.astral.sh/uv/).
 
 Install `uv` (Python package manager used for all backend tooling):
 
@@ -298,7 +301,10 @@ See [`.env.example`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/
 
 ### Optional integrations
 
-**Telegram bot** — daily digests, Pulse rating buttons, RAG Q&A from your phone, FSRS review in chat. Enable with `docker compose --profile telegram up -d`; full setup + command list in the **[User Guide → Telegram](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/telegram/)**.
+**Telegram bot** — daily digests, Pulse rating and save actions, paper triage,
+projects and tasks, shared focus sessions, and FSRS review in chat. Enable with
+`docker compose --profile telegram up -d`; the real command and inline-action
+reference is in the **[User Guide → Telegram](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/telegram/)**.
 
 **Zotero** — sync papers between JARVIS and your citation manager (push on star+project-link, pull via browser extension). Configure in **Settings → Integrations**; full setup in the **[User Guide → Settings](https://limitcycle-oss.github.io/jarvis-rd-assistant/manual/settings/)**.
 

@@ -94,7 +94,6 @@ vi.mock('@/lib/api', async () => {
   const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
   return createApiMock({
     fetchFeedCounts: async () => (RICH_COUNTS),
-    fetchFeedCountsWithFacets: async () => (RICH_COUNTS),
     fetchFeed: async () => ({ papers: [INBOX_PAPER], total: 1 }),
     fetchSources: async () => ([
       { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
@@ -299,9 +298,8 @@ describe('FacetRail — F4 honest facet empty-state copy', () => {
 
   it('shows library-scoped empty-source message when no papers exist', async () => {
     // Force empty counts so the empty-state branch fires
-    const { fetchFeedCountsWithFacets, fetchFeedCounts } =
+    const { fetchFeedCounts } =
       await import('@/lib/api');
-    (fetchFeedCountsWithFacets as ReturnType<typeof vi.fn>).mockResolvedValue(EMPTY_COUNTS);
     (fetchFeedCounts as ReturnType<typeof vi.fn>).mockResolvedValue(EMPTY_COUNTS);
 
     renderPage('?surface=inbox');
@@ -314,9 +312,8 @@ describe('FacetRail — F4 honest facet empty-state copy', () => {
   });
 
   it('shows library-scoped empty-topic message when no topics configured', async () => {
-    const { fetchFeedCountsWithFacets, fetchFeedCounts } =
+    const { fetchFeedCounts } =
       await import('@/lib/api');
-    (fetchFeedCountsWithFacets as ReturnType<typeof vi.fn>).mockResolvedValue(EMPTY_COUNTS);
     (fetchFeedCounts as ReturnType<typeof vi.fn>).mockResolvedValue(EMPTY_COUNTS);
 
     renderPage('?surface=inbox');

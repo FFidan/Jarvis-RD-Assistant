@@ -13,8 +13,8 @@
  *     navigation fallback (cached index document) so reloads work offline.
  *     Build assets are content-hashed, so we cache them opportunistically on
  *     first fetch instead of hard-coding a manifest of hashed names.
- *   - Read API surfaces (SAFELIST, GET only): stale-while-revalidate — serve
- *     cached immediately, refresh in the background when online.
+ *   - Read API surfaces (SAFELIST, GET only): network-first — return current
+ *     server state when online and fall back to the saved response offline.
  *   - NON-GOAL endpoints (RAG/chat, discovery/process/embed, streams,
  *     mutations, exports): network-only passthrough, never touched.
  *   - JARVIS_LOGOUT message: purge the runtime API cache (cross-user hygiene),
@@ -174,6 +174,10 @@ self.addEventListener('fetch', (event) => {
 
   if (!sameOrigin) return; // let cross-origin (fonts/CDN) pass through
 
+  // This boot-time policy script is intentionally unversioned and served with
+  // `Cache-Control: no-cache`; let the browser revalidate it after upgrades.
+  if (url.pathname === '/preboot.js') return;
+
   // Same-origin static assets (hashed JS/CSS/img/fonts): cache-first.
   if (
     req.method === 'GET' &&
@@ -198,24 +202,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Read API surfaces: stale-while-revalidate (GET + safelist only).
+  // Read API surfaces: network-first with an offline cache fallback.
+  // Returning cached data while online would let a mutation succeed and then
+  // immediately repaint the previous project, lifecycle, or paper state.
   if (isCacheableApiRequest(req.method, url.pathname, url.search)) {
     event.respondWith(
       caches.open(RUNTIME_API_CACHE).then(async (cache) => {
-        const cached = await cache.match(req);
-        const network = fetch(req)
-          .then((res) => {
-            if (res && res.ok) cache.put(req, res.clone());
-            return res;
-          })
-          .catch(() => undefined);
-        // Serve cached immediately if present; otherwise wait for network.
-        if (cached) {
-          event.waitUntil(network);
-          return cached;
+        const cachedPromise = cache.match(req);
+        try {
+          const res = await fetch(req);
+          if (res && res.ok) await cache.put(req, res.clone());
+          return res;
+        } catch {
+          return (await cachedPromise) || Response.error();
         }
-        const res = await network;
-        return res || cached || Response.error();
       }),
     );
     return;

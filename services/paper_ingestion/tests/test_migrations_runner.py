@@ -1,4 +1,4 @@
-"""Tests for migrations_runner.py — guards against migration version collisions."""
+"""Tests for the shared migration runner and migration version collisions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import asyncpg
 import pytest
-from paper_ingestion.migrations_runner import (
+from jarvis_common.migrations import (
     _MIGRATION_SCHEMA_PROBES,
     _repair_false_applied_migrations,
 )
@@ -16,7 +16,7 @@ from paper_ingestion.migrations_runner import (
 def test_no_duplicate_migration_versions() -> None:
     """Each migration file in db/migrations/ must have a unique numeric prefix.
 
-    Catches future collisions at CI time so the migrations_runner's runtime
+    Catches future collisions at CI time so the migration runner's runtime
     guard is never triggered in production.
     """
     migrations_dir = Path(__file__).resolve().parents[3] / "db" / "migrations"
@@ -147,7 +147,7 @@ def test_strip_outer_transaction_control_same_line_dollar_quote() -> None:
     a lone BEGIN on a subsequent line would still be stripped correctly. The new
     state machine must handle same-line open+close without leaking text.
     """
-    from paper_ingestion.migrations_runner import _strip_outer_transaction_control
+    from jarvis_common.migrations import _strip_outer_transaction_control
 
     sql = "BEGIN;\nDO $$ BEGIN RAISE NOTICE 'hello'; END $$;\nSELECT 1;\nCOMMIT;\n"
     result = _strip_outer_transaction_control(sql)

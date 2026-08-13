@@ -642,7 +642,7 @@ describe('AdminUsersPage — send sign-in link', () => {
 
   it('surfaces the manual link to copy when SMTP cannot deliver it', async () => {
     const { toast } = await import('sonner');
-    const link = 'https://localhost:3001/auth/verify?token=xyz789';
+    const link = 'https://localhost:3001/auth/verify#token=xyz789';
     listUsersMock.mockResolvedValueOnce(_sampleUsers);
     sendSignInLinkMock.mockResolvedValueOnce({ sent: true, sent_link: link });
 
@@ -813,7 +813,7 @@ describe('AdminUsersPage — invite deliverability (B2/OPS-2)', () => {
   });
 
   it('shows the manual-share notice and the link when SMTP is unconfigured', async () => {
-    const link = 'https://localhost:3001/auth/verify?token=abc123';
+    const link = 'https://localhost:3001/auth/verify#token=abc123';
     listUsersMock.mockResolvedValue(_sampleUsers);
     inviteUserMock.mockResolvedValueOnce({
       id: 3,
@@ -840,7 +840,7 @@ describe('AdminUsersPage — invite deliverability (B2/OPS-2)', () => {
   });
 
   it('does not blame missing SMTP when a configured relay fails', async () => {
-    const link = 'https://localhost:3001/auth/verify?token=relay-failed';
+    const link = 'https://localhost:3001/auth/verify#token=relay-failed';
     listUsersMock.mockResolvedValue(_sampleUsers);
     inviteUserMock.mockResolvedValueOnce({
       id: 3,

@@ -38,13 +38,15 @@ describe('PdfUploadZone — pure setFiles updater', () => {
       </StrictMode>,
     );
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toHaveAttribute('name', 'pdf-files');
     const file = new File(['pdf'], 'paper.pdf', { type: 'application/pdf' });
 
     fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(screen.getByText('Done')).toBeTruthy();
+      expect(screen.getByText('Indexing in background')).toBeTruthy();
     });
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(uploadPdf).toHaveBeenCalledTimes(1);
   });
 });

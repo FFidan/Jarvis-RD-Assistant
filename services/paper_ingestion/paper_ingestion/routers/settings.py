@@ -1,33 +1,23 @@
 """Settings, nudges, and source management endpoints.
 
-HTTP transport layer only — all business logic lives in
-``paper_ingestion.services.settings_service``.
+HTTP transport layer only — business logic lives in concern-specific service modules.
 
 Route handlers are thin:  parse → auth check → delegate → return.
-
-Symbols that tests patch via ``paper_ingestion.routers.settings.*`` are
-re-exported here so existing patch-paths remain stable after the extraction.
 
 Sub-routers:
 - ``settings_sources.router`` — /api/nudges/* and /api/sources/*
 """
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
-import httpx  # noqa: F401 — in namespace so tests can patch routers.settings.httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from jarvis_common import log_audit
 from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
-from jarvis_common.crypto import (
-    decrypt_secret,  # noqa: F401 — in namespace for test patch-path compat
-    encrypt_secret,  # noqa: F401 — tests patch routers.settings.encrypt_secret
-    mask_secret,  # noqa: F401 — imported by downstream (service uses it; keep for compat)
-    resolve_secret_row,
-)
-from jarvis_common.event_log import log_event as _log_event  # noqa: F401 — tests patch this name
+from jarvis_common.crypto import resolve_secret_row
+from jarvis_common.event_log import log_event as _log_event
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
@@ -36,78 +26,42 @@ from paper_ingestion.models import (
     PapersBySourceItem,
     PapersByStatusItem,
 )
-
-# Re-export ReorderRequest from sources sub-router for backward compat
-from paper_ingestion.routers.settings_sources import (  # noqa: F401
-    ReorderRequest,
-    sources_router,
+from paper_ingestion.routers.settings_sources import sources_router
+from paper_ingestion.services.analytics_queries import (
+    fetch_papers_by_source,
+    fetch_papers_by_status,
 )
-
-# update_litellm_model is passed to write_config so the router-module symbol is
-# what tests monkeypatch.  ROLE_TO_ALIAS is re-exported for any caller that
-# previously imported it from this module.
+from paper_ingestion.services.config_db import (
+    _fetch_effective_config_row,
+    _resolve_config_value,
+)
+from paper_ingestion.services.config_metadata import (
+    _ENCRYPTED_KEYS,
+    PERSONAL_KEYS,
+    _classify_config_key,
+    _is_allowed_config_key,
+)
+from paper_ingestion.services.config_write import write_config
+from paper_ingestion.services.data_export import build_export_zip
 from paper_ingestion.services.litellm_config import (
-    ROLE_TO_ALIAS,  # noqa: F401
     get_provider_base_url,
     update_litellm_model,
 )
 from paper_ingestion.services.llm_provider_registry import (
     PROVIDER_REGISTRY,
+    ProviderDefinition,
     provider_for_id,
+    provider_for_prefix,
 )
-
-# --- Symbols used by handler code ---
-# --- Re-exports: symbols that existing tests import from this module ---
-# Tests that do `from paper_ingestion.routers.settings import X` or
-# `patch("paper_ingestion.routers.settings.X")` must still find X here.
-from paper_ingestion.services.settings_service import (  # noqa: F401
-    _ALLOWED_CONFIG_KEYS,
-    _CONFIG_VALIDATORS,
-    _ENCRYPTED_KEYS,
-    _NUDGE_ALLOWED_COLUMNS,
-    _NUDGE_JSONB_COLUMNS,
-    _NUM_CTX_PATTERN,
-    _SECRET_KEYS,
-    _SOURCE_ALLOWED_COLUMNS,
-    _SOURCE_JSONB_COLUMNS,
+from paper_ingestion.services.model_assignment import cloud_provider_key_present
+from paper_ingestion.services.provider_account import fetch_provider_account
+from paper_ingestion.services.provider_models import invalidate_provider_model_cache
+from paper_ingestion.services.provider_test import (
     _SUPPORTED_PROVIDERS,
-    _THINKING_DISABLED_PATTERN,
-    _ZOTERO_LIBRARY_SCOPE_KEYS,
-    PERSONAL_KEYS,
-    SYSTEM_KEYS,
-    _classify_config_key,
-    _fetch_effective_config_row,
-    _is_allowed_config_key,
-    _resolve_config_value,
-    _validate_bool,
-    _validate_cron,
-    _validate_fsrs_learning_steps,
-    _validate_fsrs_retention,
-    _validate_group_id,
-    _validate_l2_lambda,
-    _validate_langfuse_dashboard_url,
-    _validate_library_type,
-    _validate_lookback_days,
-    _validate_nonempty_str,
-    _validate_optional_int,
-    _validate_positive_int,
-    _validate_pulse_weights,
-    _validate_startup_grace_seconds,
-    _validate_zotero_cron,
-    _write_config_row,
-    apply_fetch_interval,
-    apply_pulse_cron,
-    apply_zotero_cron,
-    build_export_zip,
-    cloud_provider_key_present,
-    fetch_papers_by_source,
-    fetch_papers_by_status,
-    migrate_plaintext_secrets,
-    reload_telegram_nudges,
+    ProviderTestResult,
     test_provider_connectivity,
-    validate_model_assignment,
-    write_config,
 )
+from paper_ingestion.services.system_models_view import _load_current_model_assignments
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -142,6 +96,17 @@ class ProviderMetadataResponse(BaseModel):
     configured: bool
     base_url_configured: bool = False
     supports_assignment: bool
+    dashboard_url: str | None = None
+    account_capability: Literal["current_key", "balance", "unavailable", "no_provider_api"]
+
+
+class ProviderAccountResponse(BaseModel):
+    """Capability-gated, sanitized account data for one registered provider."""
+
+    provider: str
+    capability: Literal["current_key", "balance", "unavailable", "no_provider_api"]
+    data: dict[str, bool | int | float | str | None]
+    error_code: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +231,26 @@ async def set_config(
     )
     display_value = result.display_value
 
-    if key in _ENCRYPTED_KEYS:
+    changed_provider = next(
+        (
+            provider
+            for provider in PROVIDER_REGISTRY
+            if key in {provider.api_key_config_key, provider.base_url_config_key}
+        ),
+        None,
+    )
+    if changed_provider is not None:
+        await invalidate_provider_model_cache(changed_provider.id)
+
+    route_role = {"llm.fast_model": "fast", "llm.smart_model": "smart"}.get(key)
+    if route_role is not None:
+        await log_audit(
+            db_pool,
+            action="llm.route.change",
+            resource=key,
+            user_id=str(caller_user_id) if caller_user_id is not None else None,
+        )
+    elif key in _ENCRYPTED_KEYS:
         await log_audit(
             db_pool,
             action="secret.rotate",
@@ -281,16 +265,20 @@ async def set_config(
             level="info",
             category="config",
             source="settings",
-            message="setting_changed",
-            context={
-                "key": key,
-                "new_value": str(display_value),
-                **(
-                    {"schedule_apply_warnings": result.schedule_apply_warnings}
-                    if result.schedule_apply_warnings
-                    else {}
-                ),
-            },
+            message="llm/route_changed" if route_role is not None else "setting_changed",
+            context=(
+                {"key": key, "role": route_role}
+                if route_role is not None
+                else {
+                    "key": key,
+                    "new_value": str(display_value),
+                    **(
+                        {"schedule_apply_warnings": result.schedule_apply_warnings}
+                        if result.schedule_apply_warnings
+                        else {}
+                    ),
+                }
+            ),
         )
     except Exception:  # noqa: BLE001
         logger.debug("config event log_event failed (non-fatal)", exc_info=True)
@@ -365,9 +353,33 @@ async def list_providers(
                 configured=configured,
                 base_url_configured=base_url_configured,
                 supports_assignment=provider.supports_assignment,
+                dashboard_url=provider.dashboard_url,
+                account_capability=provider.account_capability,
             )
         )
     return rows
+
+
+@router.get("/providers/{provider}/account", response_model=ProviderAccountResponse)
+@limiter.limit("5/minute")
+async def get_provider_account(
+    request: Request,
+    provider: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
+) -> ProviderAccountResponse:
+    """Return only the account fields that this provider's API key can safely expose."""
+    try:
+        snapshot = await fetch_provider_account(provider, db_pool=db_pool)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="unsupported provider") from exc
+    return ProviderAccountResponse(
+        provider=snapshot.provider,
+        capability=snapshot.capability,
+        data=snapshot.data,
+        error_code=snapshot.error_code,
+    )
 
 
 @router.post("/providers/{provider}/test", response_model=ProviderTestResponse)
@@ -398,16 +410,163 @@ async def test_provider(
             api_key = None
 
     if not api_key:
-        return ProviderTestResponse(ok=False, error="no api key configured")
-
-    base_url = None
-    if provider_definition.base_url_config_key is not None:
-        base_url = await get_provider_base_url(provider, db_pool)
-        if base_url is None:
-            return ProviderTestResponse(ok=False, error="no base URL configured")
-
-    result = await test_provider_connectivity(provider, api_key, base_url=base_url)
+        result = ProviderTestResult(ok=False, error="no api key configured")
+    else:
+        base_url = None
+        if provider_definition.base_url_config_key is not None:
+            base_url = await get_provider_base_url(provider, db_pool)
+        if provider_definition.base_url_config_key is not None and base_url is None:
+            result = ProviderTestResult(ok=False, error="no base URL configured")
+        else:
+            result = await test_provider_connectivity(provider, api_key, base_url=base_url)
+    try:
+        await _log_event(
+            pool=db_pool,
+            level="info" if result.ok else "warning",
+            category="config",
+            source="settings",
+            message="llm/provider_connection_checked",
+            context={
+                "provider": provider,
+                "success": result.ok,
+                "code": _provider_test_code(result.error, result.ok),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("provider connection event log_event failed (non-fatal)", exc_info=True)
     return ProviderTestResponse(ok=result.ok, error=result.error)
+
+
+def _provider_test_code(error: str | None, ok: bool) -> str:
+    """Map provider-test outcomes to stable event codes without logging provider text."""
+    if ok:
+        return "ok"
+    if error is None:
+        return "connection_failed"
+    return {
+        "no api key configured": "api_key_unavailable",
+        "no base URL configured": "base_url_unavailable",
+        "unsupported provider": "unsupported_provider",
+    }.get(error, "connection_failed")
+
+
+#: Stored model-route rows, under the names the settings UI gives them.
+_MODEL_ROUTE_LABELS: dict[str, str] = {
+    "smart_model": "Main",
+    "fast_model": "Quick",
+    "embed_model": "Embedding",
+}
+
+
+async def _model_route_using(provider: ProviderDefinition, db_pool: asyncpg.Pool) -> str | None:
+    """Return the label of a committed model route still pointing at *provider*.
+
+    Routes record the app-facing assignment prefix, which is not the prefix
+    delivered to LiteLLM: a custom endpoint is assigned as ``custom_openai/`` and
+    delivered as ``openai/``. Resolving identity from the delivery prefix would
+    read that route as OpenAI's and clear a credential still in use.
+    """
+    assignments, issue = await _load_current_model_assignments(db_pool)
+    if issue is not None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The stored model routes could not be read just now, so this setting "
+                "was left in place. Please try again in a moment."
+            ),
+        )
+    for row_key, label in _MODEL_ROUTE_LABELS.items():
+        model_id = assignments.get(row_key)
+        if (
+            isinstance(model_id, str)
+            and provider_for_prefix(model_id.partition("/")[0]) == provider
+        ):
+            return label
+    return None
+
+
+async def _remove_provider_setting(
+    provider: str,
+    field: Literal["api_key", "base_url"],
+    db_pool: asyncpg.Pool,
+    caller_user_id: int | None,
+) -> Response:
+    """Delete one stored provider row once no model route depends on that provider."""
+    try:
+        definition = provider_for_id(provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="unsupported provider") from exc
+    config_key = (
+        definition.api_key_config_key if field == "api_key" else definition.base_url_config_key
+    )
+    if config_key is None:
+        stored = "an API key" if field == "api_key" else "an endpoint URL"
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{definition.display_name} does not store {stored}, so there is nothing to remove."
+            ),
+        )
+
+    # Refuse rather than reassign: no code path in this service rewrites a model
+    # route, and doing it here would skip the assignment validation the settings
+    # write path applies.
+    blocking_route = await _model_route_using(definition, db_pool)
+    if blocking_route is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The {blocking_route} model route still uses {definition.display_name}. "
+                "Point that route at another model first."
+            ),
+        )
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM user_config WHERE key = $1 AND user_id IS NULL",
+            config_key,
+        )
+    await invalidate_provider_model_cache(definition.id)
+    await log_audit(
+        db_pool,
+        action="secret.remove",
+        resource=config_key,
+        user_id=str(caller_user_id) if caller_user_id is not None else None,
+    )
+    return Response(status_code=204)
+
+
+@router.delete("/providers/{provider}/key", status_code=204, response_class=Response)
+@limiter.limit("5/minute")
+async def remove_provider_key(
+    request: Request,
+    provider: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
+    caller_user_id: int = Depends(current_user_id_strict),
+) -> Response:
+    """Delete a provider's stored API key.
+
+    The write path refuses a blank value, so without this route a key pasted
+    under the wrong provider, revoked upstream, or leaked could only ever be
+    overwritten — never taken out of service.
+    """
+    return await _remove_provider_setting(provider, "api_key", db_pool, caller_user_id)
+
+
+@router.delete("/providers/{provider}/base-url", status_code=204, response_class=Response)
+@limiter.limit("5/minute")
+async def remove_provider_base_url(
+    request: Request,
+    provider: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+    _admin: None = Depends(require_admin),
+    caller_user_id: int = Depends(current_user_id_strict),
+) -> Response:
+    """Delete a provider's stored endpoint URL, retiring a decommissioned endpoint."""
+    return await _remove_provider_setting(provider, "base_url", db_pool, caller_user_id)
 
 
 # ---------------------------------------------------------------------------

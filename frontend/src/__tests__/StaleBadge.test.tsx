@@ -27,22 +27,23 @@ describe('StaleBadge', () => {
     const user = userEvent.setup();
     const diagnostics = {
       arxiv: {
-        status: 'rate_limit',
-        message: 'arXiv returned HTTP 429',
-        settings_hint: null,
+        last_status: 'rate_limit',
+        cooldown_until: '2026-08-09T18:00:00Z',
+        consecutive_failures: 2,
       },
       openalex: {
-        status: 'ok',
-        message: 'OK',
-        settings_hint: null,
+        last_status: 'ok',
+        cooldown_until: null,
+        consecutive_failures: 0,
       },
     };
     render(<StaleBadge ageDays={1} diagnostics={diagnostics} />);
     await user.click(screen.getByTestId('stale-badge'));
     await waitFor(() => {
       expect(screen.getByText('arxiv')).toBeInTheDocument();
-      expect(screen.getByText('arXiv returned HTTP 429')).toBeInTheDocument();
+      expect(screen.getByText(/Paused until/)).toBeInTheDocument();
       expect(screen.getByText('openalex')).toBeInTheDocument();
+      expect(screen.getByText('0 consecutive failures')).toBeInTheDocument();
     });
   });
 

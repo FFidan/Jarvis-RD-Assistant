@@ -150,6 +150,7 @@ jobs:
             arch: amd64
             runner: ubuntu-latest
             smoke_import: paper_ingestion.main
+            capability: native-vision pdf malformed-pdf
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
             context: .
@@ -159,6 +160,7 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             smoke_import: paper_ingestion.main
+            capability: native-vision pdf malformed-pdf
           - slug: paper-ingestion-cuda
             image: jarvis-paper-ingestion
             context: .
@@ -170,6 +172,9 @@ jobs:
             arch: amd64
             runner: ubuntu-latest
             smoke_import: paper_ingestion.main
+            # Hosted runners have no GPU, so this flavour proves the same
+            # host-side capabilities as the CPU images.
+            capability: native-vision pdf malformed-pdf
           - slug: learning-engine
             image: jarvis-learning-engine
             context: .
@@ -248,6 +253,34 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.source_commit }}
 
+      # Build from the digest-pinned bases in versions.env. The Dockerfile ARG
+      # defaults name a bare tag so a developer build without this file still
+      # works, but a tag is mutable, so a published image built from the default
+      # is not reproducible. Only the bases a Dockerfile actually declares are
+      # forwarded, so no image receives a build argument it never consumes.
+      # The matrix values are folded in here, rather than concatenated into the
+      # build step's input alongside this output, so that an entry carrying no
+      # matrix arguments cannot leave a blank line in the list.
+      - name: Resolve the build arguments
+        id: build_args
+        env:
+          DOCKERFILE: ${{ matrix.file }}
+          MATRIX_BUILD_ARGS: ${{ matrix.build_args }}
+        run: |
+          set -a
+          . ./versions.env
+          set +a
+          {
+            echo "resolved<<BUILD_ARGS"
+            for name in PYTHON_BASE_IMAGE NODE_BUILD_IMAGE NGINX_RUNTIME_IMAGE; do
+              if grep -q "^ARG ${name}=" "$DOCKERFILE"; then
+                printf '%s=%s\n' "$name" "${!name}"
+              fi
+            done
+            printf '%s\n' "$MATRIX_BUILD_ARGS" | sed '/^$/d'
+            echo "BUILD_ARGS"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
 
@@ -266,7 +299,7 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           platforms: ${{ matrix.platform }}
-          build-args: ${{ matrix.build_args }}
+          build-args: ${{ steps.build_args.outputs.resolved }}
           sbom: ${{ needs.preflight.outputs.mode == 'verify' }}
           outputs: ${{ needs.preflight.outputs.mode == 'verify' && format('type=image,name=ghcr.io/limitcycle-oss/{0},push-by-digest=true,name-canonical=true,push=true', matrix.image) || 'type=cacheonly' }}
 
@@ -299,6 +332,29 @@ jobs:
           docker run --rm --entrypoint python \
             "ghcr.io/limitcycle-oss/${{ matrix.image }}@${{ steps.build.outputs.digest }}" \
             -c "import importlib; importlib.import_module('${{ matrix.smoke_import }}')"
+
+      # The import smoke proves the dependency set resolves. It cannot reach a
+      # lazily imported native stack: the document pipeline builds its converter
+      # on first use, so a mismatched compiled dependency stays invisible until a
+      # real PDF is converted. This runs the capability set declared by the matrix
+      # entry inside the exact digest, before that digest joins the manifest.
+      # The service package is copied to the image's WORKDIR rather than
+      # installed, and a script invoked by path puts only its own directory on
+      # sys.path, so PYTHONPATH is what lets the checker reach it.
+      # Converting a real document takes longer than the import smoke, but the
+      # layout and OCR models are baked into the image, so nothing is downloaded
+      # here; both arm64 and amd64 run this on native runners.
+      - name: Capability check - exercise runtime paths the import cannot reach
+        if: needs.preflight.outputs.mode == 'verify' && matrix.capability != ''
+        timeout-minutes: 25
+        run: |
+          docker run --rm --network none \
+            -v "${{ github.workspace }}/scripts/image-capability-check.py:/tmp/capability.py:ro" \
+            -v "${{ github.workspace }}/frontend/e2e/fixtures/sample.pdf:/tmp/sample.pdf:ro" \
+            -e PYTHONPATH=/app \
+            --entrypoint python \
+            "ghcr.io/limitcycle-oss/${{ matrix.image }}@${{ steps.build.outputs.digest }}" \
+            /tmp/capability.py --pdf /tmp/sample.pdf ${{ matrix.capability }}
 
       - name: Upload the platform digest
         if: needs.preflight.outputs.mode == 'verify'
@@ -419,18 +475,36 @@ jobs:
           name: sbom-image-${{ matrix.slug }}
           path: sbom-${{ matrix.slug }}.cdx.json
 
+      # A gate: a critical finding that already has a fixed version fails this
+      # job, so no digest carrying one can reach a stable tag. `ignore-unfixed`
+      # keeps the gate to what rebuilding can actually clear — an advisory with
+      # no released fix would otherwise block every run until one appeared.
+      # The cost is accepted deliberately. This scans a live advisory database
+      # against an image that is already built, and this job's digest receipts
+      # are the only thing a stable tag can promote, so a fixable critical
+      # published minutes earlier will discard a verification run with nothing
+      # else wrong with it and force a full rebuild at a raised floor.
+      # Lower severities stay with the branch-level scans, which run where a fix
+      # can still be committed: pip-audit, npm-audit and osv-scanner in the
+      # Security workflow. The Dependency Scans section of docs/RELEASE.md
+      # states what the operator must do when this gate fails.
       - name: Vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ steps.digest.outputs.ref }}
           format: table
-          severity: CRITICAL,HIGH
-          exit-code: "0"
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
           output: trivy-${{ matrix.slug }}.txt
 
+      # The scan above fails the job on a finding, which would otherwise skip
+      # this step and leave the operator with a red run and no report.
       - name: Publish the vulnerability report to the job summary
+        if: ${{ !cancelled() }}
         run: |
+          [ -f trivy-${{ matrix.slug }}.txt ] || exit 0
           {
             echo "### Trivy report — ${{ steps.digest.outputs.ref }}"
             echo '```'
@@ -509,3 +583,31 @@ jobs:
           fi
           echo "Promoted ${source_ref}@${source_digest} to ${target_ref}." \
             >> "$GITHUB_STEP_SUMMARY"
+
+  promotion-gate:
+    name: Promotion gate
+    needs: [preflight, promote]
+    # `promote` runs with fail-fast disabled so one broken image cannot abandon
+    # the others half-promoted, which means the surviving legs stay green and
+    # only this job can state whether the release published in full.
+    # always() is required: without it a failed promotion skips the gate instead
+    # of failing it. `needs.promote.result` is the aggregate of every matrix leg,
+    # so it is 'success' only when all of them promoted; the mode guard keeps the
+    # gate out of build-only and verification runs, where `promote` never starts.
+    # A 'skipped' result in promote mode is a failure too — that is the shape a
+    # release takes when nothing was promoted at all.
+    if: ${{ always() && needs.preflight.outputs.mode == 'promote' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify every image promoted
+        env:
+          PROMOTION: ${{ needs.promote.result }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.release_version }}
+        run: |
+          if [ "$PROMOTION" != "success" ]; then
+            echo "::error::promotion did not complete for every image" \
+                 "(result=$PROMOTION); this release is partially published"
+            exit 1
+          fi
+          echo "Every image promoted to ${RELEASE_VERSION}." >> "$GITHUB_STEP_SUMMARY"

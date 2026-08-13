@@ -7,6 +7,7 @@ import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { ApiError } from '@/lib/api';
 import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 vi.mock('sonner', async () =>
@@ -127,9 +128,6 @@ vi.mock('@/lib/api', async () => {
     ]),
     fetchFeedCounts: async () => ({
       inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
-    }),
-    fetchFeedCountsWithFacets: async () => ({
-      inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
       by_source: {}, by_topic: [], untagged: 0,
     }),
     fetchPulseHistory: async () => ([]),
@@ -240,6 +238,10 @@ describe('ResearchFeedPage', () => {
     // "job-zotero-queued stream locked" race that makes the Zotero update test
     // fail 3/3 in the full suite while passing in isolation).
     useJobStore.getState()._reset();
+    useResearchMilestoneStore.setState({
+      completed: { save: false, analyze: false },
+      advancedCueDismissed: false,
+    });
     appQueryClient.clear();
   });
 
@@ -270,46 +272,6 @@ describe('ResearchFeedPage', () => {
   it('shows empty-library Discover CTA when library count is 0 and scope=library', async () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
-      inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
-      by_source: {}, by_topic: [], untagged: 0,
-    });
-    // Render on library surface directly
-    const { container: _c } = renderWithProviders(
-      <MemoryRouter initialEntries={['/feed?surface=library']}>
-        <Routes>
-          <Route path="/feed" element={<ResearchFeedPage />} />
-        </Routes>
-      </MemoryRouter>,
-      { queryClient: appQueryClient },
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId('library-empty-discover')).toBeInTheDocument();
-    });
-    expect(screen.getByTestId('empty-library-discover-btn')).toHaveTextContent(/discover papers/i);
-    // Should also mention library is empty
-    expect(screen.getByTestId('library-empty-discover')).toHaveTextContent(
-      /your library is empty/i,
-    );
-  });
-
-  it('renders §Status facet items (Inbox, Library, Trash) in facet rail — replaces old tab bar', () => {
-    renderPage();
-    // 3-pane IA: facet rail replaces horizontal tab bar
-    // Inbox/Library/Trash appear as §Status facet buttons (aria-pressed)
-    expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
-    expect(screen.getByTestId('facet-status-library')).toBeInTheDocument();
-    expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
-    // Discover (search surface) is accessible via the Discover link in the rail
-    expect(screen.getByTestId('facet-discover')).toBeInTheDocument();
-    // Ask is NOT in the feed page (Ask is its own nav destination)
-    expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
-    // Pulse tab was moved to /my-day; it is not rendered here
-    expect(screen.queryByRole('tab', { name: 'Pulse' })).not.toBeInTheDocument();
-  });
-
-  it('defaults to Inbox surface active (Inbox-first)', async () => {
-    const { fetchFeedCounts } = await import('@/lib/api');
-    vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
       by_source: {}, by_topic: [], untagged: 0,
     });
@@ -337,7 +299,7 @@ describe('ResearchFeedPage', () => {
     await user.click(screen.getByTestId('facet-discover'));
     expect(
       screen.getByPlaceholderText('Search your selected sources…'),
-    ).toBeInTheDocument();
+    ).toHaveAttribute('name', 'external-search');
   });
 
   it('renders search button', async () => {
@@ -384,8 +346,21 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByLabelText('Semantic Scholar')).toBeInTheDocument();
     expect(screen.getByLabelText('OpenAlex')).toBeInTheDocument();
     expect(screen.getByLabelText('PubMed')).toBeInTheDocument();
+    expect(screen.getByLabelText('arXiv')).toHaveAttribute('name', 'source-types');
+    expect(screen.getByLabelText('arXiv')).toHaveAttribute('value', 'arxiv');
     // Local (uploaded PDF) source should not appear in the Search tab checkboxes
     expect(screen.queryByLabelText('Uploaded PDF')).not.toBeInTheDocument();
+  });
+
+  it('associates every advanced search label with its form control', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByTestId('facet-discover'));
+    await user.click(screen.getByRole('button', { name: /toggle filters/i }));
+
+    for (const label of ['Year From', 'Year To', 'Sort By', 'Max Results', 'Author']) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
   });
 
   it('shows an error state with Retry (not the empty/help copy) when sources fail to load', async () => {
@@ -881,7 +856,7 @@ describe('ResearchFeedPage', () => {
         library_match: null,
       },
       expected: ['Save to Library', 'Open original'],
-      absent: ['Open Paper Detail', 'Open Projects to Link', 'Send to Zotero', 'View in Zotero', 'Re-sync Zotero'],
+      absent: ['Open Paper Detail', 'Open Projects to Link', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved Without Projects Paper',
@@ -903,7 +878,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Open Projects to Link'],
-      absent: ['Save to Library', 'Send to Zotero', 'View in Zotero', 'Re-sync Zotero'],
+      absent: ['Save to Library', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Projects Paper',
@@ -925,7 +900,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Send to Zotero'],
-      absent: ['Save to Library', 'Open Projects to Link', 'View in Zotero', 'Re-sync Zotero'],
+      absent: ['Save to Library', 'Open Projects to Link', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Zotero Paper',
@@ -946,7 +921,7 @@ describe('ResearchFeedPage', () => {
           zotero_item_key: 'ABCD1234',
         },
       },
-      expected: ['Open Paper Detail', 'Open original', 'View in Zotero', 'Re-sync Zotero'],
+      expected: ['Open Paper Detail', 'Open original', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
       absent: ['Save to Library', 'Open Projects to Link', 'Send to Zotero'],
     },
   ])('shows the correct trailing actions for $title', async ({ result, expected, absent }) => {
@@ -980,9 +955,16 @@ describe('ResearchFeedPage', () => {
     }
   });
 
-  it('does not eagerly fetch linkage for a pre-linked saved row', async () => {
+  it('uses the linked group library when opening a pre-linked Zotero item', async () => {
     const user = userEvent.setup();
     const { searchPreview, zoteroGetLinkage } = await import('@/lib/api');
+    vi.mocked(zoteroGetLinkage).mockResolvedValueOnce({
+      zotero_item_key: 'ABCD1234',
+      zotero_citation_key: null,
+      zotero_last_pushed_at: '2026-08-11T00:00:00Z',
+      zotero_library_type: 'group',
+      zotero_group_id: '24680',
+    });
     vi.mocked(searchPreview).mockResolvedValueOnce({
       results: [
         {
@@ -1019,11 +1001,15 @@ describe('ResearchFeedPage', () => {
       expect(screen.getByText('Pre-linked Zotero Paper')).toBeInTheDocument();
     });
 
-    expect(vi.mocked(zoteroGetLinkage)).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(vi.mocked(zoteroGetLinkage)).toHaveBeenCalledWith(103);
+    });
 
     await user.click(screen.getByRole('button', { name: 'Actions for Pre-linked Zotero Paper' }));
-    expect(screen.getByRole('menuitem', { name: 'View in Zotero' })).toBeInTheDocument();
-    expect(vi.mocked(zoteroGetLinkage)).not.toHaveBeenCalled();
+    expect(screen.getByRole('menuitem', { name: 'Open in Zotero desktop' })).toHaveAttribute(
+      'href',
+      'zotero://select/groups/24680/items/ABCD1234',
+    );
   });
 
   it('navigates Open Projects to Link to /projects without fake route state', async () => {
@@ -1249,7 +1235,7 @@ describe('ResearchFeedPage', () => {
     expect(vi.mocked(zoteroGetLinkage)).not.toHaveBeenCalled();
   });
 
-  it('hydrates Zotero linkage observation for an existing external running job and flips to View in Zotero after success', async () => {
+  it('hydrates Zotero linkage observation for an existing external running job and flips to the Zotero actions after success', async () => {
     const user = userEvent.setup();
     const { searchPreview, zoteroGetLinkage } = await import('@/lib/api');
     useJobStore.setState({ jobs: {}, activeAborts: {} });
@@ -1324,14 +1310,14 @@ describe('ResearchFeedPage', () => {
       });
     }
 
-    if (!screen.queryByRole('menuitem', { name: 'View in Zotero' })) {
+    if (!screen.queryByRole('menuitem', { name: 'Open in Zotero desktop' })) {
       await user.click(screen.getByRole('button', { name: 'Actions for Hydrated Zotero Paper' }));
     }
-    expect(screen.getByRole('menuitem', { name: 'View in Zotero' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Open in Zotero desktop' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Send to Zotero' })).not.toBeInTheDocument();
   });
 
-  it('updates a row from Send to Zotero to View in Zotero after the Zotero job succeeds', { timeout: 15000 }, async () => {
+  it('updates a row from Send to Zotero to the Zotero actions after the Zotero job succeeds', { timeout: 15000 }, async () => {
     const user = userEvent.setup();
     const { searchPreview, zoteroPushPaper, zoteroGetLinkage } = await import('@/lib/api');
     vi.mocked(searchPreview).mockResolvedValueOnce({
@@ -1432,8 +1418,8 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(screen.queryByRole('menuitem', { name: 'Send to Zotero' })).not.toBeInTheDocument();
     }, { timeout: 5000 });
-    // "View in Zotero" should now be visible in the still-open dropdown.
-    expect(screen.getByRole('menuitem', { name: 'View in Zotero' })).toBeInTheDocument();
+    // The desktop action should now be visible in the still-open dropdown.
+    expect(screen.getByRole('menuitem', { name: 'Open in Zotero desktop' })).toBeInTheDocument();
     // Exactly 2+ calls: first poll (null linkage) + re-poll after invalidation (ITEM-12345).
     expect(vi.mocked(zoteroGetLinkage).mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole('menuitem', { name: 'Re-sync Zotero' })).toBeInTheDocument();
@@ -1501,6 +1487,7 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith('Saved 1 paper(s). Next: Analyze a paper to unlock Ask.');
     });
+    expect(useResearchMilestoneStore.getState().completed.save).toBe(true);
 
     // Discover (search surface) facet uses aria-pressed (not aria-selected)
     expect(screen.getByTestId('facet-discover')).toHaveAttribute('aria-pressed', 'true');
@@ -1773,6 +1760,7 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Save exploded');
     });
+    expect(useResearchMilestoneStore.getState().completed.save).toBe(false);
 
     expect(screen.getByRole('dialog', { name: /Drawer Error Paper/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Drawer Error Paper/i })).toBeInTheDocument();
@@ -1907,26 +1895,6 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Library §Status facet
-    const libraryFacet = screen.getByTestId('facet-status-library');
-    await user.click(libraryFacet);
-
-    // Library surface now renders papers via FeedView
-    await waitFor(() => {
-      expect(screen.getByText('Test Paper One')).toBeInTheDocument();
-    });
-  });
-
-  // 3-pane IA: clicking Library §Status facet shows the library surface content
-  it('clicking Library §Status facet navigates to the library surface and shows section info', async () => {
-    const { fetchFeedCounts } = await import('@/lib/api');
-    vi.mocked(fetchFeedCounts).mockResolvedValue({
-      inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2,
-      by_source: {}, by_topic: [], untagged: 0,
-    });
-    const user = userEvent.setup();
-    renderPage();
-
     // Click Library §Status facet
     await user.click(screen.getByTestId('facet-status-library'));
     await waitFor(() => {
@@ -1968,19 +1936,6 @@ describe('ResearchFeedPage', () => {
   it('default landing redirects to ?surface=inbox when inbox > 0', async () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
-      inbox: 2, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 7, kept: 7, all_non_trash: 7,
-      by_source: {}, by_topic: [], untagged: 0,
-    });
-    renderPage();
-    await waitFor(() => {
-      // After redirect, Inbox §Status facet should be aria-pressed
-      expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
-    });
-  });
-
-  it('default landing redirects to ?surface=inbox (Inbox-first always)', async () => {
-    const { fetchFeedCounts } = await import('@/lib/api');
-    vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
       by_source: {}, by_topic: [], untagged: 0,
     });
@@ -1991,19 +1946,19 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  it('?tab=pulse legacy deep-link causes navigate to /my-day', async () => {
+  it('?tab=pulse legacy deep-link causes navigate to /pulse', async () => {
     // Render with the legacy ?tab=pulse query param
     renderWithProviders(
       <MemoryRouter initialEntries={['/feed?tab=pulse']}>
         <Routes>
           <Route path="/feed" element={<ResearchFeedPage />} />
-          <Route path="/my-day" element={<LocationDisplay />} />
+          <Route path="/pulse" element={<LocationDisplay />} />
         </Routes>
       </MemoryRouter>,
       { queryClient: appQueryClient },
     );
     await waitFor(() => {
-      expect(screen.getByTestId('location-path')).toHaveTextContent('/my-day');
+      expect(screen.getByTestId('location-path')).toHaveTextContent('/pulse');
     });
   });
 
@@ -2148,18 +2103,18 @@ describe('ResearchFeedPage', () => {
 
   it('clicking §Source arXiv facet drives fetchFeed with sourceTypes="arxiv"', async () => {
     // Source filtering is via §Source FacetRail facets.
-    // The FacetRail uses fetchFeedCountsWithFacets; the source facet drives ?facet_source= in URL
+    // The FacetRail uses fetchFeedCounts; the source facet drives ?facet_source= in URL
     // which feeds into effectiveSourceTypes → FeedView sourceTypes prop.
     // This test verifies the §Source facet renders from by_source data.
-    const { fetchFeedCountsWithFacets, fetchFeedCounts } = await import('@/lib/api');
+    const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
       by_source: { arxiv: 8 },
       by_topic: [],
       untagged: 0,
     });
-    // fetchFeedCountsWithFacets is now an alias for fetchFeedCounts — mock once covers both
-    vi.mocked(fetchFeedCountsWithFacets).mockResolvedValue({
+    // fetchFeedCounts is now an alias for fetchFeedCounts — mock once covers both
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
       by_source: { arxiv: 8 },
       by_topic: [],

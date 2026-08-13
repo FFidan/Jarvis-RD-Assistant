@@ -197,20 +197,6 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ---
 
-## Frontend supply-chain advisories
-
-### react-router RSC-mode CSRF (GHSA-qwww-vcr4-c8h2) — not reachable
-
-**Finding:** `osv-scanner` / `npm audit` flag `react-router` 7.18.2 (pulled by `react-router-dom`) under GHSA-qwww-vcr4-c8h2 — a CSRF bypass that can execute a router action before a 400 response is returned, in React Router's RSC (React Server Components) mode.
-
-**Why accepted:** the frontend is a client-only SPA that uses `react-router-dom` declarative routing exclusively. The RSC packages, server-action pipeline, and the APIs the advisory concerns are never imported or configured, so the vulnerable code path is unreachable in this deployment. No compatible fix is installable either: the advisory is patched in react-router core 8.3.0, but `react-router-dom` — the app's actual routing dependency — has published no v8 release, so it cannot pull the patched core, and downgrading below 7.12.0 drops required features. The suppression is scoped to this one advisory id in `frontend/osv-scanner.toml`.
-
-**Reopen / removal trigger:** remove the suppression and this entry when the frontend adopts react-router >= 8.3.0 (or a back-ported patched v7 release appears), or immediately if the app ever introduces React Router RSC mode or server actions. Suppression review date: 2026-10-15.
-
-_The companion brace-expansion advisory (GHSA-mh99-v99m-4gvg), previously suppressed here, was resolved in v1.2.3 by pinning the transitive dev-only v1 line to 1.1.17; its suppression is removed._
-
----
-
 ## Further known residual risks
 
 ### `/api/papers/process_batch` uses an underscore in the path

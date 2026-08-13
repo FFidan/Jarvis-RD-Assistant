@@ -173,6 +173,7 @@ export function EndOfDaySection() {
             </div>
             <input
               id={`eod-${f.key}`}
+              name={f.key}
               value={prompts[f.key] ?? ''}
               onChange={(e) => update(f.key, e.target.value)}
               disabled={loadError != null}
@@ -198,6 +199,7 @@ export function EndOfDaySection() {
             </label>
             <textarea
               id="eod-note"
+              name="note"
               value={prompts.note ?? ''}
               onChange={(e) => update('note', e.target.value)}
               disabled={loadError != null}

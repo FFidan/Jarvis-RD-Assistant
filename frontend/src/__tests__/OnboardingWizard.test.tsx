@@ -201,9 +201,9 @@ describe('OnboardingWizard', () => {
     });
   });
 
-  it('Done step tracks a running discovery job as running', async () => {
+  it('Done step tracks a queued discovery job', async () => {
     const user = userEvent.setup();
-    vi.mocked(pulseApi.generatePulseNow).mockResolvedValueOnce({ job_id: 'pulse-job-running', status: 'running' });
+    vi.mocked(pulseApi.generatePulseNow).mockResolvedValueOnce({ job_id: 'pulse-job-running', status: 'queued' });
     const queryClient = createTestQueryClient();
     queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
 
@@ -213,7 +213,7 @@ describe('OnboardingWizard', () => {
     await user.click(screen.getByRole('button', { name: /discover papers now/i }));
 
     await waitFor(() => {
-      expect(useJobStore.getState().jobs['pulse-job-running']?.status).toBe('running');
+      expect(useJobStore.getState().jobs['pulse-job-running']?.status).toBe('queued');
     });
   });
 

@@ -11,13 +11,13 @@ import asyncpg
 import pytest
 
 from jarvis_common.migrations import required_code_schema
-from paper_ingestion.migrations_runner import _strip_outer_transaction_control
+from jarvis_common.migrations import _strip_outer_transaction_control
 from tests.conftest import _make_pool_and_conn
 
 
 def _import_run_migrations():
     """Lazy import to avoid module-level import chain issues in test collection."""
-    from paper_ingestion.migrations_runner import run_migrations
+    from jarvis_common.migrations import run_migrations
 
     return run_migrations
 

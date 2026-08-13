@@ -25,7 +25,7 @@ import yaml
 
 from jarvis_common.app_factory import STRUCTURED_DECODING_MODE
 from paper_ingestion.config import PaperIngestionSettings
-from paper_ingestion.main import _LITELLM_ROLE_FALLBACKS
+from paper_ingestion.litellm_reconciler import _LITELLM_ROLE_FALLBACKS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ENV_EXAMPLE = REPO_ROOT / ".env.example"

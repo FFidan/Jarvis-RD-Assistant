@@ -177,9 +177,8 @@ the bot stores durable chat ownership in `telegram_user_pairings` (see
 flow — the token is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
-`/pair`. The legacy dashboard-code pairing path is no longer active.
-The legacy `TELEGRAM_CHAT_ID` environment variable is not an authorization or
-delivery fallback. Pairing records are the only user-to-chat identity source.
+`/pair`. The legacy dashboard-code pairing path is no longer active. Pairing
+records are the only user-to-chat identity source.
 
 ### Paper visibility and `user_library`
 

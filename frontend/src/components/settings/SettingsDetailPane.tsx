@@ -27,6 +27,7 @@ import { SmtpSection } from './SmtpSection';
 import { TelegramBotTokenSection } from './TelegramBotTokenSection';
 import { AccessModeSection } from './AccessModeSection';
 import { SignInDevicesSection } from './SignInDevicesSection';
+import { AboutSection } from './AboutSection';
 import { useAuthStore } from '@/stores/auth-store';
 
 // ---------------------------------------------------------------------------
@@ -108,10 +109,17 @@ function DetailContent({
   section,
   item,
   isAdmin,
+  modelPickerRequest,
+  providerId,
 }: {
   section: string;
   item: string;
   isAdmin: boolean;
+  modelPickerRequest?: {
+    role: 'fast' | 'smart';
+    provider: string;
+  };
+  providerId?: string;
 }) {
   if (section === 'account') {
     if (item === 'profile') return <AccountSection />;
@@ -134,7 +142,10 @@ function DetailContent({
     if (item === 'llm' || item === 'ai') {
       return (
         <div className="space-y-6">
-          <IngestionSection filterGroups={['AI models']} />
+          <IngestionSection
+            filterGroups={['AI models']}
+            modelPickerRequest={modelPickerRequest}
+          />
           <AIPanel />
         </div>
       );
@@ -142,7 +153,7 @@ function DetailContent({
     if (item === 'providers') {
       return (
         <div className="space-y-6">
-          <ProvidersSection />
+          <ProvidersSection initialProviderId={providerId} />
         </div>
       );
     }
@@ -190,9 +201,14 @@ function DetailContent({
 interface SettingsDetailPaneProps {
   section: string;
   item: string;
+  modelPickerRequest?: {
+    role: 'fast' | 'smart';
+    provider: string;
+  };
+  providerId?: string;
 }
 
-export function SettingsDetailPane({ section, item }: SettingsDetailPaneProps) {
+export function SettingsDetailPane({ section, item, modelPickerRequest, providerId }: SettingsDetailPaneProps) {
   const isAdmin = useAuthStore((s) => s.user)?.role === 'admin';
   const sectionTitle = SECTION_TITLES[section] ?? section;
   const itemLabel =
@@ -202,7 +218,16 @@ export function SettingsDetailPane({ section, item }: SettingsDetailPaneProps) {
     <div className="flex-1 overflow-y-auto p-6 min-w-0">
       <Breadcrumb sectionTitle={sectionTitle} itemLabel={itemLabel} />
       <h2 className="font-serif text-3xl tracking-tight text-strong mb-6">{itemLabel}</h2>
-      <DetailContent section={section} item={item} isAdmin={isAdmin ?? false} />
+      <DetailContent
+        section={section}
+        item={item}
+        isAdmin={isAdmin ?? false}
+        modelPickerRequest={modelPickerRequest}
+        providerId={providerId}
+      />
+      <div className="mt-8 border-t border-hair pt-6">
+        <AboutSection />
+      </div>
     </div>
   );
 }

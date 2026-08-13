@@ -29,8 +29,8 @@ from telegram_bot.handlers.commands.pairing_commands import pair_command  # noqa
 _PAIRED_CHAT_ID = 777
 
 
-def _make_config(telegram_chat_id: int | None = None):
-    return make_bot_config(BotConfig, telegram_chat_id=telegram_chat_id)
+def _make_config():
+    return make_bot_config(BotConfig)
 
 
 _make_conn = partial(

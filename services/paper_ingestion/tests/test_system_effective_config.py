@@ -150,7 +150,7 @@ def test_role_code_defaults_mirror_canonical_fallbacks():
     per-file edits are caught immediately.
     """
     from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
-    from paper_ingestion.main import _LITELLM_ROLE_FALLBACKS
+    from paper_ingestion.litellm_reconciler import _LITELLM_ROLE_FALLBACKS
     from paper_ingestion.routers.system import _ROLE_CODE_DEFAULTS
 
     for role, default in _ROLE_CODE_DEFAULTS.items():

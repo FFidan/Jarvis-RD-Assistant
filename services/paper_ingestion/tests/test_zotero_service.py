@@ -201,6 +201,35 @@ async def test_push_paper_filters_project_collections_by_owner_user():
     mock_zotero.ensure_collection.assert_awaited_once_with("Owner Project")
 
 
+async def test_push_paper_collection_failure_prevents_item_creation():
+    """A project collection failure must fail the job before creating an unfiled item."""
+    paper = _paper_row(project_ids=[10])
+    project = _project_row(project_id=10, name="Owner Project")
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        zotero = mock_client.return_value
+        zotero.search_by_doi = AsyncMock(return_value=None)
+        zotero.ensure_collection = AsyncMock(side_effect=RuntimeError("Zotero unavailable"))
+        zotero.create_item = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="Zotero unavailable"):
+            await push_paper_to_zotero(
+                paper_id=1,
+                db_pool=pool,
+                http_client=AsyncMock(spec=httpx.AsyncClient),
+                owner_user_id=42,
+            )
+
+    zotero.create_item.assert_not_awaited()
+
+
 async def test_poll_zotero_library_reads_config_for_polling_user():
     """Manual and scheduled polls must read the polling user's Zotero config."""
     pool = MagicMock()
@@ -317,7 +346,8 @@ async def test_push_paper_doi_dedupe():
 
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     push_conn = AsyncMock()
-    push_conn.fetchrow = AsyncMock(return_value=paper)
+    project = _project_row(col_key="COLL1234")
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(return_value=None)
 
@@ -332,14 +362,43 @@ async def test_push_paper_doi_dedupe():
             return_value={"key": "EXISTING_KEY", "data": {"DOI": "10.1234/test"}}
         )
         mock_zotero.create_item = AsyncMock()
+        mock_zotero.add_item_to_collections = AsyncMock()
         mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
 
         await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
 
         # create_item must NOT be called when DOI match is found
         mock_zotero.create_item.assert_not_called()
+        mock_zotero.add_item_to_collections.assert_awaited_once_with("EXISTING_KEY", ["COLL1234"])
         # The existing key should be persisted
         assert any("EXISTING_KEY" in str(c) for c in push_conn.execute.call_args_list)
+
+
+async def test_push_paper_doi_lookup_failure_prevents_duplicate_creation():
+    """A failed DOI lookup must not fall through to creating a possible duplicate."""
+    paper = _paper_row(project_ids=[10], doi="10.1234/test")
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(return_value=paper)
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        zotero = mock_client.return_value
+        zotero.search_by_doi = AsyncMock(side_effect=httpx.ReadTimeout("lookup timed out"))
+        zotero.create_item = AsyncMock()
+
+        with pytest.raises(httpx.ReadTimeout, match="lookup timed out"):
+            await push_paper_to_zotero(
+                paper_id=1,
+                db_pool=pool,
+                http_client=AsyncMock(spec=httpx.AsyncClient),
+                owner_user_id=7,
+            )
+
+    zotero.create_item.assert_not_awaited()
 
 
 async def test_push_paper_duplicate_link_does_not_abort_job():
@@ -357,6 +416,7 @@ async def test_push_paper_duplicate_link_does_not_abort_job():
     item-key persist makes the violation propagate and this test fails.
     """
     paper = _paper_row(project_ids=[10], doi="10.1234/dup")
+    project = _project_row(col_key="COLLDUP")
 
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
 
@@ -368,7 +428,7 @@ async def test_push_paper_duplicate_link_does_not_abort_job():
         return None
 
     push_conn = AsyncMock()
-    push_conn.fetchrow = AsyncMock(return_value=paper)
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(side_effect=_raise_on_item_link)
 
@@ -383,12 +443,14 @@ async def test_push_paper_duplicate_link_does_not_abort_job():
             return_value={"key": "DUPITEM", "data": {"DOI": "10.1234/dup"}}
         )
         mock_zotero.create_item = AsyncMock()
+        mock_zotero.add_item_to_collections = AsyncMock()
         mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
 
         # Must NOT raise — the job runner survives the duplicate-link violation.
         await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
 
         mock_zotero.create_item.assert_not_called()
+        mock_zotero.add_item_to_collections.assert_awaited_once_with("DUPITEM", ["COLLDUP"])
         # The item-key persist was attempted (and swallowed, not propagated).
         assert any(
             "INSERT INTO paper_user_zotero_links" in str(c) and "zotero_item_key" in str(c)
@@ -2389,6 +2451,32 @@ async def test_push_already_pushed_syncs_new_project_collection():
         await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
     mz.create_item.assert_not_called()
     mz.add_item_to_collections.assert_awaited_once_with("EXISTINGKEY", ["COLLNEW"])
+
+
+async def test_push_already_pushed_collection_failure_propagates():
+    """An existing item is not reported reconciled when remote filing fails."""
+    paper = _paper_row(project_ids=[10], zotero_item_key="EXISTINGKEY")
+    project = _project_row(col_key="COLLNEW")
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        zotero = mock_client.return_value
+        zotero.add_item_to_collections = AsyncMock(
+            side_effect=RuntimeError("collection update failed")
+        )
+        with pytest.raises(RuntimeError, match="collection update failed"):
+            await push_paper_to_zotero(
+                paper_id=1,
+                db_pool=pool,
+                http_client=AsyncMock(spec=httpx.AsyncClient),
+                owner_user_id=7,
+            )
 
 
 # ---------------------------------------------------------------------------

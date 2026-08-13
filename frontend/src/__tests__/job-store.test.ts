@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { useJobStore, type Job } from '@/stores/job-store';
+import { registerVisibilityHydrate, useJobStore, type Job } from '@/stores/job-store';
 import { queryClient } from '@/lib/query-client';
 import * as sseReader from '@/lib/sse-reader';
 import { QUERY_KEYS } from '@/lib/query-keys';
@@ -22,7 +22,6 @@ vi.mock('sonner', async () =>
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => 'test-key'),
       isAuthenticated: true,
       logout: vi.fn(),
     })),
@@ -92,7 +91,12 @@ function createMockSSEStream(frames: string[]): ReadableStream<Uint8Array> {
 describe('JobStore', () => {
   beforeEach(() => {
     // Reset store to empty state
-    useJobStore.setState({ jobs: {}, activeAborts: {} });
+    useJobStore.setState({
+      jobs: {},
+      activeAborts: {},
+      handledTerminalIds: {},
+      discoveryInitialized: false,
+    });
     // resetAllMocks clears call history AND queued return values (mockResolvedValueOnce
     // etc.) on all vi.fn() instances — prevents bleed-over between tests.
     // In vitest 4, vi.clearAllMocks() no longer clears the mockResolvedValueOnce queue,
@@ -435,12 +439,10 @@ describe('JobStore', () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const logout = vi.fn();
     vi.mocked(useAuthStore.getState).mockReturnValue({
-      getApiKey: vi.fn(() => 'test-key'),
       getUser: vi.fn(() => null),
       logout,
       isAuthenticated: true,
       authTime: null,
-      apiKey: 'test-key',
       user: null,
       lastError: null,
       login: vi.fn(),
@@ -470,12 +472,10 @@ describe('JobStore', () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const logout = vi.fn();
     vi.mocked(useAuthStore.getState).mockReturnValue({
-      getApiKey: vi.fn(() => 'test-key'),
       getUser: vi.fn(() => null),
       logout,
       isAuthenticated: true,
       authTime: null,
-      apiKey: 'test-key',
       user: null,
       lastError: null,
       login: vi.fn(),
@@ -537,6 +537,32 @@ describe('JobStore', () => {
     expect(updated.progress_message).toBe('Processing chunk 4/10');
   });
 
+  it.each([
+    ['wrong status type', { status: { terminal: true }, progress: 100 }],
+    ['wrong nested error type', { status: 'failed', error: 'provider secret' }],
+    [
+      'wrong consumed result type',
+      { status: 'succeeded', result: { cards_created: 'zero' } },
+    ],
+  ])('subscribe: rejects %s before it can mutate job state', async (_label, event) => {
+    const { toast } = await import('sonner');
+    const job = makeJob({ id: 'job-malformed', kind: 'card.generate', status: 'running' });
+    useJobStore.setState({ jobs: { [job.id]: job }, activeAborts: {} });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([`data: ${JSON.stringify(event)}\n\n`, 'data: [DONE]\n\n']),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().subscribe(job.id);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(requireJob(useJobStore.getState().jobs[job.id], job.id).status).toBe('running');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   // ----- terminal events -----
 
   it('subscribe: succeeded terminal event fires toast.success and keeps job in store', async () => {
@@ -568,6 +594,27 @@ describe('JobStore', () => {
     expect(useJobStore.getState().jobs['job-3']).toBeDefined();
     expect(requireJob(useJobStore.getState().jobs['job-3'], 'job-3').status).toBe('succeeded');
     expect(toast.success).toHaveBeenCalledWith('Generating Pulse completed');
+  });
+
+  it('names the scope in the completion notice for a paper-scoped scan', async () => {
+    // The same kind is submitted library-wide and for one paper, so a notice
+    // that names only the kind reads identically for two different results.
+    const { toast } = await import('sonner');
+    useJobStore.setState({ discoveryInitialized: true });
+
+    useJobStore
+      .getState()
+      ._handleTerminal(
+        makeJob({ id: 'scoped-scan', status: 'succeeded', kind: 'contradictions.scan', payload: { paper_id: 42 } }),
+      );
+    expect(toast.success).toHaveBeenCalledWith('Scanning Paper Contradictions completed');
+
+    useJobStore
+      .getState()
+      ._handleTerminal(
+        makeJob({ id: 'library-scan', status: 'succeeded', kind: 'contradictions.scan', payload: {} }),
+      );
+    expect(toast.success).toHaveBeenCalledWith('Scanning Contradictions completed');
   });
 
   it('subscribe: succeeded card.generate with zero cards does NOT fire the success toast', async () => {
@@ -970,10 +1017,10 @@ describe('JobStore', () => {
   it('hydrate: re-subscribes to running jobs from API', async () => {
     const { listJobs } = await import('@/lib/api');
     const runningJob = makeJob({ id: 'j8', status: 'running' });
-    // hydrate now calls listJobs twice (running + queued)
+    // Active jobs are exhaustive; the bounded recent call catches fast terminal jobs.
     vi.mocked(listJobs)
       .mockResolvedValueOnce([runningJob]) // running call
-      .mockResolvedValueOnce([]);           // queued call
+      .mockResolvedValueOnce([]);           // recent call
 
     // Return empty stream so subscribe terminates cleanly
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -982,7 +1029,7 @@ describe('JobStore', () => {
 
     await useJobStore.getState().hydrate();
 
-    expect(listJobs).toHaveBeenCalledWith({ status: 'running' });
+    expect(listJobs).toHaveBeenCalledWith({ status: 'active', limit: 500 });
     expect(useJobStore.getState().jobs['j8']).toBeDefined();
     expect(requireJob(useJobStore.getState().jobs['j8'], 'j8').status).toBe('running');
   });
@@ -991,7 +1038,166 @@ describe('JobStore', () => {
     const { listJobs } = await import('@/lib/api');
     vi.mocked(listJobs).mockRejectedValue(new Error('Network error'));
 
-    await expect(useJobStore.getState().hydrate()).resolves.not.toThrow();
+    await expect(useJobStore.getState().hydrate()).resolves.toBe(false);
+  });
+
+  it('hydrate: discovers a fast external terminal job and applies effects once', async () => {
+    const { listJobs } = await import('@/lib/api');
+    const { toast } = await import('sonner');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const completed = makeJob({
+      id: 'telegram-pulse-fast',
+      kind: 'pulse.generate',
+      status: 'succeeded',
+      progress: 1,
+      finished_at: '2026-08-09T12:00:01Z',
+    });
+    vi.mocked(listJobs).mockImplementation(async (params) => (
+      params?.status ? [] : [completed]
+    ));
+    useJobStore.setState({ discoveryInitialized: true });
+
+    expect(await useJobStore.getState().hydrate()).toBe(true);
+    expect(await useJobStore.getState().hydrate()).toBe(true);
+
+    expect(useJobStore.getState().jobs[completed.id]).toEqual(completed);
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.pulse.today() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.pulse.statsAll() });
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(useJobStore.getState().activeAborts[completed.id]).toBeUndefined();
+  });
+
+  it('hydrate: refreshes Pulse for a terminal job found on the initial quiet baseline', async () => {
+    const { listJobs } = await import('@/lib/api');
+    const { toast } = await import('sonner');
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const completed = makeJob({
+      id: 'telegram-pulse-before-first-hydrate',
+      kind: 'pulse.generate',
+      status: 'succeeded',
+      progress: 1,
+      finished_at: '2026-08-09T12:00:01Z',
+    });
+    vi.mocked(listJobs).mockImplementation(async (params) => (
+      params?.status ? [] : [completed]
+    ));
+
+    expect(await useJobStore.getState().hydrate()).toBe(true);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.pulse.today() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.pulse.statsAll() });
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
+  });
+
+  it('hydrate: establishes old terminal history without replaying stale toasts', async () => {
+    const { listJobs } = await import('@/lib/api');
+    const { toast } = await import('sonner');
+    const old = makeJob({
+      id: 'old-terminal',
+      status: 'succeeded',
+      finished_at: '2026-08-01T12:00:00Z',
+    });
+    vi.mocked(listJobs).mockImplementation(async (params) => (
+      params?.status ? [] : [old]
+    ));
+
+    await useJobStore.getState().hydrate();
+
+    expect(useJobStore.getState().jobs[old.id]).toEqual(old);
+    expect(useJobStore.getState().discoveryInitialized).toBe(true);
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
+  });
+
+  it('hydrate: a terminal recent snapshot wins an overlapping active snapshot', async () => {
+    const { listJobs } = await import('@/lib/api');
+    const running = makeJob({ id: 'fast-race', status: 'running' });
+    const completed = makeJob({
+      id: 'fast-race',
+      status: 'succeeded',
+      finished_at: '2026-08-09T12:00:01Z',
+    });
+    vi.mocked(listJobs)
+      .mockResolvedValueOnce([running])
+      .mockResolvedValueOnce([completed]);
+    useJobStore.setState({ discoveryInitialized: true });
+
+    await useJobStore.getState().hydrate();
+
+    expect(useJobStore.getState().jobs['fast-race']?.status).toBe('succeeded');
+    expect(useJobStore.getState().activeAborts['fast-race']).toBeUndefined();
+  });
+
+  it('hydrate: concurrent discovery calls share one request set', async () => {
+    const { listJobs } = await import('@/lib/api');
+    vi.mocked(listJobs).mockResolvedValue([]);
+
+    await Promise.all([
+      useJobStore.getState().hydrate(),
+      useJobStore.getState().hydrate(),
+    ]);
+
+    expect(listJobs).toHaveBeenCalledTimes(2);
+  });
+
+  it('hydrate: a response from before logout cannot repopulate the next user state', async () => {
+    const { listJobs } = await import('@/lib/api');
+    const resolvers: Array<(jobs: Job[]) => void> = [];
+    vi.mocked(listJobs).mockImplementation(() => new Promise((resolve) => {
+      resolvers.push(resolve);
+    }));
+
+    const pending = useJobStore.getState().hydrate();
+    useJobStore.getState()._reset();
+    for (const resolve of resolvers) {
+      resolve([makeJob({ id: 'previous-user-job', status: 'running' })]);
+    }
+
+    await expect(pending).resolves.toBe(false);
+    expect(useJobStore.getState().jobs).toEqual({});
+  });
+
+  it('keeps terminal history bounded without dropping active jobs', () => {
+    for (let index = 0; index < 60; index += 1) {
+      useJobStore.getState()._upsertJob(makeJob({
+        id: `terminal-${index}`,
+        status: 'succeeded',
+        finished_at: new Date(Date.UTC(2026, 7, 9, 12, 0, index)).toISOString(),
+      }));
+    }
+    useJobStore.getState()._upsertJob(makeJob({ id: 'still-running', status: 'running' }));
+
+    const jobs = useJobStore.getState().jobs;
+    expect(Object.keys(jobs)).toHaveLength(50);
+    expect(jobs['still-running']).toBeDefined();
+    expect(jobs['terminal-59']).toBeDefined();
+    expect(jobs['terminal-0']).toBeUndefined();
+  });
+
+  it('visibility discovery polls with bounded backoff and cleans up its timer', async () => {
+    vi.useFakeTimers();
+    const originalHydrate = useJobStore.getState().hydrate;
+    const hydrate = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    useJobStore.setState({ hydrate });
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    });
+
+    const cleanup = registerVisibilityHydrate();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(hydrate).toHaveBeenCalledTimes(2);
+
+    cleanup();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(hydrate).toHaveBeenCalledTimes(2);
+    useJobStore.setState({ hydrate: originalHydrate });
   });
 
   // ----- action_link open-redirect guard -----
@@ -1133,10 +1339,10 @@ describe('JobStore', () => {
     const jobA_running = makeJob({ id: 'job-running-1', kind: 'pulse.generate', status: 'running' });
     const jobB_queued = makeJob({ id: 'job-queued-1', kind: 'paper.process', status: 'queued' });
 
-    // listJobs called twice: first for running, then for queued
+    // One exhaustive active call plus one bounded recent-history discovery.
     vi.mocked(listJobs)
-      .mockResolvedValueOnce([jobA_running]) // status: 'running'
-      .mockResolvedValueOnce([jobB_queued]); // status: 'queued'
+      .mockResolvedValueOnce([jobA_running, jobB_queued]) // status: 'active'
+      .mockResolvedValueOnce([]);                          // recent history
 
     // Return empty stream so subscribe terminates cleanly for both jobs
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -1146,8 +1352,8 @@ describe('JobStore', () => {
     await useJobStore.getState().hydrate();
 
     // Both calls must have been made
-    expect(listJobs).toHaveBeenCalledWith({ status: 'running' });
-    expect(listJobs).toHaveBeenCalledWith({ status: 'queued' });
+    expect(listJobs).toHaveBeenCalledWith({ status: 'active', limit: 500 });
+    expect(listJobs).toHaveBeenCalledWith({ limit: 30 });
     expect(listJobs).toHaveBeenCalledTimes(2);
 
     // Both jobs must appear in the store
@@ -1268,12 +1474,10 @@ describe('JobStore', () => {
     // Authenticated at subscribe time, logged out by the time the sleep resolves.
     let authenticated = true;
     vi.mocked(useAuthStore.getState).mockImplementation(() => ({
-      getApiKey: vi.fn(() => (authenticated ? 'test-key' : null)),
       isAuthenticated: authenticated,
       getUser: vi.fn(() => null),
       logout: vi.fn(),
       authTime: null,
-      apiKey: authenticated ? 'test-key' : null,
       user: null,
       lastError: null,
       login: vi.fn(),
@@ -1327,12 +1531,10 @@ describe('JobStore', () => {
 
     let authenticated = true;
     vi.mocked(useAuthStore.getState).mockImplementation(() => ({
-      getApiKey: vi.fn(() => (authenticated ? 'test-key' : null)),
       isAuthenticated: authenticated,
       getUser: vi.fn(() => null),
       logout: vi.fn(),
       authTime: null,
-      apiKey: authenticated ? 'test-key' : null,
       user: null,
       lastError: null,
       login: vi.fn(),
@@ -1530,12 +1732,10 @@ describe('JobStore', () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const { getJob } = await import('@/lib/api');
     vi.mocked(useAuthStore.getState).mockReturnValue({
-      getApiKey: vi.fn(() => 'test-key'),
       getUser: vi.fn(() => null),
       logout: vi.fn(),
       isAuthenticated: true,
       authTime: null,
-      apiKey: 'test-key',
       user: null,
       lastError: null,
       login: vi.fn(),
@@ -1669,6 +1869,62 @@ describe('JobStore', () => {
       await vi.advanceTimersByTimeAsync(0);
     }
     expect(ourCalls()).toBe(2); // backoff ran to completion; resubscribed
+  });
+
+  it('does not re-notify or resurrect a terminal job after eviction and re-hydration', async () => {
+    // Regression: eviction used to drop the notified marker along with the row,
+    // so the next hydration treated a five-minute-old result as brand new.
+    const { listJobs } = await import('@/lib/api');
+    const { toast } = await import('sonner');
+    const job = makeJob({ id: 'evicted-1', status: 'succeeded', kind: 'pulse.generate' });
+    useJobStore.setState({ discoveryInitialized: true });
+
+    useJobStore.getState()._handleTerminal(job);
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+
+    useJobStore.getState().removeJob(job.id);
+    expect(useJobStore.getState().jobs[job.id]).toBeUndefined();
+
+    vi.mocked(listJobs).mockImplementation(async (params) => (params?.status ? [] : [job]));
+    await useJobStore.getState().hydrate();
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    expect(useJobStore.getState().jobs[job.id]).toBeUndefined();
+  });
+
+  it('keeps the notified marker when other jobs move after an eviction', async () => {
+    // The marker has to survive unrelated traffic, not just an idle gap. A
+    // researcher with a running pipeline always has another job moving between
+    // an eviction and the next hydration, so pruning markers against the
+    // currently held rows would replay the notice in exactly the common case.
+    const { listJobs } = await import('@/lib/api');
+    const { toast } = await import('sonner');
+    const job = makeJob({ id: 'evicted-2', status: 'succeeded', kind: 'pulse.generate' });
+    useJobStore.setState({ discoveryInitialized: true });
+
+    useJobStore.getState()._handleTerminal(job);
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    useJobStore.getState().removeJob(job.id);
+
+    useJobStore.getState()._upsertJob(makeJob({ id: 'unrelated-1', status: 'running' }));
+    expect(useJobStore.getState().handledTerminalIds[job.id]).toBe(true);
+
+    vi.mocked(listJobs).mockImplementation(async (params) => (params?.status ? [] : [job]));
+    await useJobStore.getState().hydrate();
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+    expect(useJobStore.getState().jobs[job.id]).toBeUndefined();
+  });
+
+  it('bounds the notified-marker map so sessionStorage cannot grow without limit', () => {
+    // Markers outlive the rows they refer to, so this cap is the only thing
+    // bounding what the session stores.
+    for (let i = 0; i < 150; i++) {
+      useJobStore.getState()._handleTerminal(
+        makeJob({ id: `notify-${i}`, status: 'succeeded' }),
+      );
+    }
+    expect(Object.keys(useJobStore.getState().handledTerminalIds).length).toBe(100);
   });
 
   // ----- paper.summarize coverage/passes -> paper-detail cache -----

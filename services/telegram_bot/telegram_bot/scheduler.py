@@ -16,8 +16,13 @@ from apscheduler.triggers.cron import CronTrigger
 from jarvis_common.maintenance import skip_for_maintenance
 from telegram import Bot
 
-from telegram_bot import formatters
+from telegram_bot import formatters, services_client
+from telegram_bot import owner as _owner
 from telegram_bot.config import BotConfig
+from telegram_bot.notification_policy import (
+    SCHEDULED_NOTIFICATION_KINDS,
+    ScheduledNotificationPolicy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,9 @@ JOB_REGISTRY: dict[str, str] = {
     "research_pulse": "telegram_bot.orchestration.research_pulse:run_research_pulse",
     "author_alert": "telegram_bot.orchestration.author_alerts:run_author_alerts",
 }
+
+if frozenset(JOB_REGISTRY) != SCHEDULED_NOTIFICATION_KINDS:
+    raise RuntimeError("Every scheduled Telegram notification must have a focus delivery policy")
 
 
 class JarvisScheduler:
@@ -58,10 +66,21 @@ class JarvisScheduler:
         self.bot = bot
         self.config = config
         self.scheduler = AsyncIOScheduler()
+        self.delivery_policy = ScheduledNotificationPolicy(http_client, config)
 
     async def load_and_start(self) -> None:
         """Load enabled nudges from DB and start the scheduler."""
         await self.reload_nudges()
+        await self._reconcile_focus_sessions()
+        self.scheduler.add_job(
+            self._reconcile_focus_sessions,
+            "interval",
+            seconds=10,
+            id="focus_reconciliation",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         self.scheduler.start()
         logger.info("Scheduler started with %d jobs", len(self.scheduler.get_jobs()))
 
@@ -231,7 +250,13 @@ class JarvisScheduler:
             module_path, func_name = JOB_REGISTRY[nudge_type].rsplit(":", 1)
             module = importlib.import_module(module_path)
             func = getattr(module, func_name)
-            await func(self.http_client, self.db_pool, self.bot, self.config)
+            await func(
+                self.http_client,
+                self.db_pool,
+                self.bot,
+                self.config,
+                delivery_policy=self.delivery_policy,
+            )
 
             # Update last_fired_at
             await self.db_pool.execute(
@@ -276,6 +301,40 @@ class JarvisScheduler:
                     nudge_type,
                     nudge_id,
                 )
+
+    async def _reconcile_focus_sessions(self) -> None:
+        """Deliver durable Telegram focus completions after timer or bot restarts."""
+        pairings = await _owner.list_user_pairings(self.db_pool)
+        for pairing in pairings:
+            try:
+                session = await services_client.fetch_pending_telegram_focus_completion(
+                    self.http_client,
+                    self.config,
+                    pairing.user_id,
+                )
+            except Exception:
+                logger.warning("Focus completion reconciliation failed", exc_info=True)
+                continue
+            if session is None:
+                continue
+            minutes = session.recorded_seconds / 60
+            duration = f"{minutes:g}"
+            try:
+                await self.bot.send_message(
+                    chat_id=pairing.chat_id,
+                    text=(
+                        f"Focus session complete ({duration} minutes). "
+                        "Did you finish your task? Want to add any notes?"
+                    ),
+                )
+                await services_client.acknowledge_telegram_focus_completion(
+                    self.http_client,
+                    self.config,
+                    pairing.user_id,
+                    session.id,
+                )
+            except Exception:
+                logger.warning("Focus completion delivery failed", exc_info=True)
 
     async def stop(self) -> None:
         """Shut down the scheduler."""

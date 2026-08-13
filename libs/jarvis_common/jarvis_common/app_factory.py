@@ -69,6 +69,7 @@ from jarvis_common.maintenance import (
     secrets_rotated_since,
 )
 from jarvis_common.migrations import run_migrations
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
@@ -406,7 +407,14 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
             stack.push_async_callback(db_pool.close)
             app.state.db_pool = db_pool
 
-            http_kwargs = {**_HTTP_CLIENT_DEFAULTS, **config.http_client_kwargs}
+            http_kwargs = {
+                **_HTTP_CLIENT_DEFAULTS,
+                "transport": PinnedAsyncTransport(JARVIS_SERVICE_POLICY),
+                **config.http_client_kwargs,
+            }
+            # A proxy would move DNS and TCP connection ownership outside the
+            # pinned transport. It is not a supported route for service egress.
+            http_kwargs["trust_env"] = False
             http_client = httpx.AsyncClient(**http_kwargs)
             stack.push_async_callback(http_client.aclose)
             app.state.http_client = http_client

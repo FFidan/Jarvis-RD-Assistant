@@ -4,8 +4,6 @@
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import { toast } from 'sonner';
-import { errorMessage } from '@/lib/errors';
 
 interface ConfigSliderProps {
   id?: string;
@@ -20,7 +18,6 @@ interface ConfigSliderProps {
   disabled?: boolean;
   onLocalChange: (v: number) => void;
   onCommit: (v: number) => void;
-  commitErrorLabel?: string;
 }
 
 export function ConfigSlider({
@@ -36,7 +33,6 @@ export function ConfigSlider({
   disabled,
   onLocalChange,
   onCommit,
-  commitErrorLabel,
 }: ConfigSliderProps) {
   return (
     <div className="space-y-1">
@@ -52,25 +48,16 @@ export function ConfigSlider({
       </Label>
       <Slider
         id={id}
+        // The label above is tied to the slider's outer element and also holds the
+        // current value, so it names nothing the control reports and would change
+        // on every step. The control carries its own steady name.
+        aria-label={label}
         min={min}
         max={max}
         step={step}
         value={[value]}
         onValueChange={([v]) => onLocalChange(v ?? value)}
-        onValueCommit={([v]) =>
-          onCommit !== undefined &&
-          (commitErrorLabel
-            ? void (async () => {
-                try {
-                  onCommit(v ?? value);
-                } catch (err) {
-                  toast.error(`Failed to update ${commitErrorLabel}`, {
-                    description: errorMessage(err),
-                  });
-                }
-              })()
-            : onCommit(v ?? value))
-        }
+        onValueCommit={([v]) => onCommit(v ?? value)}
         disabled={disabled}
         className="w-full"
       />

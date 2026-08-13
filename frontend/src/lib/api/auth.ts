@@ -1,10 +1,30 @@
 // Auth (magic-link), passkeys (WebAuthn), admin user management, and admin audit log.
-import { apiFetch } from './core';
-import type { SessionUser } from '@/stores/auth-store';
+import { apiFetchJson, apiFetchVoid } from './core';
+import {
+  adminUserListSchema,
+  adminUserSchema,
+  auditLogPageSchema,
+  ownerIdentitySchema,
+  passkeyCapabilitySchema,
+  passkeyCountSchema,
+  passkeyCreationOptionsSchema,
+  passkeyInfoListSchema,
+  passkeyRegistrationResultSchema,
+  passkeyRequestOptionsSchema,
+  sendSignInLinkSchema,
+  sentResponseSchema,
+  sessionUserSchema,
+} from './schemas/auth';
+export type {
+  AdminUser,
+  AuditLogEntry,
+  AuditLogPage,
+  OwnerIdentity,
+  PasskeyCapability,
+  PasskeyInfo,
+} from './schemas/auth';
 import type {
   AuthenticationResponseJSON,
-  PublicKeyCredentialCreationOptionsJSON,
-  PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
 } from '@simplewebauthn/browser';
 
@@ -14,54 +34,41 @@ import type {
  *  whether the email exists (the backend deliberately doesn't leak account
  *  existence). Throws ApiError only on network/transport failure. */
 export const requestMagicLink = (email: string) =>
-  apiFetch<{ sent: boolean }>('/api/auth/request-link', {
+  apiFetchJson('/api/auth/request-link', sentResponseSchema, {
     method: 'POST',
     body: JSON.stringify({ email }),
   });
 
 /** Exchange a magic-link token for a session cookie + user record. */
 export const verifyMagicLink = (token: string) =>
-  apiFetch<SessionUser>('/api/auth/verify', {
+  apiFetchJson('/api/auth/verify', sessionUserSchema, {
     method: 'POST',
     body: JSON.stringify({ token }),
   });
 
 /** Revoke the current session and clear the cookie. */
 export const logoutSession = () =>
-  apiFetch<void>('/api/auth/logout', { method: 'POST' });
+  apiFetchVoid('/api/auth/logout', { method: 'POST' });
 
 // --- Passkeys (WebAuthn) ---
 //
-// Every call below flows through apiFetch, so a 401 on a session-scoped route
+// Every call below flows through the shared decoded client, so a 401 on a session-scoped route
 // (e.g. an admin revoked all of your passkeys/sessions mid-session) is handled
 // by the shared auto-logout path in ./core — no bespoke 401 handling here.
 
 /** Whether the server will accept passkeys for the current request origin, plus
  *  the active access mode so the UI can explain when it can't (unauthenticated). */
-export interface PasskeyCapability {
-  available: boolean;
-  access_mode: string;
-}
-
-/** A registered passkey as listed for its owner. */
-export interface PasskeyInfo {
-  id: string;
-  nickname: string;
-  transports: string[] | null;
-  created_at: string;
-  last_used_at: string | null;
-}
-
 /** Probe whether passkeys are usable from this origin (unauthenticated). POST (not
  *  GET) so the browser attaches the Origin header on the same-origin production
  *  request — a same-origin GET omits it, which would hide every passkey control. */
 export const getPasskeyCapability = () =>
-  apiFetch<PasskeyCapability>('/api/auth/passkeys/capability', { method: 'POST' });
+  apiFetchJson('/api/auth/passkeys/capability', passkeyCapabilitySchema, { method: 'POST' });
 
 /** Fetch WebAuthn creation options to hand straight to `startRegistration`. */
 export const beginPasskeyRegistration = () =>
-  apiFetch<PublicKeyCredentialCreationOptionsJSON>(
+  apiFetchJson(
     '/api/auth/passkeys/register/begin',
+    passkeyCreationOptionsSchema,
     { method: 'POST' },
   );
 
@@ -70,125 +77,89 @@ export const finishPasskeyRegistration = (
   credential: RegistrationResponseJSON,
   nickname?: string,
 ) =>
-  apiFetch<Pick<PasskeyInfo, 'id' | 'nickname'>>(
+  apiFetchJson(
     '/api/auth/passkeys/register/finish',
+    passkeyRegistrationResultSchema,
     { method: 'POST', body: JSON.stringify({ ...credential, nickname }) },
   );
 
 /** Fetch WebAuthn request options to hand straight to `startAuthentication`. */
 export const beginPasskeyLogin = () =>
-  apiFetch<PublicKeyCredentialRequestOptionsJSON>(
+  apiFetchJson(
     '/api/auth/passkeys/login/begin',
+    passkeyRequestOptionsSchema,
     { method: 'POST' },
   );
 
 /** Complete login; sets the session cookie and returns the signed-in user. */
 export const finishPasskeyLogin = (assertion: AuthenticationResponseJSON) =>
-  apiFetch<SessionUser>('/api/auth/passkeys/login/finish', {
+  apiFetchJson('/api/auth/passkeys/login/finish', sessionUserSchema, {
     method: 'POST',
     body: JSON.stringify(assertion),
   });
 
 /** List the current user's registered passkeys. Requires a session. */
 export const listPasskeys = () =>
-  apiFetch<PasskeyInfo[]>('/api/auth/passkeys');
+  apiFetchJson('/api/auth/passkeys', passkeyInfoListSchema);
 
 /** Revoke one of the current user's passkeys. Requires a session. */
 export const deletePasskey = (credentialId: string) =>
-  apiFetch<void>(`/api/auth/passkeys/${encodeURIComponent(credentialId)}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/auth/passkeys/${encodeURIComponent(credentialId)}`, { method: 'DELETE' });
 
 /** Admin: how many passkeys a user has (recovery-planning signal). */
 export const getUserPasskeyCount = (userId: number) =>
-  apiFetch<{ count: number }>(`/api/admin/users/${userId}/passkeys`);
+  apiFetchJson(`/api/admin/users/${userId}/passkeys`, passkeyCountSchema);
 
 /** Admin: revoke every passkey a user holds (pairs with a fresh sign-in link). */
 export const revokeAllUserPasskeys = (userId: number) =>
-  apiFetch<void>(`/api/admin/users/${userId}/passkeys/revoke-all`, {
+  apiFetchVoid(`/api/admin/users/${userId}/passkeys/revoke-all`, {
     method: 'POST',
   });
 
 // --- Admin user management ---
 
-export interface AdminUser {
-  id: number;
-  email: string;
-  role: 'user' | 'admin';
-  created_at: string;
-  last_login_at: string | null;
-  deleted_at?: string | null;
-  invite_link?: string | null;
-  is_owner?: boolean;
-  owner_source?: 'none' | 'database' | 'environment' | null;
-  owner_state?:
-    | 'missing'
-    | 'invalid_value'
-    | 'missing_or_deleted_user'
-    | 'non_admin_user'
-    | 'valid'
-    | null;
-}
-
-export interface OwnerIdentity {
-  source: 'database' | 'environment';
-  state: 'valid';
-  user_id: number;
-}
-
 /** List users, including soft-deleted ones still within the 30-day restore
  *  grace (so the admin UI can offer a restore action). Requires admin role. */
 export const listUsers = () =>
-  apiFetch<AdminUser[]>('/api/admin/users?include_deleted=true');
+  apiFetchJson('/api/admin/users?include_deleted=true', adminUserListSchema);
 
 /** Invite a new user. Sends them a 24-hour magic link. Requires admin role. */
 export const inviteUser = (email: string, role: 'user' | 'admin') =>
-  apiFetch<AdminUser>('/api/admin/users', {
+  apiFetchJson('/api/admin/users', adminUserSchema, {
     method: 'POST',
     body: JSON.stringify({ email, role }),
   });
 
 /** Change a user's role. Requires admin role. */
 export const updateUserRole = (userId: number, role: 'user' | 'admin') =>
-  apiFetch<AdminUser>(`/api/admin/users/${userId}/role`, {
+  apiFetchJson(`/api/admin/users/${userId}/role`, adminUserSchema, {
     method: 'PATCH',
     body: JSON.stringify({ role }),
   });
 
 /** Soft-delete a user (sets deleted_at). Requires admin role. */
 export const deleteUser = (userId: number) =>
-  apiFetch<void>(`/api/admin/users/${userId}`, { method: 'DELETE' });
+  apiFetchVoid(`/api/admin/users/${userId}`, { method: 'DELETE' });
 
 /** Restore a soft-deleted user within the 30-day grace. Requires admin role. */
 export const restoreUser = (userId: number) =>
-  apiFetch<AdminUser>(`/api/admin/users/${userId}/restore`, { method: 'POST' });
+  apiFetchJson(`/api/admin/users/${userId}/restore`, adminUserSchema, { method: 'POST' });
 
 /** Transfer database-managed ownership to another live administrator. */
 export const transferOwner = (targetUserId: number, confirmation: string) =>
-  apiFetch<OwnerIdentity>('/api/admin/owner/transfer', {
+  apiFetchJson('/api/admin/owner/transfer', ownerIdentitySchema, {
     method: 'POST',
     body: JSON.stringify({ target_user_id: targetUserId, confirmation }),
   });
 
 export const sendSignInLink = (userId: number) =>
-  apiFetch<{ sent: boolean; sent_link?: string | null }>(
+  apiFetchJson(
     `/api/admin/users/${userId}/send-link`,
+    sendSignInLinkSchema,
     { method: 'POST' },
   );
 
 // --- Admin audit log ---
-
-export interface AuditLogEntry {
-  id: number;
-  user_id: string | null;
-  action: string;
-  resource: string;
-  metadata: Record<string, unknown> | null;
-  created_at: string;
-}
-
-export interface AuditLogPage {
-  entries: AuditLogEntry[];
-  next_before_id: number | null;
-}
 
 /** Read the audit log (cursor-paginated, newest first). Requires admin role. */
 export const listAuditLog = (params?: {
@@ -201,5 +172,5 @@ export const listAuditLog = (params?: {
   if (params?.beforeId != null) qs.set('before_id', String(params.beforeId));
   if (params?.actionPrefix) qs.set('action_prefix', params.actionPrefix);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiFetch<AuditLogPage>(`/api/admin/audit-log${suffix}`);
+  return apiFetchJson(`/api/admin/audit-log${suffix}`, auditLogPageSchema);
 };

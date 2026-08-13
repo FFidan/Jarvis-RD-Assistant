@@ -27,7 +27,7 @@ vi.mock('@/lib/api', async () => {
       cards_review_streak_days: 28,
     }),
     fetchAnalyticsActivity: async () => ([
-      { log_date: '2026-03-01', tasks_completed: 2, cards_reviewed: 5, papers_read: 1, focus_hours: 3, notes: null },
+      { log_date: '2026-03-01', tasks_completed: 2, cards_reviewed: 5, papers_read: 1, focus_hours: 3 },
     ]),
     fetchAnalyticsRetention: async () => ([
       { review_date: '2026-03-01', total: 10, good_easy: 8, retention_pct: 80.0 },

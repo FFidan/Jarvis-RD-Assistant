@@ -3,7 +3,7 @@
 import asyncio
 import re
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -63,7 +63,8 @@ _PULSE_REQUIRED_WEIGHT_KEYS = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# DRY hoist 3: shared cron validation body
+# Shared cron validation: type/parse the expression, then enforce the
+# schedule's own minimum-fire-interval floor.
 # ---------------------------------------------------------------------------
 
 
@@ -77,22 +78,67 @@ def _validate_cron_base(v: Any, name: str) -> CronTrigger:
         raise ValueError(f"invalid cron expression: {exc}") from exc
 
 
+#: A full day plus an hour: long enough to see every gap a day-repeating
+#: schedule produces, whatever time of day the check starts from.
+_SCHEDULE_SCAN_WINDOW = timedelta(hours=25)
+
+#: Hard stop on the walk, so no expression can spin here. Clearing the tightest
+#: floor in use (fifteen minutes) allows at most a hundred fire times in the
+#: window, and an expression that dips below its floor stops at the first pair.
+_SCHEDULE_SCAN_MAX_FIRES = 200
+
+
+def _now() -> datetime:
+    """Current local time — a seam so schedule-floor checks can be pinned in tests."""
+    return datetime.now()
+
+
+def _validate_cron_min_interval(trigger: CronTrigger, *, minimum: timedelta, message: str) -> None:
+    """Reject *trigger* if any two consecutive fire times are closer than *minimum*.
+
+    Measuring only the next two fire times would let the wall clock decide:
+    ``0,50,51 * * * *`` shows a one-minute gap when saved at ten past the hour
+    and a fifty-minute one when saved at five to, so the same expression would
+    be rejected or accepted by the minute it was saved on. Walking the schedule
+    across the whole window finds the smallest gap it really produces.
+
+    A schedule that fires less often than the window yields fewer than two fire
+    times and is accepted — a weekly sync is above any floor enforced here.
+    """
+    previous = trigger.get_next_fire_time(None, _now())
+    if previous is None:
+        return
+    deadline = previous + _SCHEDULE_SCAN_WINDOW
+    for _ in range(_SCHEDULE_SCAN_MAX_FIRES):
+        current = trigger.get_next_fire_time(previous, previous)
+        if current is None or current > deadline:
+            return
+        if current - previous < minimum:
+            raise ValueError(message)
+        previous = current
+
+
 def _validate_cron(v: Any) -> None:
     trigger = _validate_cron_base(v, "pulse.cron")
     # Reject sub-hourly schedules — pulse runs are expensive; once per hour is the minimum.
-    from datetime import datetime  # noqa: PLC0415
-
-    base = datetime.now()
-    t1 = trigger.get_next_fire_time(None, base)
-    t2 = trigger.get_next_fire_time(t1, t1)
-    if t1 is not None and t2 is not None and (t2 - t1) < timedelta(hours=1):
-        raise ValueError("Pulse cron must fire no more than once per hour")
+    _validate_cron_min_interval(
+        trigger,
+        minimum=timedelta(hours=1),
+        message="Pulse cron must fire no more than once per hour",
+    )
 
 
 def _validate_zotero_cron(v: Any) -> None:
     if not isinstance(v, str):
         raise ValueError("zotero.poll_cron must be a string")
-    _validate_cron_base(v, "zotero.poll_cron")
+    trigger = _validate_cron_base(v, "zotero.poll_cron")
+    # Reject schedules faster than every fifteen minutes — Zotero is a
+    # third-party API and must not be hammered by an over-eager sync.
+    _validate_cron_min_interval(
+        trigger,
+        minimum=timedelta(minutes=15),
+        message="Zotero sync must run no more than once every 15 minutes",
+    )
 
 
 def _validate_pulse_weights(v: Any) -> None:
@@ -368,6 +414,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.enabled": _validate_bool,
     "recommendation.enabled": _validate_bool,
     "setup.completed": _validate_bool,
+    "onboarding.dismissed": _validate_bool,
     "user.timezone": _validate_timezone,
     "telegram.owner_chat_id": _validate_optional_int,
     # LLM model role assignments

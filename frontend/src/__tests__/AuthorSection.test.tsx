@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthorSection } from '@/components/settings/AuthorSection';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
-import type { TrackedAuthor } from '@/types';
+
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
@@ -18,9 +21,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-const { fetchTrackedAuthors } = await import('@/lib/api');
+const { fetchTrackedAuthors, createTrackedAuthor } = await import('@/lib/api');
+const { toast } = await import('sonner');
 
-const AUTHOR: TrackedAuthor = {
+const AUTHOR: Awaited<ReturnType<typeof fetchTrackedAuthors>>[number] = {
   id: 1,
   author_name: 'Yoshua Bengio',
   s2_author_id: null,
@@ -63,5 +67,20 @@ describe('AuthorSection', () => {
     renderSection();
     expect(await screen.findByText('Failed to load tracked authors.')).toBeInTheDocument();
     expect(screen.queryByText('No tracked authors')).toBeNull();
+  });
+
+  it('shows an error toast when adding an author fails', async () => {
+    vi.mocked(fetchTrackedAuthors).mockResolvedValue([]);
+    vi.mocked(createTrackedAuthor).mockRejectedValue(new Error('Author already tracked'));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Add Author' }));
+    await user.type(screen.getByPlaceholderText('e.g. Yoshua Bengio'), 'Yoshua Bengio');
+    await user.click(screen.getByRole('button', { name: 'Add Author' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Author already tracked');
+    });
   });
 });

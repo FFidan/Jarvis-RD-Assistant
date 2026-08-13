@@ -12,6 +12,7 @@ from fastapi.responses import Response
 from jarvis_common import ErrorResponse
 from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
 from jarvis_common.library import add_to_library, is_in_library
+from jarvis_common.paper_state import upsert_paper_user_state
 from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 
 from paper_ingestion import papers_service
@@ -357,19 +358,29 @@ async def batch_save_papers(
                     # and leak the private metadata through the echoed response,
                     # so such collisions are skipped (no attach, no echo, and
                     # therefore no analyze-enqueue below).
+                    already_in_library = await is_in_library(
+                        conn, user_id=user_id, paper_id=row["id"]
+                    )
                     attachable = (
                         row["is_insert"]
                         or row["visibility_scope"] == PUBLIC_VISIBILITY_SCOPE
-                        or await is_in_library(conn, user_id=user_id, paper_id=row["id"])
+                        or already_in_library
                     )
                     if not attachable:
                         continue
-                    await add_to_library(
-                        conn,
-                        user_id=user_id,
-                        paper_id=row["id"],
-                        added_via="batch_save",
-                    )
+                    if not already_in_library:
+                        await add_to_library(
+                            conn,
+                            user_id=user_id,
+                            paper_id=row["id"],
+                            added_via="batch_save",
+                        )
+                        await upsert_paper_user_state(
+                            conn,
+                            row["id"],
+                            user_id,
+                            state="to_read",
+                        )
                 results.append(row_to_paper_response(row))
     if not results:
         return results
@@ -377,13 +388,9 @@ async def batch_save_papers(
     # resolve to one canonical row, which must be analyzed only once.
     saved_ids = list(dict.fromkeys(saved.id for saved in results))
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT DISTINCT paper_id FROM paper_chunks WHERE paper_id = ANY($1)",
-            saved_ids,
-        )
-    chunked_ids: set[int] = {r["paper_id"] for r in rows}
+        analysis_ids = await papers_service.find_papers_needing_analysis(conn, saved_ids)
     for paper_id in saved_ids:
-        if paper_id in chunked_ids:
+        if paper_id not in analysis_ids:
             continue
         try:
             from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415

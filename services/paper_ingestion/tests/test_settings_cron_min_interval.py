@@ -1,18 +1,17 @@
 """Cron minimum interval validation for pulse.cron.
 
-Verifies that the settings endpoint rejects cron expressions that fire more
-than once per hour with HTTP 422 (validation error).
-
-Also covers the rollback branch of _apply_cron_reschedule and the
-scheduler-apply warning surface added to write_config (_apply_schedules).
+Verifies sub-hourly rejection plus the scheduler warning surface in
+``write_config``.
 """
 
 from __future__ import annotations
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.services.config_validators import _validate_cron
+from paper_ingestion.services import config_validators
+from paper_ingestion.services.config_validators import _validate_cron, _validate_zotero_cron
 
 
 @pytest.mark.parametrize(
@@ -24,7 +23,7 @@ from paper_ingestion.services.config_validators import _validate_cron
     ],
 )
 def test_pulse_cron_rejects_sub_hourly_schedule(expr: str):
-    """H17: _validate_cron rejects cron expressions that fire more than once per hour (D5-10)."""
+    """_validate_cron rejects cron expressions that fire more than once per hour."""
     with pytest.raises(ValueError, match="no more than once per hour"):
         _validate_cron(expr)
 
@@ -48,98 +47,46 @@ def test_pulse_cron_rejects_invalid_expression():
         _validate_cron("not a cron")
 
 
-# ---------------------------------------------------------------------------
-# _apply_cron_reschedule rollback coverage
-# ---------------------------------------------------------------------------
+def test_zotero_poll_cron_rejects_a_sub_quarter_hour_schedule() -> None:
+    with pytest.raises(ValueError, match="15 minutes"):
+        _validate_zotero_cron("* * * * *")
 
 
-@pytest.mark.asyncio
-async def test_apply_cron_reschedule_rolls_back_db_when_scheduler_raises():
-    """If scheduler.reschedule_job raises, rollback_sql_factory is called with old_cron."""
-    from paper_ingestion.services.scheduler_effects import _apply_cron_reschedule
-
-    mock_scheduler = MagicMock()
-    mock_scheduler.reschedule_job.side_effect = RuntimeError("scheduler crash")
-
-    mock_conn = AsyncMock()
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    rollback_calls: list[tuple[object, str | None]] = []
-
-    async def rollback_factory(conn: object, old_cron: str | None) -> None:
-        rollback_calls.append((conn, old_cron))
-
-    with pytest.raises(RuntimeError, match="scheduler crash"):
-        await _apply_cron_reschedule(
-            scheduler=mock_scheduler,
-            job_id="pulse_overnight",
-            new_cron="0 9 * * *",
-            old_cron="0 8 * * *",
-            db_pool=mock_pool,
-            rollback_sql_factory=rollback_factory,
-        )
-
-    assert len(rollback_calls) == 1, "rollback_sql_factory must be called exactly once"
-    assert rollback_calls[0][1] == "0 8 * * *", "old_cron must be forwarded to rollback factory"
+def test_zotero_poll_cron_accepts_the_hourly_default() -> None:
+    _validate_zotero_cron("0 * * * *")
 
 
-@pytest.mark.asyncio
-async def test_apply_cron_reschedule_no_rollback_on_success():
-    """If scheduler.reschedule_job succeeds, rollback_sql_factory is never called."""
-    from paper_ingestion.services.scheduler_effects import _apply_cron_reschedule
-
-    mock_scheduler = MagicMock()
-    mock_pool = MagicMock()
-
-    rollback_calls: list[object] = []
-
-    async def rollback_factory(conn: object, old_cron: str | None) -> None:  # pragma: no cover
-        rollback_calls.append(old_cron)
-
-    await _apply_cron_reschedule(
-        scheduler=mock_scheduler,
-        job_id="pulse_overnight",
-        new_cron="0 9 * * *",
-        old_cron="0 8 * * *",
-        db_pool=mock_pool,
-        rollback_sql_factory=rollback_factory,
-    )
-
-    assert rollback_calls == [], "rollback must not be called when reschedule succeeds"
+def test_zotero_poll_cron_accepts_a_half_hourly_schedule() -> None:
+    # Pins the floor at fifteen minutes rather than Pulse's hour: this case is
+    # what fails if someone later copies the Pulse limit across.
+    _validate_zotero_cron("0,30 * * * *")
 
 
-@pytest.mark.asyncio
-async def test_apply_cron_reschedule_rolls_back_with_none_old_cron():
-    """Rollback factory receives old_cron=None (delete-branch) when old_cron was unset."""
-    from paper_ingestion.services.scheduler_effects import _apply_cron_reschedule
+@pytest.mark.parametrize(
+    "base",
+    [
+        pytest.param(datetime(2026, 8, 12, 12, 10), id="first-gap-is-small"),
+        pytest.param(datetime(2026, 8, 12, 12, 55), id="first-gap-is-large"),
+    ],
+)
+def test_zotero_poll_cron_rejects_a_tight_pair_whatever_the_time_of_day(monkeypatch, base) -> None:
+    """The floor must hold at every base time, not just the one the save happened at.
 
-    mock_scheduler = MagicMock()
-    mock_scheduler.reschedule_job.side_effect = RuntimeError("crash")
+    ``0,50,51 * * * *`` fires an hour apart, then one minute apart. Looking only
+    at the next two fire times sees the tight pair from 12:10 and misses it from
+    12:55, so the same expression would be accepted or rejected by the clock.
+    """
+    monkeypatch.setattr(config_validators, "_now", lambda: base)
 
-    mock_conn = AsyncMock()
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    with pytest.raises(ValueError, match="15 minutes"):
+        _validate_zotero_cron("0,50,51 * * * *")
 
-    rollback_calls: list[tuple[object, str | None]] = []
 
-    async def rollback_factory(conn: object, old_cron: str | None) -> None:
-        rollback_calls.append((conn, old_cron))
+def test_zotero_poll_cron_accepts_a_weekly_schedule(monkeypatch) -> None:
+    """A schedule firing less often than the scan window is above the floor by definition."""
+    monkeypatch.setattr(config_validators, "_now", lambda: datetime(2026, 8, 12, 12, 10))
 
-    with pytest.raises(RuntimeError, match="crash"):
-        await _apply_cron_reschedule(
-            scheduler=mock_scheduler,
-            job_id="pulse_overnight",
-            new_cron="0 9 * * *",
-            old_cron=None,
-            db_pool=mock_pool,
-            rollback_sql_factory=rollback_factory,
-        )
-
-    assert len(rollback_calls) == 1
-    assert rollback_calls[0][1] is None, "None old_cron must propagate to rollback factory"
+    _validate_zotero_cron("0 9 * * 1")
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +203,10 @@ async def test_write_config_scheduler_failure_returns_warning_not_500():
     # Minimal DB mock: fetchrow for old-cron pre-read, execute for UPSERT.
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = None  # no existing pulse.cron row
+    transaction_ctx = MagicMock()
+    transaction_ctx.__aenter__ = AsyncMock(return_value=None)
+    transaction_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_conn.transaction = MagicMock(return_value=transaction_ctx)
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=mock_conn)
     ctx.__aexit__ = AsyncMock(return_value=False)

@@ -354,6 +354,14 @@ class SecretsSettings(BaseSettings):
             return None
         return value
 
+    @field_validator("smtp_host", "smtp_from", mode="before")
+    @classmethod
+    def _normalize_required_smtp_secret(cls, value):
+        """Strip required relay fields and treat whitespace-only as unset."""
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
 
 @lru_cache(maxsize=1)
 def get_secrets_settings() -> SecretsSettings:

@@ -113,7 +113,7 @@ Default `litellm/config.yaml` enables Ollama-backed aliases only.
 ## Telegram
 
 - Bot Token required — create via [@BotFather](https://t.me/BotFather)
-- Pair each user via the web dashboard: go to **Settings → Integrations → Telegram**, copy the pairing token shown there, then send `/pair <token>` to your bot in Telegram. No Chat ID lookup is needed.
+- Pair each user via the web dashboard: go to **Settings → Integrations → Telegram**, generate the pairing code shown there, then send `/pair <code>` to your bot in Telegram. No Chat ID lookup is needed.
 - `telegram_bot` service starts only when the `telegram` profile is enabled
 - **Nudge/digest scheduling** uses a single global timezone (`user.timezone` in Settings). Per-user timezone scheduling is a tracked future enhancement; in multi-user deployments all nudges fire on the single configured timezone.
 
@@ -159,7 +159,7 @@ Observability variables (Langfuse): [docs/contracts/04-observability.md](https:/
 
 Host credentials use Docker Secrets; database-backed integration credentials
 are encrypted under `JARVIS_CONFIG_KEY`. Initialise host secrets with
-`bash scripts/init-secrets.sh` (or `scripts/jarvis-setup.sh`). Full table:
+`bash scripts/init-secrets.sh` or run `./setup.sh`. Full table:
 [docs/DEPLOYMENT.md](DEPLOYMENT.md).
 
 Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md).

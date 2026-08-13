@@ -83,6 +83,10 @@ async def test_public_host_send_succeeds(monkeypatch: pytest.MonkeyPatch) -> Non
 
     mock_send = AsyncMock(name="aiosmtplib.send")
     monkeypatch.setattr(aiosmtplib, "send", mock_send)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.setup.connect_pinned_socket",
+        AsyncMock(return_value=socket.socket()),
+    )
 
     body = SmtpBody(host="smtp.example.com", port=587, from_email="a@b.com")
     result = await _send_test_email(body, "a@b.com", None)
@@ -122,6 +126,10 @@ async def test_send_test_email_tls_flags_by_port(
 
     mock_send = AsyncMock(name="aiosmtplib.send")
     monkeypatch.setattr(aiosmtplib, "send", mock_send)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.setup.connect_pinned_socket",
+        AsyncMock(return_value=socket.socket()),
+    )
 
     body = SmtpBody(host="smtp.example.com", port=port, from_email="a@b.com")
     result = await _send_test_email(body, "a@b.com", None)
@@ -130,6 +138,89 @@ async def test_send_test_email_tls_flags_by_port(
     kwargs = mock_send.call_args.kwargs
     assert kwargs["use_tls"] is expected_use_tls
     assert kwargs["start_tls"] is expected_start_tls
+    assert kwargs["port"] is None
+    assert kwargs["sock"] is not None
+
+
+@pytest.mark.asyncio
+async def test_all_smtp_callers_use_a_real_pinned_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Probe, setup send, and magic-link send complete through one fake relay."""
+    from jarvis_common.email import (
+        MagicLinkDelivery,
+        _EffectiveSmtp,
+        _probe_relay,
+        send_magic_link,
+    )
+    from jarvis_common.settings import get_secrets_settings
+
+    commands: list[str] = []
+    connections = 0
+
+    async def relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        nonlocal connections
+        connections += 1
+        writer.write(b"220 fake-relay ESMTP\r\n")
+        await writer.drain()
+        try:
+            while line := await reader.readline():
+                command = line.decode("ascii", errors="replace").strip()
+                commands.append(command.split(" ", 1)[0].upper())
+                if command.upper().startswith(("EHLO", "HELO")):
+                    writer.write(b"250-fake-relay\r\n250 SIZE 100000\r\n")
+                elif command.upper() == "DATA":
+                    writer.write(b"354 End data with <CR><LF>.<CR><LF>\r\n")
+                    await writer.drain()
+                    await reader.readuntil(b"\r\n.\r\n")
+                    writer.write(b"250 accepted\r\n")
+                elif command.upper() == "QUIT":
+                    writer.write(b"221 closing\r\n")
+                    await writer.drain()
+                    break
+                else:
+                    writer.write(b"250 ok\r\n")
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(relay, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    monkeypatch.setenv("SMTP_HOST", "localhost")
+    monkeypatch.setenv("SMTP_PORT", str(port))
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.delenv("SMTP_USER", raising=False)
+    monkeypatch.delenv("SMTP_PASS", raising=False)
+    monkeypatch.delenv("DEV_SMTP_LOG_ONLY", raising=False)
+    get_secrets_settings.cache_clear()
+    try:
+        body = SmtpBody(host="localhost", port=port, from_email="bot@example.com")
+        assert await _send_test_email(body, "researcher@example.com", None) is None
+        assert await _probe_relay(
+            _EffectiveSmtp(
+                host="localhost",
+                port=port,
+                user=None,
+                password=None,
+                sender="bot@example.com",
+            )
+        ) == (True, None)
+        assert (
+            await send_magic_link(
+                "researcher@example.com",
+                "https://example.com/verify?token=test",
+                pool=None,
+            )
+            is MagicLinkDelivery.DELIVERED
+        )
+    finally:
+        get_secrets_settings.cache_clear()
+        server.close()
+        await server.wait_closed()
+
+    assert connections == 3
+    assert commands.count("DATA") == 2
+    assert commands.count("QUIT") == 3
 
 
 # ---------------------------------------------------------------------------

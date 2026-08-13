@@ -81,6 +81,34 @@ describe('IntentSection', () => {
     vi.mocked(updateTask).mockResolvedValue(undefined as any);
   });
 
+  it('names the autosaved intent control', async () => {
+    vi.mocked(fetchMyDay).mockResolvedValue(BASE_MY_DAY);
+
+    renderSubject();
+
+    expect(await screen.findByRole('textbox', { name: "Today's intent" })).toHaveAttribute(
+      'name',
+      'daily-intent',
+    );
+  });
+
+  it('names the quick-task controls', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchMyDay).mockResolvedValue(BASE_MY_DAY);
+
+    renderSubject();
+    await user.click(await screen.findByRole('button', { name: /add task/i }));
+
+    expect(screen.getByRole('textbox', { name: 'Task title' })).toHaveAttribute(
+      'name',
+      'task-title',
+    );
+    expect(screen.getByRole('combobox', { name: 'Task priority' })).toHaveAttribute(
+      'name',
+      'task-priority',
+    );
+  });
+
   describe('ChevronRight toggle for completed tasks', () => {
     it('renders "N done today" toggle button when completed tasks exist', async () => {
       vi.mocked(fetchMyDay).mockResolvedValue({

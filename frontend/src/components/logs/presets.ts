@@ -76,5 +76,15 @@ export function buildPresets(): LogsPreset[] {
       until: '',
       query: 'telegram',
     },
+    {
+      id: 'ai-routing-providers',
+      label: 'AI routing and providers',
+      level: '',
+      category: 'config',
+      source: '',
+      since: hoursAgo(24),
+      until: '',
+      query: 'llm/',
+    },
   ];
 }

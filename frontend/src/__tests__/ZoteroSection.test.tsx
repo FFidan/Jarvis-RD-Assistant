@@ -48,7 +48,6 @@ vi.mock('@/stores/job-store', async (importOriginal) => {
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => 'test-key'),
       logout: vi.fn(),
     })),
   },
@@ -200,9 +199,8 @@ describe('ZoteroSection', () => {
     const user = userEvent.setup();
     renderSection();
 
-    await screen.findByText('Auto-push on star');
-    const autoPush = screen.getAllByRole('switch')[0];
-    if (!autoPush) throw new Error('autoPush switch not found');
+    const autoPush = await screen.findByRole('switch', { name: 'Auto-push on star' });
+    expect(screen.getByRole('switch', { name: 'Enable Zotero → JARVIS sync' })).toBeInTheDocument();
     await user.click(autoPush);
 
     await waitFor(() => {
@@ -248,46 +246,57 @@ describe('ZoteroSection', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows an inline error and does NOT call setConfig when poll cron is invalid on blur', async () => {
+  it('does not save the custom cron schedule until Save is clicked', async () => {
     const user = userEvent.setup();
     renderSection();
 
-    const cronInput = await screen.findByLabelText('Sync schedule (cron)');
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
+    const cronInput = await screen.findByLabelText('Custom sync schedule (cron)');
     await user.clear(cronInput);
-    await user.type(cronInput, 'not-a-cron');
-    await user.tab(); // trigger blur
+    await user.type(cronInput, '15 3 1 * 2');
+    await user.tab(); // blur must not save
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-    });
-    expect(screen.getByRole('alert')).toHaveTextContent(/5 space-separated fields/i);
-    // setConfig must NOT have been called for poll_cron
     expect(vi.mocked(setConfig)).not.toHaveBeenCalledWith('zotero.poll_cron', expect.anything());
-  });
 
-  it('disables Sync now button while poll cron is invalid', async () => {
-    const user = userEvent.setup();
-    renderSection();
-
-    const cronInput = await screen.findByLabelText('Sync schedule (cron)');
-    await user.clear(cronInput);
-    await user.type(cronInput, 'bad value');
-    await user.tab(); // trigger blur
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /sync now/i })).toBeDisabled();
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith('zotero.poll_cron', '15 3 1 * 2');
     });
   });
-  it('saves the allowed private hostnames as a list on blur', async () => {
+
+  it('keeps the Save button disabled until a field is edited', async () => {
     const user = userEvent.setup();
     renderSection();
 
-    const hostsInput = await screen.findByLabelText('Allowed private hostnames');
+    const saveButton = await screen.findByRole('button', { name: 'Save' });
+    expect(saveButton).toBeDisabled();
+
+    const apiKeyInput = screen.getByLabelText('API Key');
+    await user.clear(apiKeyInput);
+    await user.type(apiKeyInput, 'newkey123');
+
+    expect(saveButton).toBeEnabled();
+  });
+
+  it('saves the Better BibTeX hosts as a list when Save is clicked', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
+    const hostsInput = await screen.findByLabelText('Better BibTeX hosts');
     expect(hostsInput).toHaveValue('zotero.lan');
 
     await user.clear(hostsInput);
     await user.type(hostsInput, 'zotero.lan, 192.168.1.50');
-    await user.tab(); // trigger blur
+    await user.tab(); // blur must not save
+
+    expect(vi.mocked(setConfig)).not.toHaveBeenCalledWith(
+      'zotero.allowed_private_hosts',
+      expect.anything(),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(vi.mocked(setConfig)).toHaveBeenCalledWith('zotero.allowed_private_hosts', [
@@ -295,5 +304,41 @@ describe('ZoteroSection', () => {
         '192.168.1.50',
       ]);
     });
+  });
+
+  it('shows a toast when saving a Zotero setting fails', async () => {
+    const { toast } = await import('sonner');
+    vi.mocked(setConfig).mockRejectedValue(new Error('network error'));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
+    const hostsInput = await screen.findByLabelText('Better BibTeX hosts');
+    await user.clear(hostsInput);
+    await user.type(hostsInput, 'zotero.lan, newhost.example');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('network error');
+    });
+  });
+
+  it('issues zero config writes when mounting with any stored schedule value and polling enabled', async () => {
+    const scheduleValues = ['0 * * * *', '0 */4 * * *', '30 7 * * *', '0 9 * * 1', '15 3 1 * 2'];
+
+    for (const cron of scheduleValues) {
+      vi.mocked(setConfig).mockClear();
+      vi.mocked(fetchConfig).mockResolvedValue(
+        CONFIGURED_CONFIG.map((entry) =>
+          entry.key === 'zotero.poll_cron' ? { ...entry, value: cron } : entry,
+        ),
+      );
+
+      const { unmount } = renderSection();
+      await screen.findByRole('button', { name: /sync now/i });
+
+      expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
+      unmount();
+    }
   });
 });

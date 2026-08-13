@@ -112,6 +112,16 @@ That the containers actually start, read their configuration, and report
 healthy is proven by the cold-install and upgrade checks below, before any
 stable tag exists.
 
+Each paper-ingestion leg also converts a sample PDF inside the image it just
+built, which loads the compiled vision stack that an import cannot reach. Every
+architecture runs it, because an architecture-specific compiled dependency is
+exactly what it exists to catch. The document pipeline downloads its layout and
+OCR models the first time it converts, so this step needs the model host to be
+reachable while the release runs and takes noticeably longer than the rest of
+the leg. A failure naming a download or the step timeout is an infrastructure
+condition, like a rate-limited registry: re-dispatch the run rather than looking
+for a regression in the diff.
+
 Only after that run succeeds, use the SHA images for the credential-free install
 and supported upgrade checks:
 
@@ -145,11 +155,11 @@ Run the upgrade check for each maintained source contract:
 
 | Source release | Update path | Interrupted-update state |
 |---|---|---|
-| `v1.1.3` | `bootstrap` | `current-merge-pending` |
 | `v1.2.0` | `bootstrap` | `current-merge-pending` |
 | `v1.2.1` | `bootstrap` | `current-merge-pending` |
 | `v1.2.2` | `bootstrap` | `current-merge-pending` |
-| `v1.2.3` | `direct` | `current-merge-pending` |
+| `v1.2.3` | `bootstrap` | `current-merge-pending` |
+| `v1.2.4` | `direct` | `current-merge-pending` |
 
 The `direct` row is the path essentially every existing installation takes, and
 it exercises the update transaction itself rather than the bootstrap. Do not skip
@@ -162,6 +172,14 @@ supported source enters through the bootstrap. It names explicit tags rather tha
 deriving them, so refresh it while preparing each release — the release being
 published becomes the new `direct` row, the previous `direct` row becomes a
 `bootstrap` row, and any source that has left support is dropped.
+
+These checks enforce three separate compatibility floors. Maintained in-place
+updates start at v1.2.0. The immutable v1.2.2 bootstrap remains documented as a
+separate legacy bridge from v1.1.3, but v1.1.3 is not a maintained source row and
+direct v1.1.3-to-current updates are not supported. Portable fresh-host restore
+starts with complete, signed backup sets created by v1.2.0 or later. Earlier or
+unsigned sets retain only the constrained same-host recovery paths described in
+the backup guide; they are not universally portable.
 
 The supported window is deliberate: the `bootstrap` rows reach back at most
 four releases behind the `direct` row. When adding a release to the table
@@ -268,18 +286,35 @@ that declares it — the root `pyproject.toml`, `libs/jarvis_common/pyproject.to
 and each service's `requirements.txt` — then re-locking both projects and
 regenerating the lock-derived pins with `scripts/export-service-requirements.sh`.
 
-Reproduce all three scans locally before pushing a release branch and again
-before tagging:
+The GHCR workflow scans each verification manifest as well and prints the result
+to the job summary. That step is a gate: a critical finding that already has a
+fixed version fails the verification job, so the digest carrying it can never be
+promoted to a stable tag. Findings without a released fix are excluded, because
+a gate no rebuild can clear would only teach everyone to override it.
+
+Failing the gate costs a whole verification run. It reads the same live advisory
+database, and the run's digest receipts are the only artifacts a stable tag can
+promote, so an advisory published minutes earlier discards an otherwise sound run
+and forces a full rebuild. That trade is deliberate: no release is published over
+a severe defect that rebuilding would have fixed. Handle a failure like any other
+dependency finding — raise the floor, re-verify, and read the report in the job
+summary, which is published whether the gate passes or fails. Lower severities
+stay with the branch-level scans above, which run where a fix can still be
+committed.
+
+Reproduce the locally runnable dependency and secret scans before pushing a
+release branch and again before tagging:
 
 ```bash
-for c in services/*/constraints.txt; do
-  uvx pip-audit --no-deps --disable-pip -r "$c"
-done
-python3 scripts/check_npm_audit.py
-curl -fsSL -o /tmp/osv-scanner \
-  https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
-chmod +x /tmp/osv-scanner && /tmp/osv-scanner scan --recursive .
+make security-scan
 ```
+
+The target pins the same osv-scanner and gitleaks artifacts as the hosted
+workflow, keeps them outside the repository, and verifies both downloaded
+artifacts and executable bytes on every run. It also runs the three pinned
+Python dependency inputs and the checked npm audit policy. It supports Linux
+x86_64; on another workstation, use the hosted Security workflow. A local pass
+does not replace the hosted Security aggregate or CodeQL evidence.
 
 ## Changelog Generation
 

@@ -17,6 +17,7 @@ from telegram_bot.formatters import (
     format_weekly_digest,
     truncate,
 )
+from telegram_bot.notification_policy import ScheduledNotificationPolicy
 
 # HTML tags supported by Telegram's HTML parse mode that can span text.
 _OPEN_TAG_RE = re.compile(r"<(b|i|u|s|a|code|pre|tg-spoiler)(?:\s[^>]*)?>", re.IGNORECASE)
@@ -228,6 +229,8 @@ async def run_paper_digest(
     db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
+    *,
+    delivery_policy: ScheduledNotificationPolicy | None = None,
 ) -> None:
     """Send a weekly digest of papers grouped by topic.
 
@@ -253,6 +256,10 @@ async def run_paper_digest(
         return
 
     for pairing in pairings:
+        if delivery_policy is not None and await delivery_policy.suppresses(
+            pairing.user_id, "paper_digest"
+        ):
+            continue
         digest = await _fetch_digest_from_api(http_client, config, user_id=pairing.user_id)
         if digest and digest.get("topics"):
             text = format_weekly_digest(digest)

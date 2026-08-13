@@ -13,6 +13,7 @@ from telegram_bot.formatters import (
     format_morning_briefing,
     format_paper_card,
     format_pulse_card,
+    format_pulse_deck_status,
     format_review_stats,
     sanitize_user_input,
 )
@@ -208,7 +209,6 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
         data = await services_client.fetch_pulse_today(http, config, jarvis_user_id, limit=1)
-        cards = data.get("cards", []) if isinstance(data, dict) else []
     except Exception:
         logger.exception("Failed to fetch pulse deck for /next")
         await update.message.reply_text(
@@ -217,20 +217,27 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    if not cards:
+    if data is None:
         await update.message.reply_text(
-            "🌙 No Pulse deck yet — try /pulse_now to generate one.",
+            "No Pulse deck yet — try /pulse_now to generate one.",
             parse_mode="HTML",
         )
         return
-
-    card = cards[0]
-    paper_id = card.get("paper_id") or card.get("id")
-    if not paper_id:
-        await update.message.reply_text("Pulse card has no paper_id.", parse_mode="HTML")
+    if not data.cards:
+        if data.empty_reason == "no_data_yet":
+            message = (
+                f"{format_pulse_deck_status(data)}: no papers are available yet. "
+                "Try /pulse_now after your sources collect papers."
+            )
+        else:
+            message = "No Pulse cards are available — try /pulse_now to generate a fresh deck."
+        await update.message.reply_text(message, parse_mode="HTML")
         return
 
-    text = format_pulse_card(card)
+    card = data.cards[0]
+    paper_id = card.paper_id
+
+    text = f"<b>{format_pulse_deck_status(data)}</b>\n\n{format_pulse_card(card.model_dump())}"
     await update.message.reply_text(
         text,
         parse_mode="HTML",

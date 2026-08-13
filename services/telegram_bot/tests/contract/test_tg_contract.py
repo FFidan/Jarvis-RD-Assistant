@@ -114,7 +114,7 @@ def _make_context(pool: Any, config: Any = None, *, args: list[str] | None = Non
 
     return make_ptb_context(
         pool,
-        config or make_bot_config(BotConfig, telegram_chat_id=None),
+        config or make_bot_config(BotConfig),
         options=PTBContextOptions(args=args, with_bot=True),
     )
 
@@ -230,8 +230,8 @@ async def test_whoami_command_reads_real_pairing(contract_conn):
 
     pool = TgContractPool(contract_conn)
     update = make_telegram_update(chat_id=9901)
-    # telegram_chat_id=None so the legacy-owner branch is not taken
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    #
+    config = make_bot_config(BotConfig)
     context = _make_context(pool, config=config)
 
     await whoami_command(update, context)
@@ -463,7 +463,7 @@ async def test_tg_paper_detail_callback_owner_sees_paper(contract_conn, contract
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = _make_http_mock(
         method="get",
         json_data={
@@ -520,7 +520,7 @@ async def test_tg_paper_detail_callback_other_user_404(contract_conn, contract_t
     chat_id_b_unpaired = 20099
 
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = AsyncMock()
 
     update = _make_callback_update(
@@ -562,7 +562,7 @@ async def test_tg_paper_action_save_transitions_state(contract_conn, contract_tw
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:save:{paper_id_a}")
@@ -601,7 +601,7 @@ async def test_tg_paper_action_done_transitions_state(contract_conn, contract_tw
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:done:{paper_id_a}")
@@ -639,7 +639,7 @@ async def test_tg_paper_action_trash_transitions_state(contract_conn, contract_t
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:trash:{paper_id_a}")
@@ -678,7 +678,7 @@ async def test_tg_paper_feedback_persists_with_correct_source(contract_conn, con
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = _make_http_mock(method="post")
 
     update = _make_callback_update(
@@ -725,7 +725,7 @@ async def test_tg_paper_feedback_idor_rejected(contract_conn, contract_two_users
     chat_id_unpaired = 20098
 
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = AsyncMock()
 
     update = _make_callback_update(
@@ -769,7 +769,7 @@ async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contra
     await _seed_tg_pairing(contract_conn, user_b_id, chat_id_b)
 
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     for user_id, chat_id in [(user_a_id, chat_id_a), (user_b_id, chat_id_b)]:
         _timestamps.clear()
@@ -807,17 +807,8 @@ async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contra
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_tg_focus_command_logs_focus_event(contract_conn, contract_two_users):
-    """W1B.1-9: /focus 25 schedules a job_queue timer and replies with confirmation.
-
-    focus_command does not write to DB directly — it schedules a PTB job that
-    later POSTs to /api/executive/focus/log.  The contract verifies the
-    scheduler is called and the user gets a confirmation reply.
-    Verified: system_commands.py:218–287 (focus_command, job_queue.run_once).
-
-    RED proof: removing context.job_queue.run_once() call →
-    context.job_queue.run_once.assert_called_once() fails.
-    """
+async def test_tg_focus_command_starts_scoped_durable_session(contract_conn, contract_two_users):
+    """/focus starts the shared server interval and creates no process-local timer."""
     from unittest.mock import patch
 
     from jarvis_common.testing import make_bot_config
@@ -831,16 +822,32 @@ async def test_tg_focus_command_logs_focus_event(contract_conn, contract_two_use
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     update = _make_update_with_text("/focus 25", chat_id=chat_id)
     context = _make_context(pool, config)
     context.user_data = {"jarvis_user_id": user_a_id}
-    # PTB job_queue must be wired (focus_command checks job_queue is not None)
     context.job_queue = MagicMock()
-    context.job_queue.get_jobs_by_name = MagicMock(return_value=[])
     context.job_queue.run_once = MagicMock()
     context.args = ["25"]
+    mock_http = _make_http_mock(
+        method="post",
+        json_data={
+            "id": 81,
+            "state": "active",
+            "source": "telegram",
+            "duration_seconds": 1500,
+            "remaining_seconds": 1500,
+            "started_at": "2026-08-09T12:00:00+00:00",
+            "paused_at": None,
+            "paused_seconds": 0.0,
+            "completed_at": None,
+            "recorded_seconds": 0.0,
+            "task_id": None,
+            "paper_id": None,
+        },
+    )
+    context.application.bot_data["http_client"] = mock_http
 
     with patch(
         "telegram_bot.handlers.commands._auth.auth_check",
@@ -849,11 +856,11 @@ async def test_tg_focus_command_logs_focus_event(contract_conn, contract_two_use
     ):
         await focus_command(update, context)
 
-    # Scheduler must have been called once
-    context.job_queue.run_once.assert_called_once()
-    _, kwargs = context.job_queue.run_once.call_args
-    assert kwargs.get("chat_id") == chat_id
-    # Confirmation reply sent
+    context.job_queue.run_once.assert_not_called()
+    mock_http.post.assert_awaited_once()
+    _, kwargs = mock_http.post.await_args
+    assert kwargs["json"] == {"duration_seconds": 1500, "source": "telegram"}
+    assert kwargs["headers"]["X-Owner-User-Id"] == str(user_a_id)
     update.message.reply_text.assert_awaited_once()
     reply_text: str = update.message.reply_text.call_args[0][0]
     assert "25" in reply_text, f"Expected duration '25' in reply; got: {reply_text!r}"
@@ -883,7 +890,7 @@ async def test_tg_pulse_now_command_enqueues_pulse_job(contract_conn, contract_t
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_http = _make_http_mock(method="post")
 
     update = _make_update_with_text("/pulse_now", chat_id=chat_id)
@@ -939,7 +946,7 @@ async def test_tg_start_command_welcome_path_no_pair_token(contract_conn, contra
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     update = _make_update_with_text("/start", chat_id=chat_id)
     context = _make_context(pool, config)

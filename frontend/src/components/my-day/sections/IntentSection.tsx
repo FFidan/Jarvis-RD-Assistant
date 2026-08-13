@@ -139,6 +139,8 @@ export function IntentSection() {
       {/* Intent textarea — debounced autosave */}
       <textarea
         ref={intentRef}
+        id="daily-intent"
+        name="daily-intent"
         value={intentText}
         onChange={(e) => setIntentText(e.target.value)}
         rows={1}
@@ -177,6 +179,8 @@ export function IntentSection() {
             <div className="h-3.5 w-3.5 rounded-full border-[1.5px] border-hair shrink-0" />
             <input
               autoFocus
+              id="new-task-title"
+              name="task-title"
               aria-label="Task title"
               value={addTitle}
               onChange={(e) => setAddTitle(e.target.value)}
@@ -191,6 +195,8 @@ export function IntentSection() {
               disabled={addMutation.isPending}
             />
             <select
+              name="task-priority"
+              aria-label="Task priority"
               value={addPriority}
               onChange={(e) => setAddPriority(Number(e.target.value))}
               className="text-[11px] font-mono text-faint bg-transparent border border-hair rounded px-1 py-0.5 shrink-0"

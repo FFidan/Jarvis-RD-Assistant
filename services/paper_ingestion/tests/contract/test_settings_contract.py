@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+import asyncpg
 from unittest.mock import AsyncMock
 from jarvis_common.testing import A_PAPER_TITLE, SharedConnPool
 
@@ -238,6 +239,188 @@ async def test_put_config_ghost_key_does_not_write_db(contract_conn, pi_settings
     assert row is None, "Ghost key must not write to user_config"
 
 
+async def _seed_zotero_library_state(contract_conn, contract_two_users) -> int:
+    """Seed independent remote Zotero caches for both contract users."""
+    user_a = contract_two_users.user_a_id
+    user_b = contract_two_users.user_b_id
+    paper_b = await contract_conn.fetchval(
+        "SELECT paper_id FROM user_library WHERE user_id = $1",
+        user_b,
+    )
+    await contract_conn.executemany(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value""",
+        [
+            (user_a, "zotero.user_id", "library-a"),
+            (user_a, "zotero.last_library_version", 17),
+            (user_b, "zotero.user_id", "library-b"),
+            (user_b, "zotero.last_library_version", 23),
+        ],
+    )
+    await contract_conn.execute(
+        "UPDATE projects SET zotero_collection_key = 'COLLECTION-A' WHERE user_id = $1",
+        user_a,
+    )
+    await contract_conn.execute(
+        "UPDATE projects SET zotero_collection_key = 'COLLECTION-B' WHERE user_id = $1",
+        user_b,
+    )
+    await contract_conn.executemany(
+        """INSERT INTO paper_user_zotero_links
+               (paper_id, user_id, zotero_item_key, zotero_citation_key,
+                zotero_attachment_key, zotero_last_pushed_at,
+                analysis_enqueued_at, analysis_enqueue_attempts)
+           VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), $6)
+           ON CONFLICT (paper_id, user_id) DO UPDATE SET
+               zotero_item_key = EXCLUDED.zotero_item_key,
+               zotero_citation_key = EXCLUDED.zotero_citation_key,
+               zotero_attachment_key = EXCLUDED.zotero_attachment_key,
+               zotero_last_pushed_at = EXCLUDED.zotero_last_pushed_at,
+               analysis_enqueued_at = EXCLUDED.analysis_enqueued_at,
+               analysis_enqueue_attempts = EXCLUDED.analysis_enqueue_attempts""",
+        [
+            (contract_two_users.paper_id_a, user_a, "ITEM-A", "CITE-A", "ATTACH-A", 2),
+            (int(paper_b), user_b, "ITEM-B", "CITE-B", "ATTACH-B", 3),
+        ],
+    )
+    return int(paper_b)
+
+
+async def test_zotero_library_change_clears_only_callers_remote_cache(
+    contract_conn, contract_two_users, pi_settings_client
+):
+    """Changing library identity preserves local history and the other user's cache."""
+    paper_b = await _seed_zotero_library_state(contract_conn, contract_two_users)
+    user_a = contract_two_users.user_a_id
+    user_b = contract_two_users.user_b_id
+
+    response = await pi_settings_client.put(
+        "/api/config/zotero.user_id",
+        json={"key": "zotero.user_id", "value": "library-a-new"},
+    )
+
+    assert response.status_code == 200, response.text
+    link_a = await contract_conn.fetchrow(
+        """SELECT zotero_item_key, zotero_citation_key, zotero_attachment_key,
+                  zotero_last_pushed_at, analysis_enqueued_at, analysis_enqueue_attempts
+             FROM paper_user_zotero_links
+            WHERE paper_id = $1 AND user_id = $2""",
+        contract_two_users.paper_id_a,
+        user_a,
+    )
+    assert link_a is not None
+    assert tuple(link_a)[:4] == (None, None, None, None)
+    assert link_a["analysis_enqueued_at"] is not None
+    assert link_a["analysis_enqueue_attempts"] == 2
+    link_b = await contract_conn.fetchrow(
+        """SELECT zotero_item_key, zotero_citation_key, zotero_attachment_key,
+                  analysis_enqueue_attempts
+             FROM paper_user_zotero_links
+            WHERE paper_id = $1 AND user_id = $2""",
+        paper_b,
+        user_b,
+    )
+    assert tuple(link_b) == ("ITEM-B", "CITE-B", "ATTACH-B", 3)
+    projects = await contract_conn.fetch(
+        "SELECT user_id, zotero_collection_key FROM projects ORDER BY user_id"
+    )
+    collections = {row["user_id"]: row["zotero_collection_key"] for row in projects}
+    assert collections[user_a] is None
+    assert collections[user_b] == "COLLECTION-B"
+    cursors = await contract_conn.fetch(
+        "SELECT user_id, value FROM user_config WHERE key = 'zotero.last_library_version'"
+    )
+    assert {row["user_id"]: row["value"] for row in cursors} == {user_b: 23}
+
+
+async def test_zotero_cache_survives_identical_scope_and_unrelated_writes(
+    contract_conn, contract_two_users, pi_settings_client
+):
+    """Only a material library identity change invalidates remote linkage."""
+    await _seed_zotero_library_state(contract_conn, contract_two_users)
+    for key, value in (
+        ("zotero.user_id", "library-a"),
+        ("zotero.auto_push_on_star", True),
+    ):
+        response = await pi_settings_client.put(
+            f"/api/config/{key}",
+            json={"key": key, "value": value},
+        )
+        assert response.status_code == 200, response.text
+
+    link = await contract_conn.fetchrow(
+        """SELECT zotero_item_key, zotero_citation_key, zotero_attachment_key,
+                  analysis_enqueued_at, analysis_enqueue_attempts
+             FROM paper_user_zotero_links
+            WHERE paper_id = $1 AND user_id = $2""",
+        contract_two_users.paper_id_a,
+        contract_two_users.user_a_id,
+    )
+    assert tuple(link)[:3] == ("ITEM-A", "CITE-A", "ATTACH-A")
+    assert link["analysis_enqueued_at"] is not None
+    assert link["analysis_enqueue_attempts"] == 2
+    assert (
+        await contract_conn.fetchval(
+            "SELECT zotero_collection_key FROM projects WHERE id = $1",
+            contract_two_users.project_id_a,
+        )
+        == "COLLECTION-A"
+    )
+
+
+async def test_zotero_library_change_rolls_back_config_and_cache_together(
+    contract_conn, contract_two_users, pi_settings_client
+):
+    """A cache-reset failure cannot commit a mismatched library identity."""
+    await _seed_zotero_library_state(contract_conn, contract_two_users)
+    user_a = contract_two_users.user_a_id
+    await contract_conn.execute(
+        """CREATE FUNCTION fail_zotero_collection_reset() RETURNS trigger
+           LANGUAGE plpgsql AS $$
+           BEGIN
+               RAISE EXCEPTION 'forced Zotero collection reset failure';
+           END;
+           $$"""
+    )
+    await contract_conn.execute(
+        """CREATE TRIGGER fail_zotero_collection_reset
+           BEFORE UPDATE OF zotero_collection_key ON projects
+           FOR EACH ROW
+           EXECUTE FUNCTION fail_zotero_collection_reset()"""
+    )
+
+    with pytest.raises(asyncpg.RaiseError, match="forced Zotero collection reset failure"):
+        await pi_settings_client.put(
+            "/api/config/zotero.user_id",
+            json={"key": "zotero.user_id", "value": "library-a-new"},
+        )
+
+    assert (
+        await contract_conn.fetchval(
+            "SELECT value FROM user_config WHERE user_id = $1 AND key = 'zotero.user_id'",
+            user_a,
+        )
+        == "library-a"
+    )
+    assert (
+        await contract_conn.fetchval(
+            """SELECT zotero_item_key FROM paper_user_zotero_links
+               WHERE paper_id = $1 AND user_id = $2""",
+            contract_two_users.paper_id_a,
+            user_a,
+        )
+        == "ITEM-A"
+    )
+    assert (
+        await contract_conn.fetchval(
+            "SELECT value FROM user_config WHERE user_id = $1 AND key = 'zotero.last_library_version'",
+            user_a,
+        )
+        == 17
+    )
+
+
 async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_client):
     """The owner.user_id system row is writable ONLY by create_first_admin.
 
@@ -267,10 +450,10 @@ async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_clien
 # ---------------------------------------------------------------------------
 # E1.PI extensions — FSRS / L2 / weights / setup.completed / telegram.owner_chat_id
 #
-# Verified: settings_service.py:56-107 (_ALLOWED_CONFIG_KEYS, PERSONAL_KEYS, SYSTEM_KEYS)
-# Verified: settings_service.py:415-468 (_CONFIG_VALIDATORS)
-# Verified: settings_service.py:520-547 (_write_config_row — UPSERT)
-# Verified: settings_service.py:477-517 (_fetch_effective_config_row — scoped GET)
+# Verified: config_metadata.py (_ALLOWED_CONFIG_KEYS, PERSONAL_KEYS, SYSTEM_KEYS)
+# Verified: config_validators.py (_CONFIG_VALIDATORS)
+# Verified: config_db.py (_write_config_row — UPSERT)
+# Verified: config_db.py (_fetch_effective_config_row — scoped GET)
 # ---------------------------------------------------------------------------
 
 
@@ -284,8 +467,8 @@ async def test_put_fsrs_desired_retention_round_trip(
 ):
     """PUT /api/config/fsrs.desired_retention persists; GET reads it back.
 
-    Verified: settings_service.py:436 (_validate_fsrs_retention),
-              settings_service.py:520-547 (_write_config_row UPSERT path).
+    Verified: config_validators.py (_validate_fsrs_retention),
+              config_db.py (_write_config_row UPSERT path).
     Survivor-of: test_settings.py fsrs key round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -311,7 +494,7 @@ async def test_put_fsrs_desired_retention_round_trip(
 async def test_put_fsrs_desired_retention_invalid_value_returns_400(pi_settings_client):
     """PUT fsrs.desired_retention with value ≥ 1.0 returns 400 (validator guard).
 
-    Verified: settings_service.py:416-421 (_validate_fsrs_retention out-of-range).
+    Verified: config_validators.py (_validate_fsrs_retention out-of-range).
     Survivor-of: test_settings.py invalid-value parametrize cases.
     """
     resp = await pi_settings_client.put(
@@ -331,8 +514,8 @@ async def test_put_fsrs_desired_retention_invalid_value_returns_400(pi_settings_
 async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client):
     """PUT /api/config/pulse.l2_lambda persists in user_config (user_id IS NULL).
 
-    Verified: settings_service.py:329-337 (_validate_l2_lambda),
-              settings_service.py:520-547 (_write_config_row NULL-scoped UPSERT).
+    Verified: config_validators.py (_validate_l2_lambda),
+              config_db.py (_write_config_row NULL-scoped UPSERT).
     Survivor-of: test_settings.py l2_lambda round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -352,13 +535,36 @@ async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client)
 async def test_put_pulse_l2_lambda_out_of_range_returns_400(pi_settings_client):
     """PUT pulse.l2_lambda > 2.0 returns 400.
 
-    Verified: settings_service.py:335-337 (_validate_l2_lambda range guard).
+    Verified: config_validators.py (_validate_l2_lambda range guard).
     """
     resp = await pi_settings_client.put(
         "/api/config/pulse.l2_lambda",
         json={"key": "pulse.l2_lambda", "value": 3.0},
     )
     assert resp.status_code == 400
+
+
+async def test_put_onboarding_dismissed_round_trip_is_personal(
+    contract_conn, contract_two_users, pi_settings_client
+):
+    """The tour dismissal written by the Web UI must be readable for that user."""
+    resp = await pi_settings_client.put(
+        "/api/config/onboarding.dismissed",
+        json={"key": "onboarding.dismissed", "value": True},
+    )
+    assert resp.status_code == 200, f"PUT failed: {resp.json()}"
+
+    row = await contract_conn.fetchrow(
+        """SELECT value FROM user_config
+           WHERE key = 'onboarding.dismissed' AND user_id = $1""",
+        contract_two_users.user_a_id,
+    )
+    assert row is not None
+    assert row["value"] is True
+
+    fetched = await pi_settings_client.get("/api/config/onboarding.dismissed")
+    assert fetched.status_code == 200
+    assert fetched.json() == {"key": "onboarding.dismissed", "value": True}
 
 
 # ---------------------------------------------------------------------------
@@ -369,8 +575,8 @@ async def test_put_pulse_l2_lambda_out_of_range_returns_400(pi_settings_client):
 async def test_put_setup_completed_persists_true(contract_conn, pi_settings_client):
     """PUT /api/config/setup.completed stores True in user_config.
 
-    Verified: settings_service.py:447 (_validate_bool guard),
-              settings_service.py:520-547 (_write_config_row UPSERT).
+    Verified: config_validators.py (_validate_bool guard),
+              config_db.py (_write_config_row UPSERT).
     Survivor-of: test_settings.py setup.completed round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -439,8 +645,8 @@ async def test_put_api_key_login_enabled_rejects_non_bool(pi_settings_client):
 async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_client):
     """PUT /api/config/telegram.owner_chat_id stores integer; GET reads it back.
 
-    Verified: settings_service.py:448 (telegram.owner_chat_id → _validate_optional_int),
-              settings_service.py:512-517 (_fetch_effective_config_row system path).
+    Verified: config_validators.py (telegram.owner_chat_id → _validate_optional_int),
+              config_db.py (_fetch_effective_config_row system path).
     Survivor-of: test_settings.py telegram.owner_chat_id round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -460,7 +666,7 @@ async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_
 async def test_put_telegram_owner_chat_id_null_clears(contract_conn, pi_settings_client):
     """PUT /api/config/telegram.owner_chat_id with null clears the stored integer.
 
-    Verified: settings_service.py:313-317 (_validate_optional_int null branch).
+    Verified: config_validators.py (_validate_optional_int null branch).
     """
     resp = await pi_settings_client.put(
         "/api/config/telegram.owner_chat_id",
@@ -549,7 +755,7 @@ async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_c
 
     import paper_ingestion.services.config_db as _config_db
     import paper_ingestion.services.litellm_config as _litellm_cfg
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     # Seed the "old" stored model so the reconciler has something to re-deliver.
     await contract_conn.execute(
@@ -906,7 +1112,7 @@ async def test_settings_ai_dismiss_banner_persists_per_user(contract_conn, _ai_s
 # Verified: routers/settings.py:466-486 (export_my_data)
 # Verified: auth.py:283-308 (current_user_id_strict — raises HTTPException(401) when
 #           request.state.user_id is absent)
-# Verified: services/settings_service.py:1044-1064 (build_export_zip)
+# Verified: services/data_export.py (build_export_zip)
 # ---------------------------------------------------------------------------
 
 
@@ -952,7 +1158,7 @@ async def test_get_my_export_returns_zip_for_authenticated_user(
     """A130: GET /api/me/export returns 200 + application/zip for authenticated user.
 
     Verified: routers/settings.py:466-486 (export_my_data StreamingResponse)
-    Verified: services/settings_service.py:1044-1064 (build_export_zip returns bytes)
+    Verified: services/data_export.py (build_export_zip returns bytes)
     Verified: auth.py:283-308 (current_user_id_strict resolves cookie_a session)
     """
     resp = await _me_export_client.get("/api/me/export")
@@ -1156,7 +1362,7 @@ async def test_get_my_export_excludes_other_users_papers(
     ``discovered_by`` set; we then GET as user A and assert user B's seeded
     paper is absent from ``papers.jsonl``.
 
-    Verified: services/settings_service.py:1029 — papers query is scoped via
+    Verified: services/data_export.py — papers query is scoped via
     ``WHERE p.discovered_by = $1``; jarvis_common/testing.py:546 — fixture
     seeds A_PAPER_TITLE for user A and ``paper-b`` for user B.
     """

@@ -20,7 +20,6 @@ const { authState } = vi.hoisted(() => ({ authState: { isAuthenticated: true } }
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: () => ({
-      getApiKey: () => 'test-key',
       isAuthenticated: authState.isAuthenticated,
       logout: logoutMock,
     }),

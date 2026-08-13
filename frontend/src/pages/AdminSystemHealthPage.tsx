@@ -25,6 +25,7 @@ import {
 } from '@/lib/api';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { docsUrl } from '@/lib/docs-links';
 import { ModelDiagnosticsCard } from '@/components/admin/ModelDiagnosticsCard';
 import { StorageCard } from '@/components/admin/StorageCard';
 
@@ -59,6 +60,7 @@ const DISPLAY_LABELS: Record<string, string> = {
   https: 'HTTPS / TLS',
   audit_log: 'Audit log',
   owner_identity: 'Instance owner',
+  vector_visibility_metadata: 'Search-index access metadata',
 };
 
 /**
@@ -89,6 +91,8 @@ const CHECK_EXPLANATIONS: Record<string, string> = {
     'Security event logging.',
   owner_identity:
     'Account allowed to recover and transfer ownership of this JARVIS instance.',
+  vector_visibility_metadata:
+    'Search vectors carry library visibility rules. Authenticated vector search fails closed until this repair completes.',
 };
 
 const STATUS_VERDICT: Record<StatusLevel, string> = {
@@ -232,8 +236,8 @@ export function AdminSystemHealthPage() {
               )}
             </p>
           ) : (
-            <p className="text-sm text-green-600 dark:text-green-400 mb-3" data-testid="stack-summary">
-              All services running.
+            <p className="text-sm text-[var(--status-ok)] mb-3" data-testid="stack-summary">
+              All services reachable.
             </p>
           )}
           <div className="rounded-md border overflow-x-auto" data-testid="live-services-table">
@@ -306,7 +310,7 @@ export function AdminSystemHealthPage() {
                 for local development — they flag settings that must be changed before a public
                 production deployment. See the{' '}
                 <a
-                  href="https://limitcycle-oss.github.io/jarvis-rd-assistant/DEPLOYMENT/#production-readiness-check"
+                  href={`${docsUrl('DEPLOYMENT.md')}#production-readiness-check`}
                   className="underline"
                   target="_blank"
                   rel="noopener noreferrer"

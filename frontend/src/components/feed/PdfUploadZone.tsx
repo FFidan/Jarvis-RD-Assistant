@@ -7,7 +7,7 @@ import { uploadPdf, processPdf } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
 import { errorMessage } from '@/lib/errors';
 
-type FileStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
+type FileStatus = 'idle' | 'uploading' | 'processing' | 'queued' | 'error';
 
 interface FileEntry {
   uid: string;
@@ -44,7 +44,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
           payload: { paper_id: paper.id },
           status: 'queued',
         });
-        setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
+        setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'queued' as FileStatus } : f)));
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
         onComplete?.();
@@ -77,7 +77,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
             payload: { paper_id: paper.id },
             status: 'queued',
           });
-          setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
+          setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'queued' as FileStatus } : f)));
         } catch (err) {
           setFiles(s =>
             s.map((f) =>
@@ -108,10 +108,10 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
   };
 
   const statusLabel: Record<FileStatus, string> = {
-    idle: 'Queued',
+    idle: 'Waiting',
     uploading: 'Uploading\u2026',
-    processing: 'Indexing\u2026',
-    done: 'Done',
+    processing: 'Starting indexing\u2026',
+    queued: 'Indexing in background',
     error: 'Error',
   };
 
@@ -119,7 +119,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
     idle: 'text-muted-foreground',
     uploading: 'text-blue-500',
     processing: 'text-amber-500',
-    done: 'text-green-600',
+    queued: 'text-blue-500',
     error: 'text-destructive',
   };
 
@@ -141,7 +141,16 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
         <p className="text-sm font-medium">Drop PDF files here or click to browse</p>
         {/* Must match MAX_UPLOAD_PDF_SIZE, the per-file cap this upload route enforces. */}
         <p className="mt-1 text-xs text-muted-foreground">Multiple files supported &middot; Max 50 MB each</p>
-        <input ref={inputRef} type="file" accept=".pdf" multiple className="hidden" onChange={handleInput} />
+        <input
+          ref={inputRef}
+          id="pdf-upload-input"
+          name="pdf-files"
+          type="file"
+          accept=".pdf"
+          multiple
+          className="hidden"
+          onChange={handleInput}
+        />
       </div>
 
       {files.length > 0 && (

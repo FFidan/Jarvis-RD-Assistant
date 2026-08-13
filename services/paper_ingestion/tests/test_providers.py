@@ -10,11 +10,15 @@ Covers:
 from __future__ import annotations
 
 import socket
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
+import httpcore
 import httpx
 import pytest
 import respx
 from httpx import ASGITransport
+from jarvis_common.pinned_transport import PinnedAsyncTransport, pinned_async_client
 from jarvis_common.testing import RoleMiddleware
 
 from tests.conftest import _make_pool_and_conn
@@ -100,6 +104,44 @@ async def _post_provider_test(app, provider: str, *, role: str | None = "admin")
         transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
         return await client.post(f"/api/providers/{provider}/test")
+
+
+async def _get_provider_account(app, provider: str, *, role: str | None = "admin"):
+    transport_app = RoleMiddleware(app, role) if role is not None else app
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=transport_app), base_url="http://test"
+    ) as client:
+        return await client.get(f"/api/providers/{provider}/account")
+
+
+async def _delete_provider_setting(
+    app, provider: str, field: str = "key", *, role: str | None = "admin"
+):
+    transport_app = RoleMiddleware(app, role) if role is not None else app
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=transport_app), base_url="http://test"
+    ) as client:
+        return await client.delete(f"/api/providers/{provider}/{field}")
+
+
+def _assignment_rows(**models: str) -> list[dict[str, str]]:
+    """Rows shaped like the ``llm.*_model`` reads behind the removal guard.
+
+    Values are JSONB-encoded strings in production, so they arrive quoted.
+    """
+    return [{"key": f"llm.{role}", "value": f'"{model}"'} for role, model in models.items()]
+
+
+def _executed(conn) -> list[tuple]:
+    """Return the SQL and bound arguments of every statement the route ran."""
+    return [call.args for call in conn.execute.await_args_list]
+
+
+def _statement_with(conn, fragment: str) -> tuple:
+    """Return the single executed statement containing *fragment*."""
+    matches = [args for args in _executed(conn) if fragment in args[0]]
+    assert len(matches) == 1, f"expected exactly one {fragment!r} statement, got {len(matches)}"
+    return matches[0]
 
 
 @pytest.mark.asyncio
@@ -318,6 +360,53 @@ async def test_list_providers_admin_returns_metadata(_app):
     assert resp.status_code == 200
     provider_ids = {item["id"] for item in resp.json()}
     assert {"anthropic", "openai", "custom_openai_compatible"} <= provider_ids
+    openrouter = next(item for item in resp.json() if item["id"] == "openrouter")
+    assert openrouter["dashboard_url"] == "https://openrouter.ai/settings/keys"
+    assert openrouter["account_capability"] == "current_key"
+    assert (
+        next(item for item in resp.json() if item["id"] == "moonshot")["account_capability"]
+        == "balance"
+    )
+    assert (
+        next(item for item in resp.json() if item["id"] == "moonshot")["dashboard_url"]
+        == "https://platform.kimi.ai/console/api-keys"
+    )
+    assert {"label", "creator_user_id", "workspace_id", "hash"}.isdisjoint(openrouter)
+
+
+def test_provider_response_models_match_the_registry_capability_literal() -> None:
+    """Both response models restate the registry literal, so both must equal it."""
+    from typing import get_args
+
+    from paper_ingestion.routers.settings import (
+        ProviderAccountResponse,
+        ProviderMetadataResponse,
+    )
+    from paper_ingestion.services.llm_provider_registry import AccountCapability
+
+    expected = get_args(AccountCapability)
+
+    assert get_args(ProviderMetadataResponse.model_fields["account_capability"].annotation) == (
+        expected
+    )
+    assert get_args(ProviderAccountResponse.model_fields["capability"].annotation) == expected
+
+
+def test_every_account_capability_claim_has_an_implementation() -> None:
+    """_ACCOUNT_URLS is the integration truth; a claim without one advertises nothing."""
+    from paper_ingestion.services.llm_provider_registry import (
+        ACCOUNT_FETCH_CAPABILITIES,
+        PROVIDER_REGISTRY,
+    )
+    from paper_ingestion.services.provider_account import _ACCOUNT_URLS
+
+    claimed = {
+        provider.id
+        for provider in PROVIDER_REGISTRY
+        if provider.account_capability in ACCOUNT_FETCH_CAPABILITIES
+    }
+
+    assert claimed == set(_ACCOUNT_URLS)
 
 
 @pytest.mark.asyncio
@@ -332,6 +421,334 @@ async def test_test_provider_requires_admin_session(_app):
     assert api_key_only.status_code == 403
     assert member.status_code == 403
     conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_provider_account_requires_admin_session(_app):
+    """Account snapshots keep the same browser-admin boundary as provider tests."""
+    app, conn = _app
+
+    api_key_only = await _get_provider_account(app, "openrouter", role=None)
+    member = await _get_provider_account(app, "openrouter", role="member")
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_remove_provider_key_requires_admin_session(_app):
+    """Deleting a credential keeps the same browser-admin boundary as the sibling routes."""
+    app, conn = _app
+
+    api_key_only = await _delete_provider_setting(app, "anthropic", role=None)
+    member = await _delete_provider_setting(app, "anthropic", role="member")
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetch.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_remove_provider_base_url_requires_admin_session(_app):
+    """The endpoint route has its own decorator stack, so it needs its own boundary check."""
+    app, conn = _app
+
+    api_key_only = await _delete_provider_setting(
+        app, "custom_openai_compatible", "base-url", role=None
+    )
+    member = await _delete_provider_setting(
+        app, "custom_openai_compatible", "base-url", role="member"
+    )
+
+    assert api_key_only.status_code == 403
+    assert member.status_code == 403
+    conn.fetch.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", ["anthropic", "zai", "custom_openai_compatible"])
+async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(
+    monkeypatch, provider_id
+):
+    """Unsupported provider accounts are a capability response, never an outbound probe."""
+    from paper_ingestion.services import provider_account
+
+    fetch_key = AsyncMock()
+    pinned_factory = AsyncMock()
+    monkeypatch.setattr(provider_account, "get_provider_api_key", fetch_key)
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_factory)
+
+    snapshot = await provider_account.fetch_provider_account(provider_id, db_pool=object())
+
+    assert snapshot.capability == "unavailable"
+    assert snapshot.data == {}
+    assert snapshot.error_code is None
+    fetch_key.assert_not_awaited()
+    pinned_factory.assert_not_called()
+
+
+def test_an_unknown_account_provider_is_never_parsed_as_another_provider() -> None:
+    """A provider wired up without a parser must fail closed, not borrow DeepSeek's shape."""
+    from paper_ingestion.services import provider_account
+
+    with pytest.raises(provider_account._AccountFetchError) as exc_info:
+        provider_account._allowlisted_provider_data("mistral", {"balance_infos": []})
+
+    assert str(exc_info.value) == "provider_account_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_uses_public_pinned_transport_and_discards_identity(monkeypatch):
+    """Current-key snapshots use a dedicated public transport and an explicit field allow-list."""
+    from jarvis_common.pinned_transport import PUBLIC_ONLY
+    from paper_ingestion.services import provider_account
+
+    transport_calls: list[object] = []
+    requests: list[httpx.Request] = []
+
+    @asynccontextmanager
+    async def pinned_client(policy, *, timeout):
+        transport_calls.append((policy, timeout))
+        payload = {
+            "data": {
+                "is_free_tier": False,
+                "usage": 2.5,
+                "usage_daily": 1.25,
+                "usage_weekly": 2.5,
+                "usage_monthly": 2.5,
+                "limit": 10,
+                "limit_remaining": 7.5,
+                "limit_reset": "monthly",
+                "expires_at": "2030-01-01T00:00:00Z",
+                "label": "must-not-leak",
+                "creator_user_id": "must-not-leak",
+                "workspace_id": "must-not-leak",
+                "hash": "must-not-leak",
+            }
+        }
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: (requests.append(request), httpx.Response(200, json=payload))[1]
+            )
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert transport_calls and transport_calls[0][0] is PUBLIC_ONLY
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == "https://openrouter.ai/api/v1/key"
+    assert requests[0].headers["authorization"] == "Bearer test-token"
+    assert snapshot.capability == "current_key"
+    assert snapshot.error_code is None
+    assert snapshot.data == {
+        "is_free_tier": False,
+        "usage": 2.5,
+        "usage_daily": 1.25,
+        "usage_weekly": 2.5,
+        "usage_monthly": 2.5,
+        "limit": 10,
+        "limit_remaining": 7.5,
+        "limit_reset": "monthly",
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "endpoint", "payload", "expected"),
+    [
+        (
+            "moonshot",
+            "https://api.moonshot.ai/v1/users/me/balance",
+            {"data": {"available_balance": 3.5, "voucher_balance": 1}},
+            {"available_balance": 3.5, "voucher_balance": 1},
+        ),
+        (
+            "deepseek",
+            "https://api.deepseek.com/user/balance",
+            {
+                "is_available": True,
+                "balance_infos": [
+                    {
+                        "currency": "CNY",
+                        "total_balance": "2",
+                        "granted_balance": "1",
+                        "topped_up_balance": "1",
+                    },
+                    {"currency": "USD", "total_balance": "3"},
+                ],
+            },
+            {
+                "is_available": True,
+                "total_balance_cny": "2",
+                "granted_balance_cny": "1",
+                "topped_up_balance_cny": "1",
+                "total_balance_usd": "3",
+            },
+        ),
+    ],
+)
+async def test_balance_accounts_use_pinned_exact_endpoint_and_sanitized_payload(
+    monkeypatch, provider_id, endpoint, payload, expected
+):
+    """Only documented balance routes can decrypt and send a provider credential."""
+    from jarvis_common.pinned_transport import PUBLIC_ONLY
+    from paper_ingestion.services import provider_account
+
+    requests: list[httpx.Request] = []
+    policies: list[object] = []
+
+    @asynccontextmanager
+    async def pinned_client(policy, *, timeout):
+        policies.append(policy)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: (requests.append(request), httpx.Response(200, json=payload))[1]
+            )
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account(provider_id, db_pool=object())
+
+    assert policies == [PUBLIC_ONLY]
+    assert snapshot.capability == "balance"
+    assert snapshot.data == expected
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == endpoint
+    assert requests[0].headers["authorization"] == "Bearer test-token"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_omits_supported_fields_absent_from_provider_response(monkeypatch):
+    """Missing fields stay missing so the UI cannot claim account data is available."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+        payload = {"data": {"label": "discarded"}}
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code is None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (401, "provider_authentication_failed"),
+        (402, "provider_payment_required"),
+        (429, "provider_rate_limited"),
+        (500, "provider_unavailable"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_openrouter_account_failure_codes_are_sanitized(
+    monkeypatch, status_code: int, expected_code: str
+):
+    """Provider status classes remain actionable without exposing response details."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(status_code, text="sensitive upstream response")
+            )
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_timeout_has_a_specific_sanitized_code(monkeypatch):
+    """HTTP-client timeouts are not collapsed into an unhelpful network failure."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+
+        def raise_timeout(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("sensitive timeout detail", request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(raise_timeout)) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code == "provider_request_timed_out"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_account_response_is_hard_byte_capped(monkeypatch):
+    """Account snapshots stop reading oversized bodies before decoding them."""
+    from paper_ingestion.services import provider_account
+
+    @asynccontextmanager
+    async def pinned_client(_policy, *, timeout):
+        del timeout
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200, content=b"x" * (provider_account._MAX_ACCOUNT_RESPONSE_BYTES + 1)
+                )
+            )
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
+    monkeypatch.setattr(
+        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
+    )
+
+    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+
+    assert snapshot.data == {}
+    assert snapshot.error_code == "provider_response_too_large"
 
 
 # ---------------------------------------------------------------------------
@@ -563,6 +980,58 @@ async def test_test_provider_custom_endpoint_blocks_link_local_resolution(_app, 
 
 
 @pytest.mark.asyncio
+async def test_custom_provider_rebind_is_blocked_at_the_real_connect_boundary(monkeypatch):
+    """A public validation answer cannot authorize a private connection answer."""
+    from paper_ingestion.services import provider_test
+
+    delegated: list[str] = []
+
+    class Backend(httpcore.AsyncNetworkBackend):
+        async def connect_tcp(self, host: str, port: int, **_kwargs):  # type: ignore[no-untyped-def]
+            delegated.append(host)
+            return object()
+
+        async def connect_unix_socket(self, path: str, **_kwargs):  # type: ignore[no-untyped-def]
+            return object()
+
+        async def sleep(self, seconds: float) -> None:
+            return None
+
+    def public_validation_answer(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+
+    async def private_connect_answer(host: str, port: int) -> list[tuple[int, str]]:
+        return [(socket.AF_INET, "127.0.0.1")]
+
+    def client_factory(policy, *, timeout):  # type: ignore[no-untyped-def]
+        return pinned_async_client(
+            policy,
+            timeout=timeout,
+            transport=PinnedAsyncTransport(
+                policy,
+                resolver=private_connect_answer,
+                backend=Backend(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.llm_provider_registry.socket.getaddrinfo",
+        public_validation_answer,
+    )
+    monkeypatch.setattr(provider_test, "pinned_async_client", client_factory)
+
+    result = await provider_test.test_provider_connectivity(
+        "custom_openai_compatible",
+        "test-key",
+        base_url="https://custom.example/v1",
+    )
+
+    assert result.ok is False
+    assert result.error == "provider request failed"
+    assert delegated == []
+
+
+@pytest.mark.asyncio
 @respx.mock
 @pytest.mark.usefixtures("fernet_key")
 async def test_google_probe_uses_header_not_url_param(_app):
@@ -600,6 +1069,116 @@ async def test_google_probe_uses_header_not_url_param(_app):
     assert req.headers.get("x-goog-api-key") == plaintext_key, (
         "Expected x-goog-api-key header with the API key"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests: removing a stored provider credential
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def _cache_invalidations(monkeypatch):
+    """Record the provider ids whose cached model list the route discarded."""
+    from paper_ingestion.routers import settings as settings_router
+
+    invalidate = AsyncMock()
+    monkeypatch.setattr(settings_router, "invalidate_provider_model_cache", invalidate)
+    return invalidate
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_provider_key_clears_it_and_records_the_change(
+    _app, _cache_invalidations
+) -> None:
+    """Removal must be a first-class action, not an overwrite with a placeholder."""
+    app, conn = _app
+    conn.fetch.return_value = []
+
+    resp = await _delete_provider_setting(app, "anthropic")
+
+    assert resp.status_code == 204
+    _, deleted_key = _statement_with(conn, "DELETE FROM user_config")
+    assert deleted_key == "llm.anthropic.api_key"
+    _cache_invalidations.assert_awaited_once_with("anthropic")
+    audit = _statement_with(conn, "audit_log")
+    assert audit[2] == "secret.remove"
+    assert audit[3] == "llm.anthropic.api_key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_key_a_model_route_still_uses_is_refused(_app) -> None:
+    """A live route would start failing mid-request, so the credential stays put."""
+    app, conn = _app
+    conn.fetch.return_value = _assignment_rows(smart_model="anthropic/claude-sonnet-4")
+
+    resp = await _delete_provider_setting(app, "anthropic")
+
+    assert resp.status_code == 409
+    assert "Main" in resp.json()["detail"]
+    # A refusal must leave the stored settings completely untouched, so assert
+    # no write ran at all rather than that one particular statement did not.
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_route_identity_follows_the_assignment_prefix_not_the_delivery_prefix(
+    _app, _cache_invalidations
+) -> None:
+    """A custom endpoint is assigned as ``custom_openai/`` but delivered as ``openai/``."""
+    app, conn = _app
+    conn.fetch.return_value = _assignment_rows(fast_model="custom_openai/org/model-y")
+
+    blocked = await _delete_provider_setting(app, "custom_openai_compatible")
+    unrelated = await _delete_provider_setting(app, "openai")
+
+    assert blocked.status_code == 409
+    assert "Quick" in blocked.json()["detail"]
+    assert unrelated.status_code == 204
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_key_refuses_when_assignments_cannot_be_read(_app) -> None:
+    """An unreadable assignment table is not evidence that no route uses the key."""
+    app, conn = _app
+    conn.fetch.side_effect = RuntimeError("connection reset")
+
+    resp = await _delete_provider_setting(app, "anthropic")
+
+    assert resp.status_code == 503
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_a_custom_endpoint_url_clears_the_endpoint_row(
+    _app, _cache_invalidations
+) -> None:
+    """The endpoint URL is stored encrypted like a key and needs the same exit."""
+    app, conn = _app
+    conn.fetch.return_value = []
+
+    resp = await _delete_provider_setting(app, "custom_openai_compatible", "base-url")
+
+    assert resp.status_code == 204
+    _, deleted_key = _statement_with(conn, "DELETE FROM user_config")
+    assert deleted_key == "llm.providers.custom_openai_compatible.base_url"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_removing_an_endpoint_url_a_provider_never_had_is_rejected(_app) -> None:
+    """Only the custom endpoint provider stores a base URL; the rest have none to clear."""
+    app, conn = _app
+    conn.fetch.return_value = []
+
+    resp = await _delete_provider_setting(app, "anthropic", "base-url")
+
+    assert resp.status_code == 400
+    conn.execute.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -689,3 +1268,28 @@ async def test_models_response_offers_a_keyless_custom_endpoint_live_models(monk
     assert entry["source"] == "provider"
     assert entry["fetched_at"] == summary["fetched_at"]
     assert any(item["id"] == "custom_openai/org/model-y" for item in body.recommendations["smart"])
+
+
+def test_every_account_capability_is_accepted_by_the_browser_schema() -> None:
+    """The browser validates this vocabulary independently and rejects unknowns.
+
+    The dashboard parses the provider listing against its own enum and discards
+    the whole response when a value is missing from it, so a capability added
+    here but not there would blank the providers panel rather than degrade one
+    field. Keeping the two in step has to fail here, not in a browser.
+    """
+    import re
+    from pathlib import Path
+    from typing import get_args
+
+    from paper_ingestion.services.llm_provider_registry import AccountCapability
+
+    schema = (
+        Path(__file__).resolve().parents[3] / "frontend/src/lib/api/schemas/settings.ts"
+    ).read_text(encoding="utf-8")
+    declared = set(get_args(AccountCapability))
+    for enum_body in re.findall(
+        r"account_capability: z\.enum\(\[([^\]]+)\]\)", schema
+    ) + re.findall(r"capability: z\.enum\(\[([^\]]+)\]\)", schema):
+        accepted = set(re.findall(r"'([^']+)'", enum_body))
+        assert declared <= accepted, f"not accepted by the browser schema: {declared - accepted}"

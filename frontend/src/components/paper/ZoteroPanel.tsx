@@ -1,8 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
-import { zoteroPushPaper, zoteroGetLinkage, zoteroResync } from '@/lib/api';
+import {
+  ApiError,
+  zoteroGetLinkage,
+  zoteroPushPaper,
+  zoteroResync,
+} from '@/lib/api';
+import { zoteroDesktopHref, zoteroWebHref } from '@/lib/api/zotero';
+import { useJobStore } from '@/stores/job-store';
 import { Copy, ExternalLink, RefreshCw, Send } from 'lucide-react';
 
 interface ZoteroPanelProps {
@@ -11,7 +19,13 @@ interface ZoteroPanelProps {
 }
 
 export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
-  const queryClient = useQueryClient();
+  const trackExternalJob = useJobStore((state) => state.trackExternalJob);
+  const pushRunning = useJobStore((state) =>
+    state.isRunning('zotero.push', { paper_id: paperId }),
+  );
+  const resyncRunning = useJobStore((state) =>
+    state.isRunning('zotero.resync', { paper_id: paperId }),
+  );
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -19,19 +33,29 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
   }, []);
 
-  const { data: linkage, isLoading, isError } = useQuery({
+  const { data: linkage, isLoading, isError, error } = useQuery({
     queryKey: QUERY_KEYS.zotero.linkage(paperId),
     queryFn: () => zoteroGetLinkage(paperId),
   });
 
   const pushMutation = useMutation({
     mutationFn: () => zoteroPushPaper(paperId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.zotero.linkage(paperId) }),
+    onSuccess: ({ job_id }) => trackExternalJob({
+      jobId: job_id,
+      kind: 'zotero.push',
+      payload: { paper_id: paperId },
+      status: 'queued',
+    }),
   });
 
   const resyncMutation = useMutation({
     mutationFn: () => zoteroResync(paperId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.zotero.linkage(paperId) }),
+    onSuccess: ({ job_id }) => trackExternalJob({
+      jobId: job_id,
+      kind: 'zotero.resync',
+      payload: { paper_id: paperId },
+      status: 'queued',
+    }),
   });
 
   const copyKey = async (key: string) => {
@@ -47,15 +71,22 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
 
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading Zotero status…</div>;
   if (isError) {
+    const isPermissionError = error instanceof ApiError && error.status === 403;
     return (
       <div className="space-y-3">
         <h3 className="text-sm font-semibold">Zotero</h3>
-        <p className="text-xs text-destructive">Zotero status unavailable.</p>
+        <p className="text-xs text-destructive">
+          {isPermissionError
+            ? "You don't have permission to view Zotero status for this paper."
+            : 'Zotero status is temporarily unavailable. Try again shortly.'}
+        </p>
       </div>
     );
   }
 
   const isPushed = !!linkage?.zotero_item_key;
+  const pushing = pushMutation.isPending || pushRunning;
+  const resyncing = resyncMutation.isPending || resyncRunning;
 
   return (
     <div className="space-y-3">
@@ -63,18 +94,33 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
       {!isPushed ? (
         <div className="space-y-2">
           {!hasProjectLinks && (
-            <p className="text-xs text-muted-foreground">Link to a project first to enable Zotero push.</p>
+            <p className="text-xs text-muted-foreground">
+              Link this paper to a project first. The project determines its Zotero collection.
+            </p>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!hasProjectLinks || pushMutation.isPending}
-            onClick={() => pushMutation.mutate()}
-          >
-            <Send className="h-3 w-3 mr-1" />
-            {pushMutation.isPending ? 'Sending…' : 'Send to Zotero'}
-          </Button>
-          <p className="text-xs text-muted-foreground">Pushes citation metadata (PDF not attached).</p>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!hasProjectLinks || pushing}
+              onClick={() => pushMutation.mutate()}
+            >
+              <Send className="h-3 w-3 mr-1" />
+              {pushing ? 'Sending…' : 'Send to Zotero'}
+            </Button>
+            {!hasProjectLinks && (
+              <Button size="sm" variant="outline" asChild>
+                <Link to="/projects">Open Projects to Link</Link>
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Sends citation metadata first (the PDF is not attached). You can then synchronize
+            annotations and highlights.
+          </p>
+          <a href="/settings?section=integrations&item=zotero" className="text-xs text-primary underline">
+            Configure Zotero in Settings
+          </a>
           {pushMutation.isError && <p className="text-xs text-destructive">Push failed. Try again.</p>}
         </div>
       ) : (
@@ -97,21 +143,47 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
           )}
           <div className="flex gap-1">
             <Button size="sm" variant="outline" asChild>
-              <a href={`zotero://select/library/items/${linkage.zotero_item_key}`} target="_blank" rel="noopener noreferrer">
+              <a
+                href={zoteroDesktopHref(
+                  linkage.zotero_item_key!,
+                  linkage.zotero_library_type,
+                  linkage.zotero_group_id,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 <ExternalLink className="h-3 w-3 mr-1" />
-                View in Zotero
+                Open in Zotero desktop
+              </a>
+            </Button>
+            <Button size="sm" variant="outline" asChild>
+              <a
+                href={zoteroWebHref(
+                  linkage.zotero_item_key!,
+                  linkage.zotero_library_type,
+                  linkage.zotero_group_id,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Zotero Web Library
               </a>
             </Button>
             <Button
               size="sm"
               variant="ghost"
-              disabled={resyncMutation.isPending}
+              disabled={resyncing}
               onClick={() => resyncMutation.mutate()}
               title="Re-push to Zotero"
+              aria-label="Re-push to Zotero"
             >
-              <RefreshCw className={`h-3 w-3 ${resyncMutation.isPending ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-3 w-3 ${resyncing ? 'animate-spin' : ''}`} />
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            This item is filed with its linked project collection. Citation metadata is sent before
+            annotations and highlights are synchronized.
+          </p>
         </div>
       )}
     </div>

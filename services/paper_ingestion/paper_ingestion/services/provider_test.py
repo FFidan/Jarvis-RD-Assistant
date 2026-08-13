@@ -2,6 +2,7 @@
 
 import httpx
 from jarvis_common.maintenance import OutboundEgressBlockedError, ensure_outbound_egress_allowed
+from jarvis_common.pinned_transport import LOCAL_DEVELOPMENT_POLICY, pinned_async_client
 from pydantic import BaseModel
 
 from paper_ingestion.services.llm_provider_registry import (
@@ -131,7 +132,9 @@ async def test_provider_connectivity(
 
     try:
         ensure_outbound_egress_allowed("cloud provider connectivity probe")
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        async with pinned_async_client(
+            LOCAL_DEVELOPMENT_POLICY, timeout=httpx.Timeout(10.0)
+        ) as client:
             resp = await _probe_provider_models(client, provider, api_key, base_url=base_url)
     except OutboundEgressBlockedError:
         return ProviderTestResult(

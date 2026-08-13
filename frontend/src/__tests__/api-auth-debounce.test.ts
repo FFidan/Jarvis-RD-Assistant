@@ -6,7 +6,7 @@
  * parallel requests that all 401 at once shows ONE "Session expired" toast, not
  * one per request, within a 5s window. This singleton must survive the
  * god-module → domain-modules split, so we exercise it through the public
- * `apiFetch` surface (the handler itself is intentionally not exported).
+ * status-only request surface (the handler itself is intentionally not exported).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -16,17 +16,16 @@ vi.mock('sonner', async () =>
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: () => ({
-      getApiKey: () => 'test-key',
       isAuthenticated: true,
       logout: vi.fn(),
     }),
   },
 }));
 
-import { apiFetch } from '@/lib/api';
+import { apiFetchVoid } from '@/lib/api';
 import { toast } from 'sonner';
 
-describe('handleAuthFailure session-expired toast debounce (via apiFetch)', () => {
+describe('handleAuthFailure session-expired toast debounce', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.mocked(toast.error).mockClear();
@@ -39,10 +38,10 @@ describe('handleAuthFailure session-expired toast debounce (via apiFetch)', () =
 
     // Fire several requests that all 401 "at once" (same debounce window).
     const results = await Promise.allSettled([
-      apiFetch('/api/a'),
-      apiFetch('/api/b'),
-      apiFetch('/api/c'),
-      apiFetch('/api/d'),
+      apiFetchVoid('/api/a'),
+      apiFetchVoid('/api/b'),
+      apiFetchVoid('/api/c'),
+      apiFetchVoid('/api/d'),
     ]);
 
     // All reject with ApiError(401)…
@@ -60,7 +59,7 @@ describe('handleAuthFailure session-expired toast debounce (via apiFetch)', () =
       new Response('forbidden', { status: 403 }),
     );
 
-    await apiFetch('/api/forbidden').catch(() => undefined);
+    await apiFetchVoid('/api/forbidden').catch(() => undefined);
 
     expect(toast.error).not.toHaveBeenCalled();
   });

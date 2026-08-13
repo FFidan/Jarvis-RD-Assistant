@@ -195,7 +195,6 @@ async def test_generate_cards_returns_empty_result_on_parse_failure():
         chunks=_make_chunks(),
         openai_client=_make_openai_client(),
         paper_id=5,
-        abstract="Abstract",
     )
 
     assert result == _empty_result()
@@ -232,7 +231,6 @@ async def test_generate_cards_filters_unverified_quotes_and_keeps_counts():
         chunks=_make_chunks(),
         openai_client=_make_openai_client(),
         paper_id=5,
-        abstract="Abstract",
     )
 
     assert result["verified_count"] == 1
@@ -365,7 +363,6 @@ async def test_generate_cards_all_generic_fronts_returns_empty_low(monkeypatch, 
         chunks=_make_chunks(),
         openai_client=_make_openai_client(),
         paper_id=None,
-        abstract="An abstract.",
     )
 
     assert result["cards"] == [], (
@@ -405,7 +402,6 @@ async def test_card_generation_succeeds_with_brace_in_paper_text() -> None:
         chunks=chunks_with_braces,
         openai_client=_make_openai_client(),
         paper_id=None,
-        abstract="Abstract without braces.",
     )
 
     # LLM returned None → _empty_result()
@@ -453,7 +449,6 @@ async def test_long_paper_uses_digest_and_single_llm_call(monkeypatch):
         chunks=chunks,
         openai_client=_make_openai_client(),
         paper_id=99,
-        abstract="Short abstract.",
         summary_text=summary_text,
     )
 
@@ -499,7 +494,6 @@ async def test_generate_cards_no_summary_row_uses_truncation_fallback():
         chunks=chunks,
         openai_client=_make_openai_client(),
         paper_id=5,
-        abstract="Abstract",
         summary_text=None,  # no reduce-stage digest available
         num_ctx=2048,  # tiny window forces the truncation fallback
     )
@@ -537,7 +531,6 @@ async def test_generate_cards_degrades_on_provider_500():
             chunks=_make_chunks(),
             openai_client=_make_openai_client(),
             paper_id=5,
-            abstract="Abstract",
         )
 
     assert result["cards"] == [], f"Expected empty cards on provider error; got {result['cards']}"
@@ -559,7 +552,6 @@ async def test_generate_cards_no_cards_reason_distinguishes_from_llm_error():
         chunks=_make_chunks(),
         openai_client=_make_openai_client(),
         paper_id=5,
-        abstract="Abstract",
     )
 
     assert result["cards"] == []

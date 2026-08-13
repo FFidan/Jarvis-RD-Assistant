@@ -86,10 +86,9 @@ vi.mock('@/lib/api', async () => {
   updateAccount: vi.fn(),
   downloadMyData: async () => (undefined),
   confirmEmailChange: vi.fn(),
-  apiFetch: vi.fn(),
   getTelegramBotToken: async () => ({ has_token: false }),
   saveTelegramBotToken: async () => (undefined),
-  fetchSystemModels: async () => ({ hardware: undefined, catalog: [] }),
+  fetchSystemModels: vi.fn(async () => ({ hardware: undefined, catalog: [] })),
   // AIPanel is now mounted as the advanced disclosure inside the LLM Models page.
   getAISettings: async () => ({
     hw_tier: 'cpu',
@@ -131,14 +130,12 @@ function renderSettingsPageAs(role: 'admin' | 'user' | null, initialSearch = '')
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: { id: 1, email: 'test@example.com', role },
     });
   } else {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'test-key',
       user: null,
     });
   }
@@ -155,7 +152,6 @@ describe('SettingsPage', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'test-key',
       user: null,
     });
   });
@@ -226,6 +222,23 @@ describe('SettingsPage', () => {
     );
   });
 
+  it('renders the Profile and Account data export subsection headings', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchAccount).mockResolvedValue({
+      id: 1,
+      email: 'user@example.com',
+      role: 'user',
+      display_name: 'Test User',
+      created_at: '2025-01-01T00:00:00Z',
+      last_login_at: null,
+    });
+    renderSettingsPage();
+    await waitFor(() => screen.getByRole('button', { name: /Profile & Email/i }));
+    await user.click(screen.getByRole('button', { name: /Profile & Email/i }));
+    expect(await screen.findByRole('heading', { name: 'Profile', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Account data export', level: 3 })).toBeInTheDocument();
+  });
+
   it('non-admin deep-link to system section redirects to default (Topics heading)', async () => {
     renderSettingsPageAs('user', '?section=sources&item=arxiv');
     await waitFor(() =>
@@ -266,7 +279,26 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.fetchConfig).mockResolvedValue(splitConfig);
-    vi.mocked(api.apiFetch).mockResolvedValue({ hardware: undefined, catalog: [] });
+    vi.mocked(api.fetchSystemModels).mockResolvedValue({
+      status: 'ok',
+      installed: [],
+      hardware: {},
+      current: {},
+      issues: {},
+      catalog: [],
+      recommendations: {},
+      reviewed_choices: {},
+      hardware_recommendation: {
+        vram_mb: null,
+        bucket: 'CPU_ONLY',
+        summary: 'CPU-only host',
+        aliases: [],
+      },
+      delivery: {},
+      routing: {},
+      consistent: true,
+      provider_lists: {},
+    });
   });
 
   function renderDetail(section: string, item: string) {
@@ -282,7 +314,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
   it('Models → LLM renders the AI models group with the model-runtime pointer', async () => {
     renderDetail('models', 'llm');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'AI models', level: 3 })).toBeInTheDocument(),
     );
     expect(screen.getByTestId('model-runtime-note')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /system health/i })).toHaveAttribute(
@@ -294,7 +326,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
   it('Models → stale ?item=ai deep-link resolves to the consolidated AI models page', async () => {
     renderDetail('models', 'ai');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'AI models', level: 3 })).toBeInTheDocument(),
     );
     expect(screen.getByTestId('model-runtime-note')).toBeInTheDocument();
   });
@@ -307,7 +339,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
       ).toBeInTheDocument(),
     );
     // The AI models group (and any Preferences group) must NOT leak in.
-    expect(screen.queryByRole('heading', { name: 'AI models', level: 4 })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'AI models', level: 3 })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Preferences', level: 4 })).not.toBeInTheDocument();
   });
 });
@@ -375,7 +407,6 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: { id: 1, email: 'user@example.com', role: 'user' },
     });
     const queryClient = createTestQueryClient();
@@ -396,7 +427,6 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: null,
       user: { id: 1, email: 'admin@example.com', role: 'admin' },
     });
     const queryClient = createTestQueryClient();

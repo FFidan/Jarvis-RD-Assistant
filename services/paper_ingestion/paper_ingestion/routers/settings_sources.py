@@ -1,7 +1,6 @@
 """Nudge and paper-source management endpoints — sub-router for /api/nudges/* and /api/sources/*.
 
-Thin transport layer: parse → auth check → delegate to
-``paper_ingestion.services.settings_service``.
+Thin transport layer: parse → auth check → delegate to the owning service module.
 
 Included by ``paper_ingestion.routers.settings.router`` via
 ``router.include_router(sources_router)``.
@@ -24,12 +23,14 @@ from paper_ingestion.models import (
     SourceResponse,
     SourceUpdate,
 )
-from paper_ingestion.services.settings_service import (
+from paper_ingestion.services.config_metadata import (
     _NUDGE_ALLOWED_COLUMNS,
     _NUDGE_JSONB_COLUMNS,
     _SOURCE_ALLOWED_COLUMNS,
     _SOURCE_JSONB_COLUMNS,
-    _validate_zotero_cron,
+)
+from paper_ingestion.services.config_validators import _validate_zotero_cron
+from paper_ingestion.services.model_assignment import (
     reload_telegram_nudges,
 )
 

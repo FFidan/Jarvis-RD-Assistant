@@ -123,6 +123,7 @@ async def test_readiness_shape_and_baseline(_app):
     assert by_name["audit_log"]["detail"] == "0 rows"
     assert by_name["owner_identity"]["status"] == "green"
     assert by_name["vector_visibility_metadata"]["status"] == "green"
+    assert by_name["vector_visibility_metadata"]["detail"] == "complete"
     assert body["status"] == "red"
 
 

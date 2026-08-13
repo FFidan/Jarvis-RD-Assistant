@@ -103,7 +103,6 @@ describe('logout-hygiene', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'test-key-32chars-xxxxxxxxxxxx',
       user: null,
     });
 
@@ -122,7 +121,6 @@ describe('logout-hygiene', () => {
     useAuthStore.getState().logout();
     await flushPromises();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
-    expect(useAuthStore.getState().apiKey).toBeNull();
     expect(useAuthStore.getState().user).toBeNull();
   });
 

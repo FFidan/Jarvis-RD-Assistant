@@ -118,62 +118,76 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
         <p className="text-xs text-muted-foreground">Loading contradictions...</p>
       ) : isError ? (
         <p className="text-xs text-destructive">Failed to load contradictions.</p>
+      ) : pending ? (
+        <p className="text-xs text-muted-foreground">{pendingMessage}</p>
+      ) : contradictions.length > 0 ? (
+        <>
+          {failedScan && (
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive"
+            >
+              <p className="font-medium">The latest contradiction scan failed.</p>
+              <p className="mt-1">
+                Displayed contradictions may be stale.{' '}
+                {failedScan.error?.message || 'Contradiction scan failed.'}
+              </p>
+            </div>
+          )}
+          <div className="space-y-3">
+            {contradictions.map((item) => {
+              const currentIsA = item.paper_a_id === paperId;
+              const otherTitle = currentIsA ? item.paper_b_title : item.paper_a_title;
+              const currentFinding = currentIsA ? item.finding_a : item.finding_b;
+              const otherFinding = currentIsA ? item.finding_b : item.finding_a;
+              const currentQuote = currentIsA ? item.quote_a : item.quote_b;
+              const otherQuote = currentIsA ? item.quote_b : item.quote_a;
+              const currentPage = currentIsA ? item.page_a : item.page_b;
+              const otherPage = currentIsA ? item.page_b : item.page_a;
+
+              return (
+                <article key={item.id} className="space-y-2 rounded-md border p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge variant="outline" className="truncate">
+                      {item.contradiction_type}
+                    </Badge>
+                    <span className="shrink-0 text-muted-foreground">
+                      {confidenceLabel(item.confidence)}
+                    </span>
+                  </div>
+                  <p className="font-medium leading-snug">{otherTitle}</p>
+                  <p className="text-muted-foreground">{item.explanation}</p>
+                  <div className="space-y-1">
+                    <p>
+                      <span className="font-medium">This paper:</span> {currentFinding}
+                    </p>
+                    <blockquote className="border-l-2 border-amber-500/50 pl-2 text-muted-foreground">
+                      &ldquo;{currentQuote}&rdquo; <span>({pageLabel(currentPage)})</span>
+                    </blockquote>
+                  </div>
+                  <div className="space-y-1">
+                    <p>
+                      <span className="font-medium">Other paper:</span> {otherFinding}
+                    </p>
+                    <blockquote className="border-l-2 border-muted-foreground/30 pl-2 text-muted-foreground">
+                      &ldquo;{otherQuote}&rdquo; <span>({pageLabel(otherPage)})</span>
+                    </blockquote>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </>
       ) : failedScan ? (
         <p className="text-xs text-destructive">
           {failedScan.error?.message || 'Contradiction scan failed.'}
         </p>
-      ) : pending ? (
-        <p className="text-xs text-muted-foreground">{pendingMessage}</p>
-      ) : contradictions.length === 0 ? (
+      ) : (
         <p className="text-xs text-muted-foreground">
           {completedScan
             ? 'Scan complete. No verified contradictions found.'
             : 'No verified contradictions found yet. Run a scan to compare this paper with your library.'}
         </p>
-      ) : (
-        <div className="space-y-3">
-          {contradictions.map((item) => {
-            const currentIsA = item.paper_a_id === paperId;
-            const otherTitle = currentIsA ? item.paper_b_title : item.paper_a_title;
-            const currentFinding = currentIsA ? item.finding_a : item.finding_b;
-            const otherFinding = currentIsA ? item.finding_b : item.finding_a;
-            const currentQuote = currentIsA ? item.quote_a : item.quote_b;
-            const otherQuote = currentIsA ? item.quote_b : item.quote_a;
-            const currentPage = currentIsA ? item.page_a : item.page_b;
-            const otherPage = currentIsA ? item.page_b : item.page_a;
-
-            return (
-              <article key={item.id} className="space-y-2 rounded-md border p-3 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <Badge variant="outline" className="truncate">
-                    {item.contradiction_type}
-                  </Badge>
-                  <span className="shrink-0 text-muted-foreground">
-                    {confidenceLabel(item.confidence)}
-                  </span>
-                </div>
-                <p className="font-medium leading-snug">{otherTitle}</p>
-                <p className="text-muted-foreground">{item.explanation}</p>
-                <div className="space-y-1">
-                  <p>
-                    <span className="font-medium">This paper:</span> {currentFinding}
-                  </p>
-                  <blockquote className="border-l-2 border-amber-500/50 pl-2 text-muted-foreground">
-                    &ldquo;{currentQuote}&rdquo; <span>({pageLabel(currentPage)})</span>
-                  </blockquote>
-                </div>
-                <div className="space-y-1">
-                  <p>
-                    <span className="font-medium">Other paper:</span> {otherFinding}
-                  </p>
-                  <blockquote className="border-l-2 border-muted-foreground/30 pl-2 text-muted-foreground">
-                    &ldquo;{otherQuote}&rdquo; <span>({pageLabel(otherPage)})</span>
-                  </blockquote>
-                </div>
-              </article>
-            );
-          })}
-        </div>
       )}
     </section>
   );

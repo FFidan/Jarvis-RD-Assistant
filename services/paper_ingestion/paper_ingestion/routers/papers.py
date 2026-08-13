@@ -1,4 +1,4 @@
-"""Aggregating shim: re-exports a unified ``router`` composed from the 5 sub-routers.
+"""Aggregate the five cohesive paper sub-routers into one application router.
 
 The monolithic papers.py has been split into:
   papers_feed.py       — list_papers_brief, list_papers, get_feed_counts
@@ -19,11 +19,6 @@ from paper_ingestion.routers.papers_detail import router as _detail_router
 from paper_ingestion.routers.papers_feedback import router as _feedback_router
 from paper_ingestion.routers.papers_feed import router as _feed_router
 from paper_ingestion.routers.papers_lifecycle import router as _lifecycle_router
-
-# Re-export handler functions so existing tests can reference papers.star_paper,
-# papers.submit_feedback, etc. (patch.object and __wrapped__ access patterns).
-from paper_ingestion.routers.papers_feedback import submit_feedback  # noqa: F401
-from paper_ingestion.routers.papers_lifecycle import star_paper  # noqa: F401
 
 # Aggregate all sub-routers into a single router so main.py needs only one
 # include_router call and existing callers of ``papers.router`` keep working.

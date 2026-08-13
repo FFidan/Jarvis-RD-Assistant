@@ -19,29 +19,16 @@ describe('LogsRoute', () => {
       isAuthenticated: true,
       authTime: Date.now(),
       user: { id: 1, email: 'admin@example.com', role: 'admin' },
-      apiKey: null,
     });
     renderGuard();
     expect(screen.getByText('logs content')).toBeInTheDocument();
   });
 
-  it('renders children for a legacy api-key session (user === null, apiKey set)', () => {
-    useAuthStore.setState({
-      isAuthenticated: true,
-      authTime: Date.now(),
-      user: null,
-      apiKey: 'secret-api-key',
-    });
-    renderGuard();
-    expect(screen.getByText('logs content')).toBeInTheDocument();
-  });
-
-  it('redirects a member user (role !== admin, no apiKey) to /', () => {
+  it('redirects a member user to /', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
       user: { id: 2, email: 'member@example.com', role: 'user' },
-      apiKey: null,
     });
     renderGuard();
     expect(screen.queryByText('logs content')).not.toBeInTheDocument();
@@ -49,17 +36,6 @@ describe('LogsRoute', () => {
 
   it('redirects when not authenticated', () => {
     resetAuthState();
-    renderGuard();
-    expect(screen.queryByText('logs content')).not.toBeInTheDocument();
-  });
-
-  it('redirects a member user even when an api key is present in the store', () => {
-    useAuthStore.setState({
-      isAuthenticated: true,
-      authTime: Date.now(),
-      user: { id: 2, email: 'member@example.com', role: 'user' },
-      apiKey: 'secret-api-key',
-    });
     renderGuard();
     expect(screen.queryByText('logs content')).not.toBeInTheDocument();
   });

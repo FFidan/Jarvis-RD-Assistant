@@ -79,17 +79,48 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN adduser --disabled-password --no-create-home appuser
+RUN adduser --disabled-password --no-create-home --gecos "" appuser
 
 # Writable HuggingFace cache: Docling's layout/table models (docling-ibm-models)
 # and transformers weights download here on first use (volume-backed in compose).
 ENV HF_HOME=/tmp/hf_cache HOME=/tmp/appuser
 RUN mkdir -p /tmp/hf_cache /tmp/appuser && chown -R appuser:appuser /tmp/hf_cache /tmp/appuser
-# RapidOCR downloads its ONNX models into its own site-packages dir on first use;
-# make that dir writable so appuser can populate it at runtime.
+
+# Bake in Docling's layout and table-structure models so a firewalled or
+# air-gapped deployment can convert a document on its very first run, and
+# every other deployment skips the multi-hundred-megabyte stall on first
+# import. The pinned docling version fixes which model revisions this
+# downloads, so no separate revision pin is needed here.
+RUN docling-tools models download layout tableformer -o /opt/docling_models \
+    && chown -R appuser:appuser /opt/docling_models
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling_models
+
+# RapidOCR's ONNX models ship inside its wheel, so nothing downloads here at
+# runtime; the directory is still made writable in case a future engine
+# revision needs to populate its own cache. Setting DOCLING_ARTIFACTS_PATH
+# above also makes Docling look for the OCR models under that directory
+# instead of RapidOCR's own package path, so symlink the wheel's copies into
+# the spot Docling expects rather than fetching or duplicating them. `ln -s`
+# never fails on a missing target, so a wheel revision that renames one of
+# these files would otherwise build clean and only break the first document
+# conversion at runtime; the loop below fails the build instead.
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     mkdir -p "$SITE_PKGS/rapidocr/models" && \
-    chown -R appuser:appuser "$SITE_PKGS/rapidocr/models"
+    chown -R appuser:appuser "$SITE_PKGS/rapidocr/models" && \
+    mkdir -p /opt/docling_models/RapidOcr/onnx/PP-OCRv6/det \
+             /opt/docling_models/RapidOcr/onnx/PP-OCRv6/rec \
+             /opt/docling_models/RapidOcr/onnx/PP-OCRv4/cls && \
+    ln -s "$SITE_PKGS/rapidocr/models/PP-OCRv6_det_small.onnx" \
+          /opt/docling_models/RapidOcr/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx && \
+    ln -s "$SITE_PKGS/rapidocr/models/PP-OCRv6_rec_small.onnx" \
+          /opt/docling_models/RapidOcr/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx && \
+    ln -s "$SITE_PKGS/rapidocr/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx" \
+          /opt/docling_models/RapidOcr/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx && \
+    for link in /opt/docling_models/RapidOcr/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx \
+                /opt/docling_models/RapidOcr/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx \
+                /opt/docling_models/RapidOcr/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx; do \
+      test -e "$link" || { echo "ERROR: RapidOCR model symlink does not resolve: $link" >&2; exit 1; }; \
+    done
 
 COPY services/paper_ingestion/paper_ingestion/ ./paper_ingestion/
 COPY services/paper_ingestion/entrypoint.sh /app/entrypoint.sh

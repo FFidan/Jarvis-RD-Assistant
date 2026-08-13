@@ -30,11 +30,18 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
 
-      - name: Install cyclonedx-py
-        run: uv tool install cyclonedx-bom
-
+      # Every generator below names its exact release. An unpinned `uv tool run`
+      # or `npx` resolves the newest one at run time, so the inventory a release
+      # ships could change shape between the pull request and the tag with no
+      # commit in between.
+      #
+      # The <python> argument targets the synced project environment; without
+      # it, cyclonedx-py inventories the isolated `uv tool run` environment it
+      # executes in, not this project's own dependencies.
       - name: Generate Python SBOM
-        run: uv tool run cyclonedx-py environment --output-format JSON --output-file sbom-python.json
+        run: |
+          uv tool run --from cyclonedx-bom==7.3.1 cyclonedx-py environment .venv/bin/python \
+            --output-format JSON --output-file sbom-python.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -53,7 +60,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: "24"
+          node-version-file: ".nvmrc"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -92,7 +99,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: "24"
+          node-version-file: ".nvmrc"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -102,7 +109,8 @@ jobs:
 
       - name: Scan Python licenses (copyleft = warn)
         run: |
-          uv tool run pip-licenses --format=json > licenses-python.json
+          uv tool run --from pip-licenses==5.5.5 pip-licenses \
+            --format=json > licenses-python.json
           python3 - <<'PY'
           import json, os, re
           data = json.load(open("licenses-python.json"))
@@ -127,7 +135,7 @@ jobs:
 
       - name: Scan Node licenses (copyleft = warn)
         run: |
-          npx --yes license-checker-rseidelsohn --production --json > frontend/licenses-node.json
+          npx --yes license-checker-rseidelsohn@5.0.1 --production --json > frontend/licenses-node.json
           python3 - <<'PY'
           import json, os, re
           data = json.load(open("frontend/licenses-node.json"))
@@ -186,7 +194,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: "24"
+          node-version-file: ".nvmrc"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -197,11 +205,13 @@ jobs:
       # --python targets the synced project environment; without it pip-licenses
       # scans an isolated tool env and reports nothing.
       - name: Generate Python license inventory
-        run: uv tool run pip-licenses --python .venv/bin/python --format=json > licenses-python.json
+        run: |
+          uv tool run --from pip-licenses==5.5.5 pip-licenses \
+            --python .venv/bin/python --format=json > licenses-python.json
 
       - name: Generate Node license inventory
         working-directory: frontend
-        run: npx --yes license-checker-rseidelsohn --production --json > licenses-node.json
+        run: npx --yes license-checker-rseidelsohn@5.0.1 --production --json > licenses-node.json
 
       - name: Enforce license policy (fail on GPL/AGPL)
         run: python3 scripts/gen_notice.py gate --python-json licenses-python.json --node-json frontend/licenses-node.json

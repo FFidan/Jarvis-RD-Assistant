@@ -343,16 +343,16 @@ def test_first_admin_and_api_key_copy_matches_the_working_operator_path() -> Non
 
 
 def test_readme_names_one_full_noninteractive_installer() -> None:
-    """The legacy localhost bootstrap must not look equivalent to setup.sh."""
+    """The deprecated entry point must be documented and implemented as a forwarder."""
     readme = _README.read_text(encoding="utf-8")
     deployment = _DEPLOYMENT_DOC.read_text(encoding="utf-8")
     legacy = _JARVIS_SETUP_SCRIPT.read_text(encoding="utf-8")
 
     assert "./setup.sh --non-interactive" in readme
-    assert "local-only compatibility bootstrap" in readme
-    assert "local-only compatibility bootstrap" in deployment
-    assert "serves http://localhost" in legacy
-    assert "starts no TLS profile" in legacy
+    assert "deprecated compatibility forwarder" in readme
+    assert "deprecated compatibility forwarder" in deployment
+    assert 'exec "${REPO_ROOT}/setup.sh" "${setup_args[@]}"' in legacy
+    assert "docker compose" not in legacy
 
 
 def test_published_docs_match_access_reconfiguration_and_cloudflare_trust() -> None:
@@ -381,6 +381,7 @@ def test_published_docs_match_access_reconfiguration_and_cloudflare_trust() -> N
     dockerignore_lines = set(dockerignore.splitlines())
     assert ".jarvis-setup-transaction" in dockerignore_lines
     assert ".jarvis-setup-transaction.pending" in dockerignore_lines
+    assert "shared/" in dockerignore_lines
 
     assert "--overwrite-env" in access
     assert "accepts a replacement route only after it verifies" in access_words
@@ -591,21 +592,6 @@ def test_security_copy_limits_owner_recovery_and_suppressed_email_logs() -> None
     assert "recipient hash" in flags
     assert "bearer link" in flags
     assert "written to stdout/logs" not in flags
-
-
-def test_security_copy_describes_the_legacy_chat_id_variable_accurately() -> None:
-    """The TELEGRAM_CHAT_ID tombstone must be denied a role without overclaiming.
-
-    "not read at runtime" was too strong — the bot reads the variable once at
-    startup to choose between two log lines. The security-relevant claim (it
-    addresses and authorizes nothing) has to survive that correction, so both
-    halves are pinned here.
-    """
-    override = _normalized_words(_section(_read(_SECURITY_DOC), "X-Owner-User-Id Mechanism"))
-
-    assert "read once at startup only to choose a log line" in override
-    assert "never to address or authorize a message" in override
-    assert "not read at runtime" not in override
 
 
 def test_hardware_and_disk_guidance_names_the_real_diagnostics_boundary() -> None:

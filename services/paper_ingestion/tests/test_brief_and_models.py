@@ -193,7 +193,7 @@ async def test_papers_brief_empty(_app):
 async def test_system_models_full_response(_app):
     """GET /api/system/models returns installed, hardware, and current keys."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -260,16 +260,40 @@ async def test_system_models_full_response(_app):
     assert any(item["id"] == "qwen3-embedding:0.6b" for item in body.catalog)
     assert any(item["status"] == "active" for item in body.catalog)
     assert "embed" in body.recommendations
+    assert "embed" in body.reviewed_choices
+    assert body.reviewed_choices["embed"] == []
+    assert [item["id"] for item in body.reviewed_choices["smart"]] == [
+        "anthropic/claude-sonnet-4-6"
+    ]
+    assert all(item["source"] == "reviewed_catalog" for item in body.reviewed_choices["smart"])
+    assert not any(
+        item["id"] in {"anthropic/claude-haiku-4-5", "openai/gpt-4o"}
+        for item in body.reviewed_choices["smart"]
+    )
 
     # Delivery state (additive field): no llm.delivery_pending row → all applied
     assert body.delivery == {"smart": "applied", "fast": "applied", "embed": "applied"}
+
+
+def test_reviewed_choices_exclude_deprecated_models() -> None:
+    from paper_ingestion.services import system_models_view
+
+    catalog = [
+        {"id": "active", "roles": ["smart"], "lifecycle": "active"},
+        {"id": "retired", "roles": ["smart"], "lifecycle": "deprecated"},
+    ]
+    reviewed_ids = {"active", "retired"}
+
+    choices = system_models_view._build_reviewed_choices(catalog, reviewed_ids)
+
+    assert [entry["id"] for entry in choices["smart"]] == ["active"]
 
 
 @pytest.mark.asyncio
 async def test_system_models_ollama_unreachable(_app):
     """GET /api/system/models returns empty installed list when Ollama is down."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -290,7 +314,7 @@ async def test_system_models_ollama_unreachable(_app):
 async def test_system_models_reports_embedding_config_mismatch(_app, monkeypatch):
     """GET /api/system/models surfaces stale model/dimension env drift."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     monkeypatch.setattr(
         "paper_ingestion.services.system_models_view.EMBEDDING_MODEL_NAME",
@@ -321,7 +345,7 @@ async def test_system_models_reports_embedding_config_mismatch(_app, monkeypatch
 async def test_system_models_no_config(_app):
     """GET /api/system/models returns empty current dict when no config exists."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -361,10 +385,36 @@ async def test_system_models_no_config(_app):
 
 
 @pytest.mark.asyncio
+async def test_system_models_always_exposes_effective_embedding_contract(_app, monkeypatch):
+    """The embedding route comes from runtime configuration, not an optional DB row."""
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import get_system_models
+    import paper_ingestion.services.litellm_config as litellm_config
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = []
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def unavailable_litellm():
+        raise RuntimeError("LiteLLM unavailable")
+
+    monkeypatch.setattr(litellm_config, "get_litellm_deployments", unavailable_litellm)
+
+    body = await get_system_models(request)
+
+    assert body.current.get("embed_model") is None
+    assert body.embedding_contract == {
+        "model": "qwen3-embedding:4b",
+        "dimension": 2560,
+        "change_requires_reindex": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_system_models_db_failure_still_returns_ollama_data(_app):
     """GET /api/system/models degrades when config loading fails but still returns Ollama data."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -393,7 +443,7 @@ async def test_system_models_db_failure_still_returns_ollama_data(_app):
 async def test_system_models_surfaces_pending_delivery(_app):
     """GET /api/system/models maps llm.delivery_pending roles to pending_restart."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -419,7 +469,7 @@ async def test_system_models_surfaces_pending_delivery(_app):
 async def test_system_models_delivery_empty_when_config_read_fails(_app):
     """Delivery state read failure leaves delivery empty — never a phantom applied."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
     conn.fetch.side_effect = RuntimeError("db unavailable")
@@ -434,7 +484,7 @@ async def test_system_models_delivery_empty_when_config_read_fails(_app):
 async def test_system_models_runtime_probe_failure_keeps_installed_models(_app):
     """GET /api/system/models keeps installed models even when runtime probe fails."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -611,7 +661,7 @@ async def test_delete_system_model_fails_closed_when_current_assignments_unavail
 async def test_system_models_includes_hardware_recommendation(_app, monkeypatch):
     """GET /api/system/models response includes hardware_recommendation field."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
 
     # Patch hardware detection to return a known 16 GB value so we can assert
     # deterministic recommendation output without an actual GPU.
@@ -669,7 +719,7 @@ async def test_system_models_includes_hardware_recommendation(_app, monkeypatch)
 async def test_system_models_hardware_recommendation_cpu_only_when_no_gpu(_app, monkeypatch):
     """hardware_recommendation is safe / non-crashing when no GPU detected."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     from paper_ingestion.services import model_lifecycle as ml
 
     # Simulate CPU-only / GPU probe failure: vram_gb == 0.0
@@ -715,7 +765,7 @@ async def test_system_models_hardware_recommendation_cpu_only_when_no_gpu(_app, 
 async def test_system_models_hardware_recommendation_48gb_no_confirm_flag(_app, monkeypatch):
     """hardware_recommendation for 48 GB GPU: smart is live-validated, no confirm flag."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     from paper_ingestion.services import model_lifecycle as ml
 
     # Simulate 48 GB GPU (49 152 MiB → HIGH bucket)
@@ -771,7 +821,7 @@ async def test_system_models_routing_mismatch_surfaces_inconsistency(_app, monke
     the smart alias. Expects routing["smart"] == "qwen3:8b" and consistent=False.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -808,7 +858,7 @@ async def test_system_models_litellm_down_endpoint_stays_200(_app, monkeypatch):
     routing must be empty; consistent=False only when there is stored intent.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -838,7 +888,7 @@ async def test_system_models_litellm_down_endpoint_stays_200(_app, monkeypatch):
 async def test_system_models_routing_consistent_when_litellm_matches(_app, monkeypatch):
     """When LiteLLM routes the same model as stored intent, consistent=True."""
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -879,6 +929,87 @@ async def test_system_models_routing_consistent_when_litellm_matches(_app, monke
 
 
 @pytest.mark.asyncio
+async def test_system_models_routing_consistent_for_a_custom_endpoint(_app, monkeypatch):
+    """A custom endpoint delivers under a different prefix than it is assigned.
+
+    Comparing the delivered model against the stored intent without normalizing
+    that difference reported a correctly applied route as permanently divergent.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    # Stored intent uses the app-facing prefix; delivery uses "openai/".
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="custom_openai/org/local-llm"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def _fake_deployments():
+        return [
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "openai/org/local-llm"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            )
+        ]
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
+
+    body = await get_system_models(request)
+
+    assert body.routing.get("smart") == "custom_openai/org/local-llm", (
+        f"routing must be reported in the assigned form; got {body.routing.get('smart')!r}"
+    )
+    assert body.consistent is True, (
+        f"a correctly delivered custom route is not divergent; routing={body.routing}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_models_routing_consistent_for_a_direct_openai_route(_app, monkeypatch):
+    """``openai/`` is a provider prefix in its own right, not only a delivery form.
+
+    Rewriting it whenever it appears would relabel every genuine OpenAI route as
+    divergent, so the prefix alone must never drive the normalization.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="openai/gpt-5"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def _fake_deployments():
+        return [
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "openai/gpt-5"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            )
+        ]
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
+
+    body = await get_system_models(request)
+
+    assert body.routing.get("smart") == "openai/gpt-5"
+    assert body.consistent is True, (
+        f"a genuine OpenAI route must stay consistent; routing={body.routing}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeypatch):
     """:latest suffix on either side must not cause false divergence (consistent=True).
 
@@ -888,7 +1019,7 @@ async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeyp
     false divergence.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)
@@ -935,7 +1066,7 @@ async def test_system_models_num_ctx_override_reflected_in_fit_detail(_app, monk
     catalog default because the unparsable override is ignored.
     """
     app, conn, mock_http = _app
-    from paper_ingestion.main import get_system_models
+    from paper_ingestion.routers.system import get_system_models
     import paper_ingestion.services.litellm_config as _lc
 
     request = _make_request(app.state.db_pool, mock_http)

@@ -40,8 +40,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     setConfig: vi.fn().mockResolvedValue({ key: 'automation.fetch_interval_hours', value: 6 }),
   };
 });
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 const { fetchNudges, fetchConfig, setConfig } = await import('@/lib/api');
+const { toast } = await import('sonner');
 
 function renderSection() {
   const queryClient = createTestQueryClient();
@@ -159,7 +162,8 @@ describe('AutomationSection', () => {
     });
   });
 
-  it('cancels in-flight debounce timeout when NudgeRow unmounts', async () => {
+  it('commits the new time directly when a TimeSelect value is chosen (no debounce)', async () => {
+    const { updateNudge } = await import('@/lib/api');
     vi.mocked(fetchNudges).mockResolvedValue([
       {
         id: 4,
@@ -172,37 +176,41 @@ describe('AutomationSection', () => {
       },
     ]);
 
-    const { unmount } = renderSection();
+    renderSection();
     await waitFor(() => {
       expect(screen.getByText('Flashcard Review Reminder')).toBeInTheDocument();
     });
 
-    // Spy on setTimeout to capture the debounce timer ID, and on clearTimeout to
-    // assert the exact ID is cancelled when the component unmounts.
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
-    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
-
-    // Arm the debounce inside NudgeRow by triggering onValueChange on the TimeSelect's
-    // minutes Select (the last Select rendered by TimeSelect; our Radix mock overwrites
-    // _selectOnValueChange on each Select, so it always holds the final one — minutes).
-    act(() => {
+    // The Radix mock overwrites _selectOnValueChange on each rendered Select, so it
+    // always holds the last one TimeSelect renders — the minutes picker.
+    await act(async () => {
       _selectOnValueChange?.('15');
     });
 
-    // Verify a setTimeout was registered by handleTimeChange
-    expect(setTimeoutSpy).toHaveBeenCalled();
-    // The last setTimeout call is the debounce (300ms)
-    const debounceTimerId = setTimeoutSpy.mock.results[setTimeoutSpy.mock.results.length - 1]?.value;
-    expect(debounceTimerId).toBeDefined();
+    // Asserted immediately after act (which only drains microtasks) rather
+    // than inside waitFor's up-to-one-second polling window: a real timer
+    // sitting between the pick and the call would not have fired yet here,
+    // so this fails if a debounce is reintroduced.
+    expect(vi.mocked(updateNudge)).toHaveBeenCalledWith(4, { cron_expression: '15 8 * * *' });
+  });
 
-    // Unmount BEFORE the 300ms debounce elapses — the cleanup useEffect must call
-    // clearTimeout with the exact debounce timer ID.
-    unmount();
+  it('shows a schedule the picker cannot represent as text, not an editable control', async () => {
+    vi.mocked(fetchNudges).mockResolvedValue([
+      {
+        id: 6,
+        nudge_type: 'research_pulse',
+        enabled: true,
+        cron_expression: '0 * * * *',
+        last_fired_at: null,
+        config: {},
+        created_at: '2026-04-17T00:00:00Z',
+      },
+    ]);
 
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(debounceTimerId);
+    renderSection();
 
-    setTimeoutSpy.mockRestore();
-    clearTimeoutSpy.mockRestore();
+    expect(await screen.findByText('Every hour')).toBeInTheDocument();
+    expect(screen.queryByTestId('select-trigger')).toBeNull();
   });
 
   it('renders auto-fetch interval input and fires setConfig mutation on blur', async () => {
@@ -240,6 +248,37 @@ describe('AutomationSection', () => {
         'automation.fetch_interval_hours',
         6,
       );
+    });
+  });
+
+  it('shows a toast when saving the fetch interval is rejected by the server', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue([
+      { key: 'automation.fetch_interval_hours', value: 24 },
+    ]);
+    vi.mocked(fetchNudges).mockResolvedValue([
+      {
+        id: 3,
+        nudge_type: 'daily_summary',
+        enabled: true,
+        cron_expression: '0 8 * * *',
+        last_fired_at: null,
+        config: {},
+        created_at: '2026-04-17T00:00:00Z',
+      },
+    ]);
+    vi.mocked(setConfig).mockRejectedValueOnce(new Error(''));
+
+    renderSection();
+    const input = await screen.findByRole('spinbutton');
+    await waitFor(() => {
+      expect((input as HTMLInputElement).value).toBe('24');
+    });
+
+    fireEvent.change(input, { target: { value: '6' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Could not save this setting');
     });
   });
 });

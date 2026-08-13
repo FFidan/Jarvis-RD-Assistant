@@ -119,14 +119,12 @@ def make_bot_config(bot_config_cls: Any, **overrides: Any) -> Any:
     does not import from any service package.
 
     Defaults match the canonical ``_make_config`` in ``test_pairing.py``;
-    pass ``**overrides`` to change individual fields (e.g.
-    ``telegram_chat_id=None`` for pairing-flow tests).
+    pass ``**overrides`` to change individual fields.
     """
     from pydantic import SecretStr
 
     defaults: dict[str, Any] = dict(
         telegram_token="test-token",
-        telegram_chat_id=777,
         database_url="postgres://test",
         paper_ingestion_url="http://paper:8000",
         learning_engine_url="http://learn:8001",

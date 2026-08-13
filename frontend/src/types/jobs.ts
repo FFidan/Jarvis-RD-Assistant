@@ -118,8 +118,10 @@ export interface ExtractionTemplate {
   updated_at: string;
 }
 
+import type { JsonValue } from './json';
+
 export interface ExtractedFieldValue {
-  value: string | null;
+  value: JsonValue;
   quote: string | null;
   verified: boolean;
   confidence: number;
@@ -144,7 +146,7 @@ export interface BatchExtractionResponse {
 export interface PaperBrief {
   id: number;
   title: string;
-  source_type?: string;
+  source_type?: string | null;
   published_date?: string | null;
 }
 
@@ -179,7 +181,7 @@ export interface Entity {
   description: string | null;
   metadata: Record<string, unknown>;
   paper_count: number;
-  created_at: string;
+  created_at: string | null;
   display_size?: number;
 }
 
@@ -189,9 +191,10 @@ export interface Relationship {
   target_entity_id: number;
   relationship_type: string;
   paper_id: number | null;
+  page_number?: number | null;
   evidence_quote: string | null;
   confidence: number;
-  created_at: string;
+  created_at: string | null;
 }
 
 export interface KnowledgeGraph {

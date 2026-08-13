@@ -9,33 +9,36 @@
  * - Thinking-mode checkbox renders for supports_thinking entries and persists
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { IngestionSection } from '@/components/settings/IngestionSection';
+import { docsUrl } from '@/lib/docs-links';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
+const ingestionApiMocks = vi.hoisted(() => ({
+  fetchSystemModels: vi.fn(),
+  listProviders: vi.fn(),
+}));
+
 vi.mock('@/lib/api', async () => {
   const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
-  const apiFetch = vi.fn();
   const mocked = await createApiMock({
     fetchConfig: vi.fn(),
     setConfig: async () => ({}),
-    // fetchSystemModels is the named export used by IngestionSection's queryFn.
-    // Wire it through to the same apiFetch mock so existing per-test
-    // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
-    fetchSystemModels: () => apiFetch('/api/system/models'),
+    fetchSystemModels: ingestionApiMocks.fetchSystemModels,
+    listProviders: ingestionApiMocks.listProviders,
   });
-  // Export the very same apiFetch instance fetchSystemModels closes over —
-  // wrapping it would break that per-test control.
-  return Object.assign(mocked, { apiFetch });
+  return mocked;
 });
 
 // Mock Radix Slider with a simple range input for testability
 vi.mock('@/components/ui/slider', () => ({
-  Slider: ({ min, max, step, value, onValueChange, onValueCommit, 'data-testid': testid }: {
+  Slider: ({ min, max, step, value, onValueChange, onValueCommit, 'data-testid': testid, 'aria-label': ariaLabel }: {
     min: number;
     max: number;
     step: number;
@@ -43,10 +46,12 @@ vi.mock('@/components/ui/slider', () => ({
     onValueChange?: (v: number[]) => void;
     onValueCommit?: (v: number[]) => void;
     'data-testid'?: string;
+    'aria-label'?: string;
   }) => (
     <input
       type="range"
       data-testid={testid ?? 'slider'}
+      aria-label={ariaLabel}
       min={min}
       max={max}
       step={step}
@@ -179,9 +184,10 @@ function renderSection() {
 describe('IngestionSection — hardware strip', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.listProviders.mockResolvedValue([]);
   });
 
   it('shows VRAM and tier in hardware strip', async () => {
@@ -216,6 +222,23 @@ describe('IngestionSection — hardware strip', () => {
     expect(screen.getByText(/nvidia-smi/)).toBeInTheDocument();
   });
 
+  it('pairs the hardware strip toggle with content that sits outside it', async () => {
+    renderSection();
+    const toggle = await screen.findByTestId('hardware-strip');
+    expect(toggle).toHaveAttribute('aria-controls', 'hardware-strip-details');
+    expect(toggle).toHaveAccessibleName('15.9 GB VRAM · Tier 2');
+
+    fireEvent.click(toggle);
+    const detail = await screen.findByText(/nvidia-smi/);
+    const details = document.getElementById('hardware-strip-details');
+    expect(details).toContainElement(detail);
+    // Revealed content nested inside the toggle would make aria-controls point
+    // at the toggle's own subtree, and the detail text would be swallowed into
+    // the toggle's name — which would then change on every click.
+    expect(toggle).not.toContainElement(details);
+    expect(toggle).toHaveAccessibleName('15.9 GB VRAM · Tier 2');
+  });
+
   it('renders hardware strip only in AI models group context', async () => {
     renderSection();
     await waitFor(() => {
@@ -226,21 +249,77 @@ describe('IngestionSection — hardware strip', () => {
   });
 });
 
+describe('IngestionSection — unavailable cloud catalog', () => {
+  it('keeps a configured cloud route truthful when its catalog entry is unavailable', async () => {
+    const { fetchConfig } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue([
+      ...baseConfig.filter((entry) => entry.key !== 'llm.smart_model'),
+      { key: 'llm.smart_model', value: 'openrouter/vendor/unlisted-model' },
+    ]);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      current: {
+        ...systemModelsWithFitDetail.current,
+        smart_model: 'openrouter/vendor/unlisted-model',
+      },
+      catalog: systemModelsWithFitDetail.catalog,
+      provider_lists: {
+        openrouter: {
+          model_count: 0,
+          fetched_at: '2026-08-11T00:00:00Z',
+          error: 'provider request failed',
+          truncated: false,
+          excluded: {},
+        },
+      },
+    });
+    ingestionApiMocks.listProviders.mockResolvedValue([
+      {
+        id: 'openrouter',
+        display_name: 'OpenRouter',
+        kind: 'router',
+        api_key_config_key: 'llm.providers.openrouter.api_key',
+        base_url_config_key: null,
+        assignment_prefix: 'openrouter/',
+        litellm_prefix: 'openrouter/',
+        privacy_boundary: 'router',
+        best_for: 'Hosted models',
+        data_note: 'Requests pass through OpenRouter to the selected upstream provider.',
+        configured: true,
+        base_url_configured: false,
+        supports_assignment: true,
+        dashboard_url: 'https://openrouter.ai/settings/keys',
+        account_capability: 'current_key',
+      },
+    ]);
+
+    renderSection();
+
+    const card = await screen.findByTestId('llm-route-card-smart');
+    expect(card).toHaveTextContent('Cloud — through OpenRouter');
+    expect(card).toHaveTextContent('Provider catalog is currently unavailable');
+    expect(card).toHaveTextContent('Price unavailable');
+    expect(card).not.toHaveTextContent('No provider charge');
+    expect(screen.queryByTestId('configure-toggle-smart')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Provider details' })).toBeInTheDocument();
+  });
+});
+
 describe('IngestionSection — num_ctx slider', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
   });
 
-  it('renders a Configure toggle for each LLM role', async () => {
+  it('renders local controls for generative routes, but not the dimension-locked embedder', async () => {
     renderSection();
     await waitFor(() => {
       expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
       expect(screen.getByTestId('configure-toggle-fast')).toBeInTheDocument();
-      expect(screen.getByTestId('configure-toggle-embed')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('configure-toggle-embed')).not.toBeInTheDocument();
   });
 
   it('slider is not visible before Configure is opened', async () => {
@@ -259,6 +338,36 @@ describe('IngestionSection — num_ctx slider', () => {
     fireEvent.click(screen.getByTestId('configure-toggle-smart'));
     await waitFor(() => {
       expect(screen.getByTestId('slider-smart')).toBeInTheDocument();
+    });
+  });
+
+  it('pairs the local-model-controls toggle with its content via aria-controls', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    const toggle = screen.getByTestId('configure-toggle-smart');
+    expect(toggle).toHaveAttribute('aria-controls', 'local-model-controls-smart');
+
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(screen.getByTestId('slider-smart')).toBeInTheDocument();
+    });
+    expect(document.getElementById('local-model-controls-smart')).toContainElement(
+      screen.getByTestId('slider-smart'),
+    );
+  });
+
+  it('slider for the smart role is reachable by its label', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('configure-toggle-smart'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Reading window for the main model')).toBe(
+        screen.getByTestId('slider-smart'),
+      );
     });
   });
 
@@ -287,13 +396,13 @@ describe('IngestionSection — num_ctx slider', () => {
   });
 
   it('re-reads num_ctx from config on mount', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     // Provide a persisted value of 4096 (index 1)
     vi.mocked(fetchConfig).mockResolvedValue([
       ...baseConfig,
       { key: 'llm.host-test-gpu.smart_num_ctx', value: 4096 },
     ]);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
     await waitFor(() => {
@@ -313,9 +422,9 @@ describe('IngestionSection — num_ctx slider', () => {
 describe('IngestionSection — num_ctx save failure honesty', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
   });
 
   it('shows an inline error and rolls the slider back when num_ctx save fails', async () => {
@@ -353,9 +462,9 @@ describe('IngestionSection — num_ctx save failure honesty', () => {
 describe('IngestionSection — per-key save errors', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
   });
 
   it('paints the failed save error ONLY under the card whose key failed', async () => {
@@ -389,8 +498,8 @@ describe('IngestionSection — model delivery pending pill', () => {
   });
 
   it('renders the pending pill only for roles with delivery=pending_restart', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue({
+
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       delivery: { smart: 'pending_restart', fast: 'applied', embed: 'applied' },
     });
@@ -407,8 +516,8 @@ describe('IngestionSection — model delivery pending pill', () => {
   });
 
   it('renders no pill when the delivery field is absent (older backend)', async () => {
-    const { apiFetch } = await import('@/lib/api');
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
     await waitFor(() => {
@@ -424,9 +533,9 @@ describe('IngestionSection — fit badge color', () => {
   });
 
   it('shows green fit badge at default (8192) ctx', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
     await waitFor(() => {
@@ -450,9 +559,9 @@ describe('IngestionSection — fit badge color', () => {
      * Use base_vram_gb=10.0, base=8192, kv=500_000:
      * At 16384: required = 10.0 + (16384-8192)*500_000/1e9 = 10.0 + 4.096 = 14.096 > 13.515 → partial
      */
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       hardware: { ...hardwareWith16GB },
       catalog: [
@@ -493,12 +602,12 @@ describe('IngestionSection — fit badge color', () => {
   });
 
   it('uses backend baseline fields instead of double-counting selected required VRAM', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue([
       ...baseConfig,
       { key: 'llm.host-test-gpu.smart_num_ctx', value: 16384 },
     ]);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       catalog: [
         {
@@ -534,12 +643,12 @@ describe('IngestionSection — fit badge color', () => {
   });
 
   it('falls back to backend verdict when additive baseline fields are absent', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue([
       ...baseConfig,
       { key: 'llm.host-test-gpu.smart_num_ctx', value: 16384 },
     ]);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       catalog: [
         {
@@ -579,9 +688,9 @@ describe('IngestionSection — fit badge color', () => {
      * At 8192: required = 12.0 → fits
      * Slider clamp should snap back to index 2 (8192)
      */
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail); // kv=1_000_000
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail); // kv=1_000_000
 
     renderSection();
     await waitFor(() => {
@@ -612,9 +721,9 @@ describe('IngestionSection — thinking-mode toggle', () => {
   });
 
   it('renders thinking-mode toggle for supports_thinking models when Configure open', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
     await waitFor(() => {
@@ -629,9 +738,9 @@ describe('IngestionSection — thinking-mode toggle', () => {
   });
 
   it('does NOT render thinking-mode toggle for non-thinking models', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
     await waitFor(() => {
@@ -647,9 +756,9 @@ describe('IngestionSection — thinking-mode toggle', () => {
   });
 
   it('persists thinking_disabled via setConfig on toggle change', async () => {
-    const { fetchConfig, apiFetch, setConfig } = await import('@/lib/api');
+    const { fetchConfig, setConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
     await waitFor(() => {
@@ -724,9 +833,9 @@ describe('IngestionSection — hardware recommendation banner', () => {
   });
 
   it('shows summary + alias rows for a MID bucket recommendation', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       // No seeded model → the per-VRAM recommendation is the single advisory.
       current: {},
@@ -756,9 +865,9 @@ describe('IngestionSection — hardware recommendation banner', () => {
   });
 
   it('shows summary + alias rows for a MID_HIGH bucket recommendation', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       current: {},
       hardware_recommendation: hwRecommendationMidHigh,
@@ -786,9 +895,9 @@ describe('IngestionSection — hardware recommendation banner', () => {
   });
 
   it('marks advisory framing — does not claim auto-change', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       current: {},
       hardware_recommendation: hwRecommendationMid,
@@ -806,9 +915,9 @@ describe('IngestionSection — hardware recommendation banner', () => {
   });
 
   it('shows confirm-on-target badge for aliases with confirm_on_target:true', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       current: {},
       hardware_recommendation: hwRecommendationHigh,
@@ -829,9 +938,9 @@ describe('IngestionSection — hardware recommendation banner', () => {
   });
 
   it('renders gracefully when vram_mb is null and aliases is empty (GPU probe failed)', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       current: {},
       hardware_recommendation: hwRecommendationNullVram,
@@ -851,9 +960,9 @@ describe('IngestionSection — hardware recommendation banner', () => {
   });
 
   it('does NOT render banner when hardware_recommendation is absent', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
 
@@ -867,9 +976,9 @@ describe('IngestionSection — hardware recommendation banner', () => {
 
 describe('IngestionSection — degraded backend (no fit_detail)', () => {
   it('renders without crashing when fit_detail is absent', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       catalog: systemModelsWithFitDetail.catalog.map((c) => ({
         ...c,
@@ -890,9 +999,9 @@ describe('IngestionSection — degraded backend (no fit_detail)', () => {
   });
 
   it('renders without crashing when hardware is absent', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       hardware: undefined,
     });
@@ -919,9 +1028,9 @@ describe('IngestionSection — first-boot model banner (Part 3-1)', () => {
     // current.smart_model is qwen3:14b (what autoconfigure actually seeded);
     // the bucket recommendation's smart alias is qwen3:8b. The banner must
     // assert the model that was actually picked — qwen3:14b, not qwen3:8b.
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       hardware_recommendation: hwRecommendationMid,
     });
@@ -942,9 +1051,9 @@ describe('IngestionSection — first-boot model banner (Part 3-1)', () => {
   });
 
   it('does NOT render first-boot banner when there is no current smart model (even with a recommendation)', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       current: {},
       hardware_recommendation: hwRecommendationMid,
@@ -961,9 +1070,9 @@ describe('IngestionSection — first-boot model banner (Part 3-1)', () => {
   });
 
   it('does NOT render first-boot banner on CPU (no GPU / vram 0)', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       hardware: { ...hardwareWith16GB, vram_gb: 0 },
       hardware_recommendation: hwRecommendationNullVram,
@@ -984,9 +1093,9 @@ describe('IngestionSection — hardware source line (Part 3-2)', () => {
   });
 
   it('renders hardware-source-line when vram_source_detail is present', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       hardware: {
         ...hardwareWith16GB,
@@ -1003,9 +1112,9 @@ describe('IngestionSection — hardware source line (Part 3-2)', () => {
   });
 
   it('does NOT render hardware-source-line when vram_source_detail is absent', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
 
@@ -1022,9 +1131,9 @@ describe('IngestionSection — GPU overlay divergence line (Part 3-3)', () => {
   });
 
   it('renders gpu-overlay-divergence warning when host_gpu_divergence is true', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       hardware: {
         ...hardwareWith16GB,
@@ -1043,9 +1152,9 @@ describe('IngestionSection — GPU overlay divergence line (Part 3-3)', () => {
   });
 
   it('does NOT render gpu-overlay-divergence when host_gpu_divergence is false', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue({
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue({
       ...systemModelsWithFitDetail,
       hardware: {
         ...hardwareWith16GB,
@@ -1062,9 +1171,9 @@ describe('IngestionSection — GPU overlay divergence line (Part 3-3)', () => {
   });
 
   it('does NOT render gpu-overlay-divergence when host_gpu_divergence is absent', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
 
@@ -1083,9 +1192,9 @@ describe('IngestionSection — GPU overlay divergence line (Part 3-3)', () => {
 describe('IngestionSection — researcher-language model labels', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
   });
 
   it('renders a plain-language top-of-page description for the AI models group', async () => {
@@ -1093,27 +1202,41 @@ describe('IngestionSection — researcher-language model labels', () => {
     await waitFor(() => {
       expect(screen.getByTestId('llm-models-description')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('llm-models-description').textContent).toMatch(/apply changes for you/i);
+    expect(screen.getByTestId('llm-models-description').textContent).toMatch(/applies your choices automatically/i);
   });
 
-  it('labels each role in plain language with the technical alias in parentheses', async () => {
+  it('labels each route in plain language without exposing internal aliases', async () => {
     renderSection();
     await waitFor(() => {
-      expect(screen.getByText('Main model (smart)')).toBeInTheDocument();
+      expect(screen.getByText('Main model')).toBeInTheDocument();
     });
-    expect(screen.getByText('Quick model (fast)')).toBeInTheDocument();
-    expect(screen.getByText('Embedding model (embed)')).toBeInTheDocument();
+    expect(screen.getByText('Quick model')).toBeInTheDocument();
+    expect(screen.getByText('Embedding model')).toBeInTheDocument();
   });
 
   it('describes what each model does and that choices apply automatically', async () => {
     renderSection();
     await waitFor(() => {
-      expect(screen.getByText(/Writes your summaries, cards, and Ask answers/i)).toBeInTheDocument();
+      expect(screen.getByText(/Writes summaries, cards, extraction, and Ask answers/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/Scores and triages incoming papers/i)).toBeInTheDocument();
-    expect(screen.getByText(/Powers search across your library/i)).toBeInTheDocument();
+    expect(screen.getByText(/Builds the searchable representation of every paper/i)).toBeInTheDocument();
     // Post-W1/2/3 truth: model choices apply automatically (not "pending restart").
     expect(screen.getAllByText(/applies automatically/i).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('resolves local route details when a stored model value includes the latest suffix', async () => {
+    const { fetchConfig } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue([
+      ...baseConfig.filter((entry) => entry.key !== 'llm.smart_model'),
+      { key: 'llm.smart_model', value: 'qwen3:14b:latest' },
+    ]);
+
+    renderSection();
+
+    const card = await screen.findByTestId('llm-route-card-smart');
+    expect(card).toHaveTextContent('Fits this machine');
+    expect(card).not.toHaveTextContent('Model details unavailable');
   });
 });
 
@@ -1129,9 +1252,9 @@ describe('IngestionSection — config load failure', () => {
   });
 
   it('renders an error state (not EmptyState) when the config query fails', async () => {
-    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    const { fetchConfig } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockRejectedValue(new Error('HTTP 500: boom'));
-    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
 
     renderSection();
 
@@ -1141,5 +1264,89 @@ describe('IngestionSection — config load failure', () => {
     expect(screen.getByTestId('config-load-error')).toHaveTextContent(/Failed to load configuration/i);
     // The empty-state copy must NOT appear on failure.
     expect(screen.queryByText('No config entries')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Documentation links — routed through docsUrl() (src/lib/docs-links.ts) so
+// the published-site base URL and path-to-URL shape live in one place.
+// ---------------------------------------------------------------------------
+
+describe('IngestionSection — embedding guide link', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { fetchConfig } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    ingestionApiMocks.fetchSystemModels.mockResolvedValue(systemModelsWithFitDetail);
+  });
+
+  it('resolves the migration guide link through docsUrl, with no raw hostname in the component', async () => {
+    renderSection();
+
+    const link = await screen.findByRole('link', { name: /embedding model migration guide/i });
+    expect(link).toHaveAttribute('href', docsUrl('manual/changing-embedding-model.md'));
+
+    const componentSource = readFileSync(
+      path.resolve(__dirname, '../components/settings/IngestionSection.tsx'),
+      'utf8',
+    );
+    expect(componentSource).not.toContain('limitcycle-oss.github.io');
+  });
+});
+
+describe('docsUrl() call sites name a real file under docs/', () => {
+  const srcRoot = path.resolve(__dirname, '..');
+  const docsRoot = path.resolve(__dirname, '../../../docs');
+  // Assembled from parts rather than written as one hostname literal: the check
+  // below is a source-text scan (it greps product files for a hardcoded docs
+  // URL), not URL handling, so a bare hostname literal here is a false positive
+  // for the static analyser's incomplete-url-substring query.
+  const DOCS_HOSTNAME = ['limitcycle-oss', 'github', 'io'].join('.');
+  // Matches a docsUrl call whose sole argument is a single- or double-quoted
+  // string literal, capturing the quoted path in group 2.
+  const CALL_PATTERN = /\bdocsUrl\(\s*(['"])((?:(?!\1).)+)\1\s*\)/g;
+
+  // Scan product source only. Test files are excluded so the scan can never
+  // match its own regex definition or assertion strings — see this file's
+  // "embedding guide link" test above for the one legitimate test-side call.
+  function productFilesUnder(directory: string): string[] {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      if (entry.name === '__tests__') return [];
+      const absolute = path.join(directory, entry.name);
+      return entry.isDirectory() ? productFilesUnder(absolute) : [absolute];
+    }).filter((file) => (file.endsWith('.ts') || file.endsWith('.tsx')) && !file.endsWith('.test.tsx') && !file.endsWith('.test.ts'));
+  }
+
+  function docPathsUsed(): string[] {
+    const paths: string[] = [];
+    for (const file of productFilesUnder(srcRoot)) {
+      for (const match of readFileSync(file, 'utf8').matchAll(CALL_PATTERN)) {
+        const docPath = match[2];
+        if (docPath !== undefined) paths.push(docPath);
+      }
+    }
+    return paths;
+  }
+
+  it('every docsUrl(path) argument in the product source resolves to a file under docs/', () => {
+    const docPaths = docPathsUsed();
+    // A pattern miss would make this check vacuously pass — pin the known
+    // call count so a regex regression fails loudly instead of silently.
+    expect(docPaths.length).toBeGreaterThanOrEqual(3);
+
+    for (const docPath of docPaths) {
+      const exists = existsSync(path.resolve(docsRoot, docPath));
+      expect(exists, `docsUrl call argument "${docPath}" has no matching file under docs/`).toBe(true);
+    }
+  });
+
+  it('no product file other than docs-links.ts hardcodes the published docs hostname', () => {
+    // A raw href is invisible to the docsUrl() scan above — guard separately
+    // so a future component can't bypass docsUrl() with a literal URL.
+    const offenders = productFilesUnder(srcRoot)
+      .filter((file) => path.relative(srcRoot, file) !== path.join('lib', 'docs-links.ts'))
+      .filter((file) => readFileSync(file, 'utf8').includes(DOCS_HOSTNAME));
+
+    expect(offenders, `raw docs hostname found outside docs-links.ts: ${offenders.join(', ')}`).toEqual([]);
   });
 });

@@ -25,7 +25,7 @@ from jarvis_common.model_catalog import (
 )
 
 from paper_ingestion.services.llm_provider_registry import provider_for_id
-from paper_ingestion.services.model_prefixes import strip_ollama_prefix
+from paper_ingestion.services.model_prefixes import strip_latest_tag, strip_ollama_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,12 @@ class ModelStatusDict(TypedDict):
     default_num_ctx: int | None
     max_num_ctx: int | None
     supports_thinking: bool
+    input_price_per_million: str | None
+    output_price_per_million: str | None
+    price_source: str | None
+    capabilities: tuple[str, ...]
+    lifecycle: str | None
+    field_sources: dict[str, dict[str, str]]
     # -- runtime keys added by build_model_statuses --
     active: bool
     pulled: bool
@@ -182,8 +188,7 @@ def normalize_model_tag(tag: str) -> str:
         Canonical tag with the ``ollama/`` / ``ollama_chat/`` prefix and
         ``:latest`` suffix stripped (e.g. ``"qwen3:8b"`` or ``"mistral-nemo"``).
     """
-    value = strip_ollama_prefix(tag.strip())
-    return value.removesuffix(":latest")
+    return strip_latest_tag(strip_ollama_prefix(tag.strip()))
 
 
 def hardware_tier(vram_gb: float) -> int:
@@ -781,7 +786,9 @@ def build_model_statuses(
     active_ids = _active_model_ids(current, embedding_model_name)
 
     statuses: list[ModelStatusDict] = []
-    for entry in (*MODEL_CATALOG, *extra_entries):
+    entries_by_id = {normalize_model_tag(entry.id): entry for entry in MODEL_CATALOG}
+    entries_by_id.update({normalize_model_tag(entry.id): entry for entry in extra_entries})
+    for entry in entries_by_id.values():
         payload = entry.to_dict()
         active = normalize_model_tag(entry.id) in active_ids or (
             entry.ollama_tag is not None and normalize_model_tag(entry.ollama_tag) in active_ids

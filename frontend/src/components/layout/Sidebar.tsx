@@ -2,7 +2,7 @@
  * Sidebar — grouped roman-numeral navigation per the Shell/Sidebar+Admin IA spec.
  *
  * Density modes (device-scoped, `useNavPrefsStore`):
- *   - simple  — short essentials rail (Home · My Day · Library · Ask · Cards)
+ *   - simple  — short essentials rail (Home · My Day · Discover · Library · Ask · Cards)
  *               with the rest one click away under a "More" disclosure. The
  *               default for first-time researchers so the app isn't overwhelming.
  *   - full    — the grouped layout below; the default for returning users.
@@ -45,12 +45,14 @@ import {
   ChevronRight,
   Sliders,
   LogOut,
+  X,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/ui-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useNavPrefsStore } from '@/stores/nav-prefs-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -66,6 +68,7 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   testid?: string;
+  tourId?: string;
 }
 
 interface NavGroup {
@@ -85,8 +88,19 @@ const navGroups: NavGroup[] = [
       { path: '/', label: 'Home', icon: Home },
       { path: '/my-day', label: 'My Day', icon: Sun },
       { path: '/pulse', label: 'Pulse Deck', icon: Sparkles },
-      { path: '/feed?surface=library', label: 'Library', icon: Newspaper },
-      { path: '/feed?surface=search', label: 'Discover', icon: Search, testid: 'nav-discover' },
+      {
+        path: '/feed?surface=library',
+        label: 'Library',
+        icon: Newspaper,
+        tourId: 'sidebar-library sidebar-analyze',
+      },
+      {
+        path: '/feed?surface=search',
+        label: 'Discover',
+        icon: Search,
+        testid: 'nav-discover',
+        tourId: 'sidebar-discover',
+      },
     ],
   },
   {
@@ -115,7 +129,7 @@ const navGroups: NavGroup[] = [
     label: 'Ask',
     subLabel: 'Cross-paper reasoning and workspace.',
     items: [
-      { path: '/ask', label: 'Ask', icon: MessageCircleQuestion },
+      { path: '/ask', label: 'Ask', icon: MessageCircleQuestion, tourId: 'sidebar-ask' },
     ],
   },
   {
@@ -139,6 +153,7 @@ const navGroups: NavGroup[] = [
 const SIMPLE_NAV_PATHS = new Set([
   '/',
   '/my-day',
+  '/feed?surface=search',
   '/feed?surface=library',
   '/ask',
   '/cards',
@@ -160,7 +175,7 @@ function NavLinkItem({ item, isActive, collapsed }: NavLinkProps) {
     <Link
       to={item.path}
       data-testid={item.testid}
-      data-tour-id={item.path === '/settings' ? 'sidebar-settings' : undefined}
+      data-tour-id={item.tourId}
       className={cn(
         'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
         isActive
@@ -208,14 +223,14 @@ function GroupHeader({ numeral, label, subLabel, collapsed }: GroupHeaderProps) 
   return (
     <div className="px-3 pt-4 pb-1">
       <div className="flex items-baseline gap-2">
-        <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-muted-foreground/60">
+        <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-meta">
           {numeral}
         </span>
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-meta">
           {label}
         </span>
       </div>
-      <p className="mt-0.5 text-[10px] italic text-muted-foreground/50 leading-snug">
+      <p className="mt-0.5 text-[10px] italic text-meta leading-snug">
         {subLabel}
       </p>
     </div>
@@ -329,8 +344,22 @@ export function Sidebar() {
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
   const { logout, user } = useAuthStore();
   const { navMode, toggleNavMode } = useNavPrefsStore();
+  const completedMilestones = useResearchMilestoneStore((state) => state.completed);
+  const advancedCueDismissed = useResearchMilestoneStore(
+    (state) => state.advancedCueDismissed,
+  );
+  const dismissAdvancedCue = useResearchMilestoneStore(
+    (state) => state.dismissAdvancedCue,
+  );
   const isAdmin = user?.role === 'admin';
   const isSimple = navMode === 'simple';
+  const hasResearchMilestone = completedMilestones.save || completedMilestones.analyze;
+  const showAdvancedCue = isSimple && hasResearchMilestone && !advancedCueDismissed;
+
+  const handleNavModeToggle = () => {
+    if (showAdvancedCue) dismissAdvancedCue();
+    toggleNavMode();
+  };
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -386,16 +415,40 @@ export function Sidebar() {
 
         {/* Footer: Nav-mode toggle · Settings · HealthDots · Sign out */}
         <div className="p-3 space-y-2">
+          {showAdvancedCue && !sidebarCollapsed && (
+            <div
+              className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs text-muted-foreground"
+              data-testid="advanced-workspace-cue"
+              role="status"
+            >
+              <div className="flex items-start gap-2">
+                <p className="leading-relaxed">
+                  Ready for the next step? Show all features to use Projects, Extraction,
+                  Knowledge Graph, and Citation Graph.
+                </p>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-mr-2 -mt-2 h-7 w-7 shrink-0"
+                  onClick={dismissAdvancedCue}
+                  aria-label="Dismiss workspace feature tip"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Nav-mode toggle — simple ⇄ full nav density (device-scoped) */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size={sidebarCollapsed ? 'icon' : 'sm'}
-                onClick={toggleNavMode}
+                onClick={handleNavModeToggle}
                 className="w-full"
                 data-testid="nav-mode-toggle"
-                aria-label={isSimple ? 'Show all features' : 'Show simple nav'}
+                aria-label={isSimple ? 'Show all features' : 'Simple view'}
               >
                 <Sliders className="h-4 w-4 shrink-0" aria-hidden="true" />
                 {!sidebarCollapsed && (

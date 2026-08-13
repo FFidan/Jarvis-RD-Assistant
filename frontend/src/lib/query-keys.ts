@@ -67,6 +67,11 @@ export const QUERY_KEYS = {
     auditLog: (actionPrefix: string) => ["admin", "audit-log", actionPrefix] as const,
     users: () => ["admin", "users"] as const,
     systemHealth: () => ["admin", "system-health"] as const,
+    restoreStatus: () => ["admin", "restore-status"] as const,
+    restorePoints: () => ["admin", "restore-points"] as const,
+    backupRetention: () => ["admin", "backups", "retention"] as const,
+    backupStatus: () => ["admin", "backups", "status"] as const,
+    backupInbox: () => ["admin", "backups", "inbox"] as const,
   },
 
   // ── Citation graph ────────────────────────────────────────────────────────
@@ -225,6 +230,8 @@ export const QUERY_KEYS = {
     all: () => ["config"] as const,
     systemModels: () => ["system-models"] as const,
     systemCapabilities: () => ["system-capabilities"] as const,
+    providers: () => ["settings", "providers"] as const,
+    providerAccount: (provider: string) => ["settings", "providers", provider, "account"] as const,
   },
 
   // ── Topics ────────────────────────────────────────────────────────────────

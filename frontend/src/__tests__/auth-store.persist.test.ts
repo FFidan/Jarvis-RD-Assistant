@@ -1,6 +1,5 @@
 /**
- * Tests for auth store persistence: API key uses sessionStorage (not localStorage),
- * and logout clears the jarvis-ui localStorage entry.
+ * Tests for cookie-session metadata persistence and cross-user cleanup.
  *
  * The Zustand persist middleware writes to the storage engine on every
  * state change. In the jsdom environment, sessionStorage and localStorage
@@ -27,7 +26,6 @@ describe('auth-store — sessionStorage persistence', () => {
     useAuthStore.setState({
       isAuthenticated: false,
       authTime: null,
-      apiKey: null,
     });
   });
 
@@ -40,12 +38,12 @@ describe('auth-store — sessionStorage persistence', () => {
     await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
 
     // sessionStorage must contain the persisted auth entry with the session
-    // user (the cookie is the credential — no raw apiKey is persisted).
+    // user (the cookie is the credential — no raw key is persisted).
     const raw = sessionStorage.getItem('jarvis-auth');
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw!);
     expect(parsed.state.user).toEqual({ id: 7, email: 'owner@example.com', role: 'admin' });
-    // apiKey must not be persisted to sessionStorage at all.
+    // No legacy raw-key field may be persisted to sessionStorage.
     expect('apiKey' in (parsed.state as Record<string, unknown>)).toBe(false);
 
     // localStorage must NOT contain the auth entry.
@@ -102,15 +100,10 @@ describe('auth-store — sessionStorage persistence', () => {
     expect(useUIStore.getState().checklistDismissed).toBe(false);
   });
 
-  // -------------------------------------------------------------------------
-  // partialize must never include apiKey (in-memory only)
-  // -------------------------------------------------------------------------
-  it('apiKey is absent from the partialized state even when set in-memory', () => {
-    // Force an apiKey into in-memory state (simulates a legacy/edge-case path).
+  it('the partialized session shape excludes the legacy raw-key field', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'should-never-be-persisted',
       user: { id: 1, email: 'x@example.com', role: 'user' },
     });
 
@@ -120,7 +113,7 @@ describe('auth-store — sessionStorage persistence', () => {
     expect(raw).not.toBeNull();
     const persisted = JSON.parse(raw!) as { state: Record<string, unknown> };
 
-    // The apiKey field must not appear in the persisted payload.
+    // The removed legacy field must not reappear in the persisted payload.
     expect('apiKey' in persisted.state).toBe(false);
     // Non-sensitive fields are still persisted.
     expect(persisted.state.isAuthenticated).toBe(true);

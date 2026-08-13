@@ -613,7 +613,10 @@ async def test_litellm_probe_uses_dedicated_client_when_shared_pool_times_out(
             assert timeout == 2.0
             return Response()
 
-    monkeypatch.setattr(httpx, "AsyncClient", DedicatedClient)
+    monkeypatch.setattr(
+        "jarvis_common.health.pinned_async_client",
+        lambda _policy: DedicatedClient(),
+    )
     request = _fake_request()
     request.app.state.http_client = SharedClient()
 

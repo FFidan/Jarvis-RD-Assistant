@@ -37,6 +37,7 @@ const mockPaperDetail = {
     priority_score: 0.95,
     metadata: {},
     external_id: '1706.03762',
+    discovery_origin: 'user_initiated',
   },
   summary: {
     id: 1,
@@ -47,6 +48,7 @@ const mockPaperDetail = {
     tldr: 'TLDR_TEXT: Transformers are attention-only.',
     methodology: 'METHODOLOGY_TEXT: Self-attention mechanism with multi-head attention.',
     limitations: 'LIMITATIONS_TEXT: Quadratic complexity with sequence length.',
+    relevance_notes: null,
     key_findings: [
       {
         finding: 'FINDING_TEXT: Transformer outperforms RNN-based models on translation tasks',

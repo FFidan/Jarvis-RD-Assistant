@@ -82,8 +82,8 @@ def _make_config():
 def test_ts_07_skips_make_config_delegating_to_helper():
     """make_config bodies that delegate to make_bot_config do NOT trigger TS-07."""
     src = """\
-def _make_config(telegram_chat_id: int | None = 777):
-    return make_bot_config(telegram_chat_id=telegram_chat_id)
+def _make_config():
+    return make_bot_config()
 """
     _, warnings = _run_check(src, filename="test_make_config_delegating.py")
     ts07 = [w for w in warnings if "TS-07" in w and "make_config" in w]
@@ -117,7 +117,7 @@ def test_ts_07_flags_make_config_multiline_botconfig():
 def _make_config() -> BotConfig:
     return BotConfig(
         telegram_token="tok",
-        telegram_chat_id=123,
+        jarvis_base_url="https://example.test",
     )
 """
     _, warnings = _run_check(src, filename="test_make_config_multiline.py")

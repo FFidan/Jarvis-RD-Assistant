@@ -52,7 +52,10 @@ Choose the models JARVIS uses. Each control is labelled in plain language with i
 
 - **Main model (smart)** — writes your summaries, cards, and Ask answers.
 - **Quick model (fast)** — scores and triages papers.
-- **Embedding model (embed)** — powers search; it is fixed, and changing it requires re-indexing your library.
+- **Embedding model (embed)** — powers search and is dimension-locked to its
+  Qdrant collection. It is not changed with the Main or Quick picker; follow
+  [Changing the embedding model](changing-embedding-model.md) for the required
+  backup, benchmark, and re-embedding workflow.
 - **Reading window (num_ctx)** — how much of each paper the AI reads at once.
 
 Your choice applies automatically — there is no separate "save and restart" step. Operator-level tuning knobs (such as the reading window and the thinking toggle) sit behind a per-model **Configure** disclosure so the everyday controls stay uncluttered.
@@ -71,7 +74,7 @@ If a model card shows a **pending — applying automatically** badge, your choic
 
 Configure optional cloud LLM providers for this deployment. The panel keeps connected providers visible and uses **Add cloud provider** for additional choices, so administrators do not have to manage a long wall of empty API-key inputs. Supported provider entries include OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Mistral, Kimi/Moonshot, Z.ai/GLM, and a Custom OpenAI-compatible endpoint.
 
-Provider settings are deployment-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and blank saves do not delete an existing key. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.
+Provider settings are deployment-wide: changes affect the instance, not only the signed-in administrator. Keys are stored encrypted at rest, shown only as configured/not configured, and a blank save does not delete an existing key. A stored key or endpoint can also be removed rather than only overwritten; removal is refused while a model route still depends on that provider, and it is recorded in the audit log distinctly from a replacement. Custom OpenAI-compatible endpoints require an explicit base URL and are intended for trusted self-hosted or institutional gateways.
 
 Adding a key does not make cloud the default. It only makes matching cloud models assignable in the **Main model (smart)** and **Quick model (fast)** controls above. Leave all provider keys blank to keep the deployment local-only.
 
@@ -139,7 +142,12 @@ Repeated negative feedback for a topic dampens its positive similarity contribut
 
 ### Timer
 
-Configure the Pomodoro-style session timer available in the TopBar: work interval, break interval, and long-break interval.
+Configure the Pomodoro-style timer available in the TopBar: work interval,
+break interval, and long-break interval. Those preferences and break cycles are
+local to this browser. The active focus interval itself is stored per user, so
+starting it from the Web interface or Telegram shows the same remaining session
+in the other client. Pause, resume, stop, and completed-time accounting use that
+shared server state.
 
 ### Observability
 
@@ -187,13 +195,34 @@ Fill in:
   - **Personal library** — your own Zotero account. Most people want this.
   - **Group library** — a shared Zotero group. You will also need the group's **numeric Group ID** (the number in the group URL, e.g. `zotero.org/groups/987654/...`).
 
-Sending a paper to Zotero pushes its **citation metadata** (title, authors, DOI, abstract). The PDF file itself is **not attached**.
+Each JARVIS account uses one active Zotero library at a time. Changing the User
+ID, Library Type, or Group ID disconnects the item and collection references
+from the previous library. It does not remove local papers, projects, notes, or
+analysis history. The next export creates or finds the corresponding objects in
+the newly selected library.
+
+Sending a paper to Zotero pushes its **citation metadata** (title, authors, DOI,
+abstract). The PDF file itself is **not attached**. The item is filed into a
+Zotero collection matching each JARVIS project linked to the paper. Existing
+items found by DOI are filed into those collections instead of duplicated.
+
+#### Automatic sync schedule
+
+Turn on **Automatically import new papers clipped into Zotero** to have JARVIS
+pull new items from your library on a schedule. Choose how often from plain
+options — hourly, every few hours, daily at a time, or weekly on a day. For a
+schedule the options cannot express, open **Advanced** and enter a five-field
+cron expression directly. A schedule that would run more often than every
+fifteen minutes is refused.
 
 #### Verify Zotero works
 
 1. Enter your **API Key** and **User ID** (and **Group ID** for a group library).
 2. Click **Test connection**. A green "Connected" message confirms the credentials are valid; a red message names the problem (wrong key, missing user ID, or unreachable Group ID).
-3. Open any paper's [Paper Detail](paper-detail.md) page and click **Send to Zotero**. The item then appears in your Zotero library, and the panel offers a **View in Zotero** link.
+3. Link a paper to a project, open its [Paper Detail](paper-detail.md) page, and
+   click **Send to Zotero**. The job indicator shows the export until it
+   finishes. The item then appears in a collection named after the project, and
+   the panel offers a **View in Zotero** link.
 
 ---
 

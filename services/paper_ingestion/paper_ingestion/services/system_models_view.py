@@ -7,13 +7,14 @@ the installed/current/routing/recommendation snapshot served by
 
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import asyncpg
 import httpx
 from fastapi import Request
 from jarvis_common.hardware_fit import recommend_models
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from pydantic import Field
 
 from paper_ingestion.config import get_paper_ingestion_settings
@@ -23,15 +24,16 @@ from paper_ingestion.ingestion.embedder import (
     validate_embedding_configuration,
 )
 from paper_ingestion.models import SystemModelsResponse
-from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
+from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY, provider_for_prefix
 from paper_ingestion.services.model_assignment import provider_access_configured
 from paper_ingestion.services.model_lifecycle import (
+    MODEL_CATALOG,
     HardwareInfo,
     async_get_cached_hardware,
     build_model_statuses,
     recommendations_for_role,
 )
-from paper_ingestion.services.model_prefixes import strip_ollama_prefix
+from paper_ingestion.services.model_prefixes import strip_latest_tag, strip_ollama_prefix
 from paper_ingestion.services.provider_models import ProviderModelList, fetch_all_provider_models
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,22 @@ logger = logging.getLogger(__name__)
 _EMBEDDER_BASE: str = EMBEDDING_MODEL_NAME.split(":")[0]
 
 _OLLAMA_PROBE_TTL = 10  # seconds
+
+
+def _build_reviewed_choices(
+    catalog: Sequence[Mapping[str, Any]], reviewed_ids: set[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """Return sourced, assignable reviewed choices for each model role."""
+    return {
+        role: [
+            {**entry, "source": "reviewed_catalog"}
+            for entry in catalog
+            if entry["id"] in reviewed_ids
+            and role in entry["roles"]
+            and entry.get("lifecycle") != "deprecated"
+        ]
+        for role in ("smart", "fast", "embed")
+    }
 
 
 class _OllamaProbeCache:
@@ -100,9 +118,7 @@ def _strip_latest(model: str) -> str:
     never cause a false divergence — applied to BOTH sides of every
     intent ↔ routing compare and to the installed-model set.
     """
-    if model.endswith(":latest"):
-        return model[:-7]
-    return model
+    return strip_latest_tag(model)
 
 
 def _models_match(installed_names: list[str]) -> bool:
@@ -136,7 +152,7 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
 
     ollama_url = get_paper_ingestion_settings().ollama_base_url
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
         if resp.status_code != 200:
             # Log so a reachable-but-erroring Ollama (e.g. 503 during startup)
@@ -201,7 +217,7 @@ def _build_role_routing_map(deployments: list[Any]) -> dict[str, str]:
 async def _fetch_installed_ollama_models(ollama_url: str) -> set[str] | None:
     """Fetch installed Ollama model names (:latest-stripped); None on failure."""
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
         if resp.status_code != 200:
             # Reachable-but-erroring Ollama (e.g. 503 during startup): log the
@@ -357,6 +373,22 @@ async def _load_model_delivery_state(db_pool: asyncpg.Pool) -> dict[str, str]:
         return {}
 
 
+def _as_assigned(routed: str, intent: str) -> str:
+    """Restate *routed* in the prefix form *intent* is stored under.
+
+    A provider may be routed under one prefix and assigned under another — the
+    custom endpoint is delivered as ``openai/`` but stored as ``custom_openai/``
+    — and only the stored intent says which provider a route belongs to. The
+    delivered prefix cannot: ``openai/`` is also the real OpenAI provider's own
+    assignment prefix, so keying off it would relabel every genuine OpenAI route
+    as divergent.
+    """
+    from paper_ingestion.services.litellm_config import assignment_model_for  # noqa: PLC0415
+
+    provider = provider_for_prefix(intent.split("/", 1)[0]) if "/" in intent else None
+    return routed if provider is None else assignment_model_for(provider, routed)
+
+
 async def _load_routing_truth(current: dict[str, Any]) -> tuple[dict[str, str], bool]:
     """Read what LiteLLM actually routes now and compare against the committed intent."""
     # Provider prefix is normalized ("ollama/qwen3:8b" → "qwen3:8b") so the comparison
@@ -380,11 +412,15 @@ async def _load_routing_truth(current: dict[str, Any]) -> tuple[dict[str, str], 
             if not routed_full:
                 continue
             # Normalize: strip provider prefix so "ollama/qwen3:8b" → "qwen3:8b".
-            # Cloud models (anthropic/…, openai/…) keep the prefix because that
-            # is how `current` stores cloud model assignments too.
+            # Cloud models keep a prefix because that is how `current` stores
+            # cloud assignments too — but not always the same one, so the
+            # delivered prefix is restated in the assigned form as well.
             routed_normalized = strip_ollama_prefix(routed_full)
             # Normalize :latest so "qwen3:8b:latest" and "qwen3:8b" compare equal.
             routed_normalized = _strip_latest(routed_normalized)
+            routed_normalized = _as_assigned(
+                routed_normalized, str(current.get(f"{alias}_model") or "")
+            )
             # Multiple deployments per alias can exist mid-replace; the
             # reconciler removes stale duplicates on its next pass.
             routing[alias] = routed_normalized
@@ -508,6 +544,12 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
         "issues": {},
         "catalog": [],
         "recommendations": {},
+        "reviewed_choices": {},
+        "embedding_contract": {
+            "model": EMBEDDING_MODEL_NAME,
+            "dimension": EMBEDDING_DIMENSION,
+            "change_requires_reindex": True,
+        },
     }
 
     cloud_api_keys: dict[str, bool] = {"anthropic": False, "openai": False, "google": False}
@@ -580,6 +622,17 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
     _stamp_live_provenance(result["catalog"], provider_lists)
     for entries in result["recommendations"].values():
         _stamp_live_provenance(entries, provider_lists)
+    source_reviewed_ids = {
+        entry.id
+        for entry in MODEL_CATALOG
+        if any(
+            source.get("kind") == "reviewed_catalog"
+            and bool(source.get("source_url"))
+            and bool(source.get("reviewed_at"))
+            for source in entry.field_sources.values()
+        )
+    }
+    result["reviewed_choices"] = _build_reviewed_choices(result["catalog"], source_reviewed_ids)
     # Advisory per-VRAM default-model recommendation.  Convert vram_gb → MiB
     # for recommend_models(); pass None when the probe reported 0 (CPU-only /
     # probe failure) so the None-path safe-default logic fires rather than

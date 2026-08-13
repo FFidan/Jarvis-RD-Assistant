@@ -42,12 +42,8 @@ vi.mock('@/lib/api', async () => {
   const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
   return createApiMock({
     fetchFeedPapers: async () => ({ papers: [], total: 0, offset: 0, limit: 20 }),
-    fetchFeedCounts: async () => ({
-      inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
-      active: 5, kept: 5, all_non_trash: 5,
-    }),
     fetchSources: async () => [],
-    fetchFeedCountsWithFacets: async () => ({
+    fetchFeedCounts: async () => ({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
       active: 5, kept: 5, all_non_trash: 5,
       by_source: {}, by_topic: [], untagged: 0,

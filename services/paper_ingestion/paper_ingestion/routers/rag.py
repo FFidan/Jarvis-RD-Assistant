@@ -52,8 +52,10 @@ from paper_ingestion.rag.exceptions import (
 from paper_ingestion.rag.streaming import (
     CrossPaperRagNoResults,
     CrossPaperRagPrep,
+    RagAnswerBudget,
     prepare_cross_paper_rag,
     prepare_single_paper_rag,
+    resolve_rag_answer_budget,
     sse_error_stream,
     stream_rag_events,
 )
@@ -178,11 +180,18 @@ async def _prepare_single_paper_or_raise(
     *,
     paper_id: int,
     body: AskRequest,
+    answer_budget: RagAnswerBudget,
 ) -> tuple[list[dict[str, str]], list[dict[str, object]]]:
     """Build single-paper RAG inputs or raise stable route errors."""
     try:
         return await prepare_single_paper_rag(
-            deps.embedder, deps.db_pool, paper_id, body, deps.http_client, user_id=deps.user_id
+            deps.embedder,
+            deps.db_pool,
+            paper_id,
+            body,
+            deps.http_client,
+            user_id=deps.user_id,
+            answer_budget=answer_budget,
         )
     except PaperNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Paper not found") from exc
@@ -206,11 +215,16 @@ async def _prepare_cross_paper_or_raise(
     deps: _RagRouteDeps,
     *,
     body: CrossPaperAskRequest,
+    answer_budget: RagAnswerBudget,
 ) -> CrossPaperRagPrep | CrossPaperRagNoResults:
     """Build cross-paper RAG inputs or raise stable route errors."""
     try:
         return await prepare_cross_paper_rag(
-            deps.embedder, deps.db_pool, body, deps.http_client, user_id=deps.user_id
+            deps.embedder,
+            deps.db_pool,
+            body,
+            user_id=deps.user_id,
+            answer_budget=answer_budget,
         )
     except HTTPException:
         raise
@@ -233,6 +247,7 @@ async def _call_rag_llm(
     messages: list[dict[str, str]],
     *,
     smart_model: str,
+    answer_budget: RagAnswerBudget,
 ) -> "AskResponse":
     """Call the LLM for a RAG answer and return a validated AskResponse.
 
@@ -263,7 +278,7 @@ async def _call_rag_llm(
         messages=messages,
         options=ChatCompletionOptions(
             model=smart_model,
-            max_tokens=700,
+            max_tokens=answer_budget.completion_tokens,
             temperature=0.1,
             timeout=LLM_TIMEOUT_DEFAULT,
         ),
@@ -402,12 +417,21 @@ async def ask_paper(
     deps = _RagRouteDeps(
         embedder=embedder, db_pool=db_pool, http_client=http_client, user_id=user_id
     )
-    messages, raw_sources = await _prepare_single_paper_or_raise(deps, paper_id=paper_id, body=body)
-
+    answer_budget = await resolve_rag_answer_budget()
+    messages, raw_sources = await _prepare_single_paper_or_raise(
+        deps,
+        paper_id=paper_id,
+        body=body,
+        answer_budget=answer_budget,
+    )
     smart_model = get_smart_model()
 
     try:
-        ask_result = await _call_rag_llm(messages, smart_model=smart_model)
+        ask_result = await _call_rag_llm(
+            messages,
+            smart_model=smart_model,
+            answer_budget=answer_budget,
+        )
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="LLM request timed out") from exc
     except EmptyVisibleLLMContentError as exc:
@@ -479,9 +503,16 @@ async def ask_paper_stream(
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
+    answer_budget = await resolve_rag_answer_budget()
     try:
         messages, raw_sources = await prepare_single_paper_rag(
-            embedder, db_pool, paper_id, body, http_client, user_id=user_id
+            embedder,
+            db_pool,
+            paper_id,
+            body,
+            http_client,
+            user_id=user_id,
+            answer_budget=answer_budget,
         )
     except PaperNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Paper not found") from exc
@@ -518,6 +549,7 @@ async def ask_paper_stream(
             model=smart_model,
             verifier=verifier,
             db_pool=db_pool,
+            answer_budget=answer_budget,
         ):
             yield event
 
@@ -567,7 +599,12 @@ async def ask_cross_paper(
     deps = _RagRouteDeps(
         embedder=embedder, db_pool=db_pool, http_client=http_client, user_id=user_id
     )
-    result = await _prepare_cross_paper_or_raise(deps, body=body)
+    answer_budget = await resolve_rag_answer_budget()
+    result = await _prepare_cross_paper_or_raise(
+        deps,
+        body=body,
+        answer_budget=answer_budget,
+    )
 
     # Short-circuit when no chunks were found
     if isinstance(result, CrossPaperRagNoResults):
@@ -578,7 +615,11 @@ async def ask_cross_paper(
     smart_model = get_smart_model()
 
     try:
-        ask_result = await _call_rag_llm(messages, smart_model=smart_model)
+        ask_result = await _call_rag_llm(
+            messages,
+            smart_model=smart_model,
+            answer_budget=answer_budget,
+        )
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="LLM request timed out") from exc
     except EmptyVisibleLLMContentError as exc:
@@ -642,9 +683,14 @@ async def ask_cross_paper_stream(
     body : CrossPaperAskRequest
         Question, max_chunks, max_papers, and decompose parameters.
     """
+    answer_budget = await resolve_rag_answer_budget()
     try:
         result = await prepare_cross_paper_rag(
-            embedder, db_pool, body, http_client, user_id=user_id
+            embedder,
+            db_pool,
+            body,
+            user_id=user_id,
+            answer_budget=answer_budget,
         )
     except HTTPException:
         # Re-raise FastAPI HTTPExceptions unchanged so they aren't swallowed by the generic handler.
@@ -695,6 +741,7 @@ async def ask_cross_paper_stream(
             model=smart_model,
             verifier=verifier,
             db_pool=db_pool,
+            answer_budget=answer_budget,
         ):
             yield event
 
@@ -715,7 +762,6 @@ async def get_weekly_digest(
     request: Request,
     days: int = Query(default=7, ge=1, le=30),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
     user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
@@ -743,7 +789,6 @@ async def get_weekly_digest(
     """
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
-    _ = http_client  # weekly_summary uses openai_client directly; dep kept for backwards-compat.
     return await generate_weekly_summary(
         db_pool,
         days=days,

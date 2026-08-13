@@ -10,7 +10,6 @@ const logoutMock = vi.fn();
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => null),
       isAuthenticated: true,
       logout: logoutMock,
     })),

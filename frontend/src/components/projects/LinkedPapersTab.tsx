@@ -25,14 +25,17 @@ export function LinkedPapersTab({ projectId }: LinkedPapersTabProps) {
     queryFn: () => fetchProjectPapers(projectId),
   });
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.papers(projectId) });
-  };
+  const invalidatePaperLinkViews = (paperId: number) => Promise.all([
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.papers(projectId) }),
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() }),
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) }),
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() }),
+  ]);
 
   const linkMut = useMutation({
     mutationFn: (paperId: number) => linkPaper(projectId, paperId),
-    onSuccess: () => {
-      invalidate();
+    onSuccess: async (_result, paperId) => {
+      await invalidatePaperLinkViews(paperId);
       setSearchResults([]);
       setSearchQuery('');
     },
@@ -40,7 +43,7 @@ export function LinkedPapersTab({ projectId }: LinkedPapersTabProps) {
 
   const unlinkMut = useMutation({
     mutationFn: (paperId: number) => unlinkPaper(projectId, paperId),
-    onSuccess: invalidate,
+    onSuccess: (_result, paperId) => invalidatePaperLinkViews(paperId),
   });
 
   const handleSearch = async () => {

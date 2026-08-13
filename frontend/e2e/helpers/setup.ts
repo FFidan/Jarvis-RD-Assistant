@@ -180,17 +180,16 @@ export async function markSetupComplete(request: APIRequestContext): Promise<voi
  * hydrated by the time `<App/>` renders.
  */
 export async function seedAuthedSession(page: Page): Promise<void> {
-  const apiKey = API_KEY;
-  await page.addInitScript((key: string) => {
+  await page.addInitScript(() => {
     const state = {
       state: {
         isAuthenticated: true,
         authTime: Date.now(),
-        apiKey: key,
+        user: { id: 1, email: 'admin@example.com', role: 'admin' },
       },
       version: 0,
     };
     window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
     window.localStorage.setItem('jarvis-onboarding-dismissed', 'true');
-  }, apiKey);
+  });
 }

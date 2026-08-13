@@ -25,6 +25,20 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   'zotero.push_highlights': 'Exporting Highlights to Zotero',
 };
 
-export function kindLabel(kind: string): string {
+/**
+ * Overrides `JOB_KIND_LABELS` when a job is scoped to a single paper rather
+ * than the whole library — e.g. `contradictions.scan` is submitted both by
+ * the library-wide Consensus scan and a single paper's Contradictions scan,
+ * and researchers need to tell the two apart at a glance.
+ */
+const PAPER_SCOPED_LABELS: Partial<Record<string, string>> = {
+  'contradictions.scan': 'Scanning Paper Contradictions',
+};
+
+export function kindLabel(kind: string, options?: { paperScoped?: boolean }): string {
+  if (options?.paperScoped) {
+    const scopedLabel = PAPER_SCOPED_LABELS[kind];
+    if (scopedLabel) return scopedLabel;
+  }
   return JOB_KIND_LABELS[kind] ?? kind;
 }

@@ -100,6 +100,9 @@ describe('CommandPaletteSearch', () => {
 
   it('opens via the global ⌘K keydown registered by the hook', () => {
     renderPalette();
+    expect(
+      screen.getByRole('button', { name: /Search your papers/ }),
+    ).toBeInTheDocument();
     expect(useCommandPalette.getState().isOpen).toBe(false);
 
     fireEvent.keyDown(window, { key: 'k', metaKey: true });

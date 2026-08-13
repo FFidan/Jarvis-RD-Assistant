@@ -38,7 +38,7 @@ def _default_auth_patch():
     """Default: auth_required resolves the standard chat as paired user_id=1.
 
     Multi-user mode requires every authorized chat to have a paired JARVIS
-    user_id.  The env-var owner path (telegram_chat_id match) now returns
+    user_id. Unpaired chats return
     (True, None), which the decorator rejects with a pairing message.
 
     Tests that need (True, None) or a specific user_id should override with
@@ -68,7 +68,7 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
 
-    config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
+    config = make_bot_config(BotConfig)
     mock_db = AsyncMock()
     mock_http = AsyncMock()
     # auth_required stashes the resolved user_id in user_data.  Default to
@@ -568,9 +568,10 @@ def test_format_help_contains_all_commands():
 
 @pytest.mark.asyncio
 async def test_post_init_calls_set_my_commands():
-    """post_init must register at least 12 commands via set_my_commands."""
+    """post_init must register the exact catalog-backed autocomplete menu."""
     # BotCommand is now the real class from the installed telegram package.
 
+    from telegram_bot.command_catalog import menu_command_specs  # noqa: PLC0415
     from telegram_bot.main import post_init  # noqa: PLC0415
 
     bot_mock = MagicMock()
@@ -582,7 +583,7 @@ async def test_post_init_calls_set_my_commands():
     application = MagicMock()
     application.bot = bot_mock
     application.bot_data = {
-        "config": make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
+        "config": make_bot_config(BotConfig),
     }
 
     # Stub create_db_pool and JarvisScheduler so post_init doesn't blow up.
@@ -598,11 +599,8 @@ async def test_post_init_calls_set_my_commands():
 
     bot_mock.set_my_commands.assert_awaited_once()
     commands = bot_mock.set_my_commands.call_args[0][0]
-    assert len(commands) >= 12, f"Expected ≥12 commands, got {len(commands)}"
     names = {c.command for c in commands}
-    assert {"pair", "unpair", "whoami"}.issubset(names), (
-        f"missing pairing commands in autocomplete: {names}"
-    )
+    assert names == {spec.name for spec in menu_command_specs()}
 
 
 # ---------------------------------------------------------------------------
@@ -647,15 +645,22 @@ async def test_focus_zero_minutes_rejected_with_help():
 
 @pytest.mark.asyncio
 async def test_focus_positive_minutes_accepted():
-    """/focus 25 proceeds normally — timer is scheduled."""
+    """/focus 25 starts the durable server timer without a local PTB job."""
     update, context, _, _ = _make_focus_update_and_context(args=["25"])
 
-    await focus_command(update, context)
+    with patch(
+        "telegram_bot.handlers.commands.system_commands.services_client.start_focus_session",
+        new_callable=AsyncMock,
+    ) as start_focus:
+        await focus_command(update, context)
 
-    context.job_queue.run_once.assert_called_once()
+    start_focus.assert_awaited_once()
+    assert start_focus.await_args.args[2:] == (1, 1500)
+    context.job_queue.run_once.assert_not_called()
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "25" in text
+    assert "paused" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -922,7 +927,7 @@ async def test_next_command_sends_owner_user_id_for_paired_user():
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"cards": []}
+    mock_resp.json.return_value = None
     mock_http.get.return_value = mock_resp
 
     with _paired_auth_patch(7):
@@ -931,6 +936,50 @@ async def test_next_command_sends_owner_user_id_for_paired_user():
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == "7"
+
+
+@pytest.mark.asyncio
+async def test_next_command_labels_stale_unverified_pulse_without_diagnostic_leak():
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.get.return_value = make_http_response(
+        {
+            "deck_id": 7,
+            "deck_date": "2026-08-07",
+            "card_count": 1,
+            "generated_at": "2026-08-07T06:00:00+00:00",
+            "cards": [
+                {
+                    "card_id": 11,
+                    "paper_id": 12,
+                    "paper_title": "A paper",
+                    "paper_authors": ["A researcher"],
+                    "paper_url": "https://example.org/paper",
+                    "rank": 1,
+                    "score": 0.8,
+                    "llm_relevance": 8,
+                    "llm_novelty": 7,
+                    "reasoning": "Relevant to the configured topic.",
+                    "signals": {"recency": 0.5},
+                    "reasoning_verified": False,
+                    "reasoning_confidence": "UNVERIFIED",
+                }
+            ],
+            "stats": {},
+            "degraded_reason": "sensitive backend diagnostic",
+            "is_stale": True,
+            "stale_age_days": 2,
+        }
+    )
+
+    with _paired_auth_patch(7):
+        await next_command(update, context)
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "Earlier Pulse from August 07 (2 days old)" in text
+    assert "reduced signals" in text
+    assert "Unverified" in text
+    assert "sensitive backend diagnostic" not in text
 
 
 @pytest.mark.asyncio
@@ -997,46 +1046,41 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
 
 
 @pytest.mark.asyncio
-async def test_focus_alarm_sends_owner_user_id_for_paired_user():
-    """focus_alarm callback sends X-Owner-User-Id for the paired user."""
+async def test_focus_start_sends_owner_user_id_for_paired_user():
+    """The durable focus start request is scoped to the paired user."""
     update, context, _, mock_http = _make_focus_update_and_context(args=["25"])
-    # Simulate auth_required having stashed the jarvis_user_id
     context.user_data["jarvis_user_id"] = 42
-
-    captured_callbacks: list = []
-
-    def _capture_run_once(callback, delay, **kwargs):
-        captured_callbacks.append((callback, kwargs.get("data")))
-
-    context.job_queue.run_once.side_effect = _capture_run_once
+    mock_http.post.return_value = make_http_response(
+        {
+            "id": 9,
+            "state": "active",
+            "source": "telegram",
+            "duration_seconds": 1500,
+            "remaining_seconds": 1500,
+            "started_at": "2026-08-09T12:00:00+00:00",
+            "paused_at": None,
+            "paused_seconds": 0.0,
+            "completed_at": None,
+            "recorded_seconds": 0.0,
+            "task_id": None,
+            "paper_id": None,
+        }
+    )
 
     with _paired_auth_patch(42):
         await focus_command(update, context)
 
-    assert captured_callbacks, "run_once was not called"
-    callback, job_data = captured_callbacks[0]
-    assert isinstance(job_data, tuple), "job data must be a (minutes, user_id) tuple"
-    _, user_id_in_data = job_data
-    assert user_id_in_data == 42, f"expected user_id=42 in job data, got {user_id_in_data}"
-
-    # Simulate the alarm firing
-    mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
-
-    alarm_context = MagicMock()
-    alarm_context.job = MagicMock()
-    alarm_context.job.chat_id = 99999
-    alarm_context.job.data = job_data
-    alarm_context.bot.send_message = AsyncMock()
-    alarm_context.application = context.application
-
-    await callback(alarm_context)
-
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == "42", (
-        f"focus_alarm must send X-Owner-User-Id=42, headers={headers}"
+        f"focus start must send X-Owner-User-Id=42, headers={headers}"
     )
     assert headers.get("X-API-Key") == "test-key"
+    assert mock_http.post.await_args.kwargs["json"] == {
+        "duration_seconds": 1500,
+        "source": "telegram",
+    }
+    context.job_queue.run_once.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

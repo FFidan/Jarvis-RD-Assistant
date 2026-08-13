@@ -7,6 +7,7 @@ import { FeedView } from '@/components/feed/FeedView';
 import type { FeedPaper } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 
 // Hoisted so the same field values are visible both to test bodies and to the
 // hoisted vi.mock factory below.
@@ -142,6 +143,26 @@ describe('FeedView — Untagged facet', () => {
 });
 
 describe('FeedView — mutation onError toasts (NI-3)', () => {
+  beforeEach(() => {
+    useResearchMilestoneStore.setState({
+      completed: { save: false, analyze: false },
+      advancedCueDismissed: false,
+    });
+  });
+
+  it('records the Save milestone only after savePaper succeeds', async () => {
+    const user = userEvent.setup();
+    renderFeedView('inbox');
+
+    await user.click(
+      await screen.findByRole('button', { name: /save surface callback test paper/i }),
+    );
+
+    await waitFor(() => {
+      expect(useResearchMilestoneStore.getState().completed.save).toBe(true);
+    });
+  });
+
   it('shows a toast.error when savePaper fails on the inbox surface', async () => {
     const user = userEvent.setup();
     const api = await import('@/lib/api');
@@ -161,6 +182,7 @@ describe('FeedView — mutation onError toasts (NI-3)', () => {
         expect.objectContaining({ description: '500 Internal Server Error' }),
       );
     });
+    expect(useResearchMilestoneStore.getState().completed.save).toBe(false);
   });
 });
 

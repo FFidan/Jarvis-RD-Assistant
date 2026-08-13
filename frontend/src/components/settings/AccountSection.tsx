@@ -7,7 +7,7 @@
  *   `email_verification_sent: true` when a verify link was sent.
  * - Confirm-email-change token: when the account pane mounts with
  *   `#confirm_email_token=<tok>`, this component confirms the change and strips
- *   the bearer from the address. The old query form remains compatible.
+ *   the bearer from the address.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -47,7 +47,7 @@ function useConfirmEmailToken(): ConfirmState {
   const location = useLocation();
   const tokenRef = useRef(
     new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
-      .get('confirm_email_token') ?? searchParams.get('confirm_email_token'),
+      .get('confirm_email_token'),
   );
   const token = tokenRef.current;
   const [state, setState] = useState<ConfirmState>({ status: 'idle' });
@@ -59,9 +59,8 @@ function useConfirmEmailToken(): ConfirmState {
     confirmedRef.current = true;
     setState({ status: 'pending' });
 
-    // New links use a fragment so the token never reaches the server. Strip
-    // either form before the confirmation request, while preserving the
-    // settings section and item query parameters.
+    // Strip the fragment token before the confirmation request while preserving
+    // the settings section and item query parameters.
     const next = new URLSearchParams(searchParams);
     next.delete('confirm_email_token');
     setSearchParams(next, { replace: true });
@@ -92,7 +91,7 @@ function ConfirmBanner({ state }: { state: ConfirmState }) {
   }
   if (state.status === 'ok') {
     return (
-      <div className="rounded-md bg-[hsl(var(--status-ok)_/_0.1)] border border-[hsl(var(--status-ok)_/_0.4)] px-4 py-3 text-sm text-[hsl(var(--status-ok))]">
+      <div className="rounded-md border border-green-500/40 bg-green-500/10 px-4 py-3 text-sm text-[var(--status-ok)]">
         Email address updated to <strong>{state.email}</strong>.
       </div>
     );
@@ -260,7 +259,7 @@ function EmailRow({ account }: { account: AccountResponse }) {
           <Mail className="h-3.5 w-3.5" />
           Email
         </Label>
-        <div className="rounded-md bg-[hsl(var(--status-ok)_/_0.1)] border border-[hsl(var(--status-ok)_/_0.4)] px-3 py-2 text-sm text-[hsl(var(--status-ok))]">
+        <div className="rounded-md border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-[var(--status-ok)]">
           Verification link sent to <strong>{draft}</strong>. Click the link in that email to confirm.
         </div>
         <Button
@@ -353,7 +352,7 @@ function AccountDataExportCard() {
       <CardContent className="p-5 space-y-3">
         <div className="flex items-center gap-2">
           <Download className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-semibold">Account data export</span>
+          <h3 className="text-base font-semibold">Account data export</h3>
         </div>
         <p className="text-sm text-muted-foreground">
           Download a ZIP of your account data, including papers saved to your library and your
@@ -363,7 +362,7 @@ function AccountDataExportCard() {
           {mut.isPending ? 'Preparing download…' : 'Download my data'}
         </Button>
         {downloadStarted && (
-          <p className="text-xs text-[hsl(var(--status-ok))]">Download started.</p>
+          <p className="text-xs text-[var(--status-ok)]">Download started.</p>
         )}
         {mut.isError && (
           <p className="text-xs text-destructive" role="alert">
@@ -412,7 +411,7 @@ export function AccountSection() {
         <CardContent className="p-5 space-y-5">
           <div className="flex items-center gap-2">
             <User className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-semibold">Profile</span>
+            <h3 className="text-base font-semibold">Profile</h3>
           </div>
 
           <DisplayNameRow account={account} />

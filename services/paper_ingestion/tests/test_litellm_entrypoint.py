@@ -25,6 +25,23 @@ def test_compose_uses_shared_litellm_entrypoint() -> None:
         "/usr/local/bin/litellm-entrypoint.sh",
     ]
     assert not (REPO_ROOT / "litellm" / "entrypoint.sh").exists()
+    volumes = _litellm_service()["volumes"]
+    assert "./litellm/pinned_launcher.py:/app/pinned_launcher.py:ro" in volumes
+    assert (
+        "./libs/jarvis_common/jarvis_common/pinned_transport.py:"
+        "/app/jarvis_common/pinned_transport.py:ro" in volumes
+    )
+    assert "./libs/jarvis_common/jarvis_common/net.py:/app/jarvis_common/net.py:ro" in volumes
+
+
+def test_litellm_launcher_fails_closed_without_the_reviewed_transport_hook() -> None:
+    """The custom-provider path must not silently fall back to aiohttp or DNS."""
+    launcher = (REPO_ROOT / "litellm" / "pinned_launcher.py").read_text(encoding="utf-8")
+    assert '"aclient_session"' in launcher
+    assert 'setattr(litellm, "disable_aiohttp_transport", True)' in launcher
+    assert "PinnedAsyncTransport" in launcher
+    assert "Unsupported LiteLLM transport contract" in launcher
+    assert "custom-provider transport hook is unavailable" in launcher
 
 
 def test_litellm_config_requires_master_key() -> None:
@@ -100,7 +117,8 @@ def test_litellm_entrypoint_exports_salt_key_from_secret() -> None:
     must reject an empty salt-key file.
     """
     entrypoint = _litellm_entrypoint_source()
-    assert 'export LITELLM_SALT_KEY="$(cat "$salt_key_file")"' in entrypoint
+    assert 'LITELLM_SALT_KEY="$(cat "$salt_key_file")"' in entrypoint
+    assert "export LITELLM_SALT_KEY" in entrypoint
     assert 'if [ ! -s "$salt_key_file" ]' in entrypoint, (
         "the entrypoint must refuse an empty or missing salt-key secret"
     )
@@ -114,4 +132,6 @@ def test_litellm_entrypoint_enforces_production_master_key_guards() -> None:
     assert 'case "$LITELLM_MASTER_KEY" in' in entrypoint
     assert '"sk-jarvis-dev-test"|changeme|secret|password|""|"sk-1234")' in entrypoint
     assert "-lt 16" in entrypoint, "production minimum-length guard missing"
-    assert "litellm --config /app/config.yaml &" in entrypoint
+    assert 'litellm_launcher="/app/pinned_launcher.py"' in entrypoint
+    assert 'python3 "$litellm_launcher" --config /app/config.yaml &' in entrypoint
+    assert '"${ENVIRONMENT:-development}" != "test"' in entrypoint

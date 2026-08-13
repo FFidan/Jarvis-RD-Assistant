@@ -37,6 +37,16 @@ function formatMetadata(meta: Record<string, unknown> | null): string {
   }
 }
 
+const ACTION_LABELS: Readonly<Record<string, string>> = {
+  'llm.route.change': 'Model route changed',
+  'secret.rotate': 'Secret replaced',
+  'secret.remove': 'Secret removed',
+};
+
+function actionLabel(action: string): string | undefined {
+  return ACTION_LABELS[action];
+}
+
 export function AdminAuditLogPage() {
   const [filterInput, setFilterInput] = useState('');
   const [actionPrefix, setActionPrefix] = useState('');
@@ -118,7 +128,18 @@ export function AdminAuditLogPage() {
                   <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
                     {formatDate(entry.created_at)}
                   </td>
-                  <td className="px-4 py-3 font-medium">{entry.action}</td>
+                  <td className="px-4 py-3 font-medium">
+                    {actionLabel(entry.action) ? (
+                      <span className="space-y-0.5">
+                        <span className="block">{actionLabel(entry.action)}</span>
+                        <code className="block text-xs font-normal text-muted-foreground">
+                          {entry.action}
+                        </code>
+                      </span>
+                    ) : (
+                      entry.action
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {entry.user_id ?? '—'}
                   </td>

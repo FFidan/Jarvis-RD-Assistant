@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,11 +23,13 @@ def _read(path: str) -> str:
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
+    assert changelog.count("## v1.2.5 (2026-08-13)") == 1
     assert changelog.count("## v1.2.4 (2026-08-07)") == 1
     assert changelog.count("## v1.2.3 (2026-08-04)") == 1
     assert "## v1.2.2 (2026-07-31)" in changelog
     assert "## v1.2.1 (2026-07-24)" in changelog
     assert "## v1.2.0 (2026-07-23)" in changelog
+    assert changelog.index("## v1.2.5") < changelog.index("## v1.2.4")
     assert changelog.index("## v1.2.4") < changelog.index("## v1.2.3")
     assert changelog.index("## v1.2.3") < changelog.index("## v1.2.2")
     assert changelog.index("## v1.2.2") < changelog.index("## v1.2.1")
@@ -92,7 +95,7 @@ def test_release_docs_match_the_exact_sha_publish_and_promotion_contract() -> No
     assert "actions/runs/${verification_run_id}" in workflow
     build_job = workflow.split("\n  build:", 1)[1].split("\n  verify:", 1)[0]
     verify_job = workflow.split("\n  verify:", 1)[1].split("\n  promote:", 1)[0]
-    promote_job = workflow.split("\n  promote:", 1)[1]
+    promote_job = workflow.split("\n  promote:", 1)[1].split("\n  promotion-gate:", 1)[0]
     assert (
         "environment: ${{ needs.preflight.outputs.mode == 'verify' && 'release' || '' }}"
         in build_job
@@ -149,21 +152,22 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
             release,
         )
     }
+    current = tomllib.loads(_read("pyproject.toml"))["project"]["version"]
+    major, minor, patch = (int(part) for part in current.split("."))
+    assert patch >= 5, "the rolling five-origin matrix requires five prior patch releases"
+    retained_origins = [f"v{major}.{minor}.{value}" for value in range(patch - 5, patch)]
     expected = {
-        "v1.1.3": ("bootstrap", "current-merge-pending"),
-        "v1.2.0": ("bootstrap", "current-merge-pending"),
-        "v1.2.1": ("bootstrap", "current-merge-pending"),
-        "v1.2.2": ("bootstrap", "current-merge-pending"),
-        # The direct path is what an already-current installation takes, and it
-        # exercises the update transaction rather than the bootstrap. Per the
-        # rule stated beside the table, this row advances with every release:
-        # the newest published tag takes it and the previous holder moves to
-        # bootstrap. Bumping the version without moving this row would leave
-        # the dominant upgrade path unexercised.
-        "v1.2.3": ("direct", "current-merge-pending"),
+        source: (
+            "direct" if source == retained_origins[-1] else "bootstrap",
+            "current-merge-pending",
+        )
+        for source in retained_origins
     }
 
     assert documented == expected
+    assert retained_origins[0] == "v1.2.0"
+    assert retained_origins[-1] == "v1.2.4"
+    assert "v1.1.3" not in documented
 
     # The runbook and the matrix are prose; this input is what a dispatched run
     # actually uses, so a divergence here silently unverifies every source.
@@ -241,6 +245,23 @@ def test_live_postgres_jobs_reuse_one_non_skipping_result_validator() -> None:
         "@pytest.mark.integration\nasync def test_num_ctx_write_delivers" in live_litellm_contract
     )
     assert "--collect-only" not in workflow
+
+
+def test_schema_101_fixture_is_single_sourced_and_collected_by_contract_ci() -> None:
+    fixture = ROOT / "db/testdata/schema-101-seed.sql"
+    restore_roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
+    contract = _read(
+        "services/paper_ingestion/tests/contract/test_schema_101_migration_contract.py"
+    )
+    workflow = _read(".github/workflows/ci.yml")
+
+    assert fixture.is_file()
+    assert "db/testdata/schema-101-seed.sql" in restore_roundtrip
+    assert "CREATE TABLE schema_migrations" not in restore_roundtrip
+    assert "pytest.mark.contract" in contract
+    assert "pytest.mark.integration" not in contract
+    assert "pytest.mark.live_qdrant" not in contract
+    assert '-m "contract and not integration and not live_qdrant"' in workflow
 
 
 def test_nightly_qdrant_gate_is_isolated_hosted_and_non_skipping() -> None:
@@ -345,6 +366,7 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
     lock = json.loads(_read("frontend/package-lock.json"))
     floors = {
         "brace-expansion": {1: (1, 1, 18), 2: (2, 1, 4), 5: (5, 0, 9)},
+        "nanoid": {3: (3, 3, 17)},
         "postcss": {8: (8, 5, 23)},
     }
     seen = dict.fromkeys(floors, 0)
@@ -359,6 +381,117 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
         seen[name] += 1
     for name, count in seen.items():
         assert count, f"no {name} nodes found in the lockfile"
+
+
+def test_release_version_pins_are_complete_and_consistent() -> None:
+    version = "1.2.5"
+    package = json.loads(_read("frontend/package.json"))
+    package_lock = json.loads(_read("frontend/package-lock.json"))
+    citation = _read("CITATION.cff")
+    compose = _read("docker-compose.yml")
+    lock = _read("uv.lock")
+
+    assert tomllib.loads(_read("pyproject.toml"))["project"]["version"] == version
+    assert package["version"] == version
+    assert package_lock["version"] == version
+    assert package_lock["packages"][""]["version"] == version
+    assert re.search(rf"^version: {re.escape(version)}$", citation, re.MULTILINE)
+    assert "date-released: 2026-08-13" in citation
+    assert f'name = "jarvis-rd-assistant"\nversion = "{version}"' in lock
+    assert compose.count(f"JARVIS_VERSION:-{version}") == 8
+    assert "JARVIS_VERSION:-1.2.4" not in compose
+
+
+def test_versions_env_contains_only_runtime_image_pins() -> None:
+    keys = {
+        line.split("=", 1)[0]
+        for line in _read("versions.env").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+
+    assert keys
+    assert all(key.endswith("_IMAGE") for key in keys)
+
+
+def test_frontend_uses_cytoscapes_bundled_type_definitions() -> None:
+    package = json.loads(_read("frontend/package.json"))
+    package_lock = json.loads(_read("frontend/package-lock.json"))
+
+    assert "@types/cytoscape" not in package["devDependencies"]
+    assert "node_modules/@types/cytoscape" not in package_lock["packages"]
+
+
+def test_frontend_node_version_is_declared_once_and_reused_by_ci() -> None:
+    node_version = _read(".nvmrc").strip()
+    package = json.loads(_read("frontend/package.json"))
+    package_lock = json.loads(_read("frontend/package-lock.json"))
+
+    assert node_version == "22.22.2"
+    assert package["engines"]["node"] == "^22.22.2"
+    assert package_lock["packages"][""]["engines"] == package["engines"]
+    assert f"Node.js {node_version}" in _read("README.md")
+
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/security.yml",
+        ".github/workflows/sbom.yml",
+    ):
+        workflow = _read(path)
+        assert workflow.count("actions/setup-node@") == workflow.count(
+            'node-version-file: ".nvmrc"'
+        )
+        assert "node-version:" not in workflow
+
+
+def test_update_and_restore_floors_are_distinct_in_current_docs() -> None:
+    readme = " ".join(_read("README.md").split())
+    release = " ".join(_read("docs/RELEASE.md").split())
+    deployment = " ".join(_read("docs/DEPLOYMENT.md").split())
+    cli = " ".join(_read("docs/manual/cli.md").split())
+    backup = " ".join(_read("docs/manual/backup-and-restore.md").split())
+
+    assert "Maintained in-place update support starts at v1.2.0" in readme
+    assert "outside the maintained update window" in readme
+    assert "Maintained in-place updates start at v1.2.0" in release
+    assert "Portable fresh-host restore starts with complete, signed backup sets" in release
+    assert "direct v1.1.3-to-current updates are not supported" in release
+    assert "Maintained in-place update support starts at v1.2.0" in deployment
+    assert "direct v1.1.3-to-current update is not promised" in deployment
+    assert "Maintained in-place update support starts at v1.2.0" in cli
+    assert "direct jump from v1.1.3 to the current release is not supported" in cli
+    assert "Portable fresh-host restore starts with a complete, signed archive set" in backup
+    assert "earlier or unsigned" in backup.lower()
+
+
+def test_local_security_scan_is_pinned_fail_closed_and_outside_the_repo() -> None:
+    makefile = _read("Makefile")
+    scanner = _read("scripts/security-scan.py")
+
+    assert "security-scan:" in makefile
+    assert "python3 scripts/security-scan.py" in makefile
+    assert "JARVIS_SECURITY_CACHE_DIR" in scanner
+    assert "cache_root.relative_to(REPO_ROOT)" in scanner
+    assert "_verify_digest(artifact" in scanner
+    assert "_verify_executable(executable" in scanner
+    assert "--verify-cache-only" in scanner
+    assert "uvx" in scanner and "pip-audit==2.10.1" in scanner
+    assert "scripts/check_npm_audit.py" in scanner
+    assert 'tools["osv-scanner"]' in scanner
+    assert '"--recursive"' not in scanner
+    for manifest in (
+        "frontend/package-lock.json",
+        "uv.lock",
+        "libs/jarvis_common/uv.lock",
+        "requirements-docs.txt",
+        "services/learning_engine/requirements.txt",
+        "services/paper_ingestion/requirements-dev.txt",
+        "services/paper_ingestion/requirements-optional.txt",
+        "services/paper_ingestion/requirements.txt",
+        "services/telegram_bot/requirements.txt",
+    ):
+        assert manifest in scanner
+    assert 'tools["gitleaks"]' in scanner
+    assert "|| true" not in scanner
 
 
 def test_release_guide_routes_every_gate_to_an_existing_execution_path() -> None:
@@ -535,10 +668,9 @@ def test_restore_release_mode_owns_a_generated_compose_project() -> None:
 
 def test_restore_release_fixture_contains_current_migration_prerequisites() -> None:
     roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
-    seed = roundtrip.split("seed_jarvis_101() {", 1)[1].split(
-        "\n}\n\nseed_auth_restore_contract()", 1
-    )[0]
+    seed = _read("db/testdata/schema-101-seed.sql")
 
+    assert "db/testdata/schema-101-seed.sql" in roundtrip
     assert "CREATE TABLE papers(" in seed
     assert "source_type text" in seed
     assert "discovery_origin text NOT NULL" in seed
@@ -550,6 +682,7 @@ def test_restore_release_fixture_contains_current_migration_prerequisites() -> N
             "without it"
         )
     for table in (
+        "projects",
         "paper_contradictions",
         "paper_user_zotero_links",
         "paper_highlights",
@@ -570,6 +703,8 @@ def test_restore_release_fixture_contains_current_migration_prerequisites() -> N
         0
     ]
     assert "updated_at timestamptz" in zotero_link_table
+    projects_table = seed.split("CREATE TABLE projects(", 1)[1].split("\n);", 1)[0]
+    assert "user_id bigint" in projects_table
 
 
 def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:
@@ -578,11 +713,17 @@ def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:
         "\nYAML\n", 1
     )[0]
 
-    assert "faux-provider:" in fixture_compose
+    assert "vllm:" in fixture_compose
     assert "litellm:" in fixture_compose
     assert "ports:" not in fixture_compose
     assert (
         "scripts/litellm-entrypoint.sh:/usr/local/bin/litellm-entrypoint.sh:ro" in fixture_compose
+    )
+    assert "litellm/pinned_launcher.py:/app/pinned_launcher.py:ro" in fixture_compose
+    assert "jarvis_common/net.py:/app/jarvis_common/net.py:ro" in fixture_compose
+    assert (
+        "jarvis_common/pinned_transport.py:/app/jarvis_common/pinned_transport.py:ro"
+        in fixture_compose
     )
     assert (
         'test: ["CMD", "sh", "/usr/local/bin/litellm-entrypoint.sh", "--healthcheck"]'
@@ -689,6 +830,169 @@ def test_every_python_image_declares_an_import_smoke_target() -> None:
             assert entry.get("smoke_import"), f"{label}: Python-based image with no smoke_import"
         else:
             assert not entry.get("smoke_import"), f"{label}: non-Python image declares smoke_import"
+
+
+def test_paper_ingestion_images_declare_a_runtime_capability_check() -> None:
+    """Every paper-ingestion flavour must exercise its native path inside the digest.
+
+    The import check cannot reach the document pipeline's converter, which is
+    built on first use, so without this the compiled vision stack is never
+    loaded before publication.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+    entries = [
+        entry
+        for entry in _build_matrix_entries(workflow)
+        if entry["image"] == "jarvis-paper-ingestion"
+    ]
+
+    assert entries, "no paper-ingestion image in the build matrix"
+    for entry in entries:
+        checks = entry.get("capability", "").split()
+        label = f"{entry['slug']} ({entry.get('arch')})"
+        assert "native-vision" in checks, f"{label}: no native-vision capability check"
+        assert "pdf" in checks, f"{label}: no PDF conversion capability check"
+
+
+def test_the_capability_check_actually_runs_against_the_built_digest() -> None:
+    """Declaring the capability set is not enough; the workflow must run it.
+
+    The sibling test above only pins the matrix declaration, so deleting the
+    step that consumes it would leave the checker orphaned and every published
+    image unverified while the suite stayed green.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+
+    assert "scripts/image-capability-check.py" in workflow
+    step = workflow.split("scripts/image-capability-check.py", 1)[1]
+    # The run must target the digest just built, never a floating tag, and must
+    # be reachable only in the verification mode that gates promotion.
+    assert "steps.build.outputs.digest" in step.split("- name:", 1)[0]
+    assert "matrix.capability" in workflow
+    # Offline is the whole point of baking the document models into the image.
+    # Without this, dropping the flag would let a rebuild that lost the models
+    # download them during the check and still report the image as capable.
+    docker_run = workflow.rsplit("docker run", 1)[1].split("- name:", 1)[0]
+    assert "--network none" in docker_run
+
+
+def test_the_capability_check_inputs_exist_on_disk() -> None:
+    """Both files the check bind-mounts must be present in the repository.
+
+    A bind mount whose source is missing is created as an empty directory
+    rather than refused, so a moved fixture would surface as an opaque failure
+    inside the container during a release.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+
+    for mounted in ("scripts/image-capability-check.py", "frontend/e2e/fixtures/sample.pdf"):
+        assert mounted in workflow, f"{mounted} is no longer mounted by the capability step"
+        assert (ROOT / mounted).is_file(), f"{mounted} is mounted by the release but missing"
+
+
+def test_hosted_dependency_and_inventory_tools_name_their_release() -> None:
+    """A hosted scan must run the release its local twin runs, not the newest one."""
+    security = _read(".github/workflows/security.yml")
+    sbom = _read(".github/workflows/sbom.yml")
+    scanner = _read("scripts/security-scan.py")
+
+    assert "pip-audit==2.10.1" in scanner
+    assert security.count("uvx --from pip-audit==2.10.1 pip-audit") == 3
+    assert "uvx pip-audit" not in security
+
+    assert sbom.count("uv tool run --from cyclonedx-bom==7.3.1 cyclonedx-py") == 1
+    assert sbom.count("uv tool run --from pip-licenses==5.5.5 pip-licenses") == 2
+    assert sbom.count("license-checker-rseidelsohn@5.0.1") == 2
+    assert sbom.count("@cyclonedx/cyclonedx-npm@4.2.1") == 1
+    assert "uv tool run pip-licenses" not in sbom
+    assert "npx --yes license-checker-rseidelsohn " not in sbom
+
+
+def test_release_images_build_from_the_digest_pinned_bases() -> None:
+    """A published image must not resolve its base image through a mutable tag."""
+    versions = dict(
+        line.split("=", 1)
+        for line in _read("versions.env").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+    build_job = workflow.split("\n  build:", 1)[1].split("\n  verify:", 1)[0]
+
+    for name in ("PYTHON_BASE_IMAGE", "NODE_BUILD_IMAGE", "NGINX_RUNTIME_IMAGE"):
+        assert re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", versions[name]), versions[name]
+
+    assert ". ./versions.env" in build_job
+    assert "PYTHON_BASE_IMAGE NODE_BUILD_IMAGE NGINX_RUNTIME_IMAGE" in build_job
+    assert 'grep -q "^ARG ${name}=" "$DOCKERFILE"' in build_job
+    assert "build-args: ${{ steps.build_args.outputs.resolved }}" in build_job
+    # The matrix arguments reach the build only through the same resolved list.
+    assert "MATRIX_BUILD_ARGS: ${{ matrix.build_args }}" in build_job
+    assert "build-args: ${{ matrix.build_args }}" not in build_job
+
+    # The workflow forwards a base only to a Dockerfile that declares it, and the
+    # ARG default remains the fallback for a build that never reads versions.env.
+    for dockerfile, declared in (
+        ("services/paper_ingestion/Dockerfile", "PYTHON_BASE_IMAGE"),
+        ("services/learning_engine/Dockerfile", "PYTHON_BASE_IMAGE"),
+        ("services/telegram_bot/Dockerfile", "PYTHON_BASE_IMAGE"),
+        ("frontend/Dockerfile", "NGINX_RUNTIME_IMAGE"),
+    ):
+        assert f"ARG {declared}=" in _read(dockerfile), dockerfile
+
+
+def test_the_published_image_scan_blocks_a_fixable_critical_finding() -> None:
+    """The scan's exit code and the release narrative must not drift apart.
+
+    A scan left non-blocking while the guide calls it a gate reads as coverage
+    nobody has.
+    """
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+    release = " ".join(_read("docs/RELEASE.md").split())
+    verify_job = workflow.split("\n  verify:", 1)[1].split("\n  promote:", 1)[0]
+
+    assert 'exit-code: "1"' in verify_job
+    assert 'exit-code: "0"' not in verify_job
+    # Trailing newline: `severity: CRITICAL,HIGH` must not satisfy this.
+    assert "severity: CRITICAL\n" in verify_job
+    assert "ignore-unfixed: true" in verify_job
+    # A failing gate must still publish the report that explains it.
+    publish_step = "- name: Publish the vulnerability report to the job summary\n"
+    assert publish_step in verify_job
+    assert verify_job.split(publish_step, 1)[1].startswith("        if: ${{ !cancelled() }}\n")
+    assert "That step is a gate" in release
+    assert "Findings without a released fix are excluded" in release
+
+
+def test_the_paper_ingestion_image_carries_its_document_models() -> None:
+    dockerfile = _read("services/paper_ingestion/Dockerfile")
+
+    assert "docling-tools models download" in dockerfile
+    assert "ENV DOCLING_ARTIFACTS_PATH=" in dockerfile
+
+
+def test_a_partial_promotion_cannot_finish_as_a_successful_release() -> None:
+    """Only the terminal gate can state that every image reached its stable tag."""
+    workflow = _read(".github/workflows/ghcr-publish.yml")
+
+    assert "\n  promotion-gate:" in workflow, "the terminal promotion gate is gone"
+    gate = workflow.split("\n  promotion-gate:", 1)[1]
+
+    assert "needs: [preflight, promote]" in gate
+    assert "if: ${{ always() && needs.preflight.outputs.mode == 'promote' }}" in gate
+    assert "PROMOTION: ${{ needs.promote.result }}" in gate
+    assert 'if [ "$PROMOTION" != "success" ]; then' in gate
+    assert "exit 1" in gate
+
+    promote_job = workflow.split("\n  promote:", 1)[1].split("\n  promotion-gate:", 1)[0]
+    assert "fail-fast: false" in promote_job
+    assert re.findall(r"- slug: ([a-z-]+)", promote_job) == [
+        "paper-ingestion-cpu",
+        "paper-ingestion-cuda",
+        "learning-engine",
+        "telegram-bot",
+        "dashboard",
+        "restore-uploader",
+    ]
 
 
 def test_model_catalog_freshness_check_flags_stale_and_missing(tmp_path: Path) -> None:

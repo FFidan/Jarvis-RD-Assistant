@@ -21,11 +21,9 @@ import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic, Pu
 import { LLM_SCORING_FAILED, suppressScoringFailed } from '@/components/pulse/reasoning-display';
 
 function sourceDiagnosticsFromStats(
-  stats: Record<string, unknown>,
+  stats: PulseDeckType['stats'],
 ): Record<string, PulseSourceDiagnostic> {
-  const raw = stats.source_diagnostics;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  return raw as Record<string, PulseSourceDiagnostic>;
+  return stats.source_diagnostics ?? {};
 }
 
 /**
@@ -264,7 +262,7 @@ export function PulseDeck() {
           </Button>
         </div>
       )}
-      {deck.cards.length === 0 && !deck.degraded_reason ? (
+      {deck.cards.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-start gap-3 py-6">
             <p className="text-muted-foreground text-sm">

@@ -46,7 +46,7 @@ def _make_command_update_and_context(chat_id=_TEST_CHAT_ID):
     # (review_start branches on `update.callback_query is not None`).
     update.callback_query = None
 
-    config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
+    config = make_bot_config(BotConfig)
     mock_http = AsyncMock()
     context = make_ptb_context(
         AsyncMock(), config, options=PTBContextOptions(http_client=mock_http)
@@ -70,7 +70,7 @@ def _make_callback_update_and_context(callback_data: str, user_data=None, chat_i
     query.edit_message_text = AsyncMock()
     update.callback_query = query
 
-    config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
+    config = make_bot_config(BotConfig)
     mock_http = AsyncMock()
     context = make_ptb_context(
         AsyncMock(),

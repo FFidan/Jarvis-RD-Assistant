@@ -12,6 +12,7 @@ from paper_ingestion.services.config_metadata import (
 from paper_ingestion.services.config_validators import _CONFIG_VALIDATORS
 
 _LANGFUSE_KEY = "observability.langfuse_dashboard_url"
+_ONBOARDING_DISMISSED_KEY = "onboarding.dismissed"
 
 # Keys the frontend renders in IngestionSection.tsx CONFIG_METADATA
 _FRONTEND_KEYS = {
@@ -56,6 +57,18 @@ def test_user_timezone_allowed():
     """user.timezone must be in the whitelist as the replacement for notifications.timezone."""
     missing = _USER_PREF_KEYS - _ALLOWED_CONFIG_KEYS
     assert not missing, f"User-pref keys not in backend whitelist: {missing}"
+
+
+def test_onboarding_dismissal_is_allowed_and_personal():
+    """Tour dismissal must round-trip for each user, not become a system setting."""
+    assert _ONBOARDING_DISMISSED_KEY in _ALLOWED_CONFIG_KEYS
+    assert _ONBOARDING_DISMISSED_KEY in PERSONAL_KEYS
+    assert _ONBOARDING_DISMISSED_KEY not in SYSTEM_KEYS
+    assert _classify_config_key(_ONBOARDING_DISMISSED_KEY) == "personal"
+    validator = _CONFIG_VALIDATORS[_ONBOARDING_DISMISSED_KEY]
+    validator(True)
+    with pytest.raises(ValueError):
+        validator("true")
 
 
 def test_unknown_key_not_allowed():
@@ -284,6 +297,27 @@ def test_provider_registry_keys_have_validators():
 
     missing = PROVIDER_CONFIG_KEYS - set(_CONFIG_VALIDATORS)
     assert not missing
+
+
+@pytest.mark.usefixtures("fernet_key")
+def test_one_unreadable_secret_does_not_break_the_configuration_listing() -> None:
+    """A key that can no longer be decrypted must degrade to a single field.
+
+    Restores and key rotation can leave ciphertext the current key cannot read.
+    Raising here took down the whole settings page, including the panel an admin
+    would use to re-enter the value. The field must also stay distinguishable
+    from an absent one, or a broken credential reads as a missing credential.
+    """
+    from paper_ingestion.services.config_db import _resolve_config_value
+
+    key = "llm.providers.openrouter.api_key"
+    row = {"key": key, "encrypted_value": b"not-decryptable", "value": None}
+
+    resolved = _resolve_config_value(key, row)
+
+    assert resolved is not None
+    assert "not-decryptable" not in str(resolved)
+    assert _resolve_config_value(key, {"key": key, "encrypted_value": None, "value": None}) is None
 
 
 @pytest.mark.parametrize(

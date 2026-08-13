@@ -177,7 +177,7 @@ describe('MyDayPage', () => {
       cards_reviewed: 4,
       tasks_done: 1,
       completed: [{ id: 11, title: 'Closed the solver benchmark', status: 'done' }],
-      deferred: [{ id: 12, title: 'Adjoint proof', status: 'deferred' }],
+      deferred: [{ id: 12, title: 'Adjoint proof', status: 'todo' }],
     });
     renderSubject();
     expect(await screen.findByText(/Yesterday/i)).toBeInTheDocument();

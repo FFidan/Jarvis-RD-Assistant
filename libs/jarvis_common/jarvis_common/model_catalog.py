@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from importlib import resources
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 Role = Literal["smart", "fast", "embed"]
 Provider = Literal[
@@ -21,6 +21,23 @@ Provider = Literal[
     "custom_openai_compatible",
 ]
 CatalogPhase = Literal["default", "advanced", "future"]
+MetadataField = Literal[
+    "context_tokens",
+    "description",
+    "input_price_per_million",
+    "output_price_per_million",
+    "capabilities",
+    "lifecycle",
+]
+
+
+class MetadataFieldSource(TypedDict):
+    """Origin for a sparse model metadata field exposed to administrators."""
+
+    kind: Literal["api_reported", "reviewed_catalog"]
+    fetched_at: NotRequired[str]
+    source_url: NotRequired[str]
+    reviewed_at: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -48,6 +65,12 @@ class ModelCatalogEntry:
     default_num_ctx: int | None = None
     max_num_ctx: int | None = None
     supports_thinking: bool = False
+    input_price_per_million: str | None = None
+    output_price_per_million: str | None = None
+    price_source: str | None = None
+    capabilities: tuple[str, ...] = ()
+    lifecycle: str | None = None
+    field_sources: dict[MetadataField, MetadataFieldSource] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize this entry to a plain dict suitable for JSON responses."""
@@ -89,6 +112,12 @@ def _coerce_entry(raw: dict) -> ModelCatalogEntry:
         ),
         max_num_ctx=(int(raw["max_num_ctx"]) if raw.get("max_num_ctx") is not None else None),
         supports_thinking=bool(raw.get("supports_thinking", False)),
+        input_price_per_million=raw.get("input_price_per_million"),
+        output_price_per_million=raw.get("output_price_per_million"),
+        price_source=raw.get("price_source"),
+        capabilities=tuple(raw.get("capabilities", ())),
+        lifecycle=raw.get("lifecycle"),
+        field_sources=raw.get("field_sources", {}),
     )
 
 

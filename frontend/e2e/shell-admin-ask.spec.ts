@@ -48,7 +48,6 @@ async function seedRegularSession(page: Page) {
       state: {
         isAuthenticated: true,
         authTime: Date.now(),
-        apiKey: 'test-key',
         user: { id: 1, email: 'user@example.com', role: 'user' },
       },
       version: 0,
@@ -66,7 +65,6 @@ async function seedAdminSession(page: Page) {
       state: {
         isAuthenticated: true,
         authTime: Date.now(),
-        apiKey: 'test-key',
         user: { id: 1, email: 'admin@example.com', role: 'admin' },
       },
       version: 0,
@@ -117,6 +115,160 @@ async function mockCommonEndpoints(page: Page) {
 
   // Shared defaults fail unexpected /api/** calls with a clear mocked-test error.
 }
+
+async function seedFirstUseMilestone(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'jarvis-research-milestones',
+      JSON.stringify({
+        state: {
+          completed: { save: true, analyze: false },
+          advancedCueDismissed: false,
+        },
+        version: 0,
+      }),
+    );
+  });
+}
+
+async function mockFirstUseEndpoints(page: Page) {
+  await installMockedApiDefaults(page);
+  await page.route('**/api/executive/focus/active', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: 'null' }),
+  );
+  await page.route('**/api/health/stack', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(HEALTH_RESPONSE),
+    }),
+  );
+  await page.route('**/api/auth/verify', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 1, email: 'user@example.com', role: 'user' }),
+    }),
+  );
+  await page.route('**/api/setup/status', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: true, setup_completed: true }),
+    }),
+  );
+  await page.route('**/api/papers/feed**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ papers: [], total: 0 }),
+    }),
+  );
+  await page.route('**/api/topics', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/dashboard/metrics', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        total_papers: 0,
+        unread_papers: 0,
+        pending_papers: 0,
+        due_cards: 0,
+        active_projects: 0,
+        topic_count: 0,
+        nudge_count: 0,
+        chunked_papers: 0,
+        onboarding_stage: 'needs_topics',
+      }),
+    }),
+  );
+  await page.route('**/api/config', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/config/onboarding.dismissed', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ key: 'onboarding.dismissed', value: true }),
+    }),
+  );
+}
+
+function captureBrowserErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (
+      message.type() === 'error' &&
+      !message.text().startsWith('Failed to load resource:')
+    ) {
+      errors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('response', (response) => {
+    if (response.status() >= 400) {
+      errors.push(`${response.status()} ${new URL(response.url()).pathname}`);
+    }
+  });
+  return errors;
+}
+
+test.describe('First-use research guidance', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRegularSession(page);
+    await seedFirstUseMilestone(page);
+    await mockFirstUseEndpoints(page);
+  });
+
+  test('desktop tour and advanced-workspace cue stay usable', async ({ page }) => {
+    const browserErrors = captureBrowserErrors(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+
+    await expect(page.getByRole('link', { name: 'Discover' })).toBeVisible();
+    await expect(page.locator('[data-tour-id="sidebar-discover"]')).toBeVisible();
+    await expect(page.locator('[data-tour-id~="sidebar-library"]')).toBeVisible();
+    await expect(page.locator('[data-tour-id~="sidebar-analyze"]')).toBeVisible();
+    await expect(page.locator('[data-tour-id="sidebar-ask"]')).toBeVisible();
+
+    await expect(page.getByText('Discover Papers')).toBeVisible({ timeout: 3000 });
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByText('Save to Your Library')).toBeVisible();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await expect(page.getByText('Discover Papers')).toBeVisible();
+    await page.getByRole('button', { name: "Don't show again" }).click();
+
+    await expect(page.getByTestId('advanced-workspace-cue')).toBeVisible();
+    await page.getByTestId('nav-mode-toggle').click();
+    await expect(page.getByText('Projects', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('advanced-workspace-cue')).toHaveCount(0);
+    expect(browserErrors).toEqual([]);
+  });
+
+  test('narrow tour uses visible targets and the cue is reachable from the menu', async ({ page }) => {
+    const browserErrors = captureBrowserErrors(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+
+    await expect(page.getByText('Discover Papers')).toBeVisible({ timeout: 3000 });
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByText('Save to Your Library')).toBeVisible();
+    await page.getByRole('button', { name: "Don't show again" }).click();
+
+    await page.getByRole('button', { name: 'Open menu' }).click();
+    const mobileNav = page.getByRole('dialog', { name: 'Navigation' });
+    await expect(mobileNav.getByRole('link', { name: 'Discover' })).toBeVisible();
+    await expect(mobileNav.getByTestId('advanced-workspace-cue')).toBeVisible();
+    const dismiss = mobileNav.getByRole('button', { name: 'Dismiss workspace feature tip' });
+    await dismiss.focus();
+    await expect(dismiss).toBeFocused();
+    await dismiss.press('Enter');
+    await expect(page.getByTestId('advanced-workspace-cue')).toHaveCount(0);
+    expect(browserErrors).toEqual([]);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests — Non-admin user

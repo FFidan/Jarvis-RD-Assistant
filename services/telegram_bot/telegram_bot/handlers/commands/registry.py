@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from telegram.ext import Application, CommandHandler
 
+from telegram_bot.command_catalog import standard_command_specs
 from telegram_bot.handlers.commands.pairing_commands import (
     pair_command,
     unpair_command,
@@ -25,6 +26,28 @@ from telegram_bot.handlers.commands.system_commands import (
 )
 from telegram_bot.handlers.commands.task_commands import done_command, tasks_command
 
+STANDARD_COMMAND_HANDLERS = {
+    "start": start_command,
+    "help": help_command,
+    "papers": papers_command,
+    "stats": stats_command,
+    "briefing": briefing_command,
+    "projects": projects_command,
+    "tasks": tasks_command,
+    "done": done_command,
+    "newproject": newproject_command,
+    "focus": focus_command,
+    "next": next_command,
+    "inbox": inbox_command,
+    "pulse_now": pulse_now_command,
+    "pair": pair_command,
+    "unpair": unpair_command,
+    "whoami": whoami_command,
+}
+
+if set(STANDARD_COMMAND_HANDLERS) != {spec.name for spec in standard_command_specs()}:
+    raise RuntimeError("Telegram command catalog and standard handlers must match")
+
 
 def register_command_handlers(app: Application) -> None:
     """Register all command handlers on the given application.
@@ -34,20 +57,5 @@ def register_command_handlers(app: Application) -> None:
     app : Application
         The ``python-telegram-bot`` Application instance.
     """
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("papers", papers_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("briefing", briefing_command))
-    app.add_handler(CommandHandler("projects", projects_command))
-    app.add_handler(CommandHandler("tasks", tasks_command))
-    app.add_handler(CommandHandler("done", done_command))
-    app.add_handler(CommandHandler("newproject", newproject_command))
-    app.add_handler(CommandHandler("focus", focus_command))
-    app.add_handler(CommandHandler("next", next_command))
-    app.add_handler(CommandHandler("inbox", inbox_command))
-    app.add_handler(CommandHandler("pulse_now", pulse_now_command))
-    # Per-user Telegram pairing commands
-    app.add_handler(CommandHandler("pair", pair_command))
-    app.add_handler(CommandHandler("unpair", unpair_command))
-    app.add_handler(CommandHandler("whoami", whoami_command))
+    for spec in standard_command_specs():
+        app.add_handler(CommandHandler(spec.name, STANDARD_COMMAND_HANDLERS[spec.name]))

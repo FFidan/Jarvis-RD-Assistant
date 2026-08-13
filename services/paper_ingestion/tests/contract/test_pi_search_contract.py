@@ -130,7 +130,7 @@ async def test_sr01_search_preview_merged_dedup_response_shape(
         _stub_resolver,
     )
     monkeypatch.setattr(
-        "paper_ingestion.routers.search._load_local_library_matches",
+        "paper_ingestion.routers.search_helpers._load_local_library_matches",
         _stub_no_library_matches,
     )
 
@@ -263,7 +263,7 @@ async def test_sr03_degraded_source_still_returns_200(
         _stub_resolver,
     )
     monkeypatch.setattr(
-        "paper_ingestion.routers.search._load_local_library_matches",
+        "paper_ingestion.routers.search_helpers._load_local_library_matches",
         _stub_no_library_matches,
     )
 
@@ -334,7 +334,7 @@ async def test_sr05_all_sources_failed_to_load_returns_400(
         _stub_resolver,
     )
     monkeypatch.setattr(
-        "paper_ingestion.routers.search._load_local_library_matches",
+        "paper_ingestion.routers.search_helpers._load_local_library_matches",
         _stub_no_library_matches,
     )
 

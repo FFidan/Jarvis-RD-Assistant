@@ -52,6 +52,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "fsrs.learning_steps",
         # User preferences
         "user.timezone",
+        "onboarding.dismissed",
         # Recommendation engine
         "recommendation.liked_weight",
         "recommendation.project_weight",
@@ -172,6 +173,8 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
         "fsrs.learning_steps",
         # User locale preference
         "user.timezone",
+        # Per-user first-use guidance preference
+        "onboarding.dismissed",
         # Per-user recommendation feed weights
         "recommendation.liked_weight",
         "recommendation.project_weight",

@@ -39,7 +39,7 @@ async def test_auth_check_accepts_paired_user():
     pairing_row = {"user_id": 1}
     pool = _make_pool(fetchrow_return=pairing_row)
     update = make_telegram_update(chat_id=999)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     authorized, user_id = await _auth_check(update, config, pool)
 
@@ -57,7 +57,7 @@ async def test_auth_check_rejects_unpaired_unknown_chat():
     """chat_id absent from the pairings table -> (False, None)."""
     pool = _make_pool(fetchrow_return=None)
     update = make_telegram_update(chat_id=12345)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     authorized, user_id = await _auth_check(update, config, pool)
 
@@ -71,20 +71,9 @@ async def test_auth_check_returns_user_id_for_paired_chat():
     """Paired chats expose the DB user_id for downstream scoping."""
     pool = _make_pool(fetchrow_return={"user_id": 7})
     update = make_telegram_update(chat_id=999)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     assert await _auth_check(update, config, pool) == (True, 7)
-
-
-@pytest.mark.asyncio
-async def test_auth_check_ignores_env_var_owner():
-    """A chat matching the legacy env-var TELEGRAM_CHAT_ID is NOT authorised
-    unless it also has a pairing row — the env-var path is retired."""
-    pool = _make_pool(fetchrow_return=None)
-    update = make_telegram_update(chat_id=12345)
-    config = make_bot_config(BotConfig, telegram_chat_id=12345)
-
-    assert await _auth_check(update, config, pool) == (False, None)
 
 
 @pytest.mark.asyncio
@@ -93,7 +82,7 @@ async def test_auth_check_db_error_denies():
     pool = MagicMock()
     pool.fetchrow = AsyncMock(side_effect=RuntimeError("db down"))
     update = make_telegram_update(chat_id=999)
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     assert await _auth_check(update, config, pool) == (False, None)
 
@@ -109,7 +98,7 @@ async def test_auth_check_denies_non_private_chat_even_when_paired():
     """
     pool = _make_pool(fetchrow_return={"user_id": 1})  # stale group pairing present
     update = make_telegram_update(chat_id=-1001234567890, chat_type="group")
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
 
     assert await _auth_check(update, config, pool) == (False, None)
     pool.fetchrow.assert_not_awaited()  # identity never resolved for a group chat
@@ -127,7 +116,7 @@ def _make_decorator_context() -> MagicMock:
         execute_return="OK",
         direct_methods=True,
     )
-    return make_ptb_context(pool, make_bot_config(BotConfig, telegram_chat_id=None))
+    return make_ptb_context(pool, make_bot_config(BotConfig))
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 /**
  * HeroTask — Pomodoro controls: Pause/Resume, Skip break,
- * Stop & log, and cycle progress dots.
+ * Stop, and cycle progress dots.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen } from '@testing-library/react';
@@ -42,7 +42,6 @@ vi.mock('@/stores/pomodoro-store', () => ({
 
 vi.mock('@/lib/api', () => ({
   updateTask: vi.fn(),
-  logFocusSession: vi.fn().mockResolvedValue({ status: 'ok', recorded_hours: 0.25 }),
 }));
 
 function renderHero() {
@@ -102,21 +101,15 @@ describe('HeroTask Pomodoro controls', () => {
     expect(skipBreakMock).toHaveBeenCalledOnce();
   });
 
-  it('Stop & log calls stopAndLog and logs the elapsed focus session', async () => {
+  it('queues the active session for authoritative server completion', async () => {
     const user = userEvent.setup();
     stopAndLogMock.mockReturnValue({ durationSeconds: 600, taskId: 7 });
-    const { logFocusSession } = await import('@/lib/api');
     renderHero();
 
-    const stopBtn = screen.getByRole('button', { name: /stop & log/i });
+    const stopBtn = screen.getByRole('button', { name: /^stop$/i });
     await user.click(stopBtn);
 
     expect(stopAndLogMock).toHaveBeenCalledOnce();
-    expect(vi.mocked(logFocusSession).mock.calls[0]?.[0]).toEqual({
-      duration_hours: 600 / 3600,
-      task_id: 7,
-      paper_id: undefined,
-    });
   });
 
   it('shows the idle placeholder when no Pomodoro is active', () => {

@@ -8,3 +8,4 @@ export * from './analytics';
 export * from './jobs';
 export * from './cards';
 export * from './pulse';
+export * from './json';

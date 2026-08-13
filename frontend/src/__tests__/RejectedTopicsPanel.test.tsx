@@ -48,7 +48,7 @@ describe('RejectedTopicsPanel', () => {
     expect(screen.getByText(/1 paper rejected/i)).toBeInTheDocument();
   });
 
-  it('reset button calls deleteRecommendationFeedback with topic_id', async () => {
+  it('reset button asks for confirmation before calling deleteRecommendationFeedback', async () => {
     (fetchRecommendationFeedback as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [{ paper_id: 1, title: 'P', signal: 'negative', source: 'pulse_thumbs', reason: null, topic_id: 5, topic_name: 'NLP', created_at: '...' }],
       total: 1,
@@ -56,8 +56,30 @@ describe('RejectedTopicsPanel', () => {
     (deleteRecommendationFeedback as ReturnType<typeof vi.fn>).mockResolvedValue({ deleted: 1, topic_id: 5 });
     wrap(<RejectedTopicsPanel />);
     await waitFor(() => expect(screen.getByText('NLP')).toBeInTheDocument());
+
     fireEvent.click(screen.getByRole('button', { name: /Reset feedback for NLP/i }));
+
+    // The confirmation dialog is up and the mutation has not fired yet.
+    const confirmBtn = await screen.findByRole('button', { name: /^reset$/i });
+    expect(deleteRecommendationFeedback).not.toHaveBeenCalled();
+
+    fireEvent.click(confirmBtn);
     await waitFor(() => expect(deleteRecommendationFeedback).toHaveBeenCalledWith(5));
+  });
+
+  it('cancelling the confirmation does not call deleteRecommendationFeedback', async () => {
+    (fetchRecommendationFeedback as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{ paper_id: 1, title: 'P', signal: 'negative', source: 'pulse_thumbs', reason: null, topic_id: 5, topic_name: 'NLP', created_at: '...' }],
+      total: 1,
+    });
+    wrap(<RejectedTopicsPanel />);
+    await waitFor(() => expect(screen.getByText('NLP')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Reset feedback for NLP/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument());
+    expect(deleteRecommendationFeedback).not.toHaveBeenCalled();
   });
 
   it('onError fires toast.error on reset failure', async () => {
@@ -69,6 +91,7 @@ describe('RejectedTopicsPanel', () => {
     wrap(<RejectedTopicsPanel />);
     await waitFor(() => expect(screen.getByText('NLP')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Reset feedback for NLP/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^reset$/i }));
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
   });
 });

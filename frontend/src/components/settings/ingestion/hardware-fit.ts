@@ -1,45 +1,13 @@
 import type { ModelFitDetail } from '@/types';
-import type { SystemModelsResponse } from '@/lib/api';
+import type { ModelCatalogEntry, SystemModelsResponse } from '@/lib/api';
 
 /** Power-of-2 snap steps for the num_ctx slider. */
 export const NUM_CTX_STOPS = [2048, 4096, 8192, 16384, 32768, 65536] as const;
 export type NumCtx = (typeof NUM_CTX_STOPS)[number];
 export const isNumCtx = (n: number): n is NumCtx => (NUM_CTX_STOPS as readonly number[]).includes(n);
 
-export interface HardwareInfoApi {
-  vram_gb?: number;
-  vram_source?: string;
-  /** Human-readable detail string for how VRAM was detected (e.g. "nvidia-smi (GPU 0: RTX 4090)"). */
-  vram_source_detail?: string;
-  tier?: number;
-  detected_at?: string;
-  machine_id?: string;
-  /** True when host GPU differs from the active GPU overlay — host VRAM reported, overlay not active. */
-  host_gpu_divergence?: boolean;
-}
-
-export interface ModelCatalogEntryApi {
-  id: string;
-  name: string;
-  provider: string;
-  roles: string[];
-  fit_detail?: ModelFitDetail;
-  supports_thinking?: boolean;
-}
-
-/**
- * Local refinement of `SystemModelsResponse` that narrows `hardware` and `catalog`
- * to the concrete typed shapes used by this component.
- * Derived from the canonical type so it remains structurally consistent.
- */
-export type SystemModelsApi = Pick<SystemModelsResponse, 'hardware_recommendation'> & {
-  hardware?: HardwareInfoApi;
-  catalog?: ModelCatalogEntryApi[];
-  /** Per-role LiteLLM delivery state — absent on older backends. */
-  delivery?: Record<string, 'pending_restart' | 'applied'>;
-  /** Committed per-role model intent (what autoconfigure / Settings stored). */
-  current?: { smart_model?: string; fast_model?: string; embed_model?: string };
-};
+export type HardwareInfoApi = SystemModelsResponse['hardware'];
+export type ModelCatalogEntryApi = ModelCatalogEntry;
 
 export type FitDetailWithBaseline = ModelFitDetail & {
   base_vram_gb?: number | null;

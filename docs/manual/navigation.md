@@ -59,8 +59,8 @@ Below a separator, the sidebar footer is visible to **all users**:
 | **BrandMark** | Application logo / home anchor |
 | **⌘K / Ctrl+K** | Open the command-palette search — search papers, navigate to pages, or run actions |
 | **Error pill** | Appears only when the application has logged errors in the last 24 hours; shows the count of error/critical events and, when clicked, opens the System Logs error view. Hidden when there are no recent errors. |
-| **Jobs indicator** | Shows the count of running background jobs; click to expand the jobs panel |
-| **Pomodoro timer** | A focus timer with configurable work and break intervals (configure in [Settings](settings.md) §IV System → Timer) |
+| **Jobs indicator** | Shows queued, running, and recent background work for your account, including work started from Telegram or another browser; click to expand the jobs panel |
+| **Pomodoro timer** | Shows the shared per-user focus session started from Web or Telegram; pause, resume, and stop operate on the same interval, while work and break preferences remain local to this browser (configure them in [Settings](settings.md) §IV System → Timer) |
 | **Keyboard shortcuts** | Opens the keyboard-shortcuts reference panel |
 | **Theme toggle** | Switch between light and dark mode |
 | **User avatar menu** | A round avatar button; opens a menu with two items — **Settings** (goes to `/settings`) and **Logout** (ends the session and returns to the sign-in page). |

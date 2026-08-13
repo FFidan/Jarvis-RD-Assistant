@@ -57,14 +57,16 @@ vi.mock('react-pdf-highlighter-extended', async () => {
       highlights,
       children,
       selectionTip,
+      style,
     }: {
       highlights: Array<{ id: string }>;
       children: React.ReactNode;
       selectionTip: React.ReactNode;
+      style?: React.CSSProperties;
     }) =>
       React.createElement(
         'div',
-        { 'data-testid': 'pdf-highlighter' },
+        { 'data-testid': 'pdf-highlighter', style },
         React.createElement('span', { 'data-testid': 'hl-count' }, String(highlights.length)),
         ...highlights.map((hl) =>
           React.createElement(
@@ -279,7 +281,10 @@ describe('PdfReaderPane', () => {
 
     renderPane();
 
-    expect(await screen.findByTestId('pdf-highlighter')).toBeInTheDocument();
+    const highlighter = await screen.findByTestId('pdf-highlighter');
+    const surface = screen.getByTestId('pdf-reader-surface');
+    expect(surface).toHaveClass('relative', 'h-[70vh]');
+    expect(highlighter).not.toHaveStyle({ position: 'relative' });
     expect(screen.getByTestId('hl-count')).toHaveTextContent('0');
     expect(screen.queryByTestId('text-highlight')).not.toBeInTheDocument();
   });

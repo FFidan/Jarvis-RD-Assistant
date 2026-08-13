@@ -9,7 +9,7 @@ snapshot still ships.
 
 | Capture | Tool | Install | Notes |
 |---|---|---|---|
-| Frontend bundle sizes | `npm run build` | `cd frontend && npm install --legacy-peer-deps` | Always runs. |
+| Frontend bundle sizes | `npm run build` | `cd frontend && npm ci` | Always runs. |
 | Backend GET timings | `curl` | system-provided | Reads API key from `secrets/jarvis_api_key.txt`. |
 | py-spy flamegraph | `py-spy` | `pipx install py-spy` or `uv tool install py-spy` | **Linux usually requires sudo** to ptrace the uvicorn PID. To grant py-spy non-sudo access: `sudo setcap cap_sys_ptrace=eip $(which py-spy)`. |
 | pg_stat_statements top-N | Postgres ext | see below | Requires a server restart to preload. |

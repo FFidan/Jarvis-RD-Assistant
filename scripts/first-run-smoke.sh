@@ -18,9 +18,8 @@
 #
 # ISOLATION (so this can NEVER wipe a real deployment):
 #   * setup.sh receives a dedicated persisted project name
-#     (`jarvis-firstrun-<checkout-key>`); the compatibility wrapper receives the
-#     same name through COMPOSE_PROJECT_NAME. Teardown is explicitly scoped
-#     with `-p`.
+#     (`jarvis-firstrun-<checkout-key>`). Teardown is explicitly scoped with
+#     `-p`.
 #   * Refuses to run if that smoke project already has containers, volumes, or
 #     networks
 #     (unless --force), and refuses if a `.env` already exists in the repo
@@ -33,7 +32,7 @@
 # Usage:
 #   bash scripts/first-run-smoke.sh [--force] [--timeout SECONDS] [--build-local]
 #                                   [--image-tag TAG] [--integration] [--rerun]
-#                                   [--wrapper] [--help]
+#                                   [--help]
 #
 #   --force            Remove pre-existing resources carrying the exact smoke
 #                      project label before starting, instead of refusing.
@@ -45,17 +44,12 @@
 #                      BUILT from this checkout instead of pulled from GHCR —
 #                      how CI proves the branch's own code boots (the pull
 #                      path only exercises previously-published images).
-#                      Incompatible with --wrapper: scripts/jarvis-setup.sh
-#                      takes no bootstrap-mode flag, so there is nothing to
-#                      forward to it.
 #   --image-tag TAG    Pull stable, prerelease, or lowercase 40-hex commit-tagged
-#                      application images. Incompatible with --wrapper.
+#                      application images.
 #   --integration      After the stack is healthy, run the gated integration
 #                      suite against it (sets SMOKE_INTEGRATION=1; requires uv).
 #   --rerun            After the first bootstrap succeeds, run it again with
 #                      the kept .env and assert the re-run also succeeds.
-#   --wrapper          Bootstrap via scripts/jarvis-setup.sh instead of
-#                      ./setup.sh --non-interactive --profile=dev.
 #   --help             Show this help and exit.
 set -euo pipefail
 
@@ -65,18 +59,21 @@ set -euo pipefail
 # The dedicated Compose project is derived from the canonical checkout after
 # setup_lib.sh is loaded. Separate checkouts therefore never share teardown.
 
-# Isolation: distinct subnet + dashboard port so a smoke run never collides with
-# a live deploy on the same host (which uses 10.137.241.0/24 and port 3001).
+# Isolation: distinct subnet + dashboard ports so a smoke run never collides
+# with a live deploy on the same host (which uses 10.137.241.0/24 and ports
+# 3001/3003).
 # Override via env before calling this script if the defaults conflict.
 : "${JARVIS_NET_SUBNET:=10.137.242.0/24}"
 : "${DASHBOARD_HOST_PORT:=13001}"
+: "${DASHBOARD_TRUSTED_HOST_PORT:=13003}"
 : "${LITELLM_HOST_PORT:=14000}"
 : "${POSTGRES_HOST_PORT:=15432}"
 : "${PAPER_INGESTION_HOST_PORT:=18010}"
 : "${LEARNING_ENGINE_HOST_PORT:=18011}"
 : "${QDRANT_HOST_PORT:=16333}"
 : "${OLLAMA_HOST_PORT:=11444}"
-export JARVIS_NET_SUBNET DASHBOARD_HOST_PORT LITELLM_HOST_PORT POSTGRES_HOST_PORT
+export JARVIS_NET_SUBNET DASHBOARD_HOST_PORT DASHBOARD_TRUSTED_HOST_PORT
+export LITELLM_HOST_PORT POSTGRES_HOST_PORT
 export PAPER_INGESTION_HOST_PORT LEARNING_ENGINE_HOST_PORT QDRANT_HOST_PORT OLLAMA_HOST_PORT
 
 readonly DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT}"
@@ -96,7 +93,6 @@ IMAGE_TAG=""
 IMAGE_TAG_EXPLICIT=0
 INTEGRATION=0
 RERUN=0
-WRAPPER=0
 SMOKE_OWNS_PROJECT=0
 
 # -----------------------------------------------------------------------------
@@ -130,7 +126,6 @@ while [ $# -gt 0 ]; do
     --image-tag=*) IMAGE_TAG="${1#*=}"; IMAGE_TAG_EXPLICIT=1; shift ;;
     --integration) INTEGRATION=1; shift ;;
     --rerun)   RERUN=1; shift ;;
-    --wrapper) WRAPPER=1; shift ;;
     -h|--help) show_help; exit 0 ;;
     *) err "Unknown argument: $1"; echo; show_help; exit 2 ;;
   esac
@@ -138,16 +133,6 @@ done
 case "$TIMEOUT_SECONDS" in
   ''|*[!0-9]*) err "--timeout must be a positive integer (got: $TIMEOUT_SECONDS)"; exit 2 ;;
 esac
-if [ "$BUILD_LOCAL" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
-  err "--build-local cannot be combined with --wrapper: scripts/jarvis-setup.sh takes no"
-  err "bootstrap-mode flag, so there is nothing to forward to it."
-  exit 2
-fi
-if [ "$IMAGE_TAG_EXPLICIT" -eq 1 ] && [ "$WRAPPER" -eq 1 ]; then
-  err "--image-tag cannot be combined with --wrapper: scripts/jarvis-setup.sh takes no"
-  err "published-image selector."
-  exit 2
-fi
 # Adjust the budget to the path this run actually takes. The default above (6) is
 # cpu-pull; --build-local fills the build cache (cpu-build 9); and a GPU host
 # pulls/builds the much larger CUDA image (cuda-pull == cuda-build == 17). Mirrors
@@ -184,19 +169,23 @@ esac
   || { err "The checkout's isolated project identity has the wrong length."; exit 1; }
 readonly SMOKE_PROJECT="jarvis-firstrun-${_smoke_project_key:0:16}"
 unset _smoke_lock_path _smoke_project_key
-[ "$WRAPPER" -ne 1 ] || export COMPOSE_PROJECT_NAME="$SMOKE_PROJECT"
 
 # Whether a .env already existed BEFORE this run — drives teardown (only remove
 # the .env if WE generated it, never an operator's existing config).
 ENV_PREEXISTED=0
 [ -f "$REPO_ROOT/.env" ] && ENV_PREEXISTED=1
 
-# project_resource_ids PROJECT KIND — list exactly project-labeled resources.
+# project_resource_ids PROJECT KIND — list exact Compose-owned resources plus
+# detached lifecycle guards carrying the separate ownership label.
 project_resource_ids() {
   local project="$1"
   case "$2" in
     containers)
-      docker ps -aq --filter "label=com.docker.compose.project=${project}" ;;
+      {
+        docker ps -aq --filter "label=com.docker.compose.project=${project}"
+        docker ps -aq \
+          --filter "label=${JARVIS_LIFECYCLE_PROJECT_LABEL}=${project}"
+      } | sort -u ;;
     volumes)
       docker volume ls -q --filter "label=com.docker.compose.project=${project}" ;;
     networks)
@@ -215,6 +204,35 @@ project_has_resources() {
   return 1
 }
 
+# remove_smoke_project_resources PROJECT — remove only exact project-labeled
+# resources, retrying briefly for one-off Compose containers that are still
+# exiting after an interrupted bootstrap.
+remove_smoke_project_resources() {
+  local project="$1" attempt kind resources resource state
+  for attempt in 1 2 3; do
+    for kind in containers volumes networks; do
+      resources="$(project_resource_ids "$project" "$kind")" || return 2
+      while IFS= read -r resource; do
+        [ -n "$resource" ] || continue
+        case "$kind" in
+          containers) docker rm -f "$resource" >/dev/null 2>&1 || true ;;
+          volumes) docker volume rm "$resource" >/dev/null 2>&1 || true ;;
+          networks) docker network rm "$resource" >/dev/null 2>&1 || true ;;
+        esac
+      done <<< "$resources"
+    done
+
+    state=0
+    project_has_resources "$project" || state=$?
+    case "$state" in
+      1) return 0 ;;
+      2) return 2 ;;
+    esac
+    sleep 1
+  done
+  return 1
+}
+
 # require_project_resource_labels PROJECT KIND — require non-empty exact labels.
 require_project_resource_labels() {
   local project="$1" kind="$2" ids id label
@@ -228,7 +246,11 @@ require_project_resource_labels() {
     case "$kind" in
       containers)
         label="$(docker inspect --format \
-          '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")" ;;
+          '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "dev.limitcycle.jarvis.lifecycle-project" }}' "$id")"
+        case "$label" in
+          "$project|"|"|$project"|"$project|$project") continue ;;
+        esac
+        ;;
       volumes)
         label="$(docker volume inspect --format \
           '{{ index .Labels "com.docker.compose.project" }}' "$id")" ;;
@@ -255,6 +277,8 @@ teardown() {
     # one-off bootstrap containers. The explicit project keeps teardown scoped.
     docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans 2>/dev/null \
       || warn "Compose teardown returned non-zero; checking owned resources."
+    remove_smoke_project_resources "$SMOKE_PROJECT" \
+      || warn "Exact project cleanup returned non-zero; verifying owned resources."
     for kind in containers volumes networks; do
       if ! leftovers="$(project_resource_ids "$SMOKE_PROJECT" "$kind")"; then
         err "Could not verify ${kind} cleanup for '${SMOKE_PROJECT}'."
@@ -272,6 +296,13 @@ teardown() {
   # Only delete the .env if THIS run created it (never an operator's existing one).
   if [ "$ENV_PREEXISTED" -eq 0 ]; then
     rm -f "$REPO_ROOT/.env" "$REPO_ROOT"/docker-compose.override.yml.bak.* 2>/dev/null || true
+    if ! find "$REPO_ROOT/secrets" -maxdepth 1 -name '*.txt' -exec rm -f -- {} +; then
+      err "Could not remove secret files generated by the isolated first-run check."
+      cleanup_ok=0
+    elif [ -n "$(find "$REPO_ROOT/secrets" -maxdepth 1 -name '*.txt' -print -quit)" ]; then
+      err "Teardown left secret files generated by the isolated first-run check."
+      cleanup_ok=0
+    fi
   fi
   if [ "$cleanup_ok" -eq 1 ]; then
     ok "Teardown complete; no project-owned containers, volumes, or networks remain."
@@ -287,6 +318,8 @@ teardown() {
   fi
   exit "$rc"
 }
+trap 'exit 143' TERM
+trap 'exit 130' INT
 trap teardown EXIT
 
 # -----------------------------------------------------------------------------
@@ -302,10 +335,6 @@ docker info >/dev/null 2>&1 \
   || { err "Docker daemon unreachable ('docker info' failed)."; exit 1; }
 [ -x "$REPO_ROOT/setup.sh" ] \
   || { err "setup.sh not found or not executable at repo root ($REPO_ROOT)."; exit 1; }
-if [ "$WRAPPER" -eq 1 ]; then
-  [ -f "$REPO_ROOT/scripts/jarvis-setup.sh" ] \
-    || { err "--wrapper: scripts/jarvis-setup.sh not found."; exit 1; }
-fi
 if [ "$INTEGRATION" -eq 1 ]; then
   command -v uv >/dev/null 2>&1 \
     || { err "--integration requires uv (https://docs.astral.sh/uv/)."; exit 1; }
@@ -319,6 +348,13 @@ if [ "$ENV_PREEXISTED" -eq 1 ]; then
   err "Run the first-run smoke on a fresh checkout (CI) where no .env is present."
   exit 1
 fi
+existing_secret_file="$(find "$REPO_ROOT/secrets" -maxdepth 1 -name '*.txt' -print -quit)"
+if [ -n "$existing_secret_file" ]; then
+  err "Generated secret files already exist — this is not a clean checkout."
+  err "Run the first-run smoke on a fresh checkout with no secrets/*.txt files."
+  exit 1
+fi
+unset existing_secret_file
 
 # Hold the checkout lifecycle lock before project admission and ownership. The
 # setup subprocess inherits the authenticated descriptor; a concurrent smoke
@@ -349,25 +385,8 @@ if [ -n "$existing_containers" ] || [ -n "$existing_volumes" ] \
    || [ -n "$existing_networks" ]; then
   if [ "$FORCE" -eq 1 ]; then
     warn "Pre-existing '${SMOKE_PROJECT}' state found — removing it (--force)."
-    while IFS= read -r _resource; do
-      [ -z "$_resource" ] \
-        || docker rm -f "$_resource" >/dev/null 2>&1 || true
-    done <<< "$existing_containers"
-    while IFS= read -r _resource; do
-      [ -z "$_resource" ] \
-        || docker network rm "$_resource" >/dev/null 2>&1 || true
-    done <<< "$existing_networks"
-    while IFS= read -r _resource; do
-      [ -z "$_resource" ] \
-        || docker volume rm "$_resource" >/dev/null 2>&1 || true
-    done <<< "$existing_volumes"
-    _force_rc=0
-    project_has_resources "$SMOKE_PROJECT" || _force_rc=$?
-    case "$_force_rc" in
-      1) ;;
-      0) err "--force did not remove all pre-existing '${SMOKE_PROJECT}' resources."; exit 1 ;;
-      *) err "Could not verify '${SMOKE_PROJECT}' after --force cleanup."; exit 1 ;;
-    esac
+    remove_smoke_project_resources "$SMOKE_PROJECT" \
+      || { err "--force could not remove and verify '${SMOKE_PROJECT}'."; exit 1; }
   else
     err "An isolated '${SMOKE_PROJECT}' project already exists (containers, volumes, or networks)."
     err "Re-run with --force to remove it first. (The real deployment is never touched.)"
@@ -382,10 +401,8 @@ ok "Preconditions met — clean checkout, no conflicting deployment."
 
 # -----------------------------------------------------------------------------
 # Run the documented first-run bootstrap (README: "Non-interactive (CI/cloud-init)")
-#   ./setup.sh --non-interactive --profile=dev   (or scripts/jarvis-setup.sh
-#   with --wrapper)
-# setup.sh receives its persisted project explicitly. The compatibility wrapper
-# receives the same project through its supported ambient Compose selector.
+#   ./setup.sh --non-interactive --profile=dev
+# setup.sh receives its persisted project explicitly.
 # -----------------------------------------------------------------------------
 BOOTSTRAP_CMD=(
   ./setup.sh --non-interactive --profile=dev
@@ -393,7 +410,6 @@ BOOTSTRAP_CMD=(
 )
 [ "$BUILD_LOCAL" -eq 1 ] && BOOTSTRAP_CMD+=(--build-local)
 [ "$IMAGE_TAG_EXPLICIT" -eq 0 ] || BOOTSTRAP_CMD+=(--image-tag "$IMAGE_TAG")
-[ "$WRAPPER" -eq 1 ] && BOOTSTRAP_CMD=(bash scripts/jarvis-setup.sh)
 
 # App images plus Docker build cache, in bytes — the disk the install acquires.
 # Measured as a delta against this pre-run baseline so the ratchet stays honest on
@@ -536,14 +552,83 @@ fi
 ok "Dashboard is serving HTTP at ${DASHBOARD_URL}."
 
 # -----------------------------------------------------------------------------
+# In-cluster egress. The pinned outbound transport validates the resolved address
+# of every internal hop, so a service name missing from its allowlist is refused
+# before a socket opens. Every other cross-service test drives the apps
+# in-process and never sees that, so ask a service's own interpreter to make one
+# real call over the container network.
+# -----------------------------------------------------------------------------
+EGRESS_PROBE_PY="$(cat <<'PY'
+import asyncio
+import sys
+
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
+
+
+async def probe() -> None:
+    async with pinned_async_client(JARVIS_SERVICE_POLICY, timeout=15.0) as client:
+        response = await client.get(sys.argv[1])
+        response.raise_for_status()
+
+
+asyncio.run(probe())
+PY
+)"
+
+# verify_in_cluster_egress SERVICE URL [COMPOSE_PROFILE] — one real hop, made by
+# SERVICE's own interpreter through the pinned transport.
+verify_in_cluster_egress() {
+  local service="$1" target="$2" profile="${3:-}"
+  local -a compose_args=(-p "$SMOKE_PROJECT")
+  [ -n "$profile" ] && compose_args+=(--profile "$profile")
+  docker compose "${compose_args[@]}" exec -T "$service" \
+    python -c "$EGRESS_PROBE_PY" "$target"
+}
+
+# smoke_env_value KEY — one value from the .env the bootstrap just generated.
+smoke_env_value() {
+  local line
+  line="$(grep -m1 -- "^$1=" "$REPO_ROOT/.env")" || return 1
+  printf '%s' "${line#*=}"
+}
+
+info "Verifying in-cluster service egress over the container network..."
+if ! verify_in_cluster_egress paper_ingestion "http://learning_engine:8001/health"; then
+  err "Paper ingestion cannot reach learning engine over the container network."
+  err "Every internal service name must be on the pinned outbound allowlist."
+  exit 1
+fi
+ok "Paper ingestion reaches learning engine over the container network."
+
+# The bot runs only when its profile is active, so its hop is checked only then.
+# The skip is announced rather than passing silently as a verified hop.
+if [[ ",$(smoke_env_value COMPOSE_PROFILES || true)," == *,telegram,* ]]; then
+  if ! verify_in_cluster_egress telegram_bot "http://paper_ingestion:8000/health" telegram; then
+    err "The Telegram bot cannot reach paper ingestion over the container network."
+    exit 1
+  fi
+  ok "The Telegram bot reaches paper ingestion over the container network."
+else
+  info "Telegram profile inactive — skipping the bot's in-cluster egress check."
+fi
+
+# -----------------------------------------------------------------------------
 # Optional gated integration suite (--integration): tests/integration is NOT in
 # testpaths and skipif-passes without SMOKE_INTEGRATION=1 — set the gate so the
 # suite genuinely runs against the live smoke stack.
 # -----------------------------------------------------------------------------
 if [ "$INTEGRATION" -eq 1 ]; then
   info "Running the gated integration suite against the live stack..."
+  # The per-dependency health detail the suite asserts sits behind the API key
+  # this bootstrap generated, so the suite is handed the running stack's own key.
+  smoke_api_key="$(smoke_env_value JARVIS_API_KEY)" || {
+    err "The generated .env has no JARVIS_API_KEY — the suite cannot authenticate."
+    exit 1
+  }
   if ! SMOKE_INTEGRATION=1 \
        PAPER_INGESTION_BASE="http://localhost:${PAPER_INGESTION_HOST_PORT}" \
+       LEARNING_ENGINE_BASE="http://localhost:${LEARNING_ENGINE_HOST_PORT}" \
+       JARVIS_API_KEY="$smoke_api_key" \
        uv run pytest tests/integration -q; then
     err "Integration tests failed against the live stack."
     exit 1

@@ -657,6 +657,8 @@ def test_lifespan_config_includes_litellm_reconciler_hooks() -> None:
     from paper_ingestion.main import (
         _autoconfigure_models_hook,
         _lifespan_config,
+    )
+    from paper_ingestion.litellm_reconciler import (
         _shutdown_litellm_reconciler,
         _start_litellm_reconciler,
     )
@@ -681,7 +683,7 @@ async def test_reconcile_no_db_marks_pending_and_returns_false(
     """
     import logging
 
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     pool, conn = _make_pool()
     conn.fetchrow.return_value = {"value": "qwen3:4b"}
@@ -739,7 +741,7 @@ async def test_reconcile_success_clears_pending_and_creates_fallback() -> None:
     routes the committed model, so any stale marker from a pre-restart "No DB
     Connected" commit must be cleared (restart-after-DB-attach recovery).
     """
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     pool, conn = _make_pool()
     conn.fetchrow.side_effect = [
@@ -796,7 +798,7 @@ async def test_reconcile_ignores_bare_alias_and_falls_back_to_env(
     """
     import logging
 
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     monkeypatch.setenv("JARVIS_SMART_MODEL", "qwen3:14b")
     pool, conn = _make_pool()
@@ -845,7 +847,7 @@ async def test_reconcile_missing_rows_use_env_then_static_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No stored rows: the .env value wins when set, else the static pulled default."""
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     monkeypatch.setenv("JARVIS_SMART_MODEL", "qwen3:30b-a3b")
     monkeypatch.delenv("JARVIS_FAST_MODEL", raising=False)
@@ -961,7 +963,7 @@ async def test_reconcile_transport_error_marks_pending_not_raises() -> None:
     lifespan) — it marks the roles pending and reports failure so the loop
     runs again.
     """
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     pool, conn = _make_pool()
     conn.fetchrow.return_value = {"value": "qwen3:4b"}
@@ -1022,7 +1024,7 @@ async def test_reconcile_failure_warning_is_transition_gated(
     """
     import logging
 
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     pool, conn = _make_pool()
     conn.fetchrow.return_value = None  # roles fall back to static defaults; no embed row
@@ -1073,7 +1075,7 @@ async def test_reconcile_persistent_failure_logs_terse_heartbeat(
     import logging
 
     from paper_ingestion import litellm_reconciler
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     monkeypatch.setattr(litellm_reconciler, "_RECONCILE_TERSE_EVERY_N", 2)
     pool, conn = _make_pool()
@@ -1100,7 +1102,7 @@ async def test_reconcile_bare_alias_logged_once_per_value(
     not on every 30 s pass (the stored row repeats identically forever)."""
     import logging
 
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     pool, conn = _make_pool()
     conn.fetchrow.side_effect = [
@@ -1133,7 +1135,7 @@ async def test_reconcile_embed_mismatch_warned_once_per_value(
     not on every 30 s pass."""
     import logging
 
-    from paper_ingestion.main import _reconcile_litellm_models_once
+    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
     pool, conn = _make_pool()
     conn.fetchrow.side_effect = [
@@ -1167,7 +1169,7 @@ async def test_reconciler_loop_is_persistent_across_success() -> None:
     would leave the deployment LLM-dead until a service restart. Only
     cancellation (lifespan teardown) ends the loop.
     """
-    from paper_ingestion.main import (
+    from paper_ingestion.litellm_reconciler import (
         _LITELLM_RECONCILE_INTERVAL_SECONDS,
         _litellm_model_reconciler_loop,
     )
@@ -1202,7 +1204,7 @@ async def test_reconciler_loop_skips_write_pass_during_restore(tmp_path, monkeyp
     the pass resumes once the sentinel clears — the reconciler is its OWN asyncio task,
     so the maintenance watcher's worker-pause does not cover it; this guard does.
     """
-    from paper_ingestion.main import _litellm_model_reconciler_loop
+    from paper_ingestion.litellm_reconciler import _litellm_model_reconciler_loop
 
     sentinel = tmp_path / ".maintenance"
     monkeypatch.setenv("MAINTENANCE_SENTINEL", str(sentinel))
@@ -1241,7 +1243,7 @@ async def test_start_litellm_reconciler_can_be_disabled_for_maintenance(
 ) -> None:
     """The maintenance flag skips only the background reconciler task."""
     from fastapi import FastAPI
-    from paper_ingestion.main import (
+    from paper_ingestion.litellm_reconciler import (
         _shutdown_litellm_reconciler,
         _start_litellm_reconciler,
     )
@@ -1262,7 +1264,7 @@ async def test_start_litellm_reconciler_can_be_disabled_for_maintenance(
 async def test_start_and_shutdown_reconciler_hooks_cancel_cleanly() -> None:
     """_start creates the named background task; _shutdown cancels and awaits it."""
     from fastapi import FastAPI
-    from paper_ingestion.main import (
+    from paper_ingestion.litellm_reconciler import (
         _shutdown_litellm_reconciler,
         _start_litellm_reconciler,
     )

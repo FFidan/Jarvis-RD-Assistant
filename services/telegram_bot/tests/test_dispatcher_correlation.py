@@ -87,7 +87,7 @@ async def test_dispatcher_sets_correlation_id_per_command():
 
     pool = _make_pool()
     update = make_telegram_update(chat_id=_TEST_CHAT_ID)
-    context = _make_context(pool, make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID))
+    context = _make_context(pool, make_bot_config(BotConfig))
     context.user_data = {"jarvis_user_id": _TEST_CHAT_ID}
 
     with (
@@ -121,7 +121,7 @@ async def test_dispatcher_emits_auth_event_on_first_message_per_chat():
     from telegram_bot.handlers.commands._auth import auth_required
 
     pool = _make_pool()
-    config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
+    config = make_bot_config(BotConfig)
     update = make_telegram_update(chat_id=_TEST_CHAT_ID)
     # Shared user_data dict — simulates the same PTB per-chat session store.
     shared_user_data: dict = {}
@@ -160,7 +160,7 @@ async def test_dispatcher_auth_event_not_emitted_for_second_distinct_chat():
     from telegram_bot.handlers.commands._auth import auth_required
 
     pool = _make_pool()
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    config = make_bot_config(BotConfig)
     mock_log_event = AsyncMock()
 
     @auth_required
@@ -213,7 +213,7 @@ async def test_start_paired_chat_sends_welcome_via_pairing_lookup():
     update.message.text = "/start"
     update.message.reply_text = AsyncMock()
 
-    context = _make_context(pool, make_bot_config(BotConfig, telegram_chat_id=None))
+    context = _make_context(pool, make_bot_config(BotConfig))
 
     await start_command(update, context)
 
@@ -238,7 +238,7 @@ async def test_start_unpaired_chat_shows_pair_guidance():
     update.message.text = "/start"
     update.message.reply_text = AsyncMock()
 
-    context = _make_context(pool, make_bot_config(BotConfig, telegram_chat_id=None))
+    context = _make_context(pool, make_bot_config(BotConfig))
 
     await start_command(update, context)
 

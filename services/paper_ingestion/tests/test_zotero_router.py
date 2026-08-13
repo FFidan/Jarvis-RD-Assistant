@@ -211,6 +211,49 @@ async def test_get_paper_zotero_state_is_per_user(monkeypatch):
     assert resp_other.json()["zotero_item_key"] is None
 
 
+@pytest.mark.real_auth
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("library_type", "group_id", "expected_group_id"),
+    [("user", None, None), ("group", 987654, "987654")],
+)
+async def test_get_paper_zotero_state_returns_non_secret_library_context(
+    monkeypatch,
+    library_type: str,
+    group_id: int | None,
+    expected_group_id: str | None,
+):
+    """The handoff state exposes only the caller's non-secret library scope."""
+    from paper_ingestion.integrations import zotero_service
+    from paper_ingestion.routers import zotero
+
+    pool, conn = _make_pool_and_conn()
+    monkeypatch.setattr(zotero, "assert_paper_ownership", AsyncMock())
+    conn.fetchrow.return_value = {
+        "zotero_item_key": "ITEM",
+        "zotero_citation_key": None,
+        "zotero_last_pushed_at": None,
+    }
+    conn.fetch.return_value = [
+        {"key": "zotero.library_type", "value": library_type},
+        *([{"key": "zotero.group_id", "value": group_id}] if group_id is not None else []),
+    ]
+    credential_loader = AsyncMock()
+    monkeypatch.setattr(zotero_service, "_get_zotero_config", credential_loader)
+
+    with _wired_app(pool, user_id=42) as app:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/papers/7/zotero", headers={"X-API-Key": "test"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["zotero_library_type"] == library_type
+    assert body["zotero_group_id"] == expected_group_id
+    credential_loader.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # POST /api/zotero/poll
 # ---------------------------------------------------------------------------

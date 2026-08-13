@@ -10,7 +10,7 @@
  * the manual host runbook as the advanced fallback.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   useQuery,
   useMutation,
@@ -24,24 +24,14 @@ import {
   getInboxRestorePoints,
   triggerBackup,
   downloadBackup,
-  requestRestore,
-  getRestoreStatus,
-  acknowledgeRestore,
   deleteRestorePoint,
-  getRetention,
-  putRetention,
   type RestorePoint,
   type InboxRestorePoint,
   type RestoreSource,
-  type RetentionConfig,
-  type RestoreRecoveryRecord,
 } from '@/lib/api/backups';
-import {
-  clearRestoreRecovery,
-  loadRestoreRecovery,
-  saveRestoreRecovery,
-} from '@/lib/restore-recovery';
-import { useMaintenanceStore } from '@/stores/maintenance-store';
+import { QUERY_KEYS } from '@/lib/query-keys';
+import { useRestoreRecoveryController } from '@/hooks/use-restore-recovery-controller';
+import { useRetentionForm } from '@/hooks/use-retention-form';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { OffHostUploadSection } from '@/components/admin/OffHostUploadSection';
 import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
@@ -371,8 +361,8 @@ function RestorePointCard({
 
 export function AdminBackupsPage() {
   const queryClient = useQueryClient();
-  const maintenanceActive = useMaintenanceStore((s) => s.active);
-  const [recovery, setRecovery] = useState<RestoreRecoveryRecord | null>(loadRestoreRecovery);
+  const restoreController = useRestoreRecoveryController();
+  const retention = useRetentionForm();
   const [confirming, setConfirming] = useState(false);
   const [confirmTs, setConfirmTs] = useState<string | null>(null);
   const [confirmSource, setConfirmSource] = useState<RestoreSource>('local');
@@ -383,21 +373,13 @@ export function AdminBackupsPage() {
   const [confirmSchemaUncheckable, setConfirmSchemaUncheckable] = useState(false);
   const [confirmSchemaAccepted, setConfirmSchemaAccepted] = useState(false);
   const [deleteConfirmTs, setDeleteConfirmTs] = useState<string | null>(null);
-  const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(
-    recovery?.target_timestamp ?? null,
-  );
-  const [manualStepsNotice, setManualStepsNotice] = useState<string | null>(null);
-  const [recoveryIssue, setRecoveryIssue] = useState<string | null>(null);
-  const [acknowledgementOpen, setAcknowledgementOpen] = useState(false);
-  const [keepLastN, setKeepLastN] = useState('');
-  const [maxAgeDays, setMaxAgeDays] = useState('');
 
   const {
     data: status,
     isLoading: statusLoading,
     isError: statusError,
   } = useQuery({
-    queryKey: ['admin', 'backups', 'status'],
+    queryKey: QUERY_KEYS.admin.backupStatus(),
     queryFn: getBackupStatus,
     refetchInterval: 30_000,
     placeholderData: keepPreviousData,
@@ -408,13 +390,13 @@ export function AdminBackupsPage() {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['admin', 'restore-points'],
+    queryKey: QUERY_KEYS.admin.restorePoints(),
     queryFn: getRestorePoints,
     placeholderData: keepPreviousData,
   });
 
   const inbox = useQuery({
-    queryKey: ['admin', 'backups', 'inbox'],
+    queryKey: QUERY_KEYS.admin.backupInbox(),
     queryFn: getInboxRestorePoints,
     placeholderData: keepPreviousData,
   });
@@ -424,181 +406,11 @@ export function AdminBackupsPage() {
     onSuccess: () => {
       toast.success('Backup requested. The backup runs in the background.');
       setConfirming(false);
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.restorePoints() });
     },
     onError: (e: unknown) => {
       toast.error(e instanceof Error ? e.message : 'Could not request a backup.');
       setConfirming(false);
-    },
-  });
-
-  const discardRecovery = useCallback(() => {
-    clearRestoreRecovery();
-    setRecovery(null);
-  }, []);
-
-  useEffect(() => {
-    if (!recovery) return;
-    const remainingMs = Date.parse(recovery.expires_at) - Date.now();
-    if (remainingMs <= 0) {
-      discardRecovery();
-      setRecoveryIssue(
-        'This restore session expired. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
-      );
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      discardRecovery();
-      setRecoveryIssue(
-        'This restore session expired. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
-      );
-    }, Math.min(remainingMs, 2_147_483_647));
-    return () => window.clearTimeout(timer);
-  }, [discardRecovery, recovery]);
-
-  // Fetch once on every visit so a configured owner can see quarantine without
-  // the initiating tab. A restore-session token keeps polling available while
-  // the restore replaces session rows.
-  const trackingRestore = restoringTimestamp !== null || recovery !== null;
-  const restoreStatus = useQuery({
-    queryKey: ['admin', 'restore-status'],
-    queryFn: () => getRestoreStatus(recovery?.status_token),
-    refetchInterval: trackingRestore ? 3000 : false,
-    retry: false,
-  });
-
-  const restoreState = restoreStatus.data?.state;
-  useEffect(() => {
-    const status = restoreStatus.data;
-    if (!status) return;
-    const quarantine = status.quarantine ?? 'none';
-    if (quarantine === 'unreadable') {
-      setRestoringTimestamp(null);
-      setRecoveryIssue(
-        'Restore review state is unreadable. Keep outbound access blocked and inspect it on the host before running jarvis-research restore acknowledge <restore-id>.',
-      );
-      return;
-    }
-    if (quarantine === 'awaiting_review') {
-      setRestoringTimestamp(null);
-      if (
-        recovery &&
-        (recovery.restore_id !== status.restore_id ||
-          recovery.source !== status.source ||
-          recovery.source !== 'inbox')
-      ) {
-        discardRecovery();
-        setRecoveryIssue(
-          'This tab belongs to a different restore. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
-        );
-      }
-      return;
-    }
-    if (!restoringTimestamp && !recovery) return;
-    // Only a terminal state stops tracking. 'pending' (queued — the sidecar
-    // polls every few seconds before it writes the first status), 'running', and
-    // a transient 'idle'/undefined all keep the poll alive. The backend reports
-    // 'pending' whenever the request sentinel exists, so a freshly-requested
-    // restore never reads as 'idle' and a leftover status file from a prior run
-    // can never end tracking early.
-    if (restoreState === 'done') {
-      // Off-host / older-schema restores finish 'done' but stay held in
-      // maintenance (every route still 503s) until the operator recreates the
-      // app containers and clears the markers. Don't claim success there — show
-      // a "one more step" notice pointing at the guided steps below instead.
-      if (restoreStatus.data?.manual_steps_required === true) {
-        setManualStepsNotice(
-          restoreStatus.data.error ??
-            'The restore finished but the app is held in maintenance until you recreate the app containers and clear the maintenance markers — see the steps below.',
-        );
-      } else {
-        toast.success('Restore complete. Your data has been restored.');
-      }
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
-      setRestoringTimestamp(null);
-      discardRecovery();
-    } else if (restoreState === 'failed') {
-      setRestoringTimestamp(null);
-      discardRecovery();
-    }
-  }, [discardRecovery, queryClient, recovery, restoreState, restoreStatus.data, restoringTimestamp]);
-
-  const restoreMutation = useMutation({
-    mutationFn: ({
-      timestamp,
-      source,
-      allowMissingPdfs,
-      allowUnknownSchema,
-    }: {
-      timestamp: string;
-      source: RestoreSource;
-      allowMissingPdfs: boolean;
-      allowUnknownSchema: boolean;
-    }) =>
-      requestRestore(timestamp, 'RESTORE', source, allowMissingPdfs, allowUnknownSchema),
-    onSuccess: (data, { timestamp }) => {
-      // Evict any terminal state (e.g. 'done') left by a previous restore so the
-      // new restore starts from a clean fetch rather than the stale cached state.
-      queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] });
-      const nextRecovery: RestoreRecoveryRecord = {
-        version: 1,
-        restore_id: data.restore_id,
-        source: data.source,
-        status_token: data.status_token,
-        expires_at: data.expires_at,
-        target_timestamp: timestamp,
-      };
-      saveRestoreRecovery(nextRecovery);
-      setRecovery(nextRecovery);
-      setRecoveryIssue(null);
-      setRestoringTimestamp(timestamp);
-      setConfirmTs(null);
-      setConfirmAllowMissingPdfs(false);
-      setConfirmSchemaAccepted(false);
-    },
-    onError: (e: unknown) => {
-      toast.error(e instanceof Error ? e.message : 'Could not start the restore.');
-      setConfirmTs(null);
-      setConfirmAllowMissingPdfs(false);
-      setConfirmSchemaAccepted(false);
-    },
-  });
-
-  const acknowledgementMutation = useMutation({
-    mutationFn: ({
-      restoreId,
-      token,
-    }: {
-      restoreId: string;
-      token?: string;
-    }) =>
-      acknowledgeRestore(
-        restoreId,
-        'inbox',
-        'I HAVE REVIEWED RESTORED CREDENTIALS',
-        token,
-      ),
-    onSuccess: () => {
-      discardRecovery();
-      setRestoringTimestamp(null);
-      setRecoveryIssue(null);
-      setAcknowledgementOpen(false);
-      toast.success('Restore review acknowledged. Outbound connections are available again.');
-      void restoreStatus.refetch();
-    },
-    onError: (error: unknown) => {
-      const statusCode =
-        typeof error === 'object' && error !== null && 'status' in error
-          ? Number(error.status)
-          : null;
-      if (statusCode === 401 || statusCode === 403 || statusCode === 409) {
-        discardRecovery();
-        setRecoveryIssue(
-          'This restore session is no longer usable. Sign in as the configured owner or run jarvis-research restore acknowledge <restore-id> on the host.',
-        );
-      }
-      setAcknowledgementOpen(false);
-      toast.error(error instanceof Error ? error.message : 'Could not acknowledge restore review.');
     },
   });
 
@@ -607,64 +419,13 @@ export function AdminBackupsPage() {
     onSuccess: () => {
       toast.success('Delete requested. The restore point will be removed shortly.');
       setDeleteConfirmTs(null);
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.restorePoints() });
     },
     onError: (e: unknown) => {
       toast.error(e instanceof Error ? e.message : 'Could not delete the restore point.');
       setDeleteConfirmTs(null);
     },
   });
-
-  const retentionQuery = useQuery({
-    queryKey: ['admin', 'backups', 'retention'],
-    queryFn: getRetention,
-  });
-
-  // Latches true once the policy has hydrated from the server, so Save can never
-  // fire from the uninitialized '' defaults. Stays true afterward — a later
-  // background refetch failure (isError) doesn't blank the already-loaded fields,
-  // so it shouldn't re-lock Save either.
-  const [retentionLoaded, setRetentionLoaded] = useState(false);
-
-  // Seed the inputs from the saved policy once it loads (empty string == "no cap").
-  useEffect(() => {
-    if (retentionQuery.data) {
-      setKeepLastN(retentionQuery.data.keep_last_n?.toString() ?? '');
-      setMaxAgeDays(retentionQuery.data.max_age_days?.toString() ?? '');
-      setRetentionLoaded(true);
-    }
-  }, [retentionQuery.data]);
-
-  const retentionMutation = useMutation({
-    mutationFn: putRetention,
-    onSuccess: (data) => {
-      toast.success('Retention policy saved.');
-      queryClient.setQueryData(['admin', 'backups', 'retention'], data);
-    },
-    onError: (e: unknown) => {
-      toast.error(e instanceof Error ? e.message : 'Could not save the retention policy.');
-    },
-  });
-
-  const handleSaveRetention = () => {
-    // Belt-and-suspenders: the Save button is already disabled until the policy
-    // has loaded, but never build a PUT from uninitialized fields even so.
-    if (!retentionLoaded) return;
-    // Blank, 0, or an invalid value all mean "no cap" (null): a 0 window would be
-    // a footgun (delete everything but the last day), and 0 kept points is
-    // meaningless — both collapse to the default, matching the sidecar's floors.
-    const parse = (raw: string): number | null => {
-      const trimmed = raw.trim();
-      if (trimmed === '') return null;
-      const n = Number(trimmed);
-      return Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
-    };
-    const config: RetentionConfig = {
-      keep_last_n: parse(keepLastN),
-      max_age_days: parse(maxAgeDays),
-    };
-    retentionMutation.mutate(config);
-  };
 
   const handleDownload = async (name: string) => {
     try {
@@ -692,15 +453,6 @@ export function AdminBackupsPage() {
   const deleteConfirmPoint = deleteConfirmTs
     ? (points.find((p) => p.timestamp === deleteConfirmTs) ?? null)
     : null;
-  const restoreData = restoreStatus.data;
-  const quarantineState = restoreData?.quarantine ?? 'none';
-  const quarantineRestoreId = restoreData?.restore_id ?? null;
-  const recoveryMatchesQuarantine =
-    recovery !== null &&
-    quarantineState === 'awaiting_review' &&
-    recovery.restore_id === quarantineRestoreId &&
-    recovery.source === 'inbox' &&
-    restoreData?.source === 'inbox';
   // Open the shared typed-RESTORE confirm, remembering which source it targets.
   const askRestore = (
     timestamp: string,
@@ -714,14 +466,6 @@ export function AdminBackupsPage() {
     setConfirmSchemaAccepted(false);
     setConfirmTs(timestamp);
   };
-  const showRestorePanel =
-    trackingRestore ||
-    restoreData?.state === 'failed' ||
-    manualStepsNotice !== null ||
-    quarantineState !== 'none' ||
-    recoveryIssue !== null ||
-    maintenanceActive;
-
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -821,7 +565,7 @@ export function AdminBackupsPage() {
                   askRestore(ts, 'local', allowMissingPdfs, schemaUncheckable)
                 }
                 onDelete={(ts) => setDeleteConfirmTs(ts)}
-                restoringTimestamp={restoringTimestamp}
+                restoringTimestamp={restoreController.restoringTimestamp}
               />
             ))
           )}
@@ -830,7 +574,7 @@ export function AdminBackupsPage() {
 
       <OffHostUploadSection
         onUploaded={() =>
-          void queryClient.invalidateQueries({ queryKey: ['admin', 'backups', 'inbox'] })
+          void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.backupInbox() })
         }
       />
 
@@ -840,7 +584,7 @@ export function AdminBackupsPage() {
       {!inbox.isLoading && !inbox.isError && (
         <InboxRestoreSection
           points={inboxPoints}
-          restoringTimestamp={restoringTimestamp}
+          restoringTimestamp={restoreController.restoringTimestamp}
           onRestore={(ts, allowMissingPdfs) => askRestore(ts, 'inbox', allowMissingPdfs, true)}
         />
       )}
@@ -853,13 +597,13 @@ export function AdminBackupsPage() {
             restore points are removed automatically by the backup service.
           </p>
         </div>
-        {retentionQuery.isError && !retentionLoaded ? (
+        {retention.isError && !retention.loaded ? (
           <div className="text-sm text-destructive">
             Could not load the retention policy.
             <button
               type="button"
               className="ml-2 rounded-md border px-3 py-1.5 text-sm"
-              onClick={() => void retentionQuery.refetch()}
+              onClick={() => void retention.refetch()}
             >
               Retry
             </button>
@@ -875,8 +619,8 @@ export function AdminBackupsPage() {
                 aria-label="Keep most recent restore points"
                 className="w-32 rounded-md border px-2 py-1 text-sm"
                 placeholder="All"
-                value={keepLastN}
-                onChange={(e) => setKeepLastN(e.target.value)}
+                value={retention.keepLastN}
+                onChange={(e) => retention.setKeepLastN(e.target.value)}
               />
               <span className="text-xs text-muted-foreground">restore points</span>
             </label>
@@ -889,16 +633,16 @@ export function AdminBackupsPage() {
                 aria-label="Maximum age in days"
                 className="w-32 rounded-md border px-2 py-1 text-sm"
                 placeholder="Default"
-                value={maxAgeDays}
-                onChange={(e) => setMaxAgeDays(e.target.value)}
+                value={retention.maxAgeDays}
+                onChange={(e) => retention.setMaxAgeDays(e.target.value)}
               />
               <span className="text-xs text-muted-foreground">days</span>
             </label>
             <button
               type="button"
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
-              onClick={handleSaveRetention}
-              disabled={retentionMutation.isPending || !retentionLoaded}
+              onClick={retention.save}
+              disabled={retention.isPending || !retention.loaded}
             >
               Save retention policy
             </button>
@@ -906,38 +650,38 @@ export function AdminBackupsPage() {
         )}
       </div>
 
-      {showRestorePanel && (
+      {restoreController.showRestorePanel && (
         <GuidedRecoveryView
-          restoringTimestamp={restoringTimestamp}
-          pollError={restoreStatus.isError}
-          status={restoreData}
-          manualStepsNotice={manualStepsNotice}
-          quarantine={quarantineState}
-          quarantineRestoreId={quarantineRestoreId}
-          recoveryIssue={recoveryIssue}
-          acknowledgementPending={acknowledgementMutation.isPending}
+          restoringTimestamp={restoreController.restoringTimestamp}
+          pollError={restoreController.pollError}
+          status={restoreController.status}
+          manualStepsNotice={restoreController.manualStepsNotice}
+          quarantine={restoreController.quarantine}
+          quarantineRestoreId={restoreController.quarantineRestoreId}
+          recoveryIssue={restoreController.recoveryIssue}
+          acknowledgementPending={restoreController.acknowledgementPending}
           onAcknowledge={
-            quarantineState === 'awaiting_review' && quarantineRestoreId !== null
-              ? () => setAcknowledgementOpen(true)
+            restoreController.quarantine === 'awaiting_review' &&
+            restoreController.quarantineRestoreId !== null
+              ? () => restoreController.setAcknowledgementOpen(true)
               : null
           }
-          onDismissFailed={() =>
-            queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] })
-          }
-          onDismissManual={() => setManualStepsNotice(null)}
+          onDismissFailed={restoreController.dismissFailed}
+          onDismissManual={restoreController.dismissManual}
         />
       )}
 
       <TypedConfirmDialog
         requiredWord="I HAVE REVIEWED RESTORED CREDENTIALS"
-        open={acknowledgementOpen}
-        onOpenChange={setAcknowledgementOpen}
+        open={restoreController.acknowledgementOpen}
+        onOpenChange={restoreController.setAcknowledgementOpen}
         title="Enable restored outbound connections?"
         confirmLabel="Acknowledge"
         description={
           <span>
             Confirm that you reviewed SMTP, Telegram, AI providers, Zotero, research sources, and
-            scheduled deliveries for restore <span className="font-mono">{quarantineRestoreId}</span>.
+            scheduled deliveries for restore{' '}
+            <span className="font-mono">{restoreController.quarantineRestoreId}</span>.
             This enables outbound use of restored database credentials. Type{' '}
             <span className="font-mono font-semibold">
               I HAVE REVIEWED RESTORED CREDENTIALS
@@ -946,12 +690,7 @@ export function AdminBackupsPage() {
           </span>
         }
         onConfirm={() => {
-          if (quarantineRestoreId) {
-            acknowledgementMutation.mutate({
-              restoreId: quarantineRestoreId,
-              token: recoveryMatchesQuarantine ? recovery.status_token : undefined,
-            });
-          }
+          restoreController.acknowledgeQuarantine();
         }}
       />
 
@@ -1022,12 +761,19 @@ export function AdminBackupsPage() {
             );
             return;
           }
-          restoreMutation.mutate({
-            timestamp: confirmTs,
-            source: confirmSource,
-            allowMissingPdfs: confirmAllowMissingPdfs,
-            allowUnknownSchema: confirmSchemaAccepted,
-          });
+          restoreController.startRestore(
+            {
+              timestamp: confirmTs,
+              source: confirmSource,
+              allowMissingPdfs: confirmAllowMissingPdfs,
+              allowUnknownSchema: confirmSchemaAccepted,
+            },
+            () => {
+              setConfirmTs(null);
+              setConfirmAllowMissingPdfs(false);
+              setConfirmSchemaAccepted(false);
+            },
+          );
         }}
       />
 

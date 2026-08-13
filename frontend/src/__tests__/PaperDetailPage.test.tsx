@@ -391,6 +391,7 @@ describe('PaperDetailPage', () => {
     });
     expect(screen.getByText('Rating: 4')).toBeInTheDocument();
     expect(screen.getByText('Save Rating')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /flagged/i })).toHaveAttribute('name', 'flagged');
   });
 
   it('renders RAG chat section', async () => {
@@ -462,7 +463,9 @@ describe('PaperDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Zotero')).toBeInTheDocument();
     });
-    expect(screen.getByText('Link to a project first to enable Zotero push.')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Link this paper to a project first. The project determines its Zotero collection.',
+    )).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeDisabled();
   });
 
@@ -480,7 +483,9 @@ describe('PaperDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeInTheDocument();
     });
-    expect(screen.queryByText('Link to a project first to enable Zotero push.')).not.toBeInTheDocument();
+    expect(screen.queryByText(
+      'Link this paper to a project first. The project determines its Zotero collection.',
+    )).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeEnabled();
   });
 
@@ -497,7 +502,9 @@ describe('PaperDetailPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Zotero status unavailable.')).toBeInTheDocument();
+      expect(
+        screen.getByText('Zotero status is temporarily unavailable. Try again shortly.'),
+      ).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Send to Zotero' })).not.toBeInTheDocument();
   });
@@ -694,6 +701,11 @@ describe('PaperDetailPage', () => {
     // PaperTOC received processingFailed=true from the live payload.
     const processingLabel = within(nav).getByText('Extracting passages…');
     expect(processingLabel.className).toContain('text-destructive');
+
+    // The actions panel's step tracker reads the same signal, so a reload
+    // cannot leave the two rails disagreeing about whether processing failed.
+    const actionsProcessingLabel = screen.getByText('Processing');
+    expect(actionsProcessingLabel.className).toContain('text-destructive');
   });
 
   it('left Pipeline rail does NOT show ✗ when processing_failed is absent (legacy/cached payload)', async () => {

@@ -24,7 +24,7 @@ async def test_fetch_digest_from_api_returns_payload_and_auth_header():
 
     result = await paper_digest._fetch_digest_from_api(
         http_client,
-        make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+        make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         user_id=1,
     )
 
@@ -41,7 +41,7 @@ async def test_fetch_digest_from_api_returns_none_on_error():
 
     result = await paper_digest._fetch_digest_from_api(
         http_client,
-        make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+        make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         user_id=1,
     )
 
@@ -59,7 +59,7 @@ async def test_fetch_digest_from_api_omits_auth_header_without_api_key():
 
     result = await paper_digest._fetch_digest_from_api(
         http_client,
-        make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=None),
+        make_bot_config(BotConfig, jarvis_api_key=None),
         user_id=1,
     )
 
@@ -297,7 +297,7 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 
@@ -344,7 +344,6 @@ async def test_run_paper_digest_emits_absolute_inbox_link_when_base_url_set():
     db_pool = AsyncMock()
     config = make_bot_config(
         BotConfig,
-        telegram_chat_id=1234,
         jarvis_api_key=SecretStr("secret"),
         jarvis_base_url="https://jarvis.example.com",
     )
@@ -392,7 +391,6 @@ async def test_run_paper_digest_escapes_quote_in_base_url_href():
     db_pool = AsyncMock()
     config = make_bot_config(
         BotConfig,
-        telegram_chat_id=1234,
         jarvis_api_key=SecretStr("secret"),
         jarvis_base_url='https://jarvis.example.com/"><script>',
     )
@@ -433,7 +431,7 @@ async def test_run_paper_digest_omits_inbox_link_without_base_url():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     assert config.jarvis_base_url is None  # guard: default
 
     from telegram_bot.owner import UserPairing
@@ -471,7 +469,7 @@ async def test_run_paper_digest_warns_when_api_returns_no_data():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 
@@ -499,7 +497,7 @@ async def test_paper_digest_per_pairing_user_scope():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 
@@ -539,7 +537,7 @@ async def test_digest_continues_after_blocked_user():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 

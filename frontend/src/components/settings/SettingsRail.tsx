@@ -116,7 +116,7 @@ export function SettingsRail({ activeSection, activeItem, isAdmin, onSelect }: S
   return (
     <nav
       aria-label="Settings navigation"
-      className="h-full w-full border-r border-hair bg-[hsl(var(--surface-1))] py-4 overflow-y-auto"
+      className="h-full w-full border-r border-hair bg-paper py-4 overflow-y-auto"
     >
       {visibleSections.map((section) => (
         <div key={section.title} className="mb-4">
@@ -150,7 +150,7 @@ export function SettingsRail({ activeSection, activeItem, isAdmin, onSelect }: S
                     aria-hidden
                     className={cn(
                       'h-1.5 w-1.5 rounded-full shrink-0',
-                      item.status === 'ok' ? 'bg-[hsl(var(--status-ok))]' : 'bg-[hsl(var(--muted-foreground))]',
+                      item.status === 'ok' ? 'bg-[var(--status-ok)]' : 'bg-[hsl(var(--muted-foreground))]',
                     )}
                   />
                 )}

@@ -39,10 +39,6 @@ vi.mock('@/stores/pomodoro-store', () => ({
   ),
 }));
 
-vi.mock('@/lib/api', () => ({
-  logFocusSession: vi.fn().mockResolvedValue({ status: 'ok', recorded_hours: 0.5 }),
-}));
-
 function renderHeader() {
   const qc = createTestQueryClient();
   return renderWithProviders(
@@ -87,20 +83,14 @@ describe('HeaderPomodoro', () => {
     expect(pauseMock).toHaveBeenCalledOnce();
   });
 
-  it('exposes a Stop affordance that ends and logs the session', async () => {
+  it('queues the active session for authoritative server completion', async () => {
     const user = userEvent.setup();
     stopAndLogMock.mockReturnValue({ durationSeconds: 1800, taskId: 1 });
-    const { logFocusSession } = await import('@/lib/api');
     renderHeader();
 
     const stopBtn = screen.getByRole('button', { name: /stop pomodoro/i });
     await user.click(stopBtn);
 
     expect(stopAndLogMock).toHaveBeenCalledOnce();
-    expect(vi.mocked(logFocusSession).mock.calls[0]?.[0]).toEqual({
-      duration_hours: 0.5,
-      task_id: 1,
-      paper_id: undefined,
-    });
   });
 });

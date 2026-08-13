@@ -5,7 +5,9 @@ import { toast } from 'sonner';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, fetchDecks } from '@/lib/api';
+import { isProcessingFailed } from '@/lib/paper-pipeline';
 import { useJobStore, type Job } from '@/stores/job-store';
+import { useResearchMilestoneStore } from '@/stores/research-milestone-store';
 import { streamAnalyze } from '@/lib/sse';
 import { isSafeRelativeHref } from '@/lib/safe-href';
 import { Button } from '@/components/ui/button';
@@ -46,6 +48,8 @@ interface ActionsSidebarProps {
   hasChunks?: boolean;
   /** Whether the paper has a summary */
   hasSummary?: boolean;
+  /** Set when a persisted processing job on this paper ended in failure. */
+  processingFailed?: boolean;
   /** Briefly pulse the Process PDF button (triggered by ?action=process query param) */
   pulseProcessButton?: boolean;
   /** Briefly pulse the Analyze Paper button (triggered by ?action=analyze query param) */
@@ -82,6 +86,7 @@ export function ActionsSidebar({
   pdfDownloaded = false,
   hasChunks = false,
   hasSummary = false,
+  processingFailed = false,
   pulseProcessButton = false,
   pulseAnalyzeButton = false,
   discoveryOrigin = 'user_initiated',
@@ -92,6 +97,9 @@ export function ActionsSidebar({
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const isRunning = useJobStore((s) => s.isRunning);
+  const recordResearchMilestone = useResearchMilestoneStore(
+    (store) => store.recordMilestone,
+  );
   const [genJobId, setGenJobId] = useState<string | null>(null);
   const genJob = useJobStore((s) => (genJobId ? s.jobs[genJobId] ?? null : null));
   const [deckId, setDeckId] = useState<string>('');
@@ -184,6 +192,7 @@ export function ActionsSidebar({
             setChunkCount(event.chunk_count);
           }
         } else if (event.type === 'complete') {
+          recordResearchMilestone('analyze');
           setActionResult({ type: 'success', message: 'Analysis complete' });
           queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
           toast.success('Analyzed! You can now Ask across your library', {
@@ -228,7 +237,7 @@ export function ActionsSidebar({
       setAnalyzeStep(null);
       abortRef.current = null;
     }
-  }, [paperId, queryClient, navigate]);
+  }, [paperId, queryClient, navigate, recordResearchMilestone]);
 
   const downloadMut = useMutation({
     mutationFn: () => downloadPdf(paperId),
@@ -346,11 +355,16 @@ export function ActionsSidebar({
       <div className="space-y-2 rounded-md border p-3">
           {ANALYZE_STEPS.map((step) => {
             // During an active analyze run, use live stepStatuses.
-            // Otherwise derive state from paper props.
+            // Otherwise derive state from paper props via the shared pipeline selector.
             let status: StepStatus = stepStatuses[step.key] || 'pending';
             if (!isAnalyzing && !Object.values(stepStatuses).some((s) => s !== 'pending')) {
               if (step.key === 'downloading') status = pdfDownloaded ? 'completed' : 'pending';
-              else if (step.key === 'processing') status = hasChunks ? 'completed' : 'pending';
+              else if (step.key === 'processing')
+                status = isProcessingFailed({ processingFailed, hasChunks })
+                  ? 'failed'
+                  : hasChunks
+                    ? 'completed'
+                    : 'pending';
               else if (step.key === 'summarizing') status = hasSummary ? 'completed' : 'pending';
             }
             const isFailed = status === 'failed';
@@ -574,7 +588,7 @@ export function ActionsSidebar({
                 <div className="h-1 w-full rounded-full bg-muted">
                   <div
                     className="h-1 rounded-full bg-primary transition-all"
-                    style={{ width: `${Math.round(genJob.progress * 100)}%` }}
+                    style={{ width: `${Math.round((genJob.progress ?? 0) * 100)}%` }}
                   />
                 </div>
               )}

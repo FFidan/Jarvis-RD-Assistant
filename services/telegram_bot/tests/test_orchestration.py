@@ -38,7 +38,7 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     boundary.
     """
     bot = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     pool = AsyncMock()
 
     tracked_name = "Alice Smith"
@@ -97,7 +97,7 @@ async def test_author_alerts_skips_when_no_owner():
             http_client,
             pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_not_awaited()
@@ -133,7 +133,7 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
     mocks at the http_client boundary, routing by endpoint.
     """
     bot = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     pool = AsyncMock()
 
     now = datetime.now(UTC)
@@ -173,7 +173,7 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
 async def test_daily_briefing_passes_owner_headers_on_every_call():
     """Each briefing REST call carries the canonical owner headers."""
     bot = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     pool = AsyncMock()
 
     http_client = AsyncMock(spec=httpx.AsyncClient)
@@ -207,7 +207,7 @@ async def test_daily_briefing_skips_when_no_owner():
             http_client,
             pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_not_awaited()
@@ -227,7 +227,7 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
     so the test mocks at the http_client boundary.
     """
     bot = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     pool = AsyncMock()
 
     now = datetime.now(UTC)
@@ -281,7 +281,7 @@ async def test_deadline_warning_silent_when_no_milestones():
             http_client,
             pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_not_awaited()
@@ -296,7 +296,7 @@ async def test_deadline_warning_silent_when_no_milestones():
 async def test_review_reminder_sends_message_for_due_cards():
     """run_review_reminder sends an inline-button message when cards are due."""
     bot = AsyncMock()
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     pool = AsyncMock()
 
     http_client = AsyncMock(spec=httpx.AsyncClient)
@@ -343,7 +343,7 @@ async def test_review_reminder_silent_when_no_cards_due():
             http_client,
             pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_not_awaited()
@@ -361,7 +361,7 @@ async def test_review_reminder_skips_when_no_owner():
             http_client,
             pool,
             bot,
-            make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_not_awaited()
@@ -400,7 +400,7 @@ def test_owner_headers_are_confined_to_the_canonical_client():
     )
 
     # Smoke-test that the canonical helper produces correct output.
-    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     headers_with_user = _owner_headers(config, 42)
     assert headers_with_user["X-API-Key"] == "secret"
     assert headers_with_user["X-Owner-User-Id"] == "42"

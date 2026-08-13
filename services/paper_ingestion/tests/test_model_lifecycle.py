@@ -796,22 +796,17 @@ _UNKNOWN_NOTES = (
 def _live_entry(
     provider: str,
     model_id: str,
-    *,
-    prefix: str,
-    capability: str = "chat",
 ) -> ModelCatalogEntry:
     return live_model_entry(
         provider,  # type: ignore[arg-type]
         model_id,
-        assignment_id=f"{prefix}{model_id}",
         fetched_at=datetime(2026, 8, 1, tzinfo=UTC),
-        capability=capability,  # type: ignore[arg-type]
     )
 
 
 def test_extra_entry_carries_every_model_status_key_and_is_assignable() -> None:
     """A live entry must reach the picker as a complete status entry, not a partial dict."""
-    entry = _live_entry("openrouter", "vendor/model-x", prefix="openrouter/")
+    entry = _live_entry("openrouter", "vendor/model-x")
 
     statuses = build_model_statuses(
         installed=[],
@@ -823,7 +818,7 @@ def test_extra_entry_carries_every_model_status_key_and_is_assignable() -> None:
     )
     item = next(i for i in statuses if i["id"] == "openrouter/vendor/model-x")
 
-    assert len(_STATUS_KEYS) == 29
+    assert len(_STATUS_KEYS) == 35
     assert set(item) == _STATUS_KEYS
     assert item["name"] == "vendor/model-x"
     assert item["can_assign"] is True
@@ -831,7 +826,7 @@ def test_extra_entry_carries_every_model_status_key_and_is_assignable() -> None:
 
 
 def test_display_only_extra_entry_surfaces_its_own_notes_as_the_blocker() -> None:
-    entry = _live_entry("openai", "sora-2", prefix="openai/", capability="unknown")
+    entry = _live_entry("openai", "unclassified-model")
 
     statuses = build_model_statuses(
         installed=[],
@@ -841,7 +836,7 @@ def test_display_only_extra_entry_surfaces_its_own_notes_as_the_blocker() -> Non
         cloud_api_keys={"openai": True},
         extra_entries=(entry,),
     )
-    item = next(i for i in statuses if i["id"] == "openai/sora-2")
+    item = next(i for i in statuses if i["id"] == "openai/unclassified-model")
 
     assert item["can_assign"] is False
     assert item["assign_blocker"] == _UNKNOWN_NOTES
@@ -849,7 +844,7 @@ def test_display_only_extra_entry_surfaces_its_own_notes_as_the_blocker() -> Non
 
 def test_extra_entries_reach_role_recommendations() -> None:
     """Catalog and recommendations cannot disagree about which models exist."""
-    entry = _live_entry("openrouter", "vendor/model-x", prefix="openrouter/")
+    entry = _live_entry("openrouter", "vendor/model-x")
 
     recommendations = recommendations_for_role(
         "smart",
@@ -865,7 +860,7 @@ def test_extra_entries_reach_role_recommendations() -> None:
 
 
 def test_blocker_names_the_provider_display_name_not_its_registry_id() -> None:
-    entry = _live_entry("custom_openai_compatible", "org/model-y", prefix="custom_openai/")
+    entry = _live_entry("custom_openai_compatible", "org/model-y")
 
     statuses = build_model_statuses(
         installed=[],
@@ -886,7 +881,7 @@ def test_blocker_names_the_provider_display_name_not_its_registry_id() -> None:
 
 def test_blocker_asks_only_for_a_key_where_a_key_is_the_only_way_in() -> None:
     """A keyed provider has no endpoint URL to configure, so offering one misdirects."""
-    entry = _live_entry("openrouter", "vendor/model-x", prefix="openrouter/")
+    entry = _live_entry("openrouter", "vendor/model-x")
 
     statuses = build_model_statuses(
         installed=[],

@@ -26,6 +26,9 @@ frontend/build/
 # Docs are not needed in the runtime image build context
 docs/
 
+# Runtime bind data is mounted into containers and must never enter image builds
+shared/
+
 # Big binary artifacts
 *.zip
 *.tar.gz

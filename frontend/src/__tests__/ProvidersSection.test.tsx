@@ -3,8 +3,14 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
-import type { ProviderMetadata } from '@/lib/api';
+import type {
+  ModelCatalogEntry,
+  ProviderMetadata,
+  ProviderModelListStatus,
+  SystemModelsResponse,
+} from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 vi.mock('sonner', async () =>
   (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
@@ -14,8 +20,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...orig,
     fetchConfig: vi.fn(),
+    fetchProviderAccount: vi.fn(),
     fetchSystemModels: vi.fn(),
     listProviders: vi.fn(),
+    removeProviderBaseUrl: vi.fn().mockResolvedValue(undefined),
+    removeProviderKey: vi.fn().mockResolvedValue(undefined),
     setConfig: vi.fn().mockResolvedValue({ key: '', value: null }),
     testProvider: vi.fn(),
     listJobs: vi.fn().mockResolvedValue([]),
@@ -27,16 +36,104 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: vi.fn(() => 'test-key'),
       logout: vi.fn(),
     })),
   },
 }));
 
-const { fetchConfig, fetchSystemModels, listProviders, setConfig, testProvider } = await import('@/lib/api');
+const {
+  fetchConfig,
+  fetchProviderAccount,
+  fetchSystemModels,
+  listProviders,
+  removeProviderBaseUrl,
+  removeProviderKey,
+  setConfig,
+  testProvider,
+} = await import('@/lib/api');
 const { toast } = await import('sonner');
 
-const EMPTY_SYSTEM_MODELS = { catalog: [], provider_lists: {} };
+const EMPTY_SYSTEM_MODELS: SystemModelsResponse = {
+  status: 'ok',
+  installed: [],
+  hardware: {},
+  current: {},
+  issues: {},
+  catalog: [],
+  recommendations: {},
+  reviewed_choices: {},
+  hardware_recommendation: {
+    vram_mb: null,
+    bucket: 'CPU_ONLY',
+    summary: 'CPU-only test fixture',
+    aliases: [],
+  },
+  delivery: {},
+  routing: {},
+  consistent: true,
+  provider_lists: {},
+};
+
+function modelEntry(provider: string): ModelCatalogEntry {
+  return {
+    id: `${provider}/test-model`,
+    name: 'Test model',
+    provider,
+    ollama_tag: null,
+    roles: ['smart'],
+    vram_gb: 0,
+    disk_gb: 0,
+    context_tokens: 8192,
+    license: 'test',
+    tier: 0,
+    description: 'Test fixture',
+    notes: '',
+    last_reviewed: '2026-08-09',
+    embedding_dimension: null,
+    phase: 'test',
+    assignable: true,
+    min_vram_gb_at_default_ctx: null,
+    kv_cache_bytes_per_token: null,
+    default_num_ctx: null,
+    max_num_ctx: null,
+    supports_thinking: false,
+    active: false,
+    pulled: false,
+    provider_key_present: true,
+    fit: 'available',
+    status: 'cloud_active',
+    can_assign: true,
+    assign_blocker: null,
+    fit_detail: {
+      default: 'cloud',
+      at_num_ctx: 8192,
+      required_vram_gb: null,
+      base_vram_gb: null,
+      base_num_ctx: 8192,
+      default_num_ctx: 8192,
+      max_num_ctx: 8192,
+      kv_cache_bytes_per_token: null,
+    },
+  };
+}
+
+function providerListStatus(
+  fields: Pick<ProviderModelListStatus, 'fetched_at' | 'error'>,
+): ProviderModelListStatus {
+  return {
+    model_count: 0,
+    fetched_at: fields.fetched_at,
+    error: fields.error,
+    truncated: false,
+    excluded: {},
+  };
+}
+
+function systemModels(
+  fields: Pick<SystemModelsResponse, 'catalog' | 'provider_lists'>,
+): SystemModelsResponse {
+  return { ...EMPTY_SYSTEM_MODELS, ...fields };
+}
 
 const PROVIDERS: ProviderMetadata[] = [
   {
@@ -53,6 +150,8 @@ const PROVIDERS: ProviderMetadata[] = [
     configured: true,
     base_url_configured: false,
     supports_assignment: true,
+    dashboard_url: 'https://console.anthropic.com/',
+    account_capability: 'unavailable',
   },
   {
     id: 'openrouter',
@@ -68,6 +167,8 @@ const PROVIDERS: ProviderMetadata[] = [
     configured: false,
     base_url_configured: false,
     supports_assignment: true,
+    dashboard_url: 'https://openrouter.ai/settings/keys',
+    account_capability: 'current_key',
   },
   {
     id: 'custom_openai_compatible',
@@ -83,25 +184,34 @@ const PROVIDERS: ProviderMetadata[] = [
     configured: false,
     base_url_configured: false,
     supports_assignment: true,
+    dashboard_url: null,
+    account_capability: 'unavailable',
   },
 ];
 
 const MASKED_CONFIG = [{ key: 'llm.anthropic.api_key', value: '****1234' }];
 
-function renderSection() {
+function renderSection(initialProviderId?: string) {
   const queryClient = createTestQueryClient();
-  return renderWithProviders(
+  renderWithProviders(
     <MemoryRouter>
-      <ProvidersSection />
+      <ProvidersSection initialProviderId={initialProviderId} />
     </MemoryRouter>,
     { queryClient },
   );
+  return queryClient;
 }
 
 describe('ProvidersSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
+    vi.mocked(fetchProviderAccount).mockResolvedValue({
+      provider: 'openrouter',
+      capability: 'current_key',
+      data: {},
+      error_code: null,
+    });
     vi.mocked(listProviders).mockResolvedValue(PROVIDERS);
     vi.mocked(fetchSystemModels).mockResolvedValue(EMPTY_SYSTEM_MODELS);
   });
@@ -113,7 +223,7 @@ describe('ProvidersSection', () => {
       expect(screen.getByText('Providers & Routing')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getAllByText('Configured; not checked yet')).not.toHaveLength(0);
     expect(screen.getAllByText('Anthropic Claude')).not.toHaveLength(0);
     expect(screen.getByRole('button', { name: /add cloud provider/i })).toBeInTheDocument();
     expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument();
@@ -130,23 +240,201 @@ describe('ProvidersSection', () => {
     expect(document.getElementById('provider-key-openrouter')).toBeInTheDocument();
   });
 
-  it('saves changed API keys on blur and preserves blank drafts as no-op', async () => {
+  it('links Quick and Main assignment back to the single AI model plane', async () => {
+    renderSection();
+
+    expect(await screen.findByRole('link', { name: 'Use for Quick' })).toHaveAttribute(
+      'href',
+      '/settings?section=models&item=llm&role=fast&provider=anthropic',
+    );
+    expect(screen.getByRole('link', { name: 'Use for Main' })).toHaveAttribute(
+      'href',
+      '/settings?section=models&item=llm&role=smart&provider=anthropic',
+    );
+  });
+
+  it('opens an explicitly linked provider instead of falling back to the first configured one', async () => {
+    renderSection('openrouter');
+
+    expect(await screen.findByText('Trying many hosted models through one router account.')).toBeInTheDocument();
+    expect(document.getElementById('provider-key-openrouter')).toBeInTheDocument();
+  });
+
+  it('renders only the supported current-key account snapshot fields', async () => {
+    vi.mocked(listProviders).mockResolvedValue(
+      PROVIDERS.map((provider) =>
+        provider.id === 'openrouter' ? { ...provider, configured: true } : provider,
+      ),
+    );
+    vi.mocked(fetchProviderAccount).mockResolvedValue({
+      provider: 'openrouter',
+      capability: 'current_key',
+      data: {
+        is_free_tier: false,
+        usage_monthly: 0.18,
+        limit_remaining: 4.82,
+      },
+      error_code: null,
+    });
     const user = userEvent.setup();
     renderSection();
 
-    const input = (await screen.findByLabelText('API key')) as HTMLInputElement;
-    expect(input.value).toBe('****1234');
-    await user.clear(input);
+    await user.click(await screen.findByRole('button', { name: /OpenRouter/ }));
+    expect(await screen.findByText('Current-key details')).toBeInTheDocument();
+    expect(screen.getByText('Connection')).toBeInTheDocument();
+    expect(screen.getByText('Models')).toBeInTheDocument();
+    expect(screen.getByText('Account data')).toBeInTheDocument();
+    expect(screen.getByText('Provider dashboard')).toBeInTheDocument();
+    expect(screen.getByText('Usage this month')).toBeInTheDocument();
+    expect(screen.getByText('Limit remaining')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open provider dashboard/ })).toHaveAttribute(
+      'href',
+      'https://openrouter.ai/settings/keys',
+    );
+    expect(screen.queryByText(/creator|workspace|hash/i)).not.toBeInTheDocument();
+  });
+
+  it('renders documented balance fields for balance-capable providers', async () => {
+    vi.mocked(listProviders).mockResolvedValue(
+      PROVIDERS.map((provider) =>
+        provider.id === 'anthropic'
+          ? { ...provider, id: 'deepseek', display_name: 'DeepSeek', account_capability: 'balance' }
+          : provider,
+      ),
+    );
+    vi.mocked(fetchProviderAccount).mockResolvedValue({
+      provider: 'deepseek',
+      capability: 'balance',
+      data: { total_balance_usd: '4.25', granted_balance_usd: '1.00' },
+      error_code: null,
+    });
+
+    renderSection('deepseek');
+
+    expect(await screen.findByText('Provider-reported balances')).toBeInTheDocument();
+    expect(screen.getByText('Total balance (USD)')).toBeInTheDocument();
+    expect(screen.getByText('Granted balance (USD)')).toBeInTheDocument();
+    expect(fetchProviderAccount).toHaveBeenCalledWith('deepseek');
+  });
+
+  it('replaces a key only after explicit save and lets the user cancel', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    expect(await screen.findByDisplayValue('****1234')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Replace key' }));
+    const input = screen.getByLabelText('API key') as HTMLInputElement;
+    await user.type(input, 'cancelled-key-value');
     await user.tab();
     expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
 
-    await user.click(input);
-    await user.clear(input);
-    await user.type(input, 'sk-ant-new');
-    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Replace key' }));
+    await user.type(screen.getByLabelText('API key'), 'replacement-key-value');
+    await user.click(screen.getByRole('button', { name: 'Save key' }));
 
     await waitFor(() => {
-      expect(vi.mocked(setConfig)).toHaveBeenCalledWith('llm.anthropic.api_key', 'sk-ant-new');
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith(
+        'llm.anthropic.api_key',
+        'replacement-key-value',
+      );
+    });
+  });
+
+  it('removes a stored key only after the operator confirms', async () => {
+    const user = userEvent.setup();
+    const queryClient = renderSection();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(await screen.findByRole('button', { name: 'Remove key' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(vi.mocked(removeProviderKey)).not.toHaveBeenCalled();
+
+    await user.click(await screen.findByRole('button', { name: 'Remove key' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(removeProviderKey)).toHaveBeenCalledWith('anthropic');
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: QUERY_KEYS.config.providerAccount('anthropic'),
+    });
+  });
+
+  it('explains the refusal when a model route still uses the key', async () => {
+    const refusal =
+      'The Main model route still uses Anthropic Claude. Point that route at another model first.';
+    vi.mocked(removeProviderKey).mockRejectedValueOnce(new Error(refusal));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Remove key' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(refusal);
+    });
+  });
+
+  it('offers no removal for a provider with nothing stored', async () => {
+    renderSection('openrouter');
+
+    expect(await screen.findByRole('button', { name: 'Add key' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
+  });
+
+  it('removes a stored endpoint URL through its own action', async () => {
+    vi.mocked(listProviders).mockResolvedValue(
+      PROVIDERS.map((provider) =>
+        provider.id === 'custom_openai_compatible'
+          ? { ...provider, base_url_configured: true }
+          : provider,
+      ),
+    );
+    const user = userEvent.setup();
+    renderSection('custom_openai_compatible');
+
+    await user.click(await screen.findByRole('button', { name: 'Remove endpoint' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(removeProviderBaseUrl)).toHaveBeenCalledWith('custom_openai_compatible');
+    });
+  });
+
+  it.each([
+    ['unavailable', 'JARVIS has no account lookup for this provider'],
+    ['no_provider_api', "This provider's API offers no account data"],
+  ] as const)(
+    'says who is not reporting the account for capability %s',
+    async (capability, copy) => {
+      vi.mocked(listProviders).mockResolvedValue(
+        PROVIDERS.map((provider) =>
+          provider.id === 'anthropic' ? { ...provider, account_capability: capability } : provider,
+        ),
+      );
+
+      renderSection();
+
+      expect(await screen.findByText(copy)).toBeInTheDocument();
+      expect(vi.mocked(fetchProviderAccount)).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refreshes the replaced provider account snapshot after saving a key', async () => {
+    const user = userEvent.setup();
+    const queryClient = renderSection();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await user.click(await screen.findByRole('button', { name: 'Replace key' }));
+    await user.type(screen.getByLabelText('API key'), 'replacement-key-value');
+    await user.click(screen.getByRole('button', { name: 'Save key' }));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: QUERY_KEYS.config.providerAccount('anthropic'),
+      });
     });
   });
 
@@ -157,9 +445,12 @@ describe('ProvidersSection', () => {
     await user.click(await screen.findByRole('button', { name: /add cloud provider/i }));
     await user.click(screen.getByRole('button', { name: /Custom OpenAI-compatible endpoint/i }));
 
+    await user.click(screen.getByRole('button', { name: 'Add endpoint' }));
     const baseUrl = screen.getByLabelText('Base URL');
     await user.type(baseUrl, 'http://127.0.0.1:8000/v1');
     await user.tab();
+    expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Save endpoint' }));
 
     await waitFor(() => {
       expect(vi.mocked(setConfig)).toHaveBeenCalledWith(
@@ -174,15 +465,15 @@ describe('ProvidersSection', () => {
     const user = userEvent.setup();
     renderSection();
 
-    const input = (await screen.findByLabelText('API key')) as HTMLInputElement;
-    await user.clear(input);
-    await user.type(input, 'sk-ant-unsaved');
-    await user.tab();
+    await user.click(await screen.findByRole('button', { name: 'Replace key' }));
+    const input = screen.getByLabelText('API key') as HTMLInputElement;
+    await user.type(input, 'unsaved-key-value');
+    await user.click(screen.getByRole('button', { name: 'Save key' }));
 
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Save failed');
     });
-    expect(input.value).toBe('sk-ant-unsaved');
+    expect(input.value).toBe('unsaved-key-value');
   });
 
   it('keeps a base URL draft visible when saving fails', async () => {
@@ -193,9 +484,10 @@ describe('ProvidersSection', () => {
     await user.click(await screen.findByRole('button', { name: /add cloud provider/i }));
     await user.click(screen.getByRole('button', { name: /Custom OpenAI-compatible endpoint/i }));
 
+    await user.click(screen.getByRole('button', { name: 'Add endpoint' }));
     const baseUrl = screen.getByLabelText('Base URL') as HTMLInputElement;
     await user.type(baseUrl, 'https://gateway.example.invalid/v1');
-    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Save endpoint' }));
 
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid base URL');
@@ -208,11 +500,11 @@ describe('ProvidersSection', () => {
     const user = userEvent.setup();
     renderSection();
 
-    await user.click(await screen.findByRole('button', { name: /Test Anthropic Claude connection/i }));
+    await user.click(await screen.findByRole('button', { name: 'Test now' }));
 
     await waitFor(() => {
       expect(vi.mocked(testProvider)).toHaveBeenCalledWith('anthropic');
-      expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Anthropic Claude connection OK');
+      expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Anthropic Claude connection passed');
     });
   });
 
@@ -221,6 +513,7 @@ describe('ProvidersSection', () => {
 
     renderSection();
 
+    // Queried by role: the failure has to be announced, not merely rendered.
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not load provider settings. Admin access required',
     );
@@ -231,85 +524,139 @@ describe('ProvidersSection', () => {
     const user = userEvent.setup();
     renderSection();
 
-    await user.click(await screen.findByRole('button', { name: /Test Anthropic Claude connection/i }));
+    await user.click(await screen.findByRole('button', { name: 'Test now' }));
 
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid API key');
     });
-    expect(screen.getByText('Configured, degraded: Invalid API key')).toBeInTheDocument();
+    expect(screen.getAllByText('Configured; not checked yet')).not.toHaveLength(0);
+    expect(screen.getByRole('alert')).toHaveTextContent('Connection test failed: Invalid API key');
+  });
+
+  it('uses refreshed provider-list truth after a failed connection test', async () => {
+    vi.mocked(testProvider).mockResolvedValue({ ok: false, error: 'Temporary test failure' });
+    vi.mocked(fetchSystemModels)
+      .mockResolvedValueOnce(EMPTY_SYSTEM_MODELS)
+      .mockResolvedValueOnce(systemModels({
+        catalog: [modelEntry('anthropic')],
+        provider_lists: {
+          anthropic: providerListStatus({
+            fetched_at: new Date().toISOString(),
+            error: null,
+          }),
+        },
+      }));
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: 'Test now' }));
+
+    expect(await screen.findAllByText(/Connected · checked/)).not.toHaveLength(0);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Connection test failed: Temporary test failure',
+    );
+    expect(screen.queryByText('Configured; connection needs attention')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['provider_authentication_failed', 'Provider rejected this key'],
+    ['provider_payment_required', 'Provider account needs billing attention'],
+    ['provider_rate_limited', 'Provider rate limit reached'],
+    ['provider_unavailable', 'Provider service is unavailable'],
+    ['provider_request_timed_out', 'Provider did not respond in time'],
+  ])('explains account failure %s without provider response details', async (errorCode, copy) => {
+    vi.mocked(listProviders).mockResolvedValue(
+      PROVIDERS.map((provider) =>
+        provider.id === 'openrouter' ? { ...provider, configured: true } : provider,
+      ),
+    );
+    vi.mocked(fetchProviderAccount).mockResolvedValue({
+      provider: 'openrouter',
+      capability: 'current_key',
+      data: {},
+      error_code: errorCode,
+    });
+
+    renderSection('openrouter');
+
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.queryByText('Temporarily unavailable')).not.toBeInTheDocument();
   });
 
   it('shows model count and fetch staleness for a connected provider with a live list', async () => {
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [
-        { provider: 'anthropic' },
-        { provider: 'anthropic' },
+        modelEntry('anthropic'),
+        modelEntry('anthropic'),
       ],
       provider_lists: {
-        anthropic: { fetched_at: new Date().toISOString(), error: null, truncated: false },
+        anthropic: providerListStatus({ fetched_at: new Date().toISOString(), error: null }),
       },
-    });
+    }));
     renderSection();
 
     await waitFor(() => {
       expect(screen.getByText(/2 models available/)).toBeInTheDocument();
     });
-    expect(screen.getByText(/Fetched/)).toBeInTheDocument();
+    expect(screen.getByText(/Checked/)).toBeInTheDocument();
   });
 
   it('shows the unavailable text for a connected provider whose live fetch errored', async () => {
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [],
       provider_lists: {
-        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: 'provider request failed', truncated: false },
+        anthropic: providerListStatus({
+          fetched_at: '2026-01-01T00:00:00Z',
+          error: 'provider request failed',
+        }),
       },
-    });
+    }));
     renderSection();
 
     await waitFor(() => {
       expect(
-        screen.getByText("No models available yet — JARVIS could not fetch this provider's model list"),
+        screen.getByText("Catalog unavailable — JARVIS could not refresh this provider's models"),
       ).toBeInTheDocument();
     });
   });
 
   it('shows both tested-connectivity and zero-models availability for the same tile', async () => {
     vi.mocked(testProvider).mockResolvedValue({ ok: true, error: null });
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [],
       provider_lists: {
-        anthropic: { fetched_at: null, error: 'provider request failed', truncated: false },
+        anthropic: providerListStatus({ fetched_at: null, error: 'provider request failed' }),
       },
-    });
+    }));
     const user = userEvent.setup();
     renderSection();
 
-    await user.click(await screen.findByRole('button', { name: /Test Anthropic Claude connection/i }));
+    await user.click(await screen.findByRole('button', { name: 'Test now' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Configured and tested')).toBeInTheDocument();
+      expect(screen.getAllByText('Configured; connection needs attention')).not.toHaveLength(0);
     });
     expect(
-      screen.getByText("No models available yet — JARVIS could not fetch this provider's model list"),
+      screen.getByText("Catalog unavailable — JARVIS could not refresh this provider's models"),
     ).toBeInTheDocument();
   });
 
   it('does not blame connectivity when the fetch succeeded but offered nothing usable', async () => {
     // Every model a provider lists can be excluded or already bundled. Telling the
     // operator to fix a working connection sends them after a problem they do not have.
-    vi.mocked(fetchSystemModels).mockResolvedValue({
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
       catalog: [],
       provider_lists: {
-        anthropic: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+        anthropic: providerListStatus({ fetched_at: '2026-01-01T00:00:00Z', error: null }),
       },
-    });
+    }));
     renderSection();
 
     expect(
-      await screen.findByText('No models available yet — this provider offered none JARVIS can use'),
+      await screen.findByText('Catalog checked — no compatible models were returned'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("No models available yet — JARVIS could not fetch this provider's model list"),
+      screen.queryByText("Catalog unavailable — JARVIS could not refresh this provider's models"),
     ).not.toBeInTheDocument();
   });
 
@@ -330,14 +677,19 @@ describe('ProvidersSection', () => {
         configured: false,
         base_url_configured: true,
         supports_assignment: true,
+        dashboard_url: null,
+        account_capability: 'unavailable',
       },
     ]);
-    vi.mocked(fetchSystemModels).mockResolvedValue({
-      catalog: [{ provider: 'custom_openai_compatible2' }],
+    vi.mocked(fetchSystemModels).mockResolvedValue(systemModels({
+      catalog: [modelEntry('custom_openai_compatible2')],
       provider_lists: {
-        custom_openai_compatible2: { fetched_at: '2026-01-01T00:00:00Z', error: null, truncated: false },
+        custom_openai_compatible2: providerListStatus({
+          fetched_at: '2026-01-01T00:00:00Z',
+          error: null,
+        }),
       },
-    });
+    }));
     renderSection();
 
     await waitFor(() => {

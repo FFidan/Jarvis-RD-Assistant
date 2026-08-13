@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 
 from telegram_bot import services_client
+from telegram_bot.command_catalog import command_spec
 from telegram_bot.formatters import format_card_back, format_card_front
 from telegram_bot.handlers.helpers import (
     auth_check,
@@ -31,6 +32,9 @@ from telegram_bot.handlers.helpers import (
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
+
+_REVIEW_COMMAND = command_spec("review").name
+_CANCEL_COMMAND = command_spec("cancel").name
 
 
 class _CardFetchError(Exception):
@@ -333,7 +337,7 @@ def get_review_conversation_handler() -> ConversationHandler:
     """Build and return the review ``ConversationHandler`` for flashcard sessions."""
     return ConversationHandler(
         entry_points=[
-            CommandHandler("review", review_start),
+            CommandHandler(_REVIEW_COMMAND, review_start),
             # Allow the review flow to be triggered by the inline "Start review"
             # button (callback_data="start_review") in addition to the /review command.
             CallbackQueryHandler(review_start, pattern=r"^start_review$"),
@@ -346,5 +350,5 @@ def get_review_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(rate_card, pattern=r"^rate_[1-4]$"),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_review)],
+        fallbacks=[CommandHandler(_CANCEL_COMMAND, cancel_review)],
     )

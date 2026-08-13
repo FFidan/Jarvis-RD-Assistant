@@ -89,7 +89,7 @@ describe('lazy routes wrapped in <Suspense>', () => {
       configured: false,
       setup_completed: false,
     });
-    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null });
+    useAuthStore.setState({ isAuthenticated: false, authTime: null });
     renderApp(['/']);
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
@@ -102,7 +102,7 @@ describe('lazy routes wrapped in <Suspense>', () => {
       configured: true,
       setup_completed: false,
     });
-    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
+    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), user: { id: 1, email: 'admin.com', role: 'admin' } });
     renderApp(['/']);
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
@@ -112,7 +112,6 @@ describe('lazy routes wrapped in <Suspense>', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'k',
       user: { id: 1, email: 'a@b.com', role: 'admin' },
     });
     renderApp(['/logs']);
@@ -124,7 +123,6 @@ describe('lazy routes wrapped in <Suspense>', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
-      apiKey: 'k',
       user: { id: 1, email: 'a@b.com', role: 'admin' },
     });
     renderApp(['/admin/users']);
@@ -133,7 +131,7 @@ describe('lazy routes wrapped in <Suspense>', () => {
   });
 
   it('/paper/:paperId shows PageFallback while PaperDetailPage suspends', () => {
-    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
+    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), user: { id: 1, email: 'admin.com', role: 'admin' } });
     renderApp(['/paper/123']);
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
@@ -141,7 +139,7 @@ describe('lazy routes wrapped in <Suspense>', () => {
 
   // ResearchFeedPage is now lazy-loaded
   it('/feed shows PageFallback while ResearchFeedPage suspends', () => {
-    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
+    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), user: { id: 1, email: 'admin.com', role: 'admin' } });
     renderApp(['/feed']);
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);

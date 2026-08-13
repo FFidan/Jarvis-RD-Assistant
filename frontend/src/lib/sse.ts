@@ -5,27 +5,27 @@
  * the browser's EventSource API. Instead we read the response body as
  * a stream and parse SSE frames manually.
  *
- * SECURITY: X-API-Key header is included on every SSE request.
- * AUTH: 401/403 responses trigger automatic logout.
+ * AUTH: the HttpOnly session cookie is included; 401 responses trigger logout.
  */
 
-import { useAuthStore } from '@/stores/auth-store';
+import { z } from 'zod';
 // Import from the leaf module, not the barrel: handleAuthFailure is an internal
 // helper and is intentionally NOT re-exported from @/lib/api. Importing the leaf
 // also keeps the module graph acyclic.
-import { handleAuthFailure } from '@/lib/api/core';
+import { decodeResponseJson, handleAuthFailure } from '@/lib/api/core';
+import { apiErrorDetailSchema } from '@/lib/api/schemas/common';
 
 export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNVERIFIED';
 
 export interface ConfidenceEvent {
   type: 'confidence';
-  confidence: ConfidenceLevel;
+  confidence: ConfidenceLevel | null;
   verified_fraction: number;
   per_sentence: { text: string; verified: boolean }[];
 }
 
 export interface StreamEvent {
-  type: 'token' | 'sources' | 'done' | 'error' | 'confidence';
+  type: 'token' | 'sources' | 'done' | 'error' | 'confidence' | 'backend';
   content?: string;
   full_answer?: string;
   model_used?: string | null;
@@ -39,10 +39,37 @@ export interface StreamEvent {
     score: number;
   }>;
   message?: string;
+  /** Stable sanitized code for researcher-facing remediation. */
+  code?: string;
   // confidence event fields
-  confidence?: ConfidenceLevel;
+  confidence?: ConfidenceLevel | null;
   verified_fraction?: number;
   per_sentence?: { text: string; verified: boolean }[];
+  served_by?: string | null;
+  fallback?: boolean;
+}
+
+export interface StreamError {
+  message: string;
+  code?: string;
+}
+
+const RAG_HYGIENE_ERROR_COPY =
+  'The model did not produce a usable answer. Try again. If it keeps happening, ask an administrator to review the smart model or thinking setting.';
+const STREAM_TRANSPORT_ERROR_COPY = 'Something went wrong answering that. Please try again.';
+
+/** Return the one user-facing message used by both transcript and alert. */
+export function getStreamErrorCopy(error: StreamError): string {
+  if (
+    error.code === 'llm_empty_visible_content'
+    || error.code === 'llm_visible_work_notes'
+  ) {
+    return RAG_HYGIENE_ERROR_COPY;
+  }
+  if (error.code === 'stream_transport_error') {
+    return STREAM_TRANSPORT_ERROR_COPY;
+  }
+  return error.message || 'Unknown streaming error';
 }
 
 // --- Analyze Paper SSE types ---
@@ -76,6 +103,58 @@ export interface AnalyzeErrorEvent {
 }
 
 export type AnalyzeEvent = AnalyzeStepEvent | AnalyzeCompleteEvent | AnalyzeErrorEvent;
+
+const streamSourceSchema = z.looseObject({
+  chunk_id: z.number().optional(),
+  paper_id: z.number().optional(),
+  paper_title: z.string().optional(),
+  content: z.string().optional(),
+  text: z.string().optional(),
+  page_number: z.number().nullable().optional(),
+  score: z.number(),
+});
+const verifiedSentenceSchema = z.looseObject({ text: z.string(), verified: z.boolean() });
+const typedStreamEventSchema = z.discriminatedUnion('type', [
+  z.looseObject({ type: z.literal('token'), content: z.string() }),
+  z.looseObject({ type: z.literal('sources'), sources: z.array(streamSourceSchema) }),
+  z.looseObject({
+    type: z.literal('done'),
+    full_answer: z.string(),
+    model_used: z.string().nullable().optional(),
+  }),
+  z.looseObject({ type: z.literal('error'), message: z.string(), code: z.string().optional() }),
+  z.looseObject({
+    type: z.literal('confidence'),
+    confidence: z.enum(['HIGH', 'MEDIUM', 'LOW', 'UNVERIFIED']).nullable(),
+    verified_fraction: z.number(),
+    per_sentence: z.array(verifiedSentenceSchema),
+  }),
+]);
+const backendMetadataSchema = z.looseObject({
+  served_by: z.string().nullable(),
+  fallback: z.boolean(),
+}).transform((metadata) => ({ type: 'backend' as const, ...metadata }));
+const streamEventSchema = z.union([typedStreamEventSchema, backendMetadataSchema]);
+const analyzeEventSchema = z.discriminatedUnion('type', [
+  z.looseObject({
+    type: z.literal('step'),
+    step: z.enum(['downloading', 'processing', 'summarizing']),
+    status: z.enum(['started', 'completed', 'skipped', 'failed']),
+    reason: z.string().optional(),
+    chunk_count: z.number().optional(),
+    message: z.string().optional(),
+  }),
+  z.looseObject({ type: z.literal('complete'), paper_id: z.number() }),
+  z.looseObject({
+    type: z.literal('error'),
+    step: z.string(),
+    message: z.string(),
+    error_code: z.string().nullable().optional(),
+    display_message: z.string().nullable().optional(),
+    error_type: z.string().nullable().optional(),
+    error_detail: z.string().nullable().optional(),
+  }),
+]);
 
 /**
  * Core SSE frame parser: reads from any Uint8Array reader, splits on newlines,
@@ -122,25 +201,24 @@ async function* parseSSEFrames(response: Response): AsyncGenerator<string> {
 
 /**
  * Shared POST-SSE driver: authenticated POST, ok-check (with auth routing),
- * frame parse, and JSON.parse-yield. `streamSSE` and `streamAnalyze` delegate
+ * frame parse, and schema-validated yield. `streamSSE` and `streamAnalyze` delegate
  * here so the auth/error/parse logic lives in exactly one place.
  *
  * @param errorLabel prefix for the generic non-auth error (`SSE ` / `Analyze SSE `).
  */
-async function* _postSSEStream<T>(
+async function* _postSSEStream<S extends z.ZodType>(
   url: string,
   body: string | object,
   signal: AbortSignal | undefined,
   errorLabel: string,
-): AsyncGenerator<T> {
-  const apiKey = useAuthStore.getState().getApiKey();
+  schema: S,
+): AsyncGenerator<z.output<S>> {
   const res = await fetch(url, {
     method: 'POST',
-    // Include the jarvis_session cookie alongside any X-API-Key.
+    // Include the jarvis_session cookie.
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     },
     body: typeof body === 'string' ? body : JSON.stringify(body),
     signal,
@@ -162,7 +240,7 @@ async function* _postSSEStream<T>(
     }
     let detail = '';
     try {
-      const body = (await res.json()) as { detail?: unknown };
+      const body = await decodeResponseJson(res, url, apiErrorDetailSchema);
       if (typeof body.detail === 'string') {
         detail = body.detail;
       } else if (body.detail != null) {
@@ -176,7 +254,13 @@ async function* _postSSEStream<T>(
 
   for await (const data of parseSSEFrames(res)) {
     try {
-      yield JSON.parse(data) as T;
+      const payload: unknown = JSON.parse(data);
+      const parsed = schema.safeParse(payload);
+      if (parsed.success) {
+        yield parsed.data;
+      } else {
+        console.warn('[sse] malformed frame skipped', data.slice(0, 120));
+      }
     } catch {
       console.warn('[sse] malformed frame skipped', data.slice(0, 120));
     }
@@ -188,7 +272,7 @@ export function streamSSE(
   body: object,
   signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
-  return _postSSEStream<StreamEvent>(url, body, signal, 'SSE ');
+  return _postSSEStream(url, body, signal, 'SSE ', streamEventSchema);
 }
 
 /**
@@ -200,5 +284,11 @@ export function streamAnalyze(
   paperId: number,
   signal?: AbortSignal,
 ): AsyncGenerator<AnalyzeEvent> {
-  return _postSSEStream<AnalyzeEvent>(`/api/papers/${paperId}/analyze`, '{}', signal, 'Analyze SSE ');
+  return _postSSEStream(
+    `/api/papers/${paperId}/analyze`,
+    '{}',
+    signal,
+    'Analyze SSE ',
+    analyzeEventSchema,
+  );
 }

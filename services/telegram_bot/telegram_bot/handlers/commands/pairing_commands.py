@@ -93,7 +93,7 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if chat.type != ChatType.PRIVATE:
         await message.reply_text(
             "Pairing only works in a direct 1:1 chat with the bot — "
-            "open a private chat and run /pair <token> there."
+            "open a private chat and run /pair <code> there."
         )
         return
 
@@ -101,8 +101,8 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     token = args[0].strip() if args else ""
     if not token:
         await message.reply_text(
-            "Usage: <code>/pair &lt;token&gt;</code>\n\n"
-            "Generate a token from the JARVIS web dashboard under "
+            "Usage: <code>/pair &lt;code&gt;</code>\n\n"
+            "Generate a code from the JARVIS web dashboard under "
             "Settings → Integrations → Telegram.",
             parse_mode="HTML",
         )
@@ -125,7 +125,7 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
                 if row is None:
                     await message.reply_text(
-                        "Invalid or unrecognised pairing token.\n"
+                        "Invalid or unrecognised pairing code.\n"
                         "Please generate a new one from the JARVIS dashboard."
                     )
                     return
@@ -144,7 +144,7 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         token,
                     )
                     await message.reply_text(
-                        "Pairing token expired (15-minute window).\n"
+                        "Pairing code expired (15-minute window).\n"
                         "Please generate a new one from Settings → Integrations."
                     )
                     return
@@ -263,7 +263,7 @@ async def unpair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         else:
             await message.reply_text(
-                "No active pairing found for this chat.\nUse /pair <token> to link your account."
+                "No active pairing found for this chat.\nUse /pair <code> to link your account."
             )
     except Exception:
         logger.exception("Error removing Telegram pairing for chat_id=%d", chat.id)
@@ -301,8 +301,8 @@ async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if row is None:
         await message.reply_text(
             "This chat is <b>not paired</b> to a JARVIS account.\n\n"
-            "Generate a pairing token from Settings → Integrations and run "
-            "<code>/pair &lt;token&gt;</code>.",
+            "Generate a pairing code from Settings → Integrations and run "
+            "<code>/pair &lt;code&gt;</code>.",
             parse_mode="HTML",
         )
         return

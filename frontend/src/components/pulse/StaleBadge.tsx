@@ -9,10 +9,11 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet';
+import type { PulseStaleDiagnostic } from '@/types';
 
 interface Props {
   ageDays: number;
-  diagnostics: Record<string, unknown> | null;
+  diagnostics: Record<string, PulseStaleDiagnostic> | null;
   onRetry?: () => void;
 }
 
@@ -21,28 +22,8 @@ function staleBadgeText(ageDays: number): string {
   return `Showing deck from ${ageDays} days ago`;
 }
 
-interface SourceDiagnostic {
-  status?: string;
-  message?: string;
-  status_code?: number | null;
-  retry_after_s?: number | null;
-  settings_hint?: string | null;
-}
-
-function isDiagnosticRecord(
-  value: unknown,
-): value is Record<string, SourceDiagnostic> {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value)
-  );
-}
-
 export function StaleBadge({ ageDays, diagnostics, onRetry }: Props) {
   const [open, setOpen] = useState(false);
-
-  const sourceDiagnostics = isDiagnosticRecord(diagnostics) ? diagnostics : null;
 
   return (
     <>
@@ -68,38 +49,35 @@ export function StaleBadge({ ageDays, diagnostics, onRetry }: Props) {
           </SheetHeader>
 
           <div className="mt-4 space-y-4">
-            {sourceDiagnostics && Object.keys(sourceDiagnostics).length > 0 ? (
+            {diagnostics && Object.keys(diagnostics).length > 0 ? (
               <div className="space-y-2">
                 <p className="text-sm font-medium">Source status</p>
-                {Object.entries(sourceDiagnostics).map(([source, diag]) => (
+                {Object.entries(diagnostics).map(([source, diag]) => (
                   <div
                     key={source}
                     className="rounded border bg-muted/20 p-2 text-xs"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">{source}</span>
-                      {diag.status && (
+                      {diag.last_status && (
                         <span
                           className={
-                            diag.status === 'ok'
+                            diag.last_status === 'ok'
                               ? 'text-[var(--status-ok)]'
-                              : diag.status === 'rate_limit'
+                              : diag.last_status === 'rate_limit'
                                 ? 'text-[var(--status-warn)]'
                                 : 'text-muted-foreground'
                           }
                         >
-                          {diag.status}
+                          {diag.last_status}
                         </span>
                       )}
                     </div>
-                    {diag.message && (
-                      <p className="mt-1 text-muted-foreground">{diag.message}</p>
-                    )}
-                    {diag.settings_hint && (
-                      <p className="mt-1 text-amber-600 dark:text-amber-400">
-                        {diag.settings_hint}
-                      </p>
-                    )}
+                    <p className="mt-1 text-muted-foreground">
+                      {diag.cooldown_until
+                        ? `Paused until ${new Date(diag.cooldown_until).toLocaleString()}`
+                        : `${diag.consecutive_failures} consecutive failure${diag.consecutive_failures === 1 ? '' : 's'}`}
+                    </p>
                   </div>
                 ))}
               </div>

@@ -11,12 +11,15 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NotRequired, Protocol, TypedDict
+from typing import TYPE_CHECKING, Literal, NoReturn, NotRequired, Protocol, TypedDict
 
 import asyncpg
 import httpx
+from docling.exceptions import ConversionError as DoclingConversionError
 from jarvis_common.library import is_in_library
+from pypdfium2 import PdfiumError
 from qdrant_client.models import PointIdsList
 
 # torch is an optional GPU dependency: CPU-only / scheduler deployments must be
@@ -33,6 +36,7 @@ from paper_ingestion.ingestion.embedder import (
     EMBEDDING_MODEL_NAME,
     EmbeddingBatchError,
 )
+from paper_ingestion.ingestion.payload_schema import VectorVisibility
 from paper_ingestion.models import ChunkForEmbedding
 from paper_ingestion.pdf_processor import pdf_publish_operation
 
@@ -230,6 +234,18 @@ class _LockedPdfProcessRequest:
     ctx: ProcessPdfProgressContext | None
 
 
+@dataclass(frozen=True)
+class _PdfProcessPremise:
+    """Source and authorization state frozen before deriving PDF content."""
+
+    source_url: str | None
+    visibility_generation: str
+    visibility: VectorVisibility
+    owner_id: int | None
+    existing_count: int
+    chunked_at: object | None
+
+
 _EMBEDDING_ERROR_SECRET_RE = re.compile(
     r"(Bearer\s+)[A-Za-z0-9._~+/=-]+|"
     r"(sk-[A-Za-z0-9._-]+)|"
@@ -356,8 +372,8 @@ def _embedding_failure_message(exc: BaseException) -> str:
     if detail and base != detail:
         base = f"{base}: {detail}"
     return (
-        f"{base}. Check LiteLLM/Ollama health, embedding model availability, "
-        "and LITELLM_MASTER_KEY wiring."
+        f"{base}. Check that the embedding model is available and reachable, and "
+        "that your provider credentials are configured correctly."
     )
 
 
@@ -471,211 +487,330 @@ async def run_process_pdf(
             raise
 
 
-async def _run_process_pdf_locked(
+async def _report_progress(
+    ctx: ProcessPdfProgressContext | None,
+    progress: float,
+    message: str,
+) -> None:
+    """Report a workflow checkpoint when the caller supplied a job context."""
+    if ctx is not None:
+        await ctx.update_progress(progress, message)
+
+
+async def _load_pdf_process_premise(
     request: _LockedPdfProcessRequest,
-) -> ProcessPdfResult:
-    """Run the PDF workflow while the caller holds the paper mutation lock."""
-
-    paper_id = request.paper_id
-    pdf_path = request.pdf_path
-    conn = request.conn
-    pdf_processor = request.pdf_processor
-    embedder = request.embedder
-    force = request.force
-    ctx = request.ctx
-
-    async def _maybe_progress(p: float, msg: str) -> None:
-        if ctx is not None:
-            await ctx.update_progress(p, msg)
-
-    point_ids_to_delete: list[str] = []
-    # Both reads happen under the per-paper lock and before any content is
-    # derived. The URL comes first so that a promotion landing between the two
-    # is caught by the premise read: a promotion that discards derived content
-    # also clears both of these columns, and nothing but a download can restore
-    # them — which the download fence permits only against the row's current
-    # pdf_url. A promotion landing after both reads is caught at commit.
-    source_url = await conn.fetchval(_PAPER_SOURCE_URL_SQL, paper_id)
-    if not await conn.fetchval(_PAPER_PDF_READY_SQL, paper_id, str(pdf_path)):
+) -> _PdfProcessPremise:
+    """Freeze the source, visibility, and existing-content premise under the lock."""
+    source_url = await request.conn.fetchval(_PAPER_SOURCE_URL_SQL, request.paper_id)
+    if not await request.conn.fetchval(
+        _PAPER_PDF_READY_SQL,
+        request.paper_id,
+        str(request.pdf_path),
+    ):
         raise PDFSourceSupersededError(
-            f"Paper {paper_id} does not reference the PDF this run was asked to process; "
-            "nothing was derived from it"
+            f"Paper {request.paper_id} does not reference the PDF this run was asked to "
+            "process; nothing was derived from it"
         )
-    visibility_generation = await _resolve_visibility_generation(embedder)
+    visibility_generation = await _resolve_visibility_generation(request.embedder)
     visibility, owner_id = await _load_paper_embedding_context(
-        conn,
-        paper_id,
+        request.conn,
+        request.paper_id,
         visibility_generation,
     )
     existing_count = int(
-        await conn.fetchval("SELECT COUNT(*) FROM paper_chunks WHERE paper_id = $1", paper_id) or 0
+        await request.conn.fetchval(
+            "SELECT COUNT(*) FROM paper_chunks WHERE paper_id = $1",
+            request.paper_id,
+        )
+        or 0
     )
     chunked_at = None
     if existing_count > 0:
-        chunked_at = await conn.fetchval("SELECT chunked_at FROM papers WHERE id = $1", paper_id)
-    if existing_count > 0 and chunked_at is not None and not force:
-        reconciled = await _reconcile_paper_embeddings_locked(
-            paper_id,
-            conn,
-            embedder,
-            visibility_generation=visibility_generation,
+        chunked_at = await request.conn.fetchval(
+            "SELECT chunked_at FROM papers WHERE id = $1",
+            request.paper_id,
         )
-        await _maybe_progress(
-            1.0,
-            "Repaired embeddings" if reconciled["status"] == "repaired" else "Already processed",
-        )
-        return {
-            "paper_id": paper_id,
-            "chunk_count": reconciled["chunk_count"],
-            "status": "processed" if reconciled["status"] == "repaired" else "already_processed",
-        }
-    if existing_count > 0 and force:
-        old_rows = await conn.fetch(
+    return _PdfProcessPremise(
+        source_url=source_url,
+        visibility_generation=visibility_generation,
+        visibility=visibility,
+        owner_id=owner_id,
+        existing_count=existing_count,
+        chunked_at=chunked_at,
+    )
+
+
+async def _reconcile_completed_pdf(
+    request: _LockedPdfProcessRequest,
+    premise: _PdfProcessPremise,
+) -> ProcessPdfResult | None:
+    """Return the healthy/repaired fast path, or ``None`` when processing is needed."""
+    if premise.existing_count == 0 or premise.chunked_at is None or request.force:
+        return None
+    reconciled = await _reconcile_paper_embeddings_locked(
+        request.paper_id,
+        request.conn,
+        request.embedder,
+        visibility_generation=premise.visibility_generation,
+    )
+    await _report_progress(
+        request.ctx,
+        1.0,
+        "Repaired embeddings" if reconciled["status"] == "repaired" else "Already processed",
+    )
+    return {
+        "paper_id": request.paper_id,
+        "chunk_count": reconciled["chunk_count"],
+        "status": "processed" if reconciled["status"] == "repaired" else "already_processed",
+    }
+
+
+async def _prepare_existing_pdf_content(
+    request: _LockedPdfProcessRequest,
+    premise: _PdfProcessPremise,
+) -> tuple[list[str], dict[int, str]]:
+    """Snapshot stale vector ids and reconcile resumable chunks before extraction."""
+    stale_point_ids: list[str] = []
+    if premise.existing_count > 0 and request.force:
+        old_rows = await request.conn.fetch(
             "SELECT embedding_id FROM paper_chunks "
             "WHERE paper_id = $1 AND embedding_id IS NOT NULL",
-            paper_id,
+            request.paper_id,
         )
-        point_ids_to_delete = [r["embedding_id"] for r in old_rows]
-    await _maybe_progress(0.1, "Downloaded")
+        stale_point_ids = [row["embedding_id"] for row in old_rows]
+
+    await _report_progress(request.ctx, 0.1, "Downloaded")
     resume_content: dict[int, str] = {}
-    if not force:
-        prior_rows = list(await conn.fetch(_PERSISTED_CHUNKS_SQL, paper_id))
-        if prior_rows:
-            expected_ids = {
-                int(row["chunk_index"]): chunk_point_id(
-                    paper_id,
-                    int(row["chunk_index"]),
-                )
-                for row in prior_rows
-            }
-            resume_content = await _reconcile_resume_content(
-                embedder,
-                conn,
-                paper_id,
-                prior_rows,
-                expected_ids,
-                visibility,
-                worker_lease_token=None,
-            )
+    if request.force:
+        return stale_point_ids, resume_content
 
-    async def _process_progress(
-        phase: Literal["extracted", "chunked", "embedding"],
-        completed: int,
-        total: int,
-    ) -> None:
-        if phase == "extracted":
-            await _maybe_progress(0.3, "Extracted")
-        elif phase == "chunked":
-            await _maybe_progress(0.5, "Chunked")
-        elif total > 0:
-            fraction = min(max(completed / total, 0.0), 1.0)
-            await _maybe_progress(
-                0.5 + 0.4 * fraction,
-                f"Embedding batch {completed}/{total}",
+    prior_rows = list(await request.conn.fetch(_PERSISTED_CHUNKS_SQL, request.paper_id))
+    if prior_rows:
+        expected_ids = {
+            int(row["chunk_index"]): chunk_point_id(
+                request.paper_id,
+                int(row["chunk_index"]),
             )
+            for row in prior_rows
+        }
+        resume_content = await _reconcile_resume_content(
+            request.embedder,
+            request.conn,
+            request.paper_id,
+            prior_rows,
+            expected_ids,
+            premise.visibility,
+            worker_lease_token=None,
+        )
+    return stale_point_ids, resume_content
 
+
+async def _report_process_progress(
+    ctx: ProcessPdfProgressContext | None,
+    phase: Literal["extracted", "chunked", "embedding"],
+    completed: int,
+    total: int,
+) -> None:
+    """Map processor phases onto the public job progress scale."""
+    if phase == "extracted":
+        await _report_progress(ctx, 0.3, "Extracted")
+    elif phase == "chunked":
+        await _report_progress(ctx, 0.5, "Chunked")
+    elif total > 0:
+        fraction = min(max(completed / total, 0.0), 1.0)
+        await _report_progress(ctx, 0.5 + 0.4 * fraction, f"Embedding batch {completed}/{total}")
+
+
+async def _persist_resumable_chunks(
+    request: _LockedPdfProcessRequest,
+    premise: _PdfProcessPremise,
+    exc: EmbeddingBatchError,
+) -> tuple[int, bool]:
+    """Best-effort partial save, fenced against a replaced paper source."""
+    if not exc.completed_chunks:
+        return 0, False
     try:
-        _full_text, chunks, point_ids = await pdf_processor.process(
-            pdf_path,
-            paper_id,
-            user_id=owner_id,
-            visibility=visibility,
-            progress_callback=_process_progress if ctx is not None else None,
+        async with request.conn.transaction():
+            await _require_unchanged_source_url(
+                request.conn,
+                request.paper_id,
+                premise.source_url,
+            )
+            await _persist_chunk_rows(
+                request.conn,
+                request.paper_id,
+                exc.completed_chunks,
+                exc.completed_point_ids,
+            )
+        logger.info(
+            "Persisted %d resumable chunks for paper %d before embedding failure",
+            len(exc.completed_chunks),
+            request.paper_id,
+        )
+        return len(exc.completed_chunks), False
+    except PDFSourceSupersededError:
+        logger.warning(
+            "Discarded %d resumable chunks for paper %d: it no longer carries"
+            " the source URL this run processed",
+            len(exc.completed_chunks),
+            request.paper_id,
+        )
+        return 0, True
+    except Exception:
+        logger.error(
+            "Failed to persist resumable chunks for paper %d",
+            request.paper_id,
+            exc_info=True,
+        )
+        return 0, False
+
+
+async def _raise_embedding_batch_failure(
+    request: _LockedPdfProcessRequest,
+    premise: _PdfProcessPremise,
+    exc: EmbeddingBatchError,
+) -> NoReturn:
+    """Persist any resumable prefix, then raise the stable user-facing failure."""
+    saved_chunk_count, source_superseded = await _persist_resumable_chunks(
+        request,
+        premise,
+        exc,
+    )
+    logger.error("Process PDF embedding failure for paper %d: %s", request.paper_id, exc)
+    if source_superseded:
+        raise PDFSourceSupersededError(_SUPERSEDED_SOURCE_MESSAGE) from exc
+    raise PDFUserFacingError(
+        f"{_embedding_failure_message(exc)} ({saved_chunk_count} chunks saved — retry to resume)."
+    ) from exc
+
+
+def _raise_runtime_process_failure(paper_id: int, exc: RuntimeError) -> NoReturn:
+    """Translate GPU and generic processor failures without changing their remedies."""
+    if torch is not None and isinstance(exc, torch.OutOfMemoryError):
+        logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, exc)
+        raise PDFUserFacingError(
+            "PDF text-extraction hit a GPU out-of-memory error. Retry once other "
+            "GPU-heavy work finishes, or ask an administrator to reduce concurrent "
+            "GPU load or process this paper on CPU."
+        ) from exc
+    message = str(exc)
+    if "CUDA out of memory" in message or "CUDA error" in message:
+        logger.error("PDF text-extraction CUDA error for paper %d: %s", paper_id, exc)
+        raise PDFUserFacingError(
+            "PDF text-extraction hit a GPU error. Retry once other GPU-heavy work "
+            "finishes, or ask an administrator to reduce concurrent GPU load or "
+            "process this paper on CPU."
+        ) from exc
+    logger.error("Process PDF embedding failure for paper %d: %s", paper_id, exc)
+    raise PDFUserFacingError(_embedding_failure_message(exc)) from exc
+
+
+async def _process_pdf_content(
+    request: _LockedPdfProcessRequest,
+    premise: _PdfProcessPremise,
+    resume_content: dict[int, str],
+) -> tuple[list[ChunkForEmbedding], list[str]]:
+    """Invoke the processor and preserve the existing domain-error translations."""
+    progress_callback = partial(_report_process_progress, request.ctx) if request.ctx else None
+    try:
+        _full_text, chunks, point_ids = await request.pdf_processor.process(
+            request.pdf_path,
+            request.paper_id,
+            user_id=premise.owner_id,
+            visibility=premise.visibility,
+            progress_callback=progress_callback,
             resume_content=resume_content,
         )
-        point_ids_to_delete = list(set(point_ids_to_delete) - set(point_ids))
+        return chunks, point_ids
     except EmbeddingBatchError as exc:
-        saved_chunk_count = 0
-        source_superseded = False
-        if exc.completed_chunks:
-            try:
-                async with conn.transaction():
-                    await _require_unchanged_source_url(conn, paper_id, source_url)
-                    await _persist_chunk_rows(
-                        conn,
-                        paper_id,
-                        exc.completed_chunks,
-                        exc.completed_point_ids,
-                    )
-                saved_chunk_count = len(exc.completed_chunks)
-                logger.info(
-                    "Persisted %d resumable chunks for paper %d before embedding failure",
-                    len(exc.completed_chunks),
-                    paper_id,
-                )
-            except PDFSourceSupersededError:
-                source_superseded = True
-                logger.warning(
-                    "Discarded %d resumable chunks for paper %d: it no longer carries"
-                    " the source URL this run processed",
-                    len(exc.completed_chunks),
-                    paper_id,
-                )
-            except Exception:
-                logger.error(
-                    "Failed to persist resumable chunks for paper %d", paper_id, exc_info=True
-                )
-        logger.error("Process PDF embedding failure for paper %d: %s", paper_id, exc)
-        if source_superseded:
-            # The run is void whatever the embedding service did: its content came
-            # from a source URL the paper no longer carries, so nothing was kept
-            # and there is nothing for a resume to pick up. Raised as the
-            # superseded type so this exit reaches the same reclamation handler as
-            # a run the commit fence rejects; the caller sees the message either
-            # way, and both types are RuntimeError.
-            raise PDFSourceSupersededError(_SUPERSEDED_SOURCE_MESSAGE) from exc
+        await _raise_embedding_batch_failure(request, premise, exc)
+    except (DoclingConversionError, PdfiumError) as exc:
+        logger.error("PDF conversion failure for paper %d: %s", request.paper_id, exc)
         raise PDFUserFacingError(
-            f"{_embedding_failure_message(exc)} "
-            f"({saved_chunk_count} chunks saved — retry to resume)."
+            "This PDF could not be read. It may be corrupted, password-protected, "
+            "or stored as an unsupported format. Try re-uploading it or using "
+            "another copy of the paper."
         ) from exc
     except RuntimeError as exc:
-        if torch is not None and isinstance(exc, torch.OutOfMemoryError):
-            logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, exc)
-            raise PDFUserFacingError(
-                "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
-                " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
-            ) from exc
-        message = str(exc)
-        if "CUDA out of memory" in message or "CUDA error" in message:
-            logger.error("PDF text-extraction CUDA error for paper %d: %s", paper_id, exc)
-            raise PDFUserFacingError(
-                "PDF text-extraction GPU error. Lower OLLAMA_MAX_LOADED_MODELS or"
-                " set TORCH_DEVICE=cpu."
-            ) from exc
-        logger.error("Process PDF embedding failure for paper %d: %s", paper_id, exc)
-        raise PDFUserFacingError(_embedding_failure_message(exc)) from exc
+        _raise_runtime_process_failure(request.paper_id, exc)
     except httpx.HTTPStatusError as exc:
-        logger.error("Process PDF embedding HTTP failure for paper %d: %s", paper_id, exc)
+        logger.error("Process PDF embedding HTTP failure for paper %d: %s", request.paper_id, exc)
         raise PDFUserFacingError(_embedding_failure_message(exc)) from exc
 
-    async with conn.transaction():
-        await _require_unchanged_source_url(conn, paper_id, source_url)
-        if force:
-            await conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)
-        await _persist_chunk_rows(conn, paper_id, chunks, point_ids)
-        await conn.execute("UPDATE papers SET chunked_at = now() WHERE id = $1", paper_id)
-    await _maybe_progress(0.95, "Saved chunks")
 
-    cleanup_warnings: list[str] = []
-    if point_ids_to_delete:
-        try:
-            await embedder.qdrant.delete(
-                collection_name=COLLECTION_NAME,
-                points_selector=PointIdsList(points=point_ids_to_delete),  # type: ignore[arg-type]
+async def _persist_processed_pdf(
+    request: _LockedPdfProcessRequest,
+    premise: _PdfProcessPremise,
+    chunks: list[ChunkForEmbedding],
+    point_ids: list[str],
+) -> None:
+    """Commit authoritative chunk rows behind the unchanged-source fence."""
+    async with request.conn.transaction():
+        await _require_unchanged_source_url(
+            request.conn,
+            request.paper_id,
+            premise.source_url,
+        )
+        if request.force:
+            await request.conn.execute(
+                "DELETE FROM paper_chunks WHERE paper_id = $1",
+                request.paper_id,
             )
-        except Exception as exc:
-            logger.error("Qdrant cleanup failed for paper %d: %s", paper_id, exc, exc_info=True)
-            cleanup_warnings.append(
-                f"Stale-vector cleanup failed: {len(point_ids_to_delete)} stale vector(s)"
-                " may remain in Qdrant (DB chunk rows are authoritative; see service logs)."
-            )
+        await _persist_chunk_rows(request.conn, request.paper_id, chunks, point_ids)
+        await request.conn.execute(
+            "UPDATE papers SET chunked_at = now() WHERE id = $1",
+            request.paper_id,
+        )
+    await _report_progress(request.ctx, 0.95, "Saved chunks")
 
-    await _maybe_progress(1.0, "Done")
+
+async def _delete_stale_pdf_vectors(
+    request: _LockedPdfProcessRequest,
+    point_ids: list[str],
+) -> list[str]:
+    """Delete superseded vectors after commit and return any visible warning."""
+    if not point_ids:
+        return []
+    try:
+        await request.embedder.qdrant.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=PointIdsList(points=point_ids),  # type: ignore[arg-type]
+        )
+    except Exception as exc:
+        logger.error(
+            "Qdrant cleanup failed for paper %d: %s",
+            request.paper_id,
+            exc,
+            exc_info=True,
+        )
+        return [
+            f"Stale-vector cleanup failed: {len(point_ids)} stale vector(s)"
+            " may remain in Qdrant (DB chunk rows are authoritative; see service logs)."
+        ]
+    return []
+
+
+async def _run_process_pdf_locked(
+    request: _LockedPdfProcessRequest,
+) -> ProcessPdfResult:
+    """Coordinate characterized PDF phases while holding the paper mutation lock."""
+    premise = await _load_pdf_process_premise(request)
+    completed = await _reconcile_completed_pdf(request, premise)
+    if completed is not None:
+        return completed
+
+    stale_point_ids, resume_content = await _prepare_existing_pdf_content(request, premise)
+    chunks, point_ids = await _process_pdf_content(request, premise, resume_content)
+    stale_point_ids = list(set(stale_point_ids) - set(point_ids))
+    await _persist_processed_pdf(request, premise, chunks, point_ids)
+    warnings = await _delete_stale_pdf_vectors(request, stale_point_ids)
+    await _report_progress(request.ctx, 1.0, "Done")
+
     result: ProcessPdfResult = {
-        "paper_id": paper_id,
+        "paper_id": request.paper_id,
         "chunk_count": len(chunks),
         "status": "processed",
     }
-    if cleanup_warnings:
-        result["warnings"] = cleanup_warnings
+    if warnings:
+        result["warnings"] = warnings
     return result

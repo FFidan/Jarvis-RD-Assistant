@@ -4,7 +4,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { updateTask, logFocusSession } from '@/lib/api';
+import { updateTask } from '@/lib/api';
 
 /** Format seconds as mm:ss */
 function formatMmSs(totalSeconds: number): string {
@@ -66,6 +66,7 @@ export function HeroTask() {
   const secondsRemaining = usePomodoroStore((s) => s.secondsRemaining);
   const cyclesCompleted = usePomodoroStore((s) => s.cyclesCompleted);
   const targetCycles = usePomodoroStore((s) => s.targetCycles);
+  const focusSyncPending = usePomodoroStore((s) => Boolean(s.pendingOperation));
 
   const doneMutation = useMutation({
     mutationFn: (taskId: number) => updateTask(taskId, { status: 'done' }),
@@ -76,11 +77,6 @@ export function HeroTask() {
     onError: (err: Error) => {
       toast.error(`Failed to mark done: ${err.message ?? 'unknown error'}`);
     },
-  });
-
-  const logMutation = useMutation({
-    mutationFn: logFocusSession,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
   });
 
   const isActive = phase !== 'idle' && attachedItem !== null;
@@ -109,17 +105,12 @@ export function HeroTask() {
   // Project color badge: AttachedItem has no project_color field — use ink-blue as default
   const badgeColor = 'var(--ink-blue, #0b3a8a)';
 
-  /** Stop the current session, log the elapsed focus time, and reset. */
+  /** Stop the current session; the server records the measured interval. */
   const handleStopAndLog = () => {
     const result = usePomodoroStore.getState().stopAndLog();
     if (!result) return;
     if (result.durationSeconds >= 1) {
-      logMutation.mutate({
-        duration_hours: result.durationSeconds / 3600,
-        task_id: result.taskId,
-        paper_id: result.paperId,
-      });
-      toast.success(`Logged ${Math.round(result.durationSeconds / 60)} min of focus`);
+      toast.success(`Focus stopped after ${Math.round(result.durationSeconds / 60)} min`);
     } else {
       toast.message('Pomodoro stopped (too short to log)');
     }
@@ -196,14 +187,14 @@ export function HeroTask() {
           </Button>
         )}
 
-        {/* Stop & log — end the session and record elapsed focus time */}
+        {/* Stop — the server records the measured interval exactly once. */}
         <Button
           size="sm"
           variant="outline"
           onClick={handleStopAndLog}
-          disabled={logMutation.isPending}
+          disabled={focusSyncPending}
         >
-          Stop &amp; log
+          Stop
         </Button>
 
         {item.type === 'paper' && (

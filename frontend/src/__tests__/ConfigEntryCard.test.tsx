@@ -38,7 +38,7 @@ describe('ConfigEntryCard', () => {
         entry={{ key: 'feature.enabled', value: 'true' } as ConfigEntry}
       />,
     );
-    expect(screen.getByRole('switch')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Toggle Feature' })).toBeInTheDocument();
   });
 
   it('renders Input + Save/Cancel buttons when editingKey === entry.key', () => {
@@ -83,5 +83,10 @@ describe('ConfigEntryCard', () => {
   it('does NOT render an error element for customElement when saveError is null', () => {
     render(<ConfigEntryCard {...baseProps} customElement={<div data-testid="cu">CUSTOM</div>} />);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('renders the text/number card with the house card chrome', () => {
+    const { container } = render(<ConfigEntryCard {...baseProps} />);
+    expect(container.firstChild).toHaveClass('rounded-md', 'border-hair', 'shadow-none');
   });
 });

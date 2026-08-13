@@ -56,7 +56,6 @@ vi.mock('@/lib/api', async (importActual) => ({
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
-      getApiKey: () => null,
       logout: vi.fn(),
       loginWithSession: vi.fn(),
     })),

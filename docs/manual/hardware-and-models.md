@@ -31,8 +31,10 @@ selected host and image path; custom models may require more.
 
 **Main model (smart)** — writes summaries, cards, and Ask answers.  
 **Quick model (fast)** — scores and triages incoming papers.  
-**Embedding model (embed)** — powers semantic search; it is fixed to the dimension of
-your Qdrant collection and changing it requires re-indexing your library.
+**Embedding model (embed)** — powers semantic search and is fixed to the
+dimension of your Qdrant collection. Changing it requires the deliberate
+[embedding-model migration workflow](changing-embedding-model.md), not a
+Main/Quick model assignment.
 
 ### What to expect
 
@@ -143,10 +145,13 @@ What is deliberately left out or left unassignable:
   resolves to a private address, fetching the model list and setting the model up for use both
   refuse it, so in practice the endpoint never becomes usable. Letting the server call into private
   networks on request is a well-known way to reach systems that were never meant to be exposed, so
-  the refusal is by design and JARVIS offers no way to turn it off. Note the limit of any
-  name-based check: the address is resolved when it is checked and again when the connection is
-  made, so a name deliberately made to answer differently each time is not something this can
-  catch. Point the endpoint at an address you control.
+  the refusal is by design and JARVIS offers no way to turn it off. At the connection boundary,
+  JARVIS resolves the name once, validates the complete answer set, and connects only to one of
+  those validated IP addresses while preserving the original hostname for HTTP and TLS. Mixed
+  public/private answers and later redirects are checked again before use, so a DNS change cannot
+  redirect an approved request into a private network. The benchmark-only vLLM overlay uses its
+  fixed Docker service name through a separate internal policy; it does not provide a Settings
+  escape hatch for arbitrary private endpoints.
 - **Only one vendor prefix.** OpenRouter and self-hosted endpoints publish ids like
   `vendor/model-name`. An id with more nesting than that is left out of the fetched list.
 - **Very long lists are capped.** If a provider offers more models than JARVIS lists at once, the
@@ -154,7 +159,8 @@ What is deliberately left out or left unassignable:
 - **A model is only offered where it can actually work.** One whose capability the provider does
   not report appears in the `smart` and `fast` lists but cannot be assigned, and the entry says
   why. One the provider reports as embedding-only is not offered for those roles at all — the
-  embedding model is fixed separately, as described above. Models that are plainly not chat
+  embedding model is fixed separately; see [Changing the embedding model](changing-embedding-model.md).
+  Models that are plainly not chat
   models — speech, image, moderation and similar families — are left out entirely.
 
   Where a provider publishes what each model can do, JARVIS reads that directly. Some providers
@@ -164,4 +170,4 @@ What is deliberately left out or left unassignable:
   a silently missing entry.
 
 !!! note "Privacy"
-    When a cloud model is assigned to a role, the prompts and relevant paper excerpts for that role's requests are sent to the configured provider. Local models keep model inference on infrastructure controlled by the operator. The embedding model is separate: changing it requires a deliberate re-index workflow, not a runtime provider switch.
+    When a cloud model is assigned to a role, the prompts and relevant paper excerpts for that role's requests are sent to the configured provider. Local models keep model inference on infrastructure controlled by the operator. The embedding model is separate: changing it requires a deliberate [migration workflow](changing-embedding-model.md), not a runtime provider switch.

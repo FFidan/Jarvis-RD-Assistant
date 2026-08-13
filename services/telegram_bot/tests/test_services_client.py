@@ -26,13 +26,17 @@ from jarvis_common.testing_telegram import make_bot_config, make_http_response
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.services_client import (
+    PulsePayloadError,
+    acknowledge_telegram_focus_completion,
     check_authors,
     complete_task,
     create_project,
+    fetch_active_focus_session,
     fetch_due_card_count,
     fetch_new_paper_count,
     fetch_next_review_card,
     fetch_papers_feed,
+    fetch_pending_telegram_focus_completion,
     fetch_project,
     fetch_project_milestones,
     fetch_project_tasks,
@@ -44,8 +48,10 @@ from telegram_bot.services_client import (
     fetch_weekly_digest,
     get_paper,
     log_focus_session,
+    pause_focus_session,
     record_paper_feedback,
     search_papers,
+    start_focus_session,
     submit_review_rating,
     trigger_pulse_generation,
     update_paper_action,
@@ -57,6 +63,50 @@ from telegram_bot.services_client import (
 
 USER_ID = 42
 API_KEY = "test-api-key"
+
+
+def _focus_payload(*, state: str = "active", source: str = "telegram") -> dict:
+    return {
+        "id": 19,
+        "state": state,
+        "source": source,
+        "duration_seconds": 1500,
+        "remaining_seconds": 1500 if state != "completed" else 0,
+        "started_at": "2026-08-09T12:00:00+00:00",
+        "paused_at": "2026-08-09T12:05:00+00:00" if state == "paused" else None,
+        "paused_seconds": 0.0,
+        "completed_at": "2026-08-09T12:25:00+00:00" if state == "completed" else None,
+        "recorded_seconds": 1500.0 if state == "completed" else 0.0,
+        "task_id": None,
+        "paper_id": None,
+    }
+
+
+def _pulse_deck_payload() -> dict:
+    return {
+        "deck_id": 7,
+        "deck_date": "2026-08-09",
+        "card_count": 1,
+        "generated_at": "2026-08-09T06:00:00+00:00",
+        "cards": [
+            {
+                "card_id": 11,
+                "paper_id": 12,
+                "paper_title": "Typed Pulse paper",
+                "paper_authors": ["Researcher"],
+                "paper_url": "https://example.org/paper",
+                "rank": 1,
+                "score": 0.8,
+                "llm_relevance": 8,
+                "llm_novelty": 7,
+                "reasoning": "Relevant to the configured topic.",
+                "signals": {"recency": 0.5},
+                "reasoning_verified": False,
+                "reasoning_confidence": "UNVERIFIED",
+            }
+        ],
+        "stats": {},
+    }
 
 
 @pytest.fixture()
@@ -648,6 +698,52 @@ async def test_submit_review_rating_5xx_propagates(config: BotConfig) -> None:
 
 
 @pytest.mark.asyncio
+async def test_focus_session_client_uses_durable_scoped_endpoints(config: BotConfig) -> None:
+    http = _make_http(make_http_response(_focus_payload()))
+
+    started = await start_focus_session(http, config, USER_ID, 1500)
+
+    assert started.id == 19
+    args, kwargs = http.post.call_args
+    assert args[0] == "http://learn:8001/api/executive/focus/start"
+    assert kwargs["json"] == {"duration_seconds": 1500, "source": "telegram"}
+    _assert_owner_headers(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_focus_session_client_decodes_active_pending_and_transition(
+    config: BotConfig,
+) -> None:
+    http = _make_http(make_http_response(_focus_payload()))
+    active = await fetch_active_focus_session(http, config, USER_ID)
+    assert active is not None and active.state == "active"
+
+    http.get.return_value = make_http_response(_focus_payload(state="completed"))
+    pending = await fetch_pending_telegram_focus_completion(http, config, USER_ID)
+    assert pending is not None and pending.recorded_seconds == 1500
+
+    http.post.return_value = make_http_response(
+        {"session": _focus_payload(state="paused"), "changed": True}
+    )
+    paused = await pause_focus_session(http, config, USER_ID, 19)
+    assert paused.changed is True and paused.session.state == "paused"
+
+    http.post.return_value = make_http_response(
+        {"session": _focus_payload(state="completed"), "changed": True}
+    )
+    acknowledged = await acknowledge_telegram_focus_completion(http, config, USER_ID, 19)
+    assert acknowledged.changed is True
+
+
+@pytest.mark.asyncio
+async def test_focus_session_client_rejects_malformed_payload(config: BotConfig) -> None:
+    http = _make_http(make_http_response({"state": "active"}))
+
+    with pytest.raises(ValueError, match="invalid focus session"):
+        await fetch_active_focus_session(http, config, USER_ID)
+
+
+@pytest.mark.asyncio
 async def test_log_focus_session_correct_url_and_body(config: BotConfig) -> None:
     http = _make_http(make_http_response({}))
 
@@ -829,7 +925,7 @@ async def test_record_paper_feedback_5xx_propagates(config: BotConfig) -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_pulse_today_no_limit_omits_params(config: BotConfig) -> None:
-    deck = {"cards": [{"paper_id": 1}]}
+    deck = _pulse_deck_payload()
     http = _make_http(make_http_response(deck))
 
     result = await fetch_pulse_today(http, config, USER_ID)
@@ -839,12 +935,14 @@ async def test_fetch_pulse_today_no_limit_omits_params(config: BotConfig) -> Non
     assert url == "http://paper:8000/api/pulse/today"
     assert call_kwargs.get("params") is None
     _assert_owner_headers(call_kwargs)
-    assert result == deck
+    assert result is not None
+    assert result.deck_id == 7
+    assert result.cards[0].paper_id == 12
 
 
 @pytest.mark.asyncio
 async def test_fetch_pulse_today_with_limit(config: BotConfig) -> None:
-    http = _make_http(make_http_response({"cards": []}))
+    http = _make_http(make_http_response(_pulse_deck_payload()))
 
     await fetch_pulse_today(http, config, USER_ID, limit=1)
 
@@ -870,6 +968,48 @@ async def test_fetch_pulse_today_5xx_propagates(config: BotConfig) -> None:
         await fetch_pulse_today(http, config, USER_ID)
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        "wrong_score",
+        "count_mismatch",
+        "stale_without_age",
+        "unknown_confidence",
+        "false_empty",
+        "invalid_date",
+        "naive_timestamp",
+    ],
+)
+@pytest.mark.asyncio
+async def test_fetch_pulse_today_rejects_malformed_payload_without_echo(
+    config: BotConfig,
+    case: str,
+) -> None:
+    payload = _pulse_deck_payload()
+    payload["cards"][0]["paper_title"] = "private title"
+    if case == "wrong_score":
+        payload["cards"][0]["score"] = "not-a-number"
+    elif case == "count_mismatch":
+        payload["card_count"] = 2
+    elif case == "stale_without_age":
+        payload["is_stale"] = True
+    elif case == "unknown_confidence":
+        payload["cards"][0]["reasoning_confidence"] = "CERTAIN"
+    elif case == "false_empty":
+        payload["empty_reason"] = "no_data_yet"
+    elif case == "invalid_date":
+        payload["deck_date"] = "2026-99-99"
+    else:
+        payload["generated_at"] = "2026-08-09T06:00:00"
+    http = _make_http(make_http_response(payload))
+
+    with pytest.raises(PulsePayloadError) as exc_info:
+        await fetch_pulse_today(http, config, USER_ID)
+
+    assert str(exc_info.value) == "Pulse response did not match the expected contract"
+    assert "private title" not in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # trigger_pulse_generation
 # ---------------------------------------------------------------------------
@@ -879,13 +1019,14 @@ async def test_fetch_pulse_today_5xx_propagates(config: BotConfig) -> None:
 async def test_trigger_pulse_generation_correct_url(config: BotConfig) -> None:
     http = _make_http(make_http_response({"job_id": "x", "status": "queued"}))
 
-    await trigger_pulse_generation(http, config, USER_ID)
+    job = await trigger_pulse_generation(http, config, USER_ID)
 
     http.post.assert_called_once()
     call_args, call_kwargs = http.post.call_args
     url = call_args[0] if call_args else call_kwargs["url"]
     assert url == "http://paper:8000/api/pulse/generate"
     _assert_owner_headers(call_kwargs)
+    assert job.job_id == "x"
 
 
 @pytest.mark.asyncio
@@ -893,6 +1034,14 @@ async def test_trigger_pulse_generation_5xx_propagates(config: BotConfig) -> Non
     http = _make_http(make_http_response({}, status=500))
 
     with pytest.raises(httpx.HTTPStatusError):
+        await trigger_pulse_generation(http, config, USER_ID)
+
+
+@pytest.mark.asyncio
+async def test_trigger_pulse_generation_rejects_missing_job_identity(config: BotConfig) -> None:
+    http = _make_http(make_http_response({"status": "queued"}))
+
+    with pytest.raises(PulsePayloadError, match="job response"):
         await trigger_pulse_generation(http, config, USER_ID)
 
 

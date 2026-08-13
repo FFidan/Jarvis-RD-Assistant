@@ -205,7 +205,11 @@ describe('PulseDeck', () => {
     expect(await screen.findByText(/arxiv rate limit reached/i)).toBeInTheDocument();
     expect(screen.getByText(/arxiv returned HTTP 429/i)).toBeInTheDocument();
     expect(screen.getByText(/set OPENALEX_API_KEY/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeInTheDocument();
+    // A degraded run with zero cards still shows the empty-state copy under the banner,
+    // rather than leaving a blank container below it.
+    expect(screen.getByText(/no cards yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /regenerate deck/i })).toBeInTheDocument();
   });
 
   it('offers a regenerate CTA when the deck has no cards and no degraded reason', async () => {

@@ -13,13 +13,11 @@ import { Label } from '@/components/ui/label';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { TimeSelect } from '@/components/ui/time-select';
 import { ConfigSlider } from '@/components/ui/config-slider';
-import { toast } from 'sonner';
-import { cronToHumanReadable, cronToTime, timeToCron } from '@/lib/cron-utils';
+import { cronToHumanReadable, cronToTime, isTimeOnlyCron, timeToCron } from '@/lib/cron-utils';
 import { useSyncedState } from './use-synced-state';
-import { useDebouncedConfig } from './use-debounced-config';
 import { CRON_TOOLTIP } from './pulse-constants';
 import { getConfigValue } from './pulse-utils';
-import { errorMessage } from '@/lib/errors';
+import { onSaveError } from '@/lib/forms/save-error';
 import type { ConfigEntry } from '@/types';
 
 function isValidCron(s: string): boolean {
@@ -43,30 +41,37 @@ export function PulseScheduleCard({
 }: PulseScheduleCardProps) {
   const enabled = getConfigValue<boolean>(configs, 'pulse.enabled', false);
   const cron = getConfigValue<string>(configs, 'pulse.cron', '0 4 * * *');
-  const deckSize = getConfigValue<number>(configs, 'pulse.deck_size', 10);
-  const stage2TopK = getConfigValue<number>(configs, 'pulse.stage2_top_k', 40);
+  const deckSizeConfig = getConfigValue<number>(configs, 'pulse.deck_size', 10);
+  const stage2TopKConfig = getConfigValue<number>(configs, 'pulse.stage2_top_k', 40);
   const lookbackDaysConfig = getConfigValue<number>(configs, 'pulse.lookback_days', 7);
   const startupGraceConfig = getConfigValue<number>(configs, 'pulse.startup_grace_seconds', 0);
 
   const [localCron, setLocalCron] = useSyncedState(cron);
+  const [deckSize, setDeckSize] = useSyncedState(deckSizeConfig);
+  const [stage2TopK, setStage2TopK] = useSyncedState(stage2TopKConfig);
   const [lookbackDays, setLookbackDays] = useSyncedState(lookbackDaysConfig);
   const [startupGrace, setStartupGrace] = useSyncedState(startupGraceConfig);
 
-  const debouncedCron = useDebouncedConfig(
-    ({ value }) => setMut.mutate({ key: 'pulse.cron', value }),
-    400,
-  );
+  // pulse.cron accepts more than a single daily clock time (e.g. "0 8,20 * * *"
+  // for two runs a day). The picker below can only show and edit a single time.
+  const cronIsTimeOnly = isTimeOnlyCron(cron);
 
   const handleToggle = () => {
     if (settingsControlsDisabled) return;
-    setMut.mutate({ key: 'pulse.enabled', value: !enabled });
+    setMut.mutate(
+      { key: 'pulse.enabled', value: !enabled },
+      { onError: onSaveError('Could not update whether Pulse is enabled') },
+    );
   };
 
   const handleCronChange = (value: string) => {
     if (settingsControlsDisabled) return;
     setLocalCron(value);
     if (!isValidCron(value)) return;
-    debouncedCron({ key: 'pulse.cron', value });
+    setMut.mutate(
+      { key: 'pulse.cron', value },
+      { onError: onSaveError('Could not update the daily run time') },
+    );
   };
 
   return (
@@ -106,61 +111,60 @@ export function PulseScheduleCard({
             Daily run time
             <InfoTooltip content={CRON_TOOLTIP} />
           </Label>
-          <TimeSelect
-            value={cronToTime(localCron)}
-            onChange={(v) => handleCronChange(timeToCron(v, localCron))}
-            disabled={settingsControlsDisabled}
-          />
-          <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
+          {cronIsTimeOnly ? (
+            <>
+              <TimeSelect
+                value={cronToTime(localCron)}
+                onChange={(v) => handleCronChange(timeToCron(v, localCron))}
+                disabled={settingsControlsDisabled}
+              />
+              <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground" data-testid="pulse-cron-readonly">
+              This schedule runs more than once a day ({cron}), so it can&apos;t be shown or
+              changed with the time picker.
+            </p>
+          )}
         </div>
 
         {/* Deck size */}
-        <div className="space-y-1">
-          <Label htmlFor="pulse-deck-size" className="flex items-center justify-between">
-            <span>Deck size</span>
-            <span className="text-muted-foreground text-sm font-normal">{deckSize}</span>
-          </Label>
-          <input
-            id="pulse-deck-size"
-            type="range"
-            min={5}
-            max={30}
-            step={5}
-            value={deckSize}
-            onChange={(e) =>
-              setMut.mutate({ key: 'pulse.deck_size', value: parseInt(e.target.value, 10) })
-            }
-            disabled={settingsControlsDisabled}
-            className="w-full accent-primary"
-          />
-          <p className="text-xs text-muted-foreground">
-            Papers in your daily Pulse deck. Larger decks = more variety but longer review.
-          </p>
-        </div>
+        <ConfigSlider
+          id="pulse-deck-size"
+          label="Deck size"
+          value={deckSize}
+          min={5}
+          max={30}
+          step={5}
+          disabled={settingsControlsDisabled}
+          onLocalChange={(v) => setDeckSize(v)}
+          onCommit={(v) =>
+            setMut.mutate(
+              { key: 'pulse.deck_size', value: v },
+              { onError: onSaveError('Could not update the deck size') },
+            )
+          }
+          description="Papers in your daily Pulse deck. Larger decks = more variety but longer review."
+        />
 
         {/* Stage-2 ranking candidates */}
-        <div className="space-y-1">
-          <Label htmlFor="pulse-stage2-top-k" className="flex items-center justify-between">
-            <span>Ranking candidates</span>
-            <span className="text-muted-foreground text-sm font-normal">{stage2TopK}</span>
-          </Label>
-          <input
-            id="pulse-stage2-top-k"
-            type="range"
-            min={20}
-            max={100}
-            step={10}
-            value={stage2TopK}
-            onChange={(e) =>
-              setMut.mutate({ key: 'pulse.stage2_top_k', value: parseInt(e.target.value, 10) })
-            }
-            disabled={settingsControlsDisabled}
-            className="w-full accent-primary"
-          />
-          <p className="text-xs text-muted-foreground">
-            Candidates the LLM reranker evaluates. Higher = better ranking quality but slower.
-          </p>
-        </div>
+        <ConfigSlider
+          id="pulse-stage2-top-k"
+          label="Ranking candidates"
+          value={stage2TopK}
+          min={20}
+          max={100}
+          step={10}
+          disabled={settingsControlsDisabled}
+          onLocalChange={(v) => setStage2TopK(v)}
+          onCommit={(v) =>
+            setMut.mutate(
+              { key: 'pulse.stage2_top_k', value: v },
+              { onError: onSaveError('Could not update the number of ranking candidates') },
+            )
+          }
+          description="Candidates the LLM reranker evaluates. Higher = better ranking quality but slower."
+        />
 
         {/* Lookback window */}
         <ConfigSlider
@@ -178,12 +182,7 @@ export function PulseScheduleCard({
           onCommit={(v) =>
             setMut.mutate(
               { key: 'pulse.lookback_days', value: v },
-              {
-                onError: (err) =>
-                  toast.error('Failed to update lookback window', {
-                    description: errorMessage(err),
-                  }),
-              },
+              { onError: onSaveError('Could not update the lookback window') },
             )
           }
         />
@@ -204,12 +203,7 @@ export function PulseScheduleCard({
           onCommit={(v) =>
             setMut.mutate(
               { key: 'pulse.startup_grace_seconds', value: v },
-              {
-                onError: (err) =>
-                  toast.error('Failed to update startup grace', {
-                    description: errorMessage(err),
-                  }),
-              },
+              { onError: onSaveError('Could not update the startup grace period') },
             )
           }
         />

@@ -20,7 +20,7 @@ export interface Card {
   id: number;
   deck_id: number;
   paper_id: number | null;
-  card_type: string;
+  card_type: 'concept' | 'quote' | 'method' | 'comparison';
   front: string;
   back: string;
   evidence: Evidence | null;
