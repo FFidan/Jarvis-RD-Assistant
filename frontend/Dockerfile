@@ -2,7 +2,7 @@ ARG NODE_BUILD_IMAGE=node:22.22.2-alpine3.23@sha256:8ea2348b068a9544dae7317b4f3a
 # nginxinc/nginx-unprivileged runs as uid 101 (nginx) — no root at runtime.
 # Default upstream port is 8080, but our nginx.conf template binds to 3000
 # explicitly, so the host mapping (127.0.0.1:3001:3000) is unchanged.
-ARG NGINX_RUNTIME_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine3.21
+ARG NGINX_RUNTIME_IMAGE=nginxinc/nginx-unprivileged:1.31-alpine3.24
 
 FROM ${NODE_BUILD_IMAGE} AS build
 WORKDIR /app
