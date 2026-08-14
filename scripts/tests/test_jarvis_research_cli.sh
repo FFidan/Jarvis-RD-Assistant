@@ -2306,18 +2306,51 @@ for control_cmd in start stop restart repair; do
   fi
 done
 
-# doctor warns on a GPU overlay with no DRI render node, exit unchanged.
+# doctor probes each accelerator overlay by the route that overlay actually uses.
+# run_cli cannot carry these host-path overrides, so the three cases share one
+# invocation helper that adds them to the same stub environment.
+run_cli_doctor_host() {
+  env "PATH=$STUB:$PATH" "STUB_LOG=$STUB_LOG" \
+    "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$CFG/bin" \
+    "JARVIS_DRI_DIR=$1" "JARVIS_DEV_DIR=$2" \
+    bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" doctor </dev/null 2>&1
+}
+
+# doctor warns on a ROCm/Vulkan overlay with no DRI render node, exit unchanged.
 new_env; register_repo
 printf 'JARVIS_VERSION=1.1.2\nJARVIS_IMAGE_TAG=1.1.2\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.vulkan.yml\n' > "$REPO/.env"
 EMPTY_DRI="$ROOT/dri.$RANDOM"; mkdir -p "$EMPTY_DRI"
-out="$( run_cli_dri() { env "PATH=$STUB:$PATH" "STUB_LOG=$STUB_LOG" \
-  "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$CFG/bin" \
-  "JARVIS_DRI_DIR=$EMPTY_DRI" \
-  bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" doctor </dev/null 2>&1; }; run_cli_dri )"; rc=$?
+EMPTY_DEV="$ROOT/dev.$RANDOM"; mkdir -p "$EMPTY_DEV"
+out="$(run_cli_doctor_host "$EMPTY_DRI" "$EMPTY_DEV")"; rc=$?
 if has "$out" 'render node\|/dev/dri\|render' && [ "$rc" -ne 2 ]; then
   pass "doctor_warns_overlay_without_dri: render-node WARN emitted, exit unchanged"
 else
   check_fail "doctor_warns_overlay_without_dri: rc=$rc out=<<<$out>>>"
+fi
+
+# WSL2 + NVIDIA is a supported install path and exposes /dev/dxg instead of a DRI
+# render node. Its CUDA overlay must not be told the accelerator is unavailable.
+new_env; register_repo
+printf 'JARVIS_VERSION=1.1.3\nJARVIS_IMAGE_TAG=1.1.3\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml\n' > "$REPO/.env"
+WSL_DEV="$ROOT/dev.$RANDOM"; mkdir -p "$WSL_DEV"; : > "$WSL_DEV/dxg"
+out="$(run_cli_doctor_host "$EMPTY_DRI" "$WSL_DEV")"; rc=$?
+if [ "$rc" -ne 2 ] && ! has "$out" 'render node' \
+   && ! has "$out" 'accelerator will be unavailable'; then
+  pass "doctor_cuda_overlay_without_render_node_is_not_warned"
+else
+  check_fail "doctor_cuda_overlay_without_render_node: rc=$rc out=<<<$out>>>"
+fi
+
+# When the CUDA overlay really has no NVIDIA route, the warning names the paths
+# that were probed rather than a render node that was never looked for.
+new_env; register_repo
+printf 'JARVIS_VERSION=1.1.3\nJARVIS_IMAGE_TAG=1.1.3\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml\n' > "$REPO/.env"
+out="$(run_cli_doctor_host "$EMPTY_DRI" "$EMPTY_DEV")"; rc=$?
+if [ "$rc" -ne 2 ] && hasF "$out" "${EMPTY_DEV}/dxg" \
+   && has "$out" 'NVIDIA Container Toolkit' && ! has "$out" 'render node'; then
+  pass "doctor_cuda_overlay_warning_names_the_nvidia_paths_it_probed"
+else
+  check_fail "doctor_cuda_overlay_warning_text: rc=$rc out=<<<$out>>>"
 fi
 
 # doctor answers the question both update refusals send the user here to ask.
@@ -2364,6 +2397,41 @@ if has "$out" 'Could not query container status' \
   pass "doctor_container_warning_names_repair: the warning names its recovery command"
 else
   check_fail "doctor_container_warning_names_repair: rc=$rc out=<<<$out>>>"
+fi
+
+# A recorded version that disagrees with the checkout, with no update journal to
+# explain it, used to make doctor and update report different installed versions
+# and offer no way out. Both must now print the same reconciliation message.
+new_env; register_repo
+RECONCILE_MSG='This install records version 1.1.2 in .env, but the checkout is version 1.1.3'
+doctor_out="$(run_cli doctor)"; rc=$?
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+update_out="$(run_cli update --yes)"; urc=$?
+if [ "$rc" -eq 0 ] && [ "$urc" -eq 0 ] \
+   && hasF "$doctor_out" "$RECONCILE_MSG" && hasF "$update_out" "$RECONCILE_MSG" \
+   && hasF "$doctor_out" "cd $REPO && ./update.sh --yes" \
+   && hasF "$update_out" "cd $REPO && ./update.sh --yes" \
+   && has "$update_out" 'Already up to date'; then
+  pass "version_mismatch_gets_one_reconciliation_message_from_doctor_and_update"
+else
+  check_fail "version reconciliation: rc=$rc urc=$urc doctor=<<<$doctor_out>>> update=<<<$update_out>>>"
+fi
+
+# The message is a mismatch report, not decoration: agreement silences it, and a
+# pending journal means the update path owns the difference.
+new_env; register_repo
+printf 'JARVIS_VERSION=1.1.3\nJARVIS_IMAGE_TAG=1.1.3\nTORCH_VARIANT=cpu\n' > "$REPO/.env"
+matched_out="$(run_cli doctor)"; rc=$?
+new_env; register_repo
+: > "$PENDING_FILE"
+journal_out="$(run_cli doctor)"; jrc=$?
+rm -f "$PENDING_FILE"
+if [ "$rc" -eq 0 ] && [ "$jrc" -eq 0 ] \
+   && ! has "$matched_out" 'no update is in progress' \
+   && ! has "$journal_out" 'no update is in progress'; then
+  pass "version_reconciliation_is_silent_when_matched_or_journalled"
+else
+  check_fail "version reconciliation silence: rc=$rc jrc=$jrc matched=<<<$matched_out>>> journal=<<<$journal_out>>>"
 fi
 
 # A transaction-journal write that fails after the update has already started

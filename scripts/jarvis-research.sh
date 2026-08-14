@@ -1468,6 +1468,7 @@ cmd_update() {
   # the commit it points at; peel it or this never matches.
   if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${target_ref}^{commit}")" ]; then
     ok "Already up to date (${target_ref})."
+    _version_reconciliation_notice
     _tailscale_upgrade_notice
     return 0
   fi
@@ -2291,23 +2292,21 @@ cmd_doctor() {
   local latest cur; latest="$(latest_stable_tag origin 2>/dev/null || true)"
   cur="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
   [ -n "$latest" ] && info "Latest published release: ${latest} (installed: ${cur:-unknown})."
+  _version_reconciliation_notice
   _doctor_host_probes
   return "$rc"
 }
 
 _doctor_host_probes() {
-  local compose_file torch cv dri
+  local compose_file torch cv
   compose_file="$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | head -1)"
-  if printf '%s' "$compose_file" | grep -qE 'docker-compose\.(gpu|rocm|vulkan)\.yml'; then
-    dri="${JARVIS_DRI_DIR:-/dev/dri}"
-    local -a nodes=("$dri"/renderD*)
-    if [ ! -e "${nodes[0]}" ]; then
-      warn "A GPU overlay is configured but no ${dri}/renderD* render node is present; the accelerator will be unavailable."
-    else
-      grep -qE '^JARVIS_RENDER_GID=[0-9]+' .env 2>/dev/null || warn "GPU overlay configured but JARVIS_RENDER_GID is not numeric in .env."
-      grep -qE '^JARVIS_VIDEO_GID=[0-9]+'  .env 2>/dev/null || warn "GPU overlay configured but JARVIS_VIDEO_GID is not numeric in .env."
-    fi
-  fi
+  # Each accelerator overlay reaches the GPU by a different route, so each is
+  # probed for the route it actually uses. Probing the wrong one told every
+  # WSL2 + NVIDIA install its accelerator was unavailable.
+  case "$compose_file" in
+    *docker-compose.rocm.yml*|*docker-compose.vulkan.yml*) _doctor_render_node_probe ;;
+    *docker-compose.gpu.yml*)                              _doctor_nvidia_device_probe ;;
+  esac
   torch="$(sed -n 's/^TORCH_VARIANT=//p' .env 2>/dev/null | head -1)"
   if [ "$torch" = "cuda" ]; then
     docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"' \
@@ -2318,6 +2317,55 @@ _doctor_host_probes() {
     warn "Docker Compose ${cv} is older than the tested floor 2.24.4; overlay merges may misbehave."
   fi
   _tailscale_upgrade_notice
+}
+
+# The ROCm and Vulkan overlays pass a DRI render node into the containers, so a
+# missing render node is what makes their accelerator unavailable, and the
+# render/video group ids only matter once that node exists.
+_doctor_render_node_probe() {
+  local dri; dri="${JARVIS_DRI_DIR:-/dev/dri}"
+  local -a nodes=("$dri"/renderD*)
+  if [ ! -e "${nodes[0]}" ]; then
+    warn "The ROCm or Vulkan overlay is configured but no ${dri}/renderD* render node is present; the accelerator will be unavailable."
+    return 0
+  fi
+  grep -qE '^JARVIS_RENDER_GID=[0-9]+' .env 2>/dev/null || warn "The ROCm or Vulkan overlay is configured but JARVIS_RENDER_GID is not numeric in .env."
+  grep -qE '^JARVIS_VIDEO_GID=[0-9]+'  .env 2>/dev/null || warn "The ROCm or Vulkan overlay is configured but JARVIS_VIDEO_GID is not numeric in .env."
+}
+
+# The CUDA overlay reaches the GPU through the NVIDIA container runtime, never a
+# DRI render node: a native Linux host exposes /dev/nvidia*, and a Windows host
+# running Docker in WSL2 exposes /dev/dxg instead.
+_doctor_nvidia_device_probe() {
+  local dev; dev="${JARVIS_DEV_DIR:-/dev}"
+  local -a nvidia_nodes=("$dev"/nvidia*)
+  if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    return 0
+  fi
+  if [ -e "${nvidia_nodes[0]}" ] || [ -e "${dev}/dxg" ]; then
+    return 0
+  fi
+  warn "The CUDA overlay is configured but Docker reports no nvidia runtime and neither ${dev}/nvidia* nor ${dev}/dxg is present; the accelerator will be unavailable. Install the NVIDIA Container Toolkit, then run: jarvis-research doctor"
+}
+
+# The version recorded in .env and the version this checkout represents must
+# agree. When they do not, and no update journal is in flight to explain it,
+# doctor and update say the same thing instead of each reporting a different
+# installed version and leaving the operator with no next step.
+_version_reconciliation_notice() {
+  local recorded checkout
+  if [ -z "$PENDING_FILE_PATH" ]; then
+    _init_pending_file_path || return 0
+  fi
+  if [ -f "$PENDING_FILE_PATH" ] || [ -f "$LEGACY_PENDING_FILE_PATH" ]; then
+    return 0
+  fi
+  recorded="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  checkout="$(resolve_checkout_app_version 2>/dev/null || true)"
+  if [ -z "$recorded" ] || [ -z "$checkout" ] || [ "$recorded" = "$checkout" ]; then
+    return 0
+  fi
+  warn "This install records version ${recorded} in .env, but the checkout is version ${checkout}, and no update is in progress. Bring both back in step: cd ${REPO} && ./update.sh --yes"
 }
 
 _tailscale_upgrade_notice() {
