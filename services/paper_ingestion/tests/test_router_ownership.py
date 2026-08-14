@@ -9,7 +9,6 @@ focuses on router wiring.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -692,7 +691,3 @@ async def test_search_hybrid_recheck_changes_composition_not_fused_order(_app):
         "the recheck must change which papers are returned, not the order of the ones "
         f"that survive it; got {[item['id'] for item in filtered.json()]} from {fused_order}"
     )
-
-
-# Touch unused imports so static analysers don't complain in editor environments
-_ = datetime.now(UTC)
