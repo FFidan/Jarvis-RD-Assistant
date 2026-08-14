@@ -69,7 +69,8 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
   },
   integrations: {
     telegram: 'Telegram',
-    'bot-token': 'Telegram bot key',
+    // Legacy deep link into the merged Telegram page.
+    'bot-token': 'Telegram',
     zotero: 'Zotero',
   },
   research: {
@@ -170,13 +171,27 @@ function DetailContent({
   }
 
   if (section === 'integrations') {
-    if (item === 'telegram') {
-      return <TelegramPairingSection />;
-    }
-    if (item === 'bot-token') {
-      return isAdmin
-        ? <TelegramBotTokenSection />
-        : <div className="p-6 text-sm text-destructive">Admin access required.</div>;
+    // One Telegram page. Pairing (every user) and the instance bot token
+    // (admin) were two rail items describing one integration; they now stack
+    // on a single page, and old bot-token URLs land here too.
+    if (item === 'telegram' || item === 'bot-token') {
+      return (
+        <div className="space-y-8">
+          <TelegramPairingSection />
+          {isAdmin && (
+            <div className="space-y-3 border-t border-hair pt-6">
+              <div>
+                <h3 className="text-base font-semibold">Instance bot (admin)</h3>
+                <p className="text-sm text-muted-foreground">
+                  The BotFather token that lets this instance send and receive Telegram
+                  messages for every paired user.
+                </p>
+              </div>
+              <TelegramBotTokenSection />
+            </div>
+          )}
+        </div>
+      );
     }
     if (item === 'zotero') return <ZoteroSection />;
   }

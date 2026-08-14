@@ -36,9 +36,8 @@ async function stubSources(page: import('@playwright/test').Page) {
 test.beforeEach(async ({ page }) => {
   await seedAuthedSession(page);
   await stubSources(page);
-  await page.goto('/feed');
-  // Open the Search tab — SearchBar + checkbox group live here.
-  await page.getByRole('tab', { name: 'Search' }).click();
+  // Discover is its own surface: SearchBar + checkbox group live here.
+  await page.goto('/feed?surface=search');
   await page.waitForLoadState('networkidle');
 });
 

@@ -31,9 +31,10 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
     () => new Set(saveablePapers.map((paper) => paper.external_id)),
     [saveablePapers],
   );
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(saveablePapers.map((p) => p.external_id)),
-  );
+  // Nothing is pre-selected: search results are candidates the researcher opts
+  // INTO, and pre-selecting everything next to "Save all unsaved" made a stray
+  // click bulk-import an unreviewed set.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [sortField, setSortField] = useState<'relevance' | 'date' | 'title' | 'citations'>('relevance');
   const [previewPaper, setPreviewPaper] = useState<SearchPreviewResult | null>(null);
   const previousPaperIdsRef = useRef<string[] | null>(null);
@@ -53,8 +54,8 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
   }, [papers, sortField]);
 
   // Preserve partial selection across in-place save reconciliation. A fresh
-  // result set initializes all saveable rows, but an update to the same result
-  // set only removes rows that became non-saveable.
+  // result set starts empty, and an update to the same result set only removes
+  // rows that became non-saveable.
   useEffect(() => {
     const nextPaperIds = papers.map((paper) => paper.external_id);
     const previousPaperIds = previousPaperIdsRef.current;
@@ -65,7 +66,7 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
       previousPaperIds.every((id) => nextPaperIds.includes(id));
 
     if (!sameResultSet) {
-      setSelected(new Set(saveablePapers.map((paper) => paper.external_id)));
+      setSelected(new Set());
     } else {
       setSelected((current) => {
         const next = new Set<string>();

@@ -20,7 +20,6 @@ import type {
   SurfaceView,
   LibraryFilter,
   InboxSourceFilter,
-  FeedScope,
   FeedCountsWithFacets,
 } from '@/types';
 import { toast } from 'sonner';
@@ -57,13 +56,14 @@ const VALID_FILTERS: ReadonlySet<LibraryFilter> = new Set<LibraryFilter>([
 ]);
 
 
-// ─── surface definitions (kept for CountsBadge usage) ───────────────────────
+// Discover's two ways in: live external search, or browsing the public corpus
+// this instance already holds.
+const DISCOVER_MODES = [
+  { value: 'search', label: 'Find new papers' },
+  { value: 'corpus', label: 'Browse public corpus' },
+] as const;
 
-
-const FEED_SCOPES: { value: FeedScope; label: string }[] = [
-  { value: 'library', label: 'My library' },
-  { value: 'corpus', label: 'Public + mine' },
-];
+type DiscoverMode = (typeof DISCOVER_MODES)[number]['value'];
 
 // ─── helper ─────────────────────────────────────────────────────────────────
 
@@ -76,6 +76,7 @@ function SectionInfo({ children }: { children: React.ReactNode }) {
 export function ResearchFeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { online } = useOnlineStatus();
+  const [discoverMode, setDiscoverMode] = useState<DiscoverMode>('search');
   const recordResearchMilestone = useResearchMilestoneStore(
     (state) => state.recordMilestone,
   );
@@ -95,7 +96,6 @@ export function ResearchFeedPage() {
 
   const rawSurface = searchParams.get('surface');
   const rawFilter = searchParams.get('filter');
-  const rawScope = searchParams.get('scope');
   const rawSource = searchParams.get('source');
   const rawFacetSource = searchParams.get('facet_source');
   const rawFacetTopic = searchParams.get('facet_topic');
@@ -114,8 +114,6 @@ export function ResearchFeedPage() {
     rawFilter && VALID_FILTERS.has(rawFilter as LibraryFilter)
       ? (rawFilter as LibraryFilter)
       : null;
-
-  const feedScope: FeedScope = rawScope === 'corpus' ? 'corpus' : 'library';
 
   // Parse inbox source filter — no type assertions needed since we verify membership first
   const inboxSource: InboxSourceFilter | null =
@@ -143,7 +141,7 @@ export function ResearchFeedPage() {
   useEffect(() => {
     useBulkSelection.getState().clear();
     setListFilter('');
-  }, [surface, feedScope, filter, sourceFacet, topicFacet]);
+  }, [surface, filter, sourceFacet, topicFacet]);
 
   // ── feed counts (numeric only — CountsBadge consumers) ───────────────────
   const { data: counts } = useQuery<FeedCountsWithFacets>({
@@ -152,12 +150,12 @@ export function ResearchFeedPage() {
     staleTime: 5_000,
   });
 
-  // ── feed counts with facets (§-facet rail) — scoped to active feedScope ──
-  // C-FACET-BE: backend get_feed_counts accepts ?scope= and honours it for
-  // by_source / by_topic / untagged facet counts via fetch_feed_facet_counts.
+  // ── feed counts with facets (§-facet rail) ───────────────────────────────
+  // The rail only ever describes the caller's own papers, so its facet counts
+  // are always library-scoped.
   const { data: countsWithFacets } = useQuery<FeedCountsWithFacets>({
-    queryKey: QUERY_KEYS.feed.counts(feedScope),
-    queryFn: () => fetchFeedCounts(feedScope),
+    queryKey: QUERY_KEYS.feed.counts('library'),
+    queryFn: () => fetchFeedCounts('library'),
     staleTime: 5_000,
   });
 
@@ -329,7 +327,6 @@ export function ResearchFeedPage() {
           p.set('surface', next.surface);
           // Clear filter when switching surfaces
           if (next.surface !== surface) p.delete('filter');
-          if (next.surface !== 'library') p.delete('scope');
         }
         if ('filter' in next) {
           if (next.filter === null || next.filter === undefined) {
@@ -369,20 +366,6 @@ export function ResearchFeedPage() {
     [setSearchParams, surface],
   );
 
-  // ── library scope helpers (preserved from original) ──────────────────────
-
-  function setFeedScope(scope: FeedScope) {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set('surface', 'library');
-      if (scope === 'library') next.delete('scope');
-      else next.set('scope', scope);
-      next.delete('offset');
-      return next;
-    });
-    useBulkSelection.getState().clear();
-  }
-
   // ── Compute effective FeedView filter from facet state ───────────────────
   // §Source drives the `sourceTypes` param; the §Topic facet drives `topicId`.
   // The 'untagged' sentinel has no backend topic id, so it drives a separate
@@ -403,20 +386,23 @@ export function ResearchFeedPage() {
           ) : (
             <BookOpenIcon className="h-7 w-7" />
           )}
-          {surface === 'search' ? 'Discover' : 'Library'}
+          {surface === 'search' ? 'Discover' : 'Papers'}
         </h1>
       </div>
 
       {/* ── 3-pane layout ──────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Left: §-facet rail — passes isOnline + feedScope for scope-honest copy */}
-        <FacetRail
-          counts={countsWithFacets}
-          selection={facetSelection}
-          onSelect={handleFacetSelect}
-          isOnline={online}
-          feedScope={feedScope}
-        />
+        {/* Left: §-facet rail. Discover hides it: its STATUS/TOPIC counts
+            describe the caller's own papers, which is not what either
+            Discover tab shows. */}
+        {surface !== 'search' && (
+          <FacetRail
+            counts={countsWithFacets}
+            selection={facetSelection}
+            onSelect={handleFacetSelect}
+            isOnline={online}
+          />
+        )}
 
         {/* Right: main list pane */}
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto px-4 py-3 sm:px-6">
@@ -455,32 +441,6 @@ export function ResearchFeedPage() {
                   Upload PDF
                 </button>
               )}
-
-              {/* Library scope toggle (preserved) */}
-              {surface === 'library' && (
-                <div
-                  className="ml-auto inline-flex rounded-md border border-hair p-0.5"
-                  role="tablist"
-                  aria-label="Library scope"
-                >
-                  {FEED_SCOPES.map(({ value, label }) => (
-                    <button
-                      key={value}
-                      role="tab"
-                      aria-selected={feedScope === value}
-                      onClick={() => setFeedScope(value)}
-                      className={cn(
-                        'h-7 rounded px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                        feedScope === value
-                          ? 'bg-muted text-strong'
-                          : 'text-muted-foreground hover:text-strong',
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )}
 
@@ -501,7 +461,7 @@ export function ResearchFeedPage() {
                   role="status"
                 >
                   <OfflineIndicator variant="online-only" label="Inbox" />
-                  <span className="ml-1">Inbox requires connectivity — switch to Library to read cached papers.</span>
+                  <span className="ml-1">Inbox requires connectivity — switch to Papers to read cached papers.</span>
                 </div>
               )}
               <FeedView
@@ -521,15 +481,13 @@ export function ResearchFeedPage() {
             <div>
               <div className="mb-1 flex items-center gap-2">
                 <SectionInfo>
-                  {feedScope === 'corpus'
-                    ? 'Verified public papers plus private papers in your library.'
-                    : filter === 'reading'
-                      ? 'Papers you\'re currently reading.'
-                      : filter === 'to_read'
-                        ? 'Papers saved to read later.'
-                        : filter === 'done'
-                          ? 'Papers you\'ve finished.'
-                          : 'My library — papers you\'ve saved or own.'}
+                  {filter === 'reading'
+                    ? 'Papers you\'re currently reading.'
+                    : filter === 'to_read'
+                      ? 'Papers saved to read later.'
+                      : filter === 'done'
+                        ? 'Papers you\'ve finished.'
+                        : 'Papers you\'ve saved or own.'}
                 </SectionInfo>
                 {!online && (
                   <span className="ml-1 shrink-0" data-testid="library-offline-indicator">
@@ -543,7 +501,7 @@ export function ResearchFeedPage() {
               </div>
 
               {/* Empty-library default: guide fresh users to Discover instead of a dead list */}
-              {counts && counts.library === 0 && feedScope === 'library' && !filter ? (
+              {counts && counts.library === 0 && !filter ? (
                 <div
                   className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-hair bg-muted/20 px-6 py-10 text-center"
                   data-testid="library-empty-discover"
@@ -592,7 +550,7 @@ export function ResearchFeedPage() {
                 <FeedView
                   surface="library"
                   filter={filter}
-                  scope={feedScope}
+                  scope="library"
                   sourceTypes={effectiveSourceTypes}
                   topicId={effectiveTopicId}
                   untagged={effectiveUntagged}
@@ -627,6 +585,50 @@ export function ResearchFeedPage() {
               When offline: show disabled state with explanatory indicator.     */}
           {surface === 'search' && (
             <div className="space-y-4">
+              {/* Discover is everything not yet yours: search external sources
+                  live, or browse the public corpus this instance already
+                  holds. Either way the bridge action is saving it. */}
+              <div
+                className="inline-flex rounded-md border border-hair p-0.5"
+                role="tablist"
+                aria-label="Discover mode"
+              >
+                {DISCOVER_MODES.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    role="tab"
+                    aria-selected={discoverMode === value}
+                    onClick={() => setDiscoverMode(value)}
+                    className={cn(
+                      'h-7 rounded px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      discoverMode === value
+                        ? 'bg-muted text-strong'
+                        : 'text-muted-foreground hover:text-strong',
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {discoverMode === 'corpus' ? (
+                <div>
+                  <SectionInfo>
+                    Public papers shared on this instance, plus your own. Save any of them into
+                    your papers.
+                  </SectionInfo>
+                  <FeedView
+                    surface="library"
+                    filter={null}
+                    scope="corpus"
+                    sourceTypes={effectiveSourceTypes}
+                    topicId={effectiveTopicId}
+                    untagged={effectiveUntagged}
+                    listFilter={listFilter || undefined}
+                  />
+                </div>
+              ) : (
+                <>
               <div className="flex items-center gap-3">
                 <SectionInfo>
                   Search external databases live and save new papers to your library.
@@ -732,6 +734,8 @@ export function ResearchFeedPage() {
                       <PdfUploadZone onComplete={handleUploadComplete} />
                     </div>
                   )}
+                </>
+              )}
                 </>
               )}
             </div>

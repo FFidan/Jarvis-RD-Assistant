@@ -22,6 +22,8 @@ function formatLastAt(iso: string): string {
  */
 export function HeroThread() {
   const queryClient = useQueryClient();
+  // The button starts the CONFIGURED duration — its label must say so.
+  const workMinutes = usePomodoroStore((s) => s.workMinutes);
 
   const { data, isLoading, isError } = useQuery<Thread[]>({
     queryKey: QUERY_KEYS.myDay.threads(),
@@ -113,10 +115,10 @@ export function HeroThread() {
             usePomodoroStore
               .getState()
               .startWork({ id: thread.id, title: thread.title, type: 'task' });
-            toast.success('25-min focus started');
+            toast.success(`${workMinutes}-min focus started`);
           }}
         >
-          Start 25-min focus
+          Start {workMinutes}-min focus
         </Button>
       </div>
     </div>

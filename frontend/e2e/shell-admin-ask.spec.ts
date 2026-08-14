@@ -1,7 +1,7 @@
 /**
  * shell-admin-ask.spec.ts — Playwright mocked e2e spec for:
  *   - Grouped roman-numeral sidebar nav (groups Ⅰ–Ⅳ visible to all)
- *   - Admin gating (group Ⅴ only visible for admin users)
+ *   - Admin gating (group Ⅳ only visible for admin users)
  *   - HealthDots admin navigation vs in-place expand
  *   - System Logs (/logs) vs Audit Log (/admin/audit-log) — separate destinations
  *   - Ask page renders + submits question to the cross-paper RAG endpoint
@@ -13,7 +13,11 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { installMockedApiDefaults } from './helpers/setup';
+import {
+  installMockedApiDefaults,
+  seedFirstRunShell,
+  seedReturningUserShell,
+} from './helpers/setup';
 
 // ---------------------------------------------------------------------------
 // Route mocks
@@ -77,11 +81,8 @@ async function seedAdminSession(page: Page) {
  * Mock all common backend endpoints so the spec runs without Docker.
  */
 async function mockCommonEndpoints(page: Page) {
-  // Seed full nav mode so group labels (Today/Read/Learn/Ask) are visible.
-  // nav-prefs-store defaults to 'simple' when this key is absent from localStorage.
-  await page.addInitScript(() => {
-    localStorage.setItem('jarvis-onboarding-dismissed', 'true');
-  });
+  // installMockedApiDefaults seeds the full nav density, so the group labels
+  // (Today/Workspace/Learn/Admin) this spec asserts are visible.
   await installMockedApiDefaults(page);
 
   // Stack health — required for HealthDots
@@ -133,6 +134,9 @@ async function seedFirstUseMilestone(page: Page) {
 
 async function mockFirstUseEndpoints(page: Page) {
   await installMockedApiDefaults(page);
+  // This describe block is about first use itself, so undo the returning-user
+  // shell the defaults seed: no stored nav preference, no dismissed tour.
+  await seedFirstRunShell(page);
   await page.route('**/api/executive/focus/active', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: 'null' }),
   );
@@ -235,7 +239,7 @@ test.describe('First-use research guidance', () => {
 
     await expect(page.getByText('Discover Papers')).toBeVisible({ timeout: 3000 });
     await page.getByRole('button', { name: 'Next' }).click();
-    await expect(page.getByText('Save to Your Library')).toBeVisible();
+    await expect(page.getByText('Save to Papers')).toBeVisible();
     await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.getByText('Discover Papers')).toBeVisible();
     await page.getByRole('button', { name: "Don't show again" }).click();
@@ -254,7 +258,7 @@ test.describe('First-use research guidance', () => {
 
     await expect(page.getByText('Discover Papers')).toBeVisible({ timeout: 3000 });
     await page.getByRole('button', { name: 'Next' }).click();
-    await expect(page.getByText('Save to Your Library')).toBeVisible();
+    await expect(page.getByText('Save to Papers')).toBeVisible();
     await page.getByRole('button', { name: "Don't show again" }).click();
 
     await page.getByRole('button', { name: 'Open menu' }).click();
@@ -281,16 +285,17 @@ test.describe('Sidebar — non-admin user', () => {
     await page.goto('/');
   });
 
-  test('groups Ⅰ–Ⅳ are visible', async ({ page }) => {
+  test('groups Ⅰ–Ⅲ are visible', async ({ page }) => {
     // Use exact: true to avoid substring matches ('Learn' inside 'Learning Cards').
     await expect(page.getByText('Today', { exact: true })).toBeVisible();
-    await expect(page.getByText('Read', { exact: true })).toBeVisible();
+    await expect(page.getByText('Workspace', { exact: true })).toBeVisible();
     await expect(page.getByText('Learn', { exact: true })).toBeVisible();
-    // "Ask" appears as both group label and nav link — just check at least one
-    await expect(page.locator('nav').getByText('Ask').first()).toBeVisible();
+    // Ask is a Workspace item now, not a group of its own.
+    await expect(page.getByRole('link', { name: 'Ask', exact: true })).toBeVisible();
+    await expect(page.getByText('Read', { exact: true })).toHaveCount(0);
   });
 
-  test('group Ⅴ Admin is NOT visible for non-admin', async ({ page }) => {
+  test('group Ⅳ Admin is NOT visible for non-admin', async ({ page }) => {
     await expect(page.getByText('Admin').first()).not.toBeVisible().catch(() => {
       // If element doesn't exist at all, test passes
     });
@@ -329,11 +334,9 @@ test.describe('Sidebar — non-admin user', () => {
 test.describe('Sidebar — admin user', () => {
   test.beforeEach(async ({ page }) => {
     await seedAdminSession(page);
-
-    // Seed full nav mode so group labels are visible.
-    await page.addInitScript(() => {
-      localStorage.setItem('jarvis-onboarding-dismissed', 'true');
-    });
+    // This describe stubs its own routes rather than using the mocked defaults,
+    // so it seeds the returning-user shell (grouped nav) itself.
+    await seedReturningUserShell(page);
 
     // Override auth verify to return admin role
     await page.route('/api/auth/verify', (route) =>
@@ -357,7 +360,7 @@ test.describe('Sidebar — admin user', () => {
     await page.goto('/');
   });
 
-  test('group Ⅴ Admin is visible for admin user', async ({ page }) => {
+  test('group Ⅳ Admin is visible for admin user', async ({ page }) => {
     await expect(page.getByText('Admin')).toBeVisible();
   });
 
@@ -399,7 +402,7 @@ test.describe('Sidebar — admin user', () => {
 // Tests — Ask page
 // ---------------------------------------------------------------------------
 
-test.describe('Ask page (group Ⅳ)', () => {
+test.describe('Ask page (group Ⅱ Workspace)', () => {
   test.beforeEach(async ({ page }) => {
     await seedRegularSession(page);
 

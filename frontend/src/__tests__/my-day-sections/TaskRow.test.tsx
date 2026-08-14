@@ -15,7 +15,7 @@ const startWorkMock = vi.fn();
 vi.mock('@/stores/pomodoro-store', () => ({
   usePomodoroStore: Object.assign(
     (selector?: (state: any) => any) => {
-      const state = { phase: 'idle', attachedItem: null };
+      const state = { phase: 'idle', attachedItem: null, workMinutes: 45 };
       return selector ? selector(state) : state;
     },
     { getState: () => ({ startWork: startWorkMock }) },
@@ -78,8 +78,10 @@ describe('TaskRow', () => {
     const user = userEvent.setup();
     renderRow();
 
-    // The focus button is in the DOM but visually hidden (opacity-0); it is still interactive
-    const focusBtn = screen.getByTitle(/Start 25:00 Pomodoro/i);
+    // The focus button is in the DOM but visually hidden (opacity-0); it is still
+    // interactive. Its tooltip names the CONFIGURED duration (45 in this mock),
+    // never a hardcoded 25.
+    const focusBtn = screen.getByTitle(/Start 45:00 Pomodoro/i);
     await user.click(focusBtn);
 
     expect(startWorkMock).toHaveBeenCalledOnce();

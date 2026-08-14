@@ -77,14 +77,9 @@ export const ALL_SECTIONS: RailSection[] = [
   {
     title: 'Integrations',
     items: [
+      // One integration, one page: pairing and the admin bot token live
+      // together under a single Telegram item.
       { section: 'integrations', item: 'telegram', label: 'Telegram' },
-      {
-        section: 'integrations',
-        item: 'bot-token',
-        label: 'Telegram bot key',
-        tooltip: 'The API token from BotFather that lets JARVIS send and receive Telegram messages.',
-        adminOnly: true,
-      },
       { section: 'integrations', item: 'zotero', label: 'Zotero' },
     ],
   },

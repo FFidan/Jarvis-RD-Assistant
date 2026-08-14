@@ -27,8 +27,10 @@ function PulseEmptyState({ message }: { message: string }) {
     <div className="flex flex-col items-center gap-3 py-8 text-center">
       <Sparkles className="h-7 w-7 text-faint" aria-hidden />
       <p className="font-serif italic text-faint max-w-[34ch]">{message}</p>
+      {/* Points at the surface that actually has the control: Generate lives
+          on /pulse, and Papers has no Pulse affordance. */}
       <Button asChild size="sm" variant="outline">
-        <Link to="/feed?surface=library">Open Library</Link>
+        <Link to="/pulse">Open Pulse Deck</Link>
       </Button>
     </div>
   );

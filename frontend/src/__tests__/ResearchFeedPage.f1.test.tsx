@@ -219,11 +219,14 @@ describe('ResearchFeedPage — 3-pane IA', () => {
     });
   });
 
-  it('does NOT render the scoped list-filter for search surface', async () => {
+  it('does NOT render the scoped list-filter or the facet rail on Discover', async () => {
     renderPage('?surface=search');
+    // The rail's STATUS/TOPIC counts describe your own papers, which is not
+    // what either Discover tab shows.
     await waitFor(() => {
-      expect(screen.getByTestId('facet-rail')).toBeInTheDocument();
+      expect(screen.getByRole('tablist', { name: /discover mode/i })).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('facet-rail')).not.toBeInTheDocument();
     expect(screen.queryByTestId('feed-list-filter')).not.toBeInTheDocument();
   });
 
@@ -251,13 +254,22 @@ describe('ResearchFeedPage — 3-pane IA', () => {
 
   // ── Preserved: library scope toggle ──────────────────────────────────────
 
-  it('shows library scope toggle at surface=library', async () => {
+  it('has no ownership scope toggle: Papers is always yours', async () => {
     renderPage('?surface=library');
     await waitFor(() => {
-      expect(screen.getByRole('tablist', { name: /library scope/i })).toBeInTheDocument();
+      expect(screen.getByTestId('facet-rail')).toBeInTheDocument();
     });
-    expect(screen.getByRole('tab', { name: 'My library' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Public + mine' })).toBeInTheDocument();
+    expect(screen.queryByRole('tablist', { name: /library scope/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'My library' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Public + mine' })).not.toBeInTheDocument();
+  });
+
+  it('offers the public corpus as a Discover tab instead', async () => {
+    renderPage('?surface=search');
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Find new papers' })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('tab', { name: 'Browse public corpus' })).toBeInTheDocument();
   });
 
   // ── Surface info copy ─────────────────────────────────────────────────────
@@ -269,20 +281,20 @@ describe('ResearchFeedPage — 3-pane IA', () => {
     });
   });
 
-  it('shows library info text when surface=library', async () => {
+  it('shows papers info text when surface=library', async () => {
     renderPage('?surface=library');
     await waitFor(() => {
-      // C-FEED: copy updated to "My library — papers you've saved or own."
-      expect(screen.getByText(/my library.*saved.*own/i)).toBeInTheDocument();
+      expect(screen.getByText(/papers you.*saved or own/i)).toBeInTheDocument();
     });
   });
 
-  it('describes corpus scope as public papers plus the caller library', async () => {
+  it('ignores a stale ?scope=corpus link: Papers still describes your own papers', async () => {
     renderPage('?surface=library&scope=corpus');
     await waitFor(() => {
-      expect(
-        screen.getByText(/verified public papers plus private papers in your library/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/papers you.*saved or own/i)).toBeInTheDocument();
     });
+    expect(
+      screen.queryByText(/verified public papers plus private papers in your library/i),
+    ).not.toBeInTheDocument();
   });
 });

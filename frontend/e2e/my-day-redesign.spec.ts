@@ -181,6 +181,14 @@ async function installMyDayMocks(page: Page): Promise<void> {
 // Test suite
 // ---------------------------------------------------------------------------
 
+/**
+ * My Day keeps the daily loop above the fold; the rest opens from the "More"
+ * disclosure at the foot of the page.
+ */
+async function openMore(page: Page, label: string) {
+  await page.getByRole('button', { name: new RegExp(`^${label}`) }).click();
+}
+
 test.describe('My Day v5 redesign — smoke', () => {
   test.setTimeout(30_000);
 
@@ -245,8 +253,10 @@ test.describe('My Day v5 redesign — smoke', () => {
     // Give data time to settle
     await page.waitForTimeout(1_000);
 
-    // TriageSection: returns null when actionItems.length === 0 && foundational.length === 0
-    await expect(page.locator('text="Triage"')).toHaveCount(0);
+    // TriageSection: returns null when actionItems.length === 0 && foundational.length === 0.
+    // Its "More" chip is always offered, so open it and assert nothing appears.
+    await openMore(page, 'Triage');
+    await expect(page.locator('#more-section-triage')).toBeEmpty();
 
     // TodaysPulseSection: returns null on 404 (cards.length <= 1)
     await expect(page.locator('text="Today\'s pulse"')).toHaveCount(0);
@@ -324,6 +334,7 @@ test.describe('My Day v5 redesign — smoke', () => {
     await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
+    await openMore(page, 'End of day');
     await expect(page.getByLabel('One thing that worked')).toBeVisible({ timeout: 5_000 });
     await expect(page.getByLabel("What's still blocking me")).toBeVisible();
     await expect(page.getByLabel('First move tomorrow')).toBeVisible();
@@ -335,8 +346,19 @@ test.describe('My Day v5 redesign — smoke', () => {
     await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
-    await expect(page.locator('text="Open threads"').first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole('button', { name: /\+ new thread/i })).toBeVisible();
+    await openMore(page, 'Open threads');
+    await expect(page.getByRole('button', { name: /\+ new thread/i })).toBeVisible({
+      timeout: 5_000,
+    });
+  });
+
+  test('demoted sections stay closed until their More chip is opened', async ({ page }) => {
+    await page.goto('/my-day');
+    await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
+
+    await expect(page.locator('#more-section-endofday')).toHaveCount(0);
+    await openMore(page, 'End of day');
+    await expect(page.locator('#more-section-endofday')).toBeVisible();
   });
 
   // ── 6. Page wrapper uses .bg-paper class ─────────────────────────────────

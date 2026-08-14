@@ -97,11 +97,6 @@ const LIBRARY_PAPER = {
 // ── route stubs ───────────────────────────────────────────────────────────
 
 async function stubFeedRoutes(page: import('@playwright/test').Page) {
-  // Dismiss the onboarding tour so it doesn't intercept or crash the shell.
-  await page.addInitScript(() => {
-    localStorage.setItem('jarvis-onboarding-dismissed', 'true');
-  });
-
   // Auth verify — AppShell checks auth state on mount.
   await page.route('/api/auth/verify', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
@@ -230,10 +225,11 @@ test.describe('F1 Feed IA v3 — mocked walk', () => {
     await expect(page.getByText('Attention Mechanisms Survey')).toBeVisible();
   });
 
-  test('Library-led: library scope toggle is visible at surface=library', async ({ page }) => {
+  test('Papers: no ownership scope toggle — the page is always yours', async ({ page }) => {
     await page.goto('/feed?surface=library');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('tablist', { name: /library scope/i })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Papers' })).toBeVisible();
+    await expect(page.getByRole('tablist', { name: /library scope/i })).toHaveCount(0);
   });
 
   // ── Trash as §Status facet ─────────────────────────────────────────────
@@ -295,14 +291,29 @@ test.describe('F1 Feed IA v3 — mocked walk', () => {
 
   // ── Discover (search surface) via rail ────────────────────────────────
 
-  test('Discover: clicking Discover in rail shows search surface', async ({ page }) => {
+  test('Discover: reached from the sidebar, with two tabs and no filter rail', async ({ page }) => {
     await page.goto('/feed?surface=inbox');
     await page.waitForLoadState('networkidle');
 
-    await page.getByTestId('facet-discover').click();
+    // The rail filters; navigation to Discover lives in the sidebar.
+    await expect(page.getByTestId('facet-discover')).toHaveCount(0);
+    await page.getByTestId('nav-discover').click();
     await page.waitForLoadState('networkidle');
+
+    await expect(page.getByRole('tab', { name: 'Find new papers' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Browse public corpus' })).toBeVisible();
+    // The rail's counts describe your own papers, so it has no place here.
+    await expect(page.getByTestId('facet-rail')).toHaveCount(0);
 
     // Search surface content: external search bar
     await expect(page.getByText(/search external databases/i)).toBeVisible();
+  });
+
+  test('Discover: the public corpus is a browse tab beside live search', async ({ page }) => {
+    await page.goto('/feed?surface=search');
+    await page.waitForLoadState('networkidle');
+
+    await page.getByRole('tab', { name: 'Browse public corpus' }).click();
+    await expect(page.getByText(/public papers shared on this instance/i)).toBeVisible();
   });
 });

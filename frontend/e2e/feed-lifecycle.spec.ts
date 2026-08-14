@@ -209,6 +209,14 @@ async function assertDashboardReachable(page: Page) {
 // Test suite
 // ---------------------------------------------------------------------------
 
+/**
+ * A paper row shows one primary action plus an overflow menu; everything else
+ * (skip, star, trash, permanent delete) is reached from the menu.
+ */
+async function openRowOverflow(page: Page, title: string) {
+  await page.getByRole('button', { name: `More actions for ${title}` }).click();
+}
+
 test.describe('Feed — full lifecycle smoke', () => {
   test.setTimeout(60_000);
 
@@ -266,11 +274,11 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    // Exact aria-label="Mark <title> as reading" (FeedPaperRow.tsx:345), wired by
-    // FeedView via onMarkReading (FeedView.tsx:254,370).  A missing button is a
-    // regression, not a pending-wiring condition: assert it, never skip.
+    // "Start reading" is the primary action for a to_read row, wired by
+    // FeedView via onMarkReading. A missing button is a regression, not a
+    // pending-wiring condition: assert it, never skip.
     const markReadingBtn = page.getByRole('button', {
-      name: `Mark ${PAPER_TITLE} as reading`,
+      name: `Start reading ${PAPER_TITLE}`,
       exact: true,
     });
     await expect(markReadingBtn).toBeVisible({ timeout: 10_000 });
@@ -339,7 +347,8 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    const starBtn = page.getByRole('button', { name: `Star ${PAPER_TITLE}` });
+    await openRowOverflow(page, PAPER_TITLE);
+    const starBtn = page.getByRole('menuitem', { name: 'Star', exact: true });
     await expect(starBtn).toBeVisible({ timeout: 5_000 });
 
     const [req] = await Promise.all([
@@ -369,7 +378,8 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    const doneBtn = page.getByRole('button', { name: `Mark ${PAPER_TITLE} as done` });
+    await openRowOverflow(page, PAPER_TITLE);
+    const doneBtn = page.getByRole('menuitem', { name: 'Mark Done', exact: true });
     await expect(doneBtn).toBeVisible({ timeout: 5_000 });
 
     const [req] = await Promise.all([
@@ -403,7 +413,8 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=library');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    const trashBtn = page.getByRole('button', { name: `Trash ${PAPER_TITLE}` });
+    await openRowOverflow(page, PAPER_TITLE);
+    const trashBtn = page.getByRole('menuitem', { name: 'Move to Trash', exact: true });
     await expect(trashBtn).toBeVisible({ timeout: 5_000 });
 
     const [req] = await Promise.all([
@@ -466,7 +477,8 @@ test.describe('Feed — full lifecycle smoke', () => {
     await page.goto('/feed?surface=trash');
     await expect(page.getByText(PAPER_TITLE)).toBeVisible({ timeout: 10_000 });
 
-    const hardDeleteBtn = page.getByRole('button', { name: `Permanently delete ${PAPER_TITLE}` });
+    await openRowOverflow(page, PAPER_TITLE);
+    const hardDeleteBtn = page.getByRole('menuitem', { name: 'Permanently delete', exact: true });
     await expect(hardDeleteBtn).toBeVisible({ timeout: 5_000 });
     await hardDeleteBtn.click();
 

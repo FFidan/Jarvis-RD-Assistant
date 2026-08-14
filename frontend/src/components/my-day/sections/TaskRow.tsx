@@ -15,6 +15,8 @@ interface TaskRowProps {
 export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // The button starts the CONFIGURED duration — its tooltip must say so.
+  const workMinutes = usePomodoroStore((s) => s.workMinutes);
 
   const completeMutation = useMutation({
     mutationFn: () => updateTask(task.id, { status: 'done' }),
@@ -84,7 +86,11 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
         }
         disabled={isTimerActive}
         className="h-6 px-2 text-[10px] font-mono rounded text-[var(--ink-blue)] hover:bg-[var(--ink-blue-soft)] disabled:opacity-30 transition-colors shrink-0"
-        title={isTimerActive ? 'A Pomodoro is already running' : 'Start 25:00 Pomodoro on this task'}
+        title={
+          isTimerActive
+            ? 'A Pomodoro is already running'
+            : `Start ${workMinutes}:00 Pomodoro on this task`
+        }
       >
         ▶ Focus
       </button>

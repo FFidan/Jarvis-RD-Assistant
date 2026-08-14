@@ -2,18 +2,17 @@
  * Sidebar — grouped roman-numeral navigation per the Shell/Sidebar+Admin IA spec.
  *
  * Density modes (device-scoped, `useNavPrefsStore`):
- *   - simple  — short essentials rail (Home · My Day · Discover · Library · Ask · Cards)
- *               with the rest one click away under a "More" disclosure. The
- *               default for first-time researchers so the app isn't overwhelming.
- *   - full    — the grouped layout below; the default for returning users.
+ *   - simple  — short essentials rail (My Day · Papers · Discover · Projects ·
+ *               Ask · Learning Cards). The default until the researcher asks
+ *               for more.
+ *   - full    — the grouped layout below.
  *
  * Groups (full mode):
- *   Ⅰ Today    — Home · My Day · Pulse Deck · Library (/feed?surface=library) · Discover
- *   Ⅱ Read     — Projects · Knowledge Graph · Citation Graph · Extraction Table
- *   Ⅲ Learn    — Learning Cards · Analytics
- *   Ⅳ Ask      — Ask
- *   Ⅴ Admin    — User Management · System Health · Audit Log · System Logs
- *               (conditionally rendered for role === 'admin')
+ *   Ⅰ Today     — My Day · Home · Pulse Deck · Papers (/feed?surface=library) · Discover
+ *   Ⅱ Workspace — Projects · Ask · Extraction Table · Knowledge Graph · Citation Graph · Consensus
+ *   Ⅲ Learn     — Learning Cards · Analytics
+ *   Ⅳ Admin     — User Management · System Health · Audit Log · Backups · System Logs
+ *                 (conditionally rendered for role === 'admin')
  *
  * Footer: nav-mode toggle · Settings link · HealthDots pill (navigates to
  *         /admin/system-health for admins; expands in-place for non-admins) ·
@@ -85,12 +84,12 @@ const navGroups: NavGroup[] = [
     label: 'Today',
     subLabel: 'What needs your attention right now.',
     items: [
-      { path: '/', label: 'Home', icon: Home },
       { path: '/my-day', label: 'My Day', icon: Sun },
+      { path: '/', label: 'Home', icon: Home },
       { path: '/pulse', label: 'Pulse Deck', icon: Sparkles },
       {
         path: '/feed?surface=library',
-        label: 'Library',
+        label: 'Papers',
         icon: Newspaper,
         tourId: 'sidebar-library sidebar-analyze',
       },
@@ -105,14 +104,15 @@ const navGroups: NavGroup[] = [
   },
   {
     numeral: 'Ⅱ',
-    label: 'Read',
-    subLabel: 'Your library, projects, and the graph that connects them.',
+    label: 'Workspace',
+    subLabel: 'Projects, questions, and the tools that connect your papers.',
     items: [
       { path: '/projects', label: 'Projects', icon: FolderKanban },
+      { path: '/ask', label: 'Ask', icon: MessageCircleQuestion, tourId: 'sidebar-ask' },
+      { path: '/extractions', label: 'Extraction Table', icon: TableProperties },
       { path: '/knowledge', label: 'Knowledge Graph', icon: Network },
       { path: '/citations', label: 'Citation Graph', icon: GitFork },
       { path: '/consensus', label: 'Consensus', icon: Scale },
-      { path: '/extractions', label: 'Extraction Table', icon: TableProperties },
     ],
   },
   {
@@ -126,14 +126,6 @@ const navGroups: NavGroup[] = [
   },
   {
     numeral: 'Ⅳ',
-    label: 'Ask',
-    subLabel: 'Cross-paper reasoning and workspace.',
-    items: [
-      { path: '/ask', label: 'Ask', icon: MessageCircleQuestion, tourId: 'sidebar-ask' },
-    ],
-  },
-  {
-    numeral: 'Ⅴ',
     label: 'Admin',
     subLabel: 'Users, health, and audit trail.',
     adminOnly: true,
@@ -147,16 +139,16 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-// Simple-mode rail: the daily-essential destinations a first-time researcher
-// needs (Pulse lives inside My Day, so the Pulse Deck item drops to "More").
-// Everything else stays one click away under the "More" disclosure.
+// Simple-mode rail: the daily research loop. Pulse lives inside My Day and a
+// landing dashboard is less useful day to day than the researcher's own
+// projects, so Pulse Deck and Home stay in the full grouped view.
 const SIMPLE_NAV_PATHS = new Set([
-  '/',
   '/my-day',
-  '/feed?surface=search',
   '/feed?surface=library',
-  '/ask',
+  '/feed?surface=search',
+  '/projects',
   '/cards',
+  '/ask',
 ]);
 
 // ---------------------------------------------------------------------------

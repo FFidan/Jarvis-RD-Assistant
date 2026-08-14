@@ -239,9 +239,8 @@ describe('HeroPulse empty-vs-error states (RED-ERROR-EMPTY-STATE)', () => {
     expect(
       await screen.findByText(/No Pulse for today yet/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: /Open Library/i }),
-    ).toBeInTheDocument();
+    const cta = screen.getByRole('link', { name: /Open Pulse Deck/i });
+    expect(cta).toHaveAttribute('href', '/pulse');
     // The calm empty state must NOT surface the error sentinel.
     expect(screen.queryByRole('status')).toBeNull();
   });
@@ -253,6 +252,6 @@ describe('HeroPulse empty-vs-error states (RED-ERROR-EMPTY-STATE)', () => {
     const sentinel = await screen.findByRole('status');
     expect(sentinel).toHaveTextContent(/Couldn't load your recommendations/i);
     // It must NOT show the no-data CTA.
-    expect(screen.queryByRole('link', { name: /Open Library/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /Open Pulse Deck/i })).toBeNull();
   });
 });

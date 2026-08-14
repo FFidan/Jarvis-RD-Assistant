@@ -9,7 +9,6 @@ import {
   Star,
   FileText,
   Tag,
-  Compass,
   WifiOff,
   SlidersHorizontal,
 } from 'lucide-react';
@@ -20,7 +19,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
-import type { FeedCountsWithFacets, SurfaceView, LibraryFilter, InboxSourceFilter, FeedScope } from '@/types';
+import type { FeedCountsWithFacets, SurfaceView, LibraryFilter, InboxSourceFilter } from '@/types';
 import { SOURCE_LABELS } from '@/lib/labels/sources';
 
 // --------------------------------------------------------------------------
@@ -54,8 +53,6 @@ interface FacetRailProps {
   selection: FacetSelection;
   onSelect: (next: Partial<FacetSelection>) => void;
   isOnline?: boolean;
-  /** Active library/corpus scope — drives scope-honest facet copy (C-FACET-BE). */
-  feedScope?: FeedScope;
 }
 
 // --------------------------------------------------------------------------
@@ -85,10 +82,10 @@ const STATUS_ITEMS: StatusItem[] = [
     filter: null,
   },
   {
-    // "Library" §Status = all library papers (surface=library, no filter)
+    // "Saved" §Status = every paper you own (surface=library, no filter).
     // Provides `data-testid="facet-status-library"` for IA navigation and tests.
     key: 'library',
-    label: 'Library',
+    label: 'Saved',
     icon: <Library size={14} />,
     countsKey: 'library',
     surface: 'library',
@@ -195,10 +192,8 @@ interface FacetListContentProps {
   counts: FeedCountsWithFacets | undefined;
   selection: FacetSelection;
   isOnline: boolean;
-  feedScope: FeedScope;
   isStatusActive: (item: StatusItem) => boolean;
   handleStatusClick: (item: StatusItem) => void;
-  handleDiscoverClick: () => void;
   handleSourceClick: (sourceType: string) => void;
   handleTopicClick: (topicId: number | 'untagged') => void;
   handleStarClick: () => void;
@@ -208,10 +203,8 @@ function FacetListContent({
   counts,
   selection,
   isOnline,
-  feedScope,
   isStatusActive,
   handleStatusClick,
-  handleDiscoverClick,
   handleSourceClick,
   handleTopicClick,
   handleStarClick,
@@ -225,31 +218,14 @@ function FacetListContent({
   const starActive = selection.surface === 'library' && selection.filter === 'starred';
   const starCount = counts?.starred ?? 0;
 
-  // Scope-honest copy for Source/Topic empty states.
-  const isCorpus = feedScope === 'corpus';
-  const sourceEmptyCopy = isCorpus
-    ? 'No visible papers found for this source.'
-    : 'No papers in your library yet — papers you save or that match your topics appear here.';
-  const topicEmptyCopy = isCorpus
-    ? 'No visible papers are tagged with a topic yet.'
-    : 'No library papers tagged with a topic yet — add a topic in Settings and turn on "Auto-add matches".';
+  // The rail always describes the caller's own papers.
+  const sourceEmptyCopy =
+    'No papers in your library yet — papers you save or that match your topics appear here.';
+  const topicEmptyCopy =
+    'No library papers tagged with a topic yet — add a topic in Settings and turn on "Auto-add matches".';
 
   return (
     <>
-      {/* § Discover — visually primary block at the TOP of the rail */}
-      <div
-        className="mx-2 mb-2 rounded-md border border-primary/20 bg-primary/5 px-1 py-1"
-        data-testid="facet-discover-block"
-      >
-        <FacetItem
-          icon={<Compass size={14} />}
-          label="Discover papers"
-          active={selection.surface === 'search'}
-          onClick={handleDiscoverClick}
-          data-testid="facet-discover"
-        />
-      </div>
-
       {/* § Status */}
       <SectionHeader>Status</SectionHeader>
       {STATUS_ITEMS.map((item) => (
@@ -354,7 +330,7 @@ function FacetListContent({
 // FacetRail
 // --------------------------------------------------------------------------
 
-export function FacetRail({ counts, selection, onSelect, isOnline = true, feedScope = 'library' }: FacetRailProps) {
+export function FacetRail({ counts, selection, onSelect, isOnline = true }: FacetRailProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
 
   // Derive active status item for §Status section
@@ -394,11 +370,6 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true, feedSc
     setSheetOpen(false);
   }
 
-  function handleDiscoverClick() {
-    onSelect({ surface: 'search', filter: null, sourceFacet: null, topicFacet: null });
-    setSheetOpen(false);
-  }
-
   function handleStarClick() {
     const alreadyActive = selection.surface === 'library' && selection.filter === 'starred';
     if (alreadyActive) {
@@ -413,10 +384,8 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true, feedSc
     counts,
     selection,
     isOnline,
-    feedScope,
     isStatusActive,
     handleStatusClick,
-    handleDiscoverClick,
     handleSourceClick,
     handleTopicClick,
     handleStarClick,

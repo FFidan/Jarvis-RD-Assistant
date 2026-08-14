@@ -15,6 +15,22 @@ import { WeeklyDigestSection } from '@/components/my-day/sections/WeeklyDigestSe
 import { EndOfDaySection } from '@/components/my-day/sections/EndOfDaySection';
 import { getMyDayBundle } from '@/lib/api';
 import type { MyDayBundle } from '@/types';
+import { FocusedMoreSections, type DemotedSection } from '@/components/my-day/FocusedMoreSections';
+
+// Sections reached from the "More" disclosure. The daily loop (masthead, Now,
+// intent, Pulse) stays above the fold; everything episodic or end-of-day opens
+// on demand.
+// YesterdaySection is NOT demoted: it self-hides when there was no recorded
+// activity (returns null), so a disclosure chip could expand to nothing. It
+// renders in its natural top slot instead and manages its own visibility.
+const DEMOTED_SECTIONS: DemotedSection[] = [
+  { key: 'projects', label: 'Projects', Component: ProjectsSection },
+  { key: 'threads', label: 'Open threads', Component: ThreadsSection },
+  { key: 'triage', label: 'Triage', Component: TriageSection },
+  { key: 'learning', label: 'Learning & focus', Component: LearningFocusSection },
+  { key: 'digest', label: 'Weekly digest', Component: WeeklyDigestSection },
+  { key: 'endofday', label: 'End of day', Component: EndOfDaySection },
+];
 
 /** Today's ISO date string (YYYY-MM-DD) in local time — matches EndOfDaySection. */
 function todayIso(): string {
@@ -102,13 +118,8 @@ export function MyDayPage() {
         <YesterdaySection />
         <HeroNow />
         <IntentSection />
-        <ProjectsSection />
-        <ThreadsSection />
         <TodaysPulseSection />
-        <TriageSection />
-        <LearningFocusSection />
-        <WeeklyDigestSection />
-        <EndOfDaySection />
+        <FocusedMoreSections sections={DEMOTED_SECTIONS} />
       </main>
     </div>
   );
