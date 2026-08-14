@@ -92,13 +92,13 @@ export function HeroPulse() {
   // Cleared (rated all) — only when deck exists and we've advanced past last card
   if (deck && currentIndex >= deck.cards.length) {
     return (
-      <PulseEmptyState message="All caught up — pulse cleared. Generate a fresh one from the Library." />
+      <PulseEmptyState message="All caught up — pulse cleared. Generate a fresh one from the Pulse Deck." />
     );
   }
 
   if (!card) {
     return (
-      <PulseEmptyState message="No Pulse for today yet — generate one from the Library." />
+      <PulseEmptyState message="No Pulse for today yet — generate one from the Pulse Deck." />
     );
   }
 
