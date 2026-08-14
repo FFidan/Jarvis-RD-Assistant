@@ -31,7 +31,8 @@ from tests._auth_fakes import (
 # Test helpers — pool/request stubs delegated to shared _auth_fakes (D5-03)
 # ---------------------------------------------------------------------------
 
-_NOW = datetime.now(UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 _build_mock_pool = build_mock_pool
 _build_mock_pool_txn = build_mock_pool_with_txn
@@ -58,7 +59,7 @@ def _user_row(
         "id": id,
         "email": email,
         "role": role,
-        "created_at": _NOW - timedelta(days=1),
+        "created_at": _FIXED_NOW - timedelta(days=1),
         "last_login_at": None,
         "deleted_at": deleted_at,
     }
@@ -460,7 +461,7 @@ def _invite_conn() -> AsyncMock:
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
             },
         ]
@@ -623,7 +624,7 @@ async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) 
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
             },
         ]
@@ -728,15 +729,15 @@ async def test_restore_user_allowed_with_model_hmac_key(monkeypatch) -> None:
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
-                "deleted_at": _NOW,
+                "deleted_at": _FIXED_NOW,
             },
             {
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
             },
         ]

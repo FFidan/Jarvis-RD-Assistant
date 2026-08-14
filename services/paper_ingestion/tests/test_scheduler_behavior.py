@@ -3,6 +3,7 @@
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -358,6 +359,17 @@ async def _start(app: SimpleNamespace, interval_hours: float):
         return await start_scheduler(app, interval_hours=interval_hours)
 
 
+def _next_grid_point(epoch: datetime, interval_hours: float, now: datetime) -> datetime:
+    """First epoch-anchored interval fire at or after ``now``.
+
+    Mirrors the arithmetic an interval trigger applies to a start date already in
+    the past, so an untouched job's next fire is predictable at any wall-clock
+    time instead of only outside a few minutes around a grid point.
+    """
+    interval = timedelta(hours=interval_hours)
+    return epoch + interval * ceil((now - epoch) / interval)
+
+
 async def test_auto_pipeline_interval_is_anchored_to_a_fixed_epoch() -> None:
     """The registered interval trigger must fire on an epoch-anchored grid.
 
@@ -440,12 +452,17 @@ async def test_stale_last_run_schedules_a_catch_up() -> None:
 
 async def test_fresh_last_run_schedules_no_catch_up() -> None:
     """A recent successful run means nothing was missed — no extra run at boot."""
+    from paper_ingestion.scheduler import _INTERVAL_EPOCH  # noqa: PLC0415
+
+    interval_hours = 5
     fresh = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-    scheduler = await _start(_make_scheduler_app(last_run=fresh), 5)
+    booted_at = datetime.now(UTC)
+    scheduler = await _start(_make_scheduler_app(last_run=fresh), interval_hours)
     try:
         next_run = scheduler.get_job("auto_pipeline").next_run_time
-        assert next_run is not None
-        assert next_run - datetime.now(UTC) > timedelta(minutes=5)
+        assert next_run == _next_grid_point(_INTERVAL_EPOCH, interval_hours, booted_at), (
+            "a fresh last-run stamp must leave the job on its anchored grid slot"
+        )
     finally:
         scheduler.shutdown(wait=False)
 
