@@ -1,6 +1,12 @@
 /**
  * ConfigSlider — labeled Slider row that commits on value-commit with an optional InfoTooltip.
+ *
+ * Immediate-apply is kept, but made visible and reversible: every commit
+ * announces itself in a toast carrying an Undo action, so a stray click on the
+ * track can no longer silently change a server setting.
  */
+import { useRef } from 'react';
+import { toast } from 'sonner';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
@@ -34,6 +40,26 @@ export function ConfigSlider({
   onLocalChange,
   onCommit,
 }: ConfigSliderProps) {
+  // Last value the server accepted; the Undo target.
+  const committedRef = useRef(value);
+
+  const handleCommit = (v: number) => {
+    const previous = committedRef.current;
+    if (v === previous) return; // click without movement — nothing to save
+    committedRef.current = v;
+    onCommit(v);
+    toast.success(`${label} saved: ${v}${unit}`, {
+      action: {
+        label: `Undo (${previous}${unit})`,
+        onClick: () => {
+          committedRef.current = previous;
+          onLocalChange(previous);
+          onCommit(previous);
+        },
+      },
+    });
+  };
+
   return (
     <div className="space-y-1">
       <Label htmlFor={id} className="flex items-center justify-between">
@@ -57,7 +83,7 @@ export function ConfigSlider({
         step={step}
         value={[value]}
         onValueChange={([v]) => onLocalChange(v ?? value)}
-        onValueCommit={([v]) => onCommit(v ?? value)}
+        onValueCommit={([v]) => handleCommit(v ?? value)}
         disabled={disabled}
         className="w-full"
       />

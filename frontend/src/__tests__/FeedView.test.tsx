@@ -89,7 +89,7 @@ describe('FeedView — state-switch button rendering', () => {
     );
   });
 
-  it('surface="trash" renders Restore and Permanently-delete buttons for trash-state paper', async () => {
+  it('surface="trash" renders Restore plus an overflow menu for trash-state paper', async () => {
     const api = await import('@/lib/api');
     const trashPaper: FeedPaper = { ...mockPaper, state: 'trash' };
     vi.mocked(api.fetchFeed).mockResolvedValueOnce({ papers: [trashPaper], total: 1 });
@@ -99,8 +99,9 @@ describe('FeedView — state-switch button rendering', () => {
       expect(
         screen.getByRole('button', { name: /restore surface callback test paper/i }),
       ).toBeInTheDocument();
+      // Permanently delete is a destructive action: it lives in the overflow.
       expect(
-        screen.getByRole('button', { name: /permanently delete surface callback test paper/i }),
+        screen.getByRole('button', { name: /more actions for surface callback test paper/i }),
       ).toBeInTheDocument();
     });
   });

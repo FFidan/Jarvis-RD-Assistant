@@ -111,6 +111,15 @@ function renderSubject() {
   );
 }
 
+/**
+ * My Day keeps the daily loop above the fold and reaches the rest through the
+ * "More" disclosure. Opening a chip renders the real section underneath it.
+ */
+async function openMore(label: RegExp) {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: label }));
+}
+
 describe('MyDayPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -218,33 +227,50 @@ describe('MyDayPage', () => {
 
   it('renders Learning cards sub-section', async () => {
     renderSubject();
+    await openMore(/^Learning & focus/);
     expect(await screen.findByText('Learning cards')).toBeInTheDocument();
   });
 
   it('shows Review now button when due_now > 0', async () => {
     renderSubject();
+    await openMore(/^Learning & focus/);
     expect(await screen.findByText('Review now →')).toBeInTheDocument();
   });
 
   it('shows streak days from retention stats', async () => {
     renderSubject();
+    await openMore(/^Learning & focus/);
     // LearningFocusSection renders "7d streak" (compact format)
     expect(await screen.findByText(/7d streak/)).toBeInTheDocument();
   });
 
   it('renders End of day shutdown ritual with the 3 structured prompts', async () => {
     renderSubject();
-    expect(await screen.findByText(/End of day/i)).toBeInTheDocument();
+    await openMore(/^End of day/);
     expect(screen.getByLabelText('One thing that worked')).toBeInTheDocument();
     expect(screen.getByLabelText("What's still blocking me")).toBeInTheDocument();
     expect(screen.getByLabelText('First move tomorrow')).toBeInTheDocument();
   });
 
-  it('does not render Triage section when no action items or foundational gaps', async () => {
+  it('does not render Triage content when there are no action items or foundational gaps', async () => {
     renderSubject();
-    // Wait for data to load, then assert Triage is absent (it returns null when empty)
     await screen.findByText(/RESEARCH LOG/);
-    expect(screen.queryByText(/Triage/i)).not.toBeInTheDocument();
+    // The chip is always offered; opening it renders nothing, because
+    // TriageSection returns null when it has nothing to triage.
+    await openMore(/^Triage/);
+    const panel = document.getElementById('more-section-triage');
+    expect(panel).not.toBeNull();
+    expect(panel).toBeEmptyDOMElement();
+  });
+
+  it('keeps the daily loop above the fold and everything else behind More', async () => {
+    renderSubject();
+    await screen.findByText(/RESEARCH LOG/);
+    // Demoted sections render only once their chip is opened.
+    expect(screen.queryByText('Learning cards')).not.toBeInTheDocument();
+    expect(document.getElementById('more-section-learning')).toBeNull();
+    await openMore(/^Learning & focus/);
+    expect(await screen.findByText('Learning cards')).toBeInTheDocument();
   });
 
   it('renders no-pulse-yet message in HeroNow when deck is null', async () => {
@@ -268,6 +294,7 @@ describe('MyDayPage', () => {
 
   it('FE-UIA-03: "all projects →" link uses React Router (no full-page reload)', async () => {
     renderSubject();
+    await openMore(/^Projects/);
     // Wait for project section to render
     expect(await screen.findAllByText('JARVIS')).not.toHaveLength(0);
     // The link must be a <a> element pointing to /projects but rendered via

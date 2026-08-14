@@ -26,6 +26,8 @@ export function LearningFocusSection() {
 
   const phase = usePomodoroStore((s) => s.phase);
   const attachedItem = usePomodoroStore((s) => s.attachedItem);
+  // The button starts the CONFIGURED duration — its label must say so.
+  const workMinutes = usePomodoroStore((s) => s.workMinutes);
 
   const todayFocusHours = myDay?.today_focus_hours ?? 0;
   const focusStreakDays = myDay?.focus_streak_days ?? 0;
@@ -88,12 +90,12 @@ export function LearningFocusSection() {
               Focus today
             </h3>
             <button
-              aria-label={`Start 25-minute focus session${phase !== 'idle' ? ' (timer running)' : ''}`}
+              aria-label={`Start ${workMinutes}-minute focus session${phase !== 'idle' ? ' (timer running)' : ''}`}
               onClick={() => usePomodoroStore.getState().startWork()}
               disabled={phase !== 'idle'}
               className="text-[11px] font-mono text-white bg-[var(--ink-blue)] hover:opacity-90 px-2 py-1 rounded disabled:opacity-40 transition-opacity"
             >
-              Start 25:00
+              Start {workMinutes}:00
             </button>
           </div>
 

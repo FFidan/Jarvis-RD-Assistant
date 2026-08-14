@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useCommandPalette } from '@/stores/command-palette-store';
-import { searchPreview } from '@/lib/api';
+import { fetchFeedPapers } from '@/lib/api';
+import type { SearchPreviewResult } from '@/types';
 
 const DEBOUNCE_MS = 250;
 const SEARCH_TIMEOUT_MS = 8_000;
+const PALETTE_RESULT_LIMIT = 8;
 
 /**
  * Controller hook for the global ⌘K command palette.
@@ -16,9 +18,9 @@ const SEARCH_TIMEOUT_MS = 8_000;
  *       is reachable from anywhere.
  *     - Esc closes it.
  *     - All other typing is left alone.
- *  2. Debounce the query (~250ms) and call the existing searchPreview API,
- *     writing results / loading / error flags into the store. Network or
- *     server failure surfaces as a friendly error state (never throws).
+ *  2. Debounce the query (~250ms) and search the paper feed, writing results /
+ *     loading / error flags into the store. Network or server failure surfaces
+ *     as a friendly error state (never throws).
  *
  * Mounted once by CommandPaletteSearch (always present in the TopBar on
  * authed pages), so ⌘K works app-wide without touching AppShell.
@@ -81,9 +83,29 @@ export function useCommandPaletteController() {
         setTimeout(() => reject(new Error('search_timeout')), SEARCH_TIMEOUT_MS),
       );
       try {
-        const response = await Promise.race([searchPreview(trimmed), timeout]);
+        // The box is labelled as searching YOUR papers, so it searches the
+        // library feed, not external sources. External discovery lives in
+        // Discover, reachable from the palette footer. Results map into the
+        // palette's existing shape; every hit is by definition a library match.
+        const response = await Promise.race([
+          fetchFeedPapers({ q: trimmed, limit: PALETTE_RESULT_LIMIT }),
+          timeout,
+        ]);
         if (cancelled) return;
-        setResults(response.results);
+        const mapped: SearchPreviewResult[] = response.papers.map((p) => ({
+          source_type: p.source_type,
+          external_id: p.external_id,
+          title: p.title,
+          authors: p.authors,
+          abstract: p.abstract ?? null,
+          published_date: p.published_date ?? null,
+          url: p.url ?? '',
+          pdf_url: null,
+          citation_count: p.citation_count ?? 0,
+          metadata: {},
+          library_match: { paper_id: p.id, has_project_links: false, zotero_item_key: null },
+        }));
+        setResults(mapped);
         setErrored(false);
       } catch {
         if (cancelled) return;

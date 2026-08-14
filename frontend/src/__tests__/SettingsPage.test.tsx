@@ -345,15 +345,15 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
 });
 
 // ---------------------------------------------------------------------------
-// FE-RBAC-1 — bot-token item gate (defense-in-depth; backend already 403s)
+// FE-RBAC-1 — bot-token gate (defense-in-depth; backend already 403s)
 //
-// Three layers must all gate the bot-token admin-only item:
-//  1. SettingsRail: bot-token rail item NOT rendered for non-admin users.
-//  2. SettingsPage: deep-link ?section=integrations&item=bot-token redirects
-//     non-admin to the default (research/topics).
-//  3. SettingsDetailPane: even if rendered directly with bot-token, non-admin
-//     sees access-denied message, NOT TelegramBotTokenSection.
-// Admins must be unaffected (all three layers show/render bot-token normally).
+// Telegram is ONE settings page: pairing for everyone, the instance bot token
+// for admins only. The gate therefore has three layers:
+//  1. SettingsRail: no separate bot-token item exists for anyone.
+//  2. SettingsPage: legacy deep-link ?section=integrations&item=bot-token
+//     redirects non-admin to the default (research/topics).
+//  3. SettingsDetailPane: a non-admin rendering the Telegram page sees pairing
+//     only — never the bot-token block.
 // ---------------------------------------------------------------------------
 
 describe('FE-RBAC-1 — bot-token item gate', () => {
@@ -363,7 +363,7 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
 
   // ---- Layer 1: SettingsRail item visibility --------------------------------
 
-  it('non-admin: bot-token rail item is NOT rendered in Integrations', async () => {
+  it('non-admin: no separate bot-token rail item in Integrations', async () => {
     renderSettingsPageAs('user');
     await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
     // Telegram bot key nav button must not exist
@@ -376,11 +376,12 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     expect(screen.queryByRole('button', { name: /Telegram bot key/i })).not.toBeInTheDocument();
   });
 
-  it('admin: bot-token rail item IS rendered in Integrations', async () => {
+  it('admin: Integrations lists one Telegram item, not a separate bot key item', async () => {
     renderSettingsPageAs('admin');
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /Telegram bot key/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /^Telegram$/ })).toBeInTheDocument(),
     );
+    expect(screen.queryByRole('button', { name: /Telegram bot key/i })).not.toBeInTheDocument();
   });
 
   // ---- Layer 2: SettingsPage deep-link redirect ----------------------------
@@ -392,10 +393,10 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     );
   });
 
-  it('admin deep-link ?section=integrations&item=bot-token → stays on Telegram bot key', async () => {
+  it('admin deep-link ?section=integrations&item=bot-token → lands on the Telegram page', async () => {
     renderSettingsPageAs('admin', '?section=integrations&item=bot-token');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Telegram bot key', level: 2 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'Telegram', level: 2 })).toBeInTheDocument(),
     );
     // Must NOT have been redirected to Topics
     expect(screen.queryByRole('heading', { name: 'Topics', level: 2 })).not.toBeInTheDocument();
@@ -403,7 +404,7 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
 
   // ---- Layer 3: SettingsDetailPane direct render guard --------------------
 
-  it('non-admin DetailPane with bot-token: renders access-denied message, NOT TelegramBotTokenSection', async () => {
+  it('non-admin DetailPane with bot-token: renders pairing only, NOT the bot-token block', async () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
@@ -417,13 +418,14 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
       { queryClient },
     );
     await waitFor(() =>
-      expect(screen.getByText(/Admin access required/i)).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'Telegram', level: 2 })).toBeInTheDocument(),
     );
-    // TelegramBotTokenSection renders a card — its header must not appear
+    // The admin-only block and everything it renders must be absent.
+    expect(screen.queryByRole('heading', { name: /Instance bot \(admin\)/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/bot token/i, { selector: 'h3,h4,p' })).not.toBeInTheDocument();
   });
 
-  it('admin DetailPane with bot-token: renders TelegramBotTokenSection (no access-denied)', async () => {
+  it('admin DetailPane with bot-token: renders the admin bot-token block below pairing', async () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
@@ -436,11 +438,11 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
       </MemoryRouter>,
       { queryClient },
     );
-    // Access-denied must NOT appear
-    expect(screen.queryByText(/Admin access required/i)).not.toBeInTheDocument();
-    // Positive: TelegramBotTokenSection renders its settled content for an admin
+    expect(
+      screen.getByRole('heading', { name: /Instance bot \(admin\)/i }),
+    ).toBeInTheDocument();
+    // TelegramBotTokenSection renders its settled content for an admin
     // (mock resolves has_token:false → "No bot token set").
     expect(await screen.findByText(/No bot token set/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Admin access required/i)).not.toBeInTheDocument();
   });
 });

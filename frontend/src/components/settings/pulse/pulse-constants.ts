@@ -100,28 +100,22 @@ export const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
  * Gate tooltip shown only when the required capability is missing.
  * Maps signal key → { capability, message }.
  */
+// These packages ship in every standard image, so telling a researcher to
+// install them on the server was wrong on both audience and facts. The gate
+// only ever fires on a custom server build; say that.
+const CITATION_GATE_MESSAGE =
+  'Citation-based signals are not available on this server build. Standard installations include them by default.';
+
 export const CONDITIONAL_SIGNAL_GATES: Partial<
   Record<PulseWeightKey, { capability: 'networkx' | 'scikit_learn'; message: string }>
 > = {
-  citation_pagerank: {
-    capability: 'networkx',
-    message:
-      'Citation graph signals need the `networkx` Python package on the server. Install it (`pip install networkx`) and restart the backend to enable this signal.',
-  },
-  citation_count: {
-    capability: 'networkx',
-    message:
-      'Citation graph signals need the `networkx` Python package on the server. Install it (`pip install networkx`) and restart the backend to enable this signal.',
-  },
-  citation_adamic_adar: {
-    capability: 'networkx',
-    message:
-      'Citation graph signals need the `networkx` Python package on the server. Install it (`pip install networkx`) and restart the backend to enable this signal.',
-  },
+  citation_pagerank: { capability: 'networkx', message: CITATION_GATE_MESSAGE },
+  citation_count: { capability: 'networkx', message: CITATION_GATE_MESSAGE },
+  citation_adamic_adar: { capability: 'networkx', message: CITATION_GATE_MESSAGE },
   classifier: {
     capability: 'scikit_learn',
     message:
-      'The personal classifier needs the `scikit-learn` Python package on the server. Install it (`pip install scikit-learn`) and restart the backend to enable this signal.',
+      'The personal classifier is not available on this server build. Standard installations include it by default.',
   },
 };
 

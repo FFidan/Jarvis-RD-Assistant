@@ -7,9 +7,9 @@
  *
  * Steps match the public quick start for every researcher:
  *   1. Discover a paper
- *   2. Save it to the Library
+ *   2. Save it to Papers
  *   3. Analyze it
- *   4. Ask across the analyzed Library
+ *   4. Ask across the papers you saved
  *
  * Persistence: "Don't show again" writes onboarding.dismissed=true via
  * setConfig (PUT /api/config/onboarding.dismissed).
@@ -42,9 +42,9 @@ const STEP_DISCOVER: Step = {
 
 const STEP_SAVE: Step = {
   target: '[data-tour-id~="sidebar-library"]',
-  title: 'Save to Your Library',
+  title: 'Save to Papers',
   content:
-    'Save a useful result to your Library so it becomes part of your research workspace.',
+    'Save a useful result to Papers so it becomes part of your research workspace.',
   placement: 'right',
   skipBeacon: true,
 };
@@ -53,16 +53,16 @@ const STEP_ANALYZE: Step = {
   target: '[data-tour-id~="sidebar-analyze"]',
   title: 'Analyze a Paper',
   content:
-    'Open a saved paper from the Library and choose Analyze to download, parse, and summarize it.',
+    'Open a saved paper from Papers and choose Analyze to download, parse, and summarize it.',
   placement: 'right',
   skipBeacon: true,
 };
 
 const STEP_ASK: Step = {
   target: '[data-tour-id="sidebar-ask"]',
-  title: 'Ask Across Your Library',
+  title: 'Ask Across Your Papers',
   content:
-    'After analysis, use Ask for evidence-grounded questions across papers in your Library.',
+    'After analysis, use Ask for evidence-grounded questions across the papers you saved.',
   placement: 'right',
   skipBeacon: true,
 };

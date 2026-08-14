@@ -9,6 +9,7 @@
  *  - Trash appears as a §Status facet (not top-level tab)
  *  - FacetRail calls onSelect with correct partial selection
  *  - Active state is reflected via aria-pressed
+ *  - The rail is filters only: navigation to Discover lives in the sidebar
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -226,65 +227,21 @@ describe('FacetRail', () => {
     expect(call.topicFacet).toBe('untagged');
   });
 
-  // ── Discover block at top ─────────────────────────────────────────────────
+  // ── Filters only ──────────────────────────────────────────────────────────
 
-  it('renders the primary Discover block at the TOP of the rail (before Status)', () => {
+  it('carries no Discover navigation: the rail is filters only', () => {
     render(<FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} />);
-    const rail = screen.getByTestId('facet-rail');
-    const discoverBlock = screen.getByTestId('facet-discover-block');
-    const statusInbox = screen.getByTestId('facet-status-inbox');
-    // Discover block must appear before any Status item in the DOM
-    expect(rail.compareDocumentPosition(discoverBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(
-      discoverBlock.compareDocumentPosition(statusInbox) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.queryByTestId('facet-discover-block')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('facet-discover')).not.toBeInTheDocument();
+    expect(screen.queryByText('Discover papers')).not.toBeInTheDocument();
+    // §Status is now the first block in the rail.
+    expect(screen.getByTestId('facet-rail').textContent?.startsWith('Status')).toBe(true);
   });
 
-  it('clicking Discover calls onSelect with surface=search', () => {
+  it('labels the all-owned-papers status facet "Saved", never "Library"', () => {
     render(<FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} />);
-    fireEvent.click(screen.getByTestId('facet-discover'));
-    const call = onSelect.mock.calls[0]![0] as Partial<FacetSelection>;
-    expect(call.surface).toBe('search');
-  });
-
-  it('marks Discover as active when surface=search', () => {
-    render(
-      <FacetRail
-        counts={EMPTY_COUNTS}
-        selection={{ ...BASE_SELECTION, surface: 'search' }}
-        onSelect={onSelect}
-      />,
-    );
-    expect(screen.getByTestId('facet-discover')).toHaveAttribute('aria-pressed', 'true');
-  });
-
-  // ── Scope-honest facet copy ───────────────────────────────────────────────
-
-  it('shows library-scoped empty copy when feedScope=library (default)', () => {
-    render(
-      <FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} isOnline feedScope="library" />,
-    );
-    expect(screen.getByTestId('facet-source-empty')).toHaveTextContent(
-      'No papers in your library yet',
-    );
-    expect(screen.getByTestId('facet-topic-empty')).toHaveTextContent(
-      'No library papers tagged with a topic yet',
-    );
-  });
-
-  it('shows visible-paper empty copy when feedScope=corpus', () => {
-    render(
-      <FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} isOnline feedScope="corpus" />,
-    );
-    const sourceEmpty = screen.getByTestId('facet-source-empty');
-    const topicEmpty = screen.getByTestId('facet-topic-empty');
-    // Corpus scope contains public rows plus the caller's private library.
-    expect(sourceEmpty.textContent).not.toMatch(/your library/i);
-    expect(topicEmpty.textContent).not.toMatch(/your library/i);
-    expect(sourceEmpty.textContent).toMatch(/visible papers/i);
-    expect(topicEmpty.textContent).toMatch(/visible papers/i);
+    expect(screen.getAllByTestId('facet-status-library')[0]).toHaveTextContent('Saved');
+    expect(screen.queryByText('Library')).not.toBeInTheDocument();
   });
 
   // ── Mobile drawer ─────────────────────────────────────────────────────────

@@ -58,6 +58,46 @@ const SETUP_STATUS = {
   telegram_paired: false,
 };
 
+export const NAV_PREFS_KEY = 'jarvis-nav-prefs';
+export const ONBOARDING_DISMISSED_KEY = 'jarvis-onboarding-dismissed';
+
+/**
+ * Seed the shell state a returning researcher has: the grouped ("full") nav
+ * and a dismissed onboarding tour.
+ *
+ * The product default is the short `simple` rail for everyone, so specs that
+ * assert group labels or non-essential destinations must opt into the grouped
+ * nav; and the tour would otherwise cover the app for a zero-paper account.
+ * `installMockedApiDefaults` applies this, so every mocked spec starts here.
+ */
+export async function seedReturningUserShell(page: Page): Promise<void> {
+  await page.addInitScript(
+    ([navKey, tourKey]) => {
+      window.localStorage.setItem(
+        navKey,
+        JSON.stringify({ state: { navMode: 'full' }, version: 0 }),
+      );
+      window.localStorage.setItem(tourKey, 'true');
+    },
+    [NAV_PREFS_KEY, ONBOARDING_DISMISSED_KEY] as const,
+  );
+}
+
+/**
+ * Undo `seedReturningUserShell` for the specs that exercise first use itself:
+ * no stored nav preference (so the simple rail applies) and no dismissed tour.
+ * Init scripts run in registration order, so call this after the defaults.
+ */
+export async function seedFirstRunShell(page: Page): Promise<void> {
+  await page.addInitScript(
+    ([navKey, tourKey]) => {
+      window.localStorage.removeItem(navKey);
+      window.localStorage.removeItem(tourKey);
+    },
+    [NAV_PREFS_KEY, ONBOARDING_DISMISSED_KEY] as const,
+  );
+}
+
 /**
  * Register common mocked API defaults for app-shell/background requests.
  *
@@ -66,6 +106,8 @@ const SETUP_STATUS = {
  * defaults. Any other /api/** request returns 501 to make missing mocks obvious.
  */
 export async function installMockedApiDefaults(page: Page): Promise<void> {
+  await seedReturningUserShell(page);
+
   await page.route(/^https?:\/\/[^/]+\/health\/(paper_ingestion|learning_engine)(?:\/|\?|$)/, async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/internal')) {
@@ -190,6 +232,6 @@ export async function seedAuthedSession(page: Page): Promise<void> {
       version: 0,
     };
     window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
-    window.localStorage.setItem('jarvis-onboarding-dismissed', 'true');
   });
+  await seedReturningUserShell(page);
 }

@@ -157,8 +157,8 @@ export function KnowledgeGraphPage() {
           <Network className="mb-4 h-12 w-12 text-muted-foreground/50" />
           <h3 className="text-lg font-medium">No entities extracted yet</h3>
           <p className="mt-1 max-w-md text-sm text-muted-foreground">
-            Extract entities from your processed papers to build the knowledge graph. Open a paper
-            and click &apos;Extract Entities&apos;, or use batch extraction.
+            Extract entities from your processed papers to build the knowledge graph — use the
+            Batch Extract Entities button on this page.
           </p>
           {extractMut.isSuccess && (
             <p className="mt-2 text-sm text-[var(--status-ok)]">

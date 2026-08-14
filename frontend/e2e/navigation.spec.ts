@@ -1,16 +1,30 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { ensureAuthenticated } from './helpers/auth';
+
+/**
+ * The sidebar starts on the short "simple" rail, which carries only the daily
+ * research loop. Open the grouped view so every destination is a direct link.
+ */
+async function showAllFeatures(page: Page) {
+  const toggle = page.getByTestId('nav-mode-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-label')) === 'Show all features') {
+    await toggle.click();
+  }
+  await expect(toggle).toHaveAttribute('aria-label', 'Simple view');
+}
 
 test.describe('Navigation', () => {
   test.beforeEach(async ({ page }) => {
     await ensureAuthenticated(page);
+    await showAllFeatures(page);
   });
 
   test('all sidebar links navigate to correct pages', async ({ page }) => {
     const sidebarLinks = [
       { label: 'Home', path: '/' },
       { label: 'My Day', path: '/my-day' },
-      { label: 'Library', path: '/feed' },
+      { label: 'Papers', path: '/feed\\?surface=library' },
       { label: 'Analytics', path: '/analytics' },
       { label: 'Projects', path: '/projects' },
       { label: 'Learning Cards', path: '/cards' },
@@ -50,12 +64,12 @@ test.describe('Navigation', () => {
   });
 
   test('browser back button works after navigation', async ({ page }) => {
-    // Navigate: Home → Settings → Library
+    // Navigate: Home → Settings → Papers
     await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page).toHaveURL(/\/settings$/);
 
-    await page.getByRole('link', { name: 'Library' }).click();
-    await expect(page).toHaveURL(/\/feed$/);
+    await page.getByRole('link', { name: 'Papers' }).click();
+    await expect(page).toHaveURL(/\/feed\?surface=library$/);
 
     // Go back to Settings
     await page.goBack();

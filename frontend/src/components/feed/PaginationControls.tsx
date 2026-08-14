@@ -28,6 +28,12 @@ export function PaginationControls({ offset, limit, total, onChange }: Paginatio
   const isFirstPage = offset === 0;
   const isLastPage = offset + limit >= total;
 
+  // A short list needs no chrome: hide the whole control when everything fits
+  // on one page at the smallest page size ("Page 1 of 1 (3 total)" is noise).
+  if (totalPages <= 1 && total <= PAGE_SIZE_OPTIONS[0]) {
+    return null;
+  }
+
   const handlePrev = () => {
     if (!isFirstPage) onChange(Math.max(0, offset - limit), limit);
   };

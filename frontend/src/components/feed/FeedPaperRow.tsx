@@ -1,18 +1,4 @@
 import { memo } from 'react';
-import {
-  ArchiveRestore,
-  BookOpen,
-  CheckCircle,
-  Library,
-  RotateCcw,
-  Save,
-  SkipForward,
-  Star,
-  StarOff,
-  Trash2,
-  X,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
@@ -22,7 +8,7 @@ import {
 } from '@/components/ui/tooltip';
 import { PriorityBadge } from '@/components/paper/PriorityBadge';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
-import { CitationMenu } from '@/components/citation/CitationMenu';
+import { FeedPaperRowActions } from '@/components/feed/FeedPaperRowActions';
 import { formatAuthors, formatDate } from '@/lib/utils';
 import { type FeedPaper, type SurfaceView } from '@/types';
 import { priorityLevel } from '@/lib/priority';
@@ -192,7 +178,11 @@ function FeedPaperRowInner({
               {paper.confidence}
             </Badge>
           )}
-          <PriorityBadge level={priorityLevel(paper.priority_score ?? null)} />
+          {/* An "unscored" badge on most rows is noise; show priority only once
+              a paper has actually been ranked. */}
+          {priorityLevel(paper.priority_score ?? null) !== 'unscored' && (
+            <PriorityBadge level={priorityLevel(paper.priority_score ?? null)} />
+          )}
           <div className="flex gap-1">
             {/* FeedPaper has no pdf_downloaded/has_chunks/has_summary at top-level — they come from LifecyclePaperResponse extensions */}
             {paper.has_chunks && (
@@ -232,426 +222,25 @@ function FeedPaperRowInner({
             )}
           </span>
 
-          {/* State-switch action button bar — icon-only buttons use Radix Tooltip (B.3) */}
-          <TooltipProvider delayDuration={150}>
-            <div className="mt-auto flex flex-wrap gap-1">
-              {state === 'inbox' && (
-                <>
-                  {onSave && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onSave(paper.id)}
-                          aria-label={`Save ${paper.title}`}
-                        >
-                          <Save className="mr-1 h-3 w-3" />
-                          Save
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Save to Reading List
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onSkip && (
-                    /* B.5 — Skip tooltip clarifying destination state */
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onSkip(paper.id)}
-                          aria-label={`Skip ${paper.title}`}
-                        >
-                          <SkipForward className="mr-1 h-3 w-3" />
-                          Skip
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs text-xs">
-                        Skip — moves paper to Done without saving to your Reading List. Use Trash if
-                        you don&apos;t want this paper at all.
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onTrash && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => onTrash(paper.id)}
-                          aria-label={`Trash ${paper.title}`}
-                          className="h-9 w-9"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Move to Trash
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {isStarred
-                    ? onUnstar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onUnstar(paper.id)}
-                              aria-label={`Unstar ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <StarOff className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Unstar
-                          </TooltipContent>
-                        </Tooltip>
-                      )
-                    : onStar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onStar(paper.id)}
-                              aria-label={`Star ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <Star className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Star
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                </>
-              )}
-
-              {state === 'to_read' && (
-                <>
-                  {onMarkReading && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onMarkReading(paper.id)}
-                          aria-label={`Mark ${paper.title} as reading`}
-                        >
-                          <BookOpen className="mr-1 h-3 w-3" />
-                          Mark Reading
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Move to Reading — actively reading
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onMarkDone && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onMarkDone(paper.id)}
-                          aria-label={`Mark ${paper.title} as done`}
-                        >
-                          <CheckCircle className="mr-1 h-3 w-3" />
-                          Mark Done
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Mark as finished — moves to Done
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onTrash && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => onTrash(paper.id)}
-                          aria-label={`Trash ${paper.title}`}
-                          className="h-9 w-9"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Move to Trash
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {isStarred
-                    ? onUnstar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onUnstar(paper.id)}
-                              aria-label={`Unstar ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <StarOff className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Unstar
-                          </TooltipContent>
-                        </Tooltip>
-                      )
-                    : onStar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onStar(paper.id)}
-                              aria-label={`Star ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <Star className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Star
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                </>
-              )}
-
-              {state === 'reading' && (
-                <>
-                  {onSetAside && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onSetAside(paper.id)}
-                          aria-label={`Pause reading ${paper.title}`}
-                        >
-                          <Library className="mr-1 h-3 w-3" />
-                          Pause reading
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Push back to Reading List (Reading → To Read)
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onMarkDone && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onMarkDone(paper.id)}
-                          aria-label={`Mark ${paper.title} as done`}
-                        >
-                          <CheckCircle className="mr-1 h-3 w-3" />
-                          Mark Done
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Mark as finished — moves to Done
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onTrash && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => onTrash(paper.id)}
-                          aria-label={`Trash ${paper.title}`}
-                          className="h-9 w-9"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Move to Trash
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {isStarred
-                    ? onUnstar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onUnstar(paper.id)}
-                              aria-label={`Unstar ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <StarOff className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Unstar
-                          </TooltipContent>
-                        </Tooltip>
-                      )
-                    : onStar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onStar(paper.id)}
-                              aria-label={`Star ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <Star className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Star
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                </>
-              )}
-
-              {state === 'done' && (
-                <>
-                  {onReopen && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onReopen(paper.id)}
-                          aria-label={`Resume reading ${paper.title}`}
-                        >
-                          <RotateCcw className="mr-1 h-3 w-3" />
-                          Resume reading
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Resume reading — moves Done → Reading
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onTrash && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => onTrash(paper.id)}
-                          aria-label={`Trash ${paper.title}`}
-                          className="h-9 w-9"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Move to Trash
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                  {isStarred
-                    ? onUnstar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onUnstar(paper.id)}
-                              aria-label={`Unstar ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <StarOff className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Unstar
-                          </TooltipContent>
-                        </Tooltip>
-                      )
-                    : onStar && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => onStar(paper.id)}
-                              aria-label={`Star ${paper.title}`}
-                              className="h-9 w-9"
-                            >
-                              <Star className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">
-                            Star
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                </>
-              )}
-
-              {state === 'trash' && (
-                <>
-                  {onRestore && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onRestore(paper.id)}
-                      aria-label={`Restore ${paper.title}`}
-                    >
-                      <ArchiveRestore className="mr-1 h-3 w-3" />
-                      Restore
-                    </Button>
-                  )}
-                  {onHardDelete && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => onHardDelete(paper.id)}
-                          aria-label={`Permanently delete ${paper.title}`}
-                        >
-                          <X className="mr-1 h-3 w-3" />
-                          Permanently delete
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Permanently delete this paper (cannot be undone)
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </>
-              )}
-
-              <CitationMenu paperIds={[paper.id]} />
-
-              {/* View */}
-              {onView && (
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={() => onView(paper.id)}
-                  aria-label={`View ${paper.title} details`}
-                >
-                  {viewLabel}
-                </Button>
-              )}
-            </div>
-          </TooltipProvider>
+          <FeedPaperRowActions
+            paperId={paper.id}
+            title={paper.title}
+            state={state}
+            isStarred={isStarred}
+            viewLabel={viewLabel}
+            onSave={onSave}
+            onSkip={onSkip}
+            onMarkReading={onMarkReading}
+            onMarkDone={onMarkDone}
+            onSetAside={onSetAside}
+            onReopen={onReopen}
+            onTrash={onTrash}
+            onStar={onStar}
+            onUnstar={onUnstar}
+            onRestore={onRestore}
+            onHardDelete={onHardDelete}
+            onView={onView}
+          />
 
           {/* Feedback buttons — hidden for trash surface and user-initiated papers */}
           {state !== 'trash' && (
