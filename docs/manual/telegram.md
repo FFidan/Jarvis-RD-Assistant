@@ -75,7 +75,8 @@ required.
 
 | Command | What it does |
 |---------|--------------|
-| `/papers [query]` | List recent papers, or search when a query is supplied |
+| `/papers [query]` | List recent library papers, or search your library when a query is supplied |
+| `/discover <query>` | Search arXiv, Semantic Scholar, OpenAlex and PubMed, and save the results to your library |
 | `/briefing` | Show the current briefing |
 | `/next` | Show the first recommendation from the current Pulse deck |
 | `/inbox` | Show unread saved papers for triage |
