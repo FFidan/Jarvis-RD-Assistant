@@ -31,11 +31,19 @@ logger = logging.getLogger(__name__)
 
 
 def _feed_papers(data: object) -> list[dict[str, Any]]:
-    """Return the paper rows carried by a ``/api/papers/feed`` response envelope."""
-    if not isinstance(data, dict) or "papers" not in data:
-        return []
-    rows = data["papers"]
-    return rows if isinstance(rows, list) else []
+    """Return the paper rows carried by a ``/api/papers/feed`` response envelope.
+
+    Raises
+    ------
+    ValueError
+        When the payload is not the documented ``{"papers": [...]}`` envelope.
+        An unreadable response must reach the user as a failure, never as an
+        empty feed.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("papers"), list):
+        raise ValueError("Paper feed response did not match the expected envelope")
+    rows: list[dict[str, Any]] = data["papers"]
+    return rows
 
 
 def _library_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
@@ -98,6 +106,7 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             data = await services_client.fetch_papers_feed(
                 http, config, jarvis_user_id, view="library", limit=10
             )
+        papers = _feed_papers(data)
     except Exception:
         logger.exception("Failed to fetch library feed")
         await update.message.reply_text(
@@ -106,7 +115,6 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    papers = _feed_papers(data)
     if not papers:
         if query:
             safe_query = escape(query)
@@ -134,16 +142,27 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
+def _paper_count(count: int) -> str:
+    """Render a paper count with the matching noun, e.g. ``1 paper`` / ``3 papers``."""
+    return "1 paper" if count == 1 else f"{count} papers"
+
+
 def _format_discovery_result(query: str, response: dict[str, Any]) -> str:
-    """Render a discovery search, stating the library write it performed."""
+    """Render a discovery search, stating the library write it actually performed."""
     results = response.get("results") or []
     if not results:
         return f'No external source returned a paper for "{escape(query)}". Try different terms.'
 
-    lines = [f"Found {len(results)} papers and saved them to your library."]
-    failed = response.get("failed") or []
-    if failed:
-        lines.append(f"{len(failed)} could not be saved.")
+    # Report what the backend persisted, never the number of results found:
+    # persistence is per paper, so a search can find papers and save none.
+    saved_count = len(response.get("saved") or [])
+    failed_count = len(response.get("failed") or [])
+    if saved_count:
+        lines = [f"Found {_paper_count(len(results))} and saved {saved_count} to your library."]
+        if failed_count:
+            lines.append(f"{_paper_count(failed_count)} could not be saved.")
+    else:
+        lines = [f"Found {_paper_count(len(results))}, but none could be saved to your library."]
     per_source_counts = response.get("per_source_counts") or {}
     found_in = [
         f"{escape(source)}: {count}" for source, count in per_source_counts.items() if count
@@ -152,8 +171,13 @@ def _format_discovery_result(query: str, response: dict[str, Any]) -> str:
         lines.append("From " + ", ".join(found_in) + ".")
     degraded_sources = response.get("degraded_sources") or []
     if degraded_sources:
+        # The response reports only which sources were skipped, not why: a source
+        # lands here when it is turned off in Settings and when it fails to
+        # answer. Name both causes rather than assert the rarer one.
         lines.append(
-            "These sources did not answer: " + ", ".join(escape(s) for s in degraded_sources) + "."
+            "No results from "
+            + ", ".join(escape(s) for s in degraded_sources)
+            + " (turned off in Settings, or not responding)."
         )
     return "\n".join(lines)
 
@@ -346,6 +370,7 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         data = await services_client.fetch_papers_feed(
             http, config, jarvis_user_id, view="inbox", limit=10
         )
+        papers = _feed_papers(data)
     except Exception:
         logger.exception("Failed to fetch inbox feed")
         await update.message.reply_text(
@@ -354,7 +379,6 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    papers = _feed_papers(data)
     if not papers:
         await update.message.reply_text("📭 Inbox is empty — nothing to triage.", parse_mode="HTML")
         return

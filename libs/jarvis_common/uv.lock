@@ -764,7 +764,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=50.0.0" },
-    { name = "fastapi", specifier = ">=0.137.0,<0.141.0" },
+    { name = "fastapi", specifier = ">=0.137.0,<0.142.0" },
     { name = "gitpython", specifier = ">=3.1.58" },
     { name = "httpcore", specifier = ">=1.0,<1.1" },
     { name = "httpx", specifier = ">=0.27.0" },

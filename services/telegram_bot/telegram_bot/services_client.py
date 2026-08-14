@@ -606,23 +606,17 @@ async def search_papers(
     return result
 
 
-async def fetch_papers_feed(
+async def _get_papers_feed(
     http: httpx.AsyncClient,
     config: BotConfig,
     user_id: int,
-    *,
-    view: str,
-    limit: int,
-    q: str | None = None,
+    params: dict[str, Any],
 ) -> Any:
-    """GET {paper_ingestion}/api/papers/feed?view=&limit=[&q=].
+    """GET {paper_ingestion}/api/papers/feed with pre-built query params.
 
-    Returns the raw parsed JSON envelope (``{papers, total, search_mode}``);
-    callers narrow the shape themselves.
+    *params* is the whole feed query (``view``, ``limit`` and optionally ``q``)
+    so the public wrappers below stay small and share one transport.
     """
-    params: dict[str, Any] = {"view": view, "limit": limit}
-    if q:
-        params["q"] = q
     resp = await http.get(
         f"{config.paper_ingestion_url}/api/papers/feed",
         params=params,
@@ -632,6 +626,22 @@ async def fetch_papers_feed(
     resp.raise_for_status()
     result: Any = resp.json()
     return result
+
+
+async def fetch_papers_feed(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    *,
+    view: str,
+    limit: int,
+) -> Any:
+    """GET {paper_ingestion}/api/papers/feed?view=&limit=.
+
+    Returns the raw parsed JSON envelope (``{papers, total, search_mode}``);
+    callers narrow the shape themselves.
+    """
+    return await _get_papers_feed(http, config, user_id, {"view": view, "limit": limit})
 
 
 async def search_papers_feed(
@@ -647,7 +657,9 @@ async def search_papers_feed(
     Unlike :func:`search_papers` this reads existing papers only; it never
     reaches an external source and never writes to the library.
     """
-    return await fetch_papers_feed(http, config, user_id, view="library", limit=limit, q=query)
+    return await _get_papers_feed(
+        http, config, user_id, {"view": "library", "limit": limit, "q": query}
+    )
 
 
 async def get_paper(

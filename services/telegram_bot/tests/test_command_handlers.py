@@ -280,13 +280,36 @@ async def test_papers_empty_library_shows_empty_state():
     assert "Library is empty" in text
 
 
+@pytest.mark.asyncio
+async def test_papers_unrecognised_feed_payload_reports_a_failure():
+    """A feed payload that is not the documented envelope must not read as empty."""
+    update, context, _, mock_http = _make_update_and_context(args=[])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = [{"id": 1, "title": "Paper A"}]
+    mock_http.get.return_value = mock_resp
+
+    await papers_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "Failed to load library" in text
+    assert "Library is empty" not in text
+
+
 # ---------------------------------------------------------------------------
 # Tests: /discover
 # ---------------------------------------------------------------------------
 
 
 def _multi_source_search_payload(*, failed: list[dict] | None = None) -> dict:
-    """Return a MultiSourceSearchResponse payload as POST /api/search returns it."""
+    """Return a MultiSourceSearchResponse payload as POST /api/search returns it.
+
+    ``_persist_search_results`` saves each result independently and guarantees
+    ``len(saved) + len(failed) == len(results)``, so every requested failure
+    removes one row from ``saved`` here too.
+    """
+    failures = failed or []
+    all_saved = [{"id": 11, "title": "Paper A"}, {"id": 12, "title": "Paper B"}]
     return {
         "results": [
             {"title": "Paper A", "source_type": "arxiv", "external_id": "a1"},
@@ -300,8 +323,8 @@ def _multi_source_search_payload(*, failed: list[dict] | None = None) -> dict:
             "pubmed": 1,
         },
         "degraded_sources": ["openalex"],
-        "saved": [{"id": 11, "title": "Paper A"}, {"id": 12, "title": "Paper B"}],
-        "failed": failed or [],
+        "saved": all_saved[: len(all_saved) - len(failures)],
+        "failed": failures,
     }
 
 
@@ -327,7 +350,7 @@ async def test_discover_searches_all_sources_and_states_the_library_write():
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
-    assert "Found 2 papers and saved them to your library." in text
+    assert "Found 2 papers and saved 2 to your library." in text
     assert "arxiv: 1" in text
     assert "pubmed: 1" in text
     assert "openalex" in text
@@ -347,7 +370,31 @@ async def test_discover_reports_papers_that_could_not_be_saved():
     await discover_command(update, context)
 
     text = update.message.reply_text.call_args[0][0]
-    assert "1 could not be saved" in text
+    # The headline itself must carry the saved count the backend reported (1 of
+    # 2), not the number of results found.
+    assert "Found 2 papers and saved 1 to your library." in text
+    assert "1 paper could not be saved." in text
+
+
+@pytest.mark.asyncio
+async def test_discover_does_not_claim_a_library_write_when_nothing_was_saved():
+    """/discover must not report a saved count when the backend persisted nothing."""
+    update, context, _, mock_http = _make_update_and_context(args=["transformer"])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _multi_source_search_payload(
+        failed=[
+            {"external_id": "a1", "error": "conflict"},
+            {"external_id": "b1", "error": "conflict"},
+        ]
+    )
+    mock_http.post.return_value = mock_resp
+
+    await discover_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "Found 2 papers, but none could be saved to your library." in text
+    assert "saved them to your library" not in text
 
 
 @pytest.mark.asyncio
