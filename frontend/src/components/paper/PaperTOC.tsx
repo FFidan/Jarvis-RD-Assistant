@@ -62,13 +62,13 @@ function PipelineStep({
       )}
       <span
         className={cn(
+          // Done steps are muted, not struck through — strikethrough
+          // conventionally reads as cancelled, not completed
           failed
             ? 'font-medium text-destructive'
-            : done
-              ? 'text-muted-foreground line-through'
-              : inProgress
-                ? 'font-medium'
-                : 'text-muted-foreground',
+            : inProgress
+              ? 'font-medium'
+              : 'text-muted-foreground',
         )}
       >
         {label}

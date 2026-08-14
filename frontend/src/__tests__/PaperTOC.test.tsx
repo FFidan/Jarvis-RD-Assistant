@@ -122,9 +122,11 @@ describe('PaperTOC — pipeline tri-state icons', () => {
     // CheckCircle2 carries the ok-status colour class.
     const iconClass = svg.className.baseVal ?? svg.getAttribute('class') ?? '';
     expect(iconClass).toContain('text-[var(--status-ok)]');
-    // The step label has line-through when done.
+    // The done label is muted, never struck through — strikethrough reads as
+    // cancelled rather than completed.
     const span = within(row).getByText('Downloaded');
-    expect(span.className).toContain('line-through');
+    expect(span.className).toContain('text-muted-foreground');
+    expect(span.className).not.toContain('line-through');
   });
 
   it('active (in-progress) step renders spinning Loader2 icon', () => {

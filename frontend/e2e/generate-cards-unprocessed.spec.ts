@@ -13,7 +13,7 @@ test.describe('Generate Cards on unprocessed paper is disabled @cards @jobs', ()
   test.beforeEach(async ({ page }) => {
     await seedAuthedSession(page);
 
-    // Paper is NOT processed (no chunks, no summary).
+    // The PDF is downloaded but NOT processed (no chunks, no summary).
     await page.route(`**/api/papers/${PAPER_ID}`, async (route) => {
       if (route.request().method() !== 'GET') return route.continue();
       await route.fulfill({
@@ -27,12 +27,17 @@ test.describe('Generate Cards on unprocessed paper is disabled @cards @jobs', ()
             abstract: 'Not yet processed.',
             source_type: 'arxiv',
             external_id: '0000.0001',
-            url: null,
+            url: 'https://arxiv.org/abs/0000.0001',
+            pdf_url: null,
+            pdf_local_path: null,
+            pdf_downloaded: true,
             published_date: '2024-01-01',
+            discovered_at: new Date().toISOString(),
             created_at: new Date().toISOString(),
             citation_count: 0,
             priority_score: 0,
-            pdf_path: null,
+            metadata: {},
+            discovery_origin: 'user_initiated',
           },
           summary: null,
           chunks: [],
@@ -50,7 +55,17 @@ test.describe('Generate Cards on unprocessed paper is disabled @cards @jobs', ()
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify([{ id: DECK_ID, name: 'Default Deck' }]),
+        body: JSON.stringify([
+          {
+            id: DECK_ID,
+            name: 'Default Deck',
+            description: null,
+            topic_id: null,
+            card_count: 0,
+            due_count: 0,
+            created_at: new Date().toISOString(),
+          },
+        ]),
       });
     });
 
@@ -68,12 +83,15 @@ test.describe('Generate Cards on unprocessed paper is disabled @cards @jobs', ()
   });
 
   test('Generate Cards button is disabled when paper has no chunks', async ({ page }) => {
-    await page.goto(`/paper/${PAPER_ID}`);
     await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/paper/${PAPER_ID}`);
 
     await expect(page.getByRole('heading', { name: 'Unprocessed Paper' })).toBeVisible({
       timeout: 10_000,
     });
+
+    // The actions panel is docked away until the reader asks for it.
+    await page.getByTestId('actions-dock-toggle').click();
 
     // Select a deck — even with a deck selected, the button must stay disabled
     // because the paper has no chunks (chunks: [] in the mock above).
@@ -84,6 +102,7 @@ test.describe('Generate Cards on unprocessed paper is disabled @cards @jobs', ()
     await expect(generateBtn).toBeDisabled();
 
     // The Process PDF button should be available for the user to act on.
+    await page.getByRole('button', { name: /Show advanced/ }).click();
     await expect(page.getByRole('button', { name: /process pdf/i })).toBeVisible({
       timeout: 10_000,
     });

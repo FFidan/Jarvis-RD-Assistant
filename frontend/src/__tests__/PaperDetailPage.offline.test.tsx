@@ -3,7 +3,7 @@
  *
  * Coverage:
  *  - Header shows offline indicator (stale-cached / available-offline) when offline
- *  - Action rail shows online-only banner + disabled state when offline
+ *  - Actions panel shows online-only banner + disabled state when offline
  *  - Notes section: offline hint shown + create form hidden + actions disabled
  *  - Ask This Paper: offline notice shown instead of RAG chat
  *  - Reading column (sections, chunks): still present offline
@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
@@ -29,24 +30,6 @@ vi.mock('@/hooks/use-online-status', () => ({
 vi.mock('@/lib/query-persister', () => ({
   getPersistedCacheTimestamp: vi.fn(() => Promise.resolve(_cacheTs)),
   clearPersistedQueryCache: vi.fn(),
-}));
-
-// ---------------------------------------------------------------------------
-// UI store mock
-// ---------------------------------------------------------------------------
-
-vi.mock('@/stores/ui-store', () => ({
-  useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      paperDetailNoteDismissed: true,  // hide workspace note to reduce noise
-      setPaperDetailNoteDismissed: vi.fn(),
-      sidebarCollapsed: false,
-      selectedPaperId: null,
-      checklistDismissed: false,
-      toggleSidebar: vi.fn(),
-      setSelectedPaperId: vi.fn(),
-      dismissChecklist: vi.fn(),
-    }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -204,18 +187,29 @@ describe('PaperDetailPage — header offline indicator', () => {
 // Action rail — online-only banner + disabled state
 // ---------------------------------------------------------------------------
 
-describe('PaperDetailPage — action rail offline', () => {
+describe('PaperDetailPage — actions panel offline', () => {
+  // The actions panel is docked away by default in the reading layout, so
+  // every assertion about it opens it first.
+  async function openActionsPanel() {
+    await waitFor(() => {
+      expect(screen.getByTestId('actions-dock-toggle')).toBeTruthy();
+    });
+    await userEvent.click(screen.getByTestId('actions-dock-toggle'));
+  }
+
   it('shows action-rail-offline-banner when offline', async () => {
     _online = false;
     renderDetail();
+    await openActionsPanel();
     await waitFor(() => {
       expect(screen.getByTestId('action-rail-offline-banner')).toBeTruthy();
     });
   });
 
-  it('marks action rail as disabled when offline', async () => {
+  it('marks the actions panel as disabled when offline', async () => {
     _online = false;
     renderDetail();
+    await openActionsPanel();
     await waitFor(() => {
       expect(screen.getByTestId('action-rail-disabled')).toBeTruthy();
     });
@@ -224,6 +218,7 @@ describe('PaperDetailPage — action rail offline', () => {
   it('does NOT show action-rail-offline-banner when online', async () => {
     _online = true;
     renderDetail();
+    await openActionsPanel();
     await waitFor(() => {
       // title appears in breadcrumb + h1, so getAllByText
       expect(screen.getAllByText('Test Paper Title').length).toBeGreaterThan(0);

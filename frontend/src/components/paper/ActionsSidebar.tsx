@@ -330,10 +330,22 @@ export function ActionsSidebar({
     }
   })();
 
+  // Fully analysed papers need a status, not a call to action: a loud
+  // "Analyze Paper" button on finished work reads as something left to do.
+  // Regenerate stays available under "Show advanced".
+  const fullyAnalyzed = pdfDownloaded && hasChunks && hasSummary && !isAnalyzing;
+
   return (
     <div className="space-y-4">
       <h3 className="text-lg font-semibold">Actions</h3>
 
+      {fullyAnalyzed ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <CheckCircle2 className="h-4 w-4 text-[var(--status-ok)]" aria-hidden="true" />
+          Analyzed — passages extracted{chunkCount != null ? ` (${chunkCount})` : ''}, summary ready.
+        </p>
+      ) : (
+      <>
       <Button
         id="paper-action-analyze"
         variant="default"
@@ -351,7 +363,7 @@ export function ActionsSidebar({
         />
       </Button>
 
-      {/* Step tracker: always visible so users can see pipeline completion state */}
+      {/* Step tracker: visible while there is pipeline work to see through */}
       <div className="space-y-2 rounded-md border p-3">
           {ANALYZE_STEPS.map((step) => {
             // During an active analyze run, use live stepStatuses.
@@ -384,13 +396,17 @@ export function ActionsSidebar({
                 ) : (
                   <div className="h-4 w-4 rounded-full border" />
                 )}
-                <span className={isFailed ? 'font-medium text-destructive' : isDone ? 'text-muted-foreground line-through' : isCurrent ? 'font-medium' : 'text-muted-foreground'}>
+                {/* Done steps are muted, not struck through — strikethrough
+                    conventionally reads as cancelled, not completed */}
+                <span className={isFailed ? 'font-medium text-destructive' : isCurrent ? 'font-medium' : 'text-muted-foreground'}>
                   {label}
                 </span>
               </div>
             );
           })}
       </div>
+      </>
+      )}
 
       <div className="mt-2">
         <button
