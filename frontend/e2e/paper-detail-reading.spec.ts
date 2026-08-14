@@ -1,21 +1,40 @@
 /**
- * paper-detail-3pane.spec.ts
+ * paper-detail-reading.spec.ts
  *
- * Playwright-mocked e2e walkthrough of the Paper Detail 3-pane IA redesign (F2).
+ * Playwright-mocked e2e walkthrough of the reading-first Paper Detail layout.
  *
  * All API calls are fulfilled via page.route() mocks — no backend required.
  * Test uses seedAuthedSession + baseURL http://127.0.0.1:3001.
  *
  * Coverage:
- *  - Left rail: TOC visible with section labels + pipeline status on desktop
- *  - Center: breadcrumb, title, all §-sections rendered without tab clicks
- *  - Right rail: ActionsSidebar present
+ *  - Reading column: breadcrumb, title, all §-sections rendered without tabs
+ *  - Contents: docked on demand, with section labels, pipeline status and
+ *    scroll-spy following the reader
+ *  - Actions: docked on demand; an analyzed paper gets a status, not a CTA
+ *  - Related work: References and Cited by resolve from the citation graph
+ *  - Evidence anchors: a page chip jumps the reader to the PDF section and
+ *    asks it for that page and quote
  *  - Lazy chunks: collapsed by default, expand on click
- *  - Mobile: both Sheet triggers present (Contents + Actions) on small viewport
+ *  - Narrow viewport: Contents and Actions open as sheets instead
  *  - Breadcrumb score: NOT rendered when summary has no recommendation_score
  */
 import { test, expect } from '@playwright/test';
 import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
+
+interface PdfGotoDetail {
+  page: number;
+  quote: string | null;
+}
+
+declare global {
+  interface WindowEventMap {
+    'jarvis:pdf-goto': CustomEvent<PdfGotoDetail>;
+  }
+  interface Window {
+    /** Evidence-anchor requests this spec records in the page, in order. */
+    pdfGotoRequests?: PdfGotoDetail[];
+  }
+}
 
 // ── Mock data ──────────────────────────────────────────────────────────────
 
@@ -113,6 +132,19 @@ const mockContradictions = {
   contradictions: [],
 };
 
+// Paper 1 cites paper 2; paper 3 cites paper 1.
+const mockCitationGraph = {
+  nodes: [
+    { id: 1, title: 'Attention Is All You Need', citation_count: 95000, published_date: '2017-06-12', is_stub: false },
+    { id: 2, title: 'REFERENCE_TITLE: Sequence to Sequence Learning', citation_count: 20000, published_date: '2014-09-10', is_stub: false },
+    { id: 3, title: 'CITEDBY_TITLE: BERT', citation_count: 80000, published_date: '2018-10-11', is_stub: true },
+  ],
+  edges: [
+    { source: 1, target: 2, is_influential: true, context: null },
+    { source: 3, target: 1, is_influential: false, context: null },
+  ],
+};
+
 // ── Test setup ─────────────────────────────────────────────────────────────
 
 test.beforeEach(async ({ page }) => {
@@ -135,6 +167,33 @@ test.beforeEach(async ({ page }) => {
     } else {
       await route.continue();
     }
+  });
+
+  // The cross-referenced paper, so its link can name its target
+  await page.route('**/api/papers/99', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        paper: { ...mockPaperDetail.paper, id: 99, title: 'RELATED_TITLE: Neural Machine Translation' },
+        summary: null,
+        chunks: [],
+        user_state: null,
+      }),
+    });
+  });
+
+  // Citation graph — Related work reads References / Cited by from it
+  await page.route('**/api/citations/graph**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(mockCitationGraph),
+    });
   });
 
   // Contradictions
@@ -198,17 +257,27 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-// ── Desktop 3-pane tests ───────────────────────────────────────────────────
+// ── Desktop reading-layout tests ───────────────────────────────────────────
 
-test.describe('Paper Detail 3-pane — desktop', () => {
+test.describe('Paper Detail reading layout — desktop', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 900 });
   });
 
-  test('left rail: TOC section labels visible', async ({ page }) => {
+  /** Contents and Actions are docked away until the reader asks for them. */
+  async function openDock(page: import('@playwright/test').Page, testId: string) {
+    await expect(page.getByTestId(testId)).toBeVisible({ timeout: 8000 });
+    await page.getByTestId(testId).click();
+  }
+
+  test('Contents: section labels visible once docked', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
+    // Nothing is docked by default — the reading column owns the width.
+    await expect(page.getByRole('navigation', { name: 'Paper navigation' })).toBeHidden();
+
+    await openDock(page, 'toc-dock-toggle');
     const nav = page.getByRole('navigation', { name: 'Paper navigation' });
     await expect(nav).toBeVisible({ timeout: 8000 });
 
@@ -217,14 +286,15 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await expect(nav.getByText('Methodology')).toBeVisible();
     await expect(nav.getByText('Limitations')).toBeVisible();
     await expect(nav.getByText('Evidence')).toBeVisible();
-    await expect(nav.getByText('Cross-references')).toBeVisible();
+    await expect(nav.getByText('Related work')).toBeVisible();
     await expect(nav.getByText('Your Notes')).toBeVisible();
     await expect(nav.getByText('Source Passages')).toBeVisible();
   });
 
-  test('left rail: pipeline status shows all steps complete', async ({ page }) => {
+  test('Contents: pipeline status shows all steps complete', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
+    await openDock(page, 'toc-dock-toggle');
 
     const nav = page.getByRole('navigation', { name: 'Paper navigation' });
     await expect(nav).toBeVisible({ timeout: 8000 });
@@ -235,6 +305,31 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await expect(nav.getByText('Downloaded')).toBeVisible();
     await expect(nav.getByText('2 passages')).toBeVisible();
     await expect(nav.getByText('Summarized')).toBeVisible();
+  });
+
+  test('Contents: scroll-spy follows the reader to the section they picked', async ({ page }) => {
+    await page.goto('/paper/1');
+    await page.waitForLoadState('networkidle');
+    await openDock(page, 'toc-dock-toggle');
+
+    const nav = page.getByRole('navigation', { name: 'Paper navigation' });
+    await expect(nav.locator('[data-toc-id="section-brief"]')).toHaveAttribute(
+      'aria-current',
+      'location',
+      { timeout: 8000 },
+    );
+
+    await nav.getByRole('button', { name: /Methodology/ }).click();
+
+    await expect(nav.locator('[data-toc-id="section-methodology"]')).toHaveAttribute(
+      'aria-current',
+      'location',
+      { timeout: 8000 },
+    );
+    await expect(nav.locator('[data-toc-id="section-brief"]')).not.toHaveAttribute(
+      'aria-current',
+      'location',
+    );
   });
 
   test('center: breadcrumb shows Library / state / title', async ({ page }) => {
@@ -311,13 +406,58 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     ).toBeVisible({ timeout: 8000 });
   });
 
-  test('center: cross-reference explanation visible', async ({ page }) => {
+  test('related work: References and Cited by resolve, above the similarity list', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
+    const relatedWork = page.getByTestId('related-work');
+    await expect(relatedWork.getByText('References')).toBeVisible({ timeout: 8000 });
+    await expect(
+      relatedWork.getByRole('link', { name: 'REFERENCE_TITLE: Sequence to Sequence Learning' }),
+    ).toHaveAttribute('href', '/paper/2');
+    await expect(relatedWork.getByText('Cited by')).toBeVisible();
+    await expect(
+      relatedWork.getByRole('link', { name: 'CITEDBY_TITLE: BERT' }),
+    ).toHaveAttribute('href', '/paper/3');
+    // A paper known only from a bibliography says so.
+    await expect(relatedWork.getByText('not in your library')).toBeVisible();
+
+    // The semantic-similarity list stays separate, and its link names its target.
+    await expect(page.getByText('Similar in your library')).toBeVisible();
     await expect(
       page.getByText(/CROSSREF_TEXT: Builds on sequence-to-sequence/),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: 'RELATED_TITLE: Neural Machine Translation' }),
     ).toBeVisible({ timeout: 8000 });
+  });
+
+  test('evidence anchor: the page chip jumps to the reader and asks for that page and quote', async ({ page }) => {
+    await page.goto('/paper/1');
+    await page.waitForLoadState('networkidle');
+
+    await page.evaluate(() => {
+      window.pdfGotoRequests = [];
+      window.addEventListener('jarvis:pdf-goto', (event) => {
+        window.pdfGotoRequests?.push(event.detail);
+      });
+    });
+
+    await page
+      .getByRole('button', { name: 'Open page 8 in the PDF reader' })
+      .click();
+
+    await expect
+      .poll(() => page.evaluate(() => window.pdfGotoRequests))
+      .toEqual([
+        {
+          page: 8,
+          quote:
+            'The Transformer achieves 28.4 BLEU on the WMT 2014 English-to-German translation task.',
+        },
+      ]);
+    // The reader section is what the chip scrolled the column to.
+    await expect(page.locator('#section-pdf')).toBeInViewport({ timeout: 8000 });
   });
 
   test('center: chunks collapsed by default, expand on click', async ({ page }) => {
@@ -351,13 +491,15 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await expect(page.getByText('Ask about this paper')).toBeVisible();
   });
 
-  test('right rail: ActionsSidebar Analyze Paper button visible', async ({ page }) => {
+  test('Actions: an analyzed paper gets a status line, not a call to action', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
+    await openDock(page, 'actions-dock-toggle');
 
-    await expect(page.getByRole('button', { name: /Analyze Paper/ })).toBeVisible({
-      timeout: 8000,
-    });
+    const dock = page.getByTestId('actions-dock');
+    await expect(dock.getByRole('heading', { name: 'Actions' })).toBeVisible({ timeout: 8000 });
+    await expect(dock.getByText(/Analyzed — passages extracted/)).toBeVisible();
+    await expect(dock.getByRole('button', { name: /Analyze Paper/ })).toBeHidden();
   });
 
   test('score badge NOT rendered (no recommendation_score on paper detail)', async ({ page }) => {
@@ -370,66 +512,64 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await expect(page.getByText(/^Score \d+$/)).not.toBeVisible();
   });
 
-  test('TOC navigate: clicking Brief button scrolls to #section-brief', async ({ page }) => {
+  test('Contents navigate: picking a section brings it into view', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
+    await openDock(page, 'toc-dock-toggle');
 
-    const nav = page.getByRole('navigation', { name: 'Paper navigation' }).first();
+    const nav = page.getByRole('navigation', { name: 'Paper navigation' });
     await expect(nav).toBeVisible({ timeout: 8000 });
 
-    // Click Brief in TOC — should set aria-current on the button
-    await nav.getByRole('button', { name: 'Brief' }).click();
+    await nav.getByRole('button', { name: /Your Notes/ }).click();
 
-    // The section anchor exists
-    await expect(page.locator('#section-brief')).toBeAttached();
+    await expect(page.locator('#section-notes')).toBeInViewport({ timeout: 8000 });
   });
 });
 
-// ── Mobile Sheet tests ─────────────────────────────────────────────────────
+// ── Narrow-viewport sheet tests ────────────────────────────────────────────
 
-test.describe('Paper Detail 3-pane — mobile', () => {
+test.describe('Paper Detail reading layout — narrow viewport', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
   });
 
-  test('Contents sheet trigger visible on mobile', async ({ page }) => {
+  test('the panels are offered as sheets, not docks', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
     // Use heading role to avoid strict-mode: title appears in both h1 and breadcrumb span.
     await expect(page.getByRole('heading', { name: 'Attention Is All You Need' })).toBeVisible({ timeout: 8000 });
-    await expect(page.getByRole('button', { name: /Contents/ })).toBeVisible();
+    await expect(page.getByTestId('toc-sheet-trigger')).toBeVisible();
+    await expect(page.getByTestId('actions-sheet-trigger')).toBeVisible();
+    await expect(page.getByTestId('toc-dock-toggle')).toBeHidden();
+    await expect(page.getByTestId('actions-dock-toggle')).toBeHidden();
   });
 
-  test('Actions sheet trigger visible on mobile', async ({ page }) => {
+  test('opening the Contents sheet shows the sections, and picking one closes it', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    // Use heading role to avoid strict-mode: title appears in both h1 and breadcrumb span.
-    await expect(page.getByRole('heading', { name: 'Attention Is All You Need' })).toBeVisible({ timeout: 8000 });
-    await expect(page.getByRole('button', { name: /Actions/ })).toBeVisible();
-  });
+    await page.getByTestId('toc-sheet-trigger').click();
 
-  test('opening Contents sheet shows TOC sections', async ({ page }) => {
-    await page.goto('/paper/1');
-    await page.waitForLoadState('networkidle');
-
-    await page.getByRole('button', { name: /Contents/ }).click();
-
-    // Sheet should open and show section nav — scope to the opened dialog to avoid
-    // matching the same labels in the hidden desktop TOC rail (hidden md:flex).
     const sheet = page.getByRole('dialog');
     await expect(sheet.getByText('Brief')).toBeVisible({ timeout: 5000 });
     await expect(sheet.getByText('Methodology')).toBeVisible();
+
+    await sheet.getByRole('button', { name: /Your Notes/ }).click();
+
+    // The sheet gets out of the way first, then the section arrives.
+    await expect(page.getByRole('dialog')).toBeHidden({ timeout: 5000 });
+    await expect(page.locator('#section-notes')).toBeInViewport({ timeout: 8000 });
   });
 
-  test('opening Actions sheet shows action rail', async ({ page }) => {
+  test('opening the Actions sheet shows the pipeline status', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    await page.getByRole('button', { name: /Actions/ }).click();
+    await page.getByTestId('actions-sheet-trigger').click();
 
-    await expect(page.getByRole('button', { name: /Analyze Paper/ })).toBeVisible({
+    const sheet = page.getByRole('dialog');
+    await expect(sheet.getByText(/Analyzed — passages extracted/)).toBeVisible({
       timeout: 5000,
     });
   });

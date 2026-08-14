@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { EvidenceTab } from './EvidenceTab';
 import { ChunksTab } from './ChunksTab';
 import { CrossReferencesTab } from './CrossReferencesTab';
+import { RelatedWorkSection } from './RelatedWorkSection';
 import { NotesTab } from './NotesTab';
 import { RAGChatSection } from './RAGChatSection';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
@@ -350,9 +351,18 @@ export function PaperResearchLog({
         )}
       </ResearchSection>
 
-      {/* ── § Cross-references ───────────────────────────────────────── */}
-      <ResearchSection id="section-crossrefs" title={`Cross-references${crossRefCount > 0 ? ` (${crossRefCount})` : ''}`}>
-        <CrossReferencesTab summary={summary} />
+      {/* ── § Related work ───────────────────────────────────────────── */}
+      {/* Citations and similarity are complements: citations are the paper's
+          actual scholarly graph; similarity relates library papers that do
+          not cite each other. */}
+      <ResearchSection id="section-crossrefs" title={`Related work${crossRefCount > 0 ? ` (${crossRefCount})` : ''}`}>
+        <div className="space-y-6">
+          <RelatedWorkSection paperId={paperId} />
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold">Similar in your library</h4>
+            <CrossReferencesTab summary={summary} />
+          </div>
+        </div>
       </ResearchSection>
 
       {/* ── § Contradictions ─────────────────────────────────────────── */}

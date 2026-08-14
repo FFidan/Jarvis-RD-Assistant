@@ -58,6 +58,11 @@ interface LifecycleActionsCardProps {
   state?: LifecycleState;
   /** Whether the paper is starred. */
   starred?: boolean;
+  /**
+   * 'card' renders the rail section (separator + heading); 'toolbar' renders
+   * only the button row for inline placement in the reading toolbar.
+   */
+  variant?: 'card' | 'toolbar';
 }
 
 export function LifecycleActionsCard({
@@ -65,6 +70,7 @@ export function LifecycleActionsCard({
   paperTitle,
   state = 'inbox',
   starred = false,
+  variant = 'card',
 }: LifecycleActionsCardProps) {
   const [hardDeleteOpen, setHardDeleteOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -269,18 +275,8 @@ export function LifecycleActionsCard({
     return null;
   };
 
-  return (
-    <div className="space-y-4">
-      <Separator />
-      <h3 className="flex items-center gap-1 text-lg font-semibold">
-        Lifecycle
-        <InfoTooltip
-          content="Where this paper sits in your reading workflow: Inbox (unsorted) → Saved (to read) → Reading → Done (finished). Move papers to Trash to remove them."
-          side="right"
-        />
-      </h3>
-
-      <div className="flex flex-wrap items-center gap-2">
+  const buttonRow = (
+    <div className="flex flex-wrap items-center gap-2">
         {renderActionButtons()}
 
         {/* Star toggle — always shown except trash */}
@@ -317,13 +313,38 @@ export function LifecycleActionsCard({
           </Button>
         )}
       </div>
+  );
 
-      <HardDeleteModal
-        open={hardDeleteOpen}
-        onOpenChange={setHardDeleteOpen}
-        paperId={paperId}
-        paperTitle={paperTitle}
-      />
+  const modal = (
+    <HardDeleteModal
+      open={hardDeleteOpen}
+      onOpenChange={setHardDeleteOpen}
+      paperId={paperId}
+      paperTitle={paperTitle}
+    />
+  );
+
+  if (variant === 'toolbar') {
+    return (
+      <>
+        {buttonRow}
+        {modal}
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Separator />
+      <h3 className="flex items-center gap-1 text-lg font-semibold">
+        Lifecycle
+        <InfoTooltip
+          content="Where this paper sits in your reading workflow: Inbox (unsorted) → Saved (to read) → Reading → Done (finished). Move papers to Trash to remove them."
+          side="right"
+        />
+      </h3>
+      {buttonRow}
+      {modal}
     </div>
   );
 }

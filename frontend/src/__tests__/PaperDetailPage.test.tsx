@@ -1,39 +1,17 @@
 /**
  * PaperDetailPage.test.tsx
  *
- * Regression-guard for the 3-pane Paper Detail layout.
+ * Regression-guard for the reading-first Paper Detail layout.
  *
- * The old tab-based tests have been migrated to match the new scrolling
- * research-log layout (F2 IA redesign). All existing data (summary, evidence,
- * chunks, cross-refs, notes, contradictions) must still surface correctly;
- * they are now always rendered in the scrolling column rather than behind
- * tab clicks.
+ * The research log always renders every section in the scrolling column — no
+ * tab clicks. Contents and Actions are panels the reader opens from the
+ * toolbar, so assertions about either open it first.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
-
-// Track dismiss calls for banner tests
-let mockPaperDetailNoteDismissed = false;
-const mockSetPaperDetailNoteDismissed = vi.fn((value: boolean) => {
-  mockPaperDetailNoteDismissed = value;
-});
-
-vi.mock('@/stores/ui-store', () => ({
-  useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      paperDetailNoteDismissed: mockPaperDetailNoteDismissed,
-      setPaperDetailNoteDismissed: mockSetPaperDetailNoteDismissed,
-      sidebarCollapsed: false,
-      selectedPaperId: null,
-      checklistDismissed: false,
-      toggleSidebar: vi.fn(),
-      setSelectedPaperId: vi.fn(),
-      dismissChecklist: vi.fn(),
-    }),
-}));
 
 // Mock the API module
 vi.mock('@/lib/api', async () => {
@@ -56,6 +34,7 @@ vi.mock('@/lib/api', async () => {
     downloadPdf: vi.fn(),
     processPdf: vi.fn(),
     summarizePaper: vi.fn(),
+    getCitationGraph: vi.fn(),
   };
 });
 
@@ -73,13 +52,21 @@ vi.mock('@/hooks/use-streaming-chat', () => ({
   }),
 }));
 
-import { fetchPaperDetail, fetchContradictions, fetchNotes, fetchDecks, zoteroGetLinkage } from '@/lib/api';
+import {
+  fetchPaperDetail,
+  fetchContradictions,
+  fetchNotes,
+  fetchDecks,
+  zoteroGetLinkage,
+  getCitationGraph,
+} from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchPaperDetail = vi.mocked(fetchPaperDetail);
 const mockFetchContradictions = vi.mocked(fetchContradictions);
 const mockFetchNotes = vi.mocked(fetchNotes);
 const mockFetchDecks = vi.mocked(fetchDecks);
 const mockZoteroGetLinkage = vi.mocked(zoteroGetLinkage);
+const mockGetCitationGraph = vi.mocked(getCitationGraph);
 
 const MOCK_PAPER = {
   id: 42,
@@ -198,10 +185,18 @@ function renderPage(paperId = '42', search = '') {
   );
 }
 
+/** Contents and Actions are docked away by default in the reading layout. */
+async function openPanel(testId: 'toc-dock-toggle' | 'actions-dock-toggle') {
+  await waitFor(() => {
+    expect(screen.getByTestId(testId)).toBeInTheDocument();
+  });
+  await userEvent.click(screen.getByTestId(testId));
+}
+
 describe('PaperDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockPaperDetailNoteDismissed = false;
+    mockGetCitationGraph.mockResolvedValue({ nodes: [], edges: [] });
     mockFetchDecks.mockResolvedValue([]);
     mockFetchContradictions.mockResolvedValue({ contradictions: [], total: 0 });
     mockFetchNotes.mockImplementation((_paperId, source) =>
@@ -376,24 +371,6 @@ describe('PaperDetailPage', () => {
     });
   });
 
-  it('renders user state form with initial values', async () => {
-    mockFetchPaperDetail.mockResolvedValue({
-      paper: MOCK_PAPER,
-      summary: MOCK_SUMMARY,
-      chunks: MOCK_CHUNKS,
-      user_state: MOCK_USER_STATE,
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Quick Rating')).toBeInTheDocument();
-    });
-    expect(screen.getByText('Rating: 4')).toBeInTheDocument();
-    expect(screen.getByText('Save Rating')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /flagged/i })).toHaveAttribute('name', 'flagged');
-  });
-
   it('renders RAG chat section', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: MOCK_PAPER,
@@ -459,6 +436,7 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('actions-dock-toggle');
 
     await waitFor(() => {
       expect(screen.getByText('Zotero')).toBeInTheDocument();
@@ -479,6 +457,7 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('actions-dock-toggle');
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeInTheDocument();
@@ -500,6 +479,7 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('actions-dock-toggle');
 
     await waitFor(() => {
       expect(
@@ -509,7 +489,7 @@ describe('PaperDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'Send to Zotero' })).not.toBeInTheDocument();
   });
 
-  it('shows verified contradictions in the paper sidebar', async () => {
+  it('shows verified contradictions in the actions panel', async () => {
     // Both the page count query and ContradictionsPanel call fetchContradictions;
     // use mockResolvedValue (not Once) so both calls return the contradiction.
     mockFetchContradictions.mockResolvedValue({
@@ -544,6 +524,7 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('actions-dock-toggle');
 
     await waitFor(() => {
       expect(screen.getByText('Recurrence Still Matters')).toBeInTheDocument();
@@ -578,67 +559,9 @@ describe('PaperDetailPage', () => {
     });
   });
 
-  it('shows workspace note banner when paperDetailNoteDismissed is false', async () => {
-    mockPaperDetailNoteDismissed = false;
-    mockFetchPaperDetail.mockResolvedValue({
-      paper: MOCK_PAPER,
-      summary: null,
-      chunks: [],
-      user_state: null,
-    });
+  // ── Contents panel (sections + pipeline) ──────────────────────────────────
 
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/Paper Detail is the workspace/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
-  });
-
-  it('hides workspace note banner when × is clicked', async () => {
-    const user = userEvent.setup();
-    mockPaperDetailNoteDismissed = false;
-    mockFetchPaperDetail.mockResolvedValue({
-      paper: MOCK_PAPER,
-      summary: null,
-      chunks: [],
-      user_state: null,
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
-
-    expect(mockSetPaperDetailNoteDismissed).toHaveBeenCalledWith(true);
-  });
-
-  it('does not show workspace note banner when paperDetailNoteDismissed is true', async () => {
-    mockPaperDetailNoteDismissed = true;
-    mockFetchPaperDetail.mockResolvedValue({
-      paper: MOCK_PAPER,
-      summary: null,
-      chunks: [],
-      user_state: null,
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText(/Paper Detail is the workspace/)).not.toBeInTheDocument();
-  });
-
-  // ── Left rail (TOC + pipeline) ─────────────────────────────────────────────
-
-  it('renders the left-rail TOC with section labels', async () => {
+  it('renders the Contents panel with section labels', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: MOCK_PAPER,
       summary: MOCK_SUMMARY,
@@ -647,19 +570,19 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('toc-dock-toggle');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
     });
 
-    // TOC navigation labels should appear in nav
     const nav = screen.getByRole('navigation', { name: 'Paper navigation' });
     expect(nav).toBeInTheDocument();
     expect(nav).toHaveTextContent('Brief');
     expect(nav).toHaveTextContent('Methodology');
   });
 
-  it('renders pipeline status in the TOC', async () => {
+  it('renders pipeline status in the Contents panel', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: { ...MOCK_PAPER, pdf_downloaded: true },
       summary: MOCK_SUMMARY,
@@ -668,18 +591,18 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('toc-dock-toggle');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
     });
 
-    // Pipeline section visible in TOC
     expect(screen.getByText('Processing steps')).toBeInTheDocument();
     expect(screen.getByText('Downloaded')).toBeInTheDocument();
     expect(screen.getByText('Summarized')).toBeInTheDocument();
   });
 
-  it('left Pipeline rail shows ✗ on the processing step when the paper-detail processing_failed signal is set', async () => {
+  it('Contents and Actions both mark processing failed when the paper-detail signal is set', async () => {
     // processing_failed is the SAME persisted job-failure signal ActionsSidebar
     // polls via getJob — PaperDetailPage must thread it into PaperTOC.
     mockFetchPaperDetail.mockResolvedValue({
@@ -691,6 +614,8 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('toc-dock-toggle');
+    await openPanel('actions-dock-toggle');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
@@ -708,7 +633,7 @@ describe('PaperDetailPage', () => {
     expect(actionsProcessingLabel.className).toContain('text-destructive');
   });
 
-  it('left Pipeline rail does NOT show ✗ when processing_failed is absent (legacy/cached payload)', async () => {
+  it('Contents does NOT mark processing failed when the signal is absent (legacy/cached payload)', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: { ...MOCK_PAPER, pdf_downloaded: true },
       summary: null,
@@ -718,6 +643,7 @@ describe('PaperDetailPage', () => {
     });
 
     renderPage();
+    await openPanel('toc-dock-toggle');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
@@ -777,6 +703,71 @@ describe('PaperDetailPage', () => {
 
       document.body.removeChild(el);
       scrollIntoViewSpy.mockRestore();
+    });
+  });
+
+  describe('Contents navigation', () => {
+    beforeEach(() => {
+      mockFetchPaperDetail.mockResolvedValue({
+        paper: MOCK_PAPER,
+        summary: MOCK_SUMMARY,
+        chunks: MOCK_CHUNKS,
+        user_state: MOCK_USER_STATE,
+      });
+    });
+
+    /** Own-property stub, so an assertion proves WHICH section was scrolled to. */
+    async function watchMethodologySection() {
+      const section = await waitFor(() => {
+        const el = document.getElementById('section-methodology');
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      section.scrollIntoView = vi.fn();
+      return section;
+    }
+
+    it('scrolls straight to a section when Contents is docked', async () => {
+      renderPage();
+      await openPanel('toc-dock-toggle');
+      const section = await watchMethodologySection();
+
+      const nav = within(screen.getByTestId('toc-dock')).getByRole('navigation', {
+        name: 'Paper navigation',
+      });
+      await userEvent.click(within(nav).getByRole('button', { name: /Methodology/ }));
+
+      expect(section.scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+
+    it('closes the Contents sheet before scrolling, and does not restore focus to the trigger', async () => {
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('toc-sheet-trigger')).toBeInTheDocument();
+      });
+      await userEvent.click(screen.getByTestId('toc-sheet-trigger'));
+      const sheet = await screen.findByRole('dialog');
+      const section = await watchMethodologySection();
+
+      await userEvent.click(within(sheet).getByRole('button', { name: /Methodology/ }));
+
+      // Scrolling while the sheet is still closing loses the scroll: Radix
+      // restores focus on close, and that focus scrolls the trigger back into
+      // view. The scroll must therefore wait for the close to settle.
+      expect(section.scrollIntoView).not.toHaveBeenCalled();
+      await waitFor(
+        () =>
+          expect(section.scrollIntoView).toHaveBeenCalledWith({
+            behavior: 'smooth',
+            block: 'start',
+          }),
+        { timeout: 2000 },
+      );
+      // Focus restoration is suppressed for the same reason.
+      expect(screen.getByTestId('toc-sheet-trigger')).not.toHaveFocus();
     });
   });
 });

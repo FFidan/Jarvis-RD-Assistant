@@ -145,7 +145,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground">
-        Page-anchored highlights and notes (separate from your Quick Rating in the sidebar).
+        Page-anchored highlights and notes for this paper.
       </p>
       {/* Create note form — hidden when read-only (offline NON-GOAL). */}
       {!readOnly && (

@@ -25,6 +25,9 @@ const mocks = vi.hoisted<{
   trackExternalJob: Mock;
   isRunning: Mock;
   toastError: Mock;
+  // Stand-in for the highlighter's page viewer, handed to the component
+  // through the `utilsRef` callback the library normally supplies.
+  viewer: { scrollPageIntoView: Mock; getPageView: Mock } | null;
 }>(() => ({
   selection: null,
   fetchPdfUrl: vi.fn(),
@@ -37,6 +40,7 @@ const mocks = vi.hoisted<{
   trackExternalJob: vi.fn(),
   isRunning: vi.fn(() => false),
   toastError: vi.fn(),
+  viewer: null,
 }));
 
 // Lightweight stub of the PDF library so tests exercise OUR adapter / CRUD /
@@ -58,13 +62,18 @@ vi.mock('react-pdf-highlighter-extended', async () => {
       children,
       selectionTip,
       style,
+      utilsRef,
     }: {
       highlights: Array<{ id: string }>;
       children: React.ReactNode;
       selectionTip: React.ReactNode;
       style?: React.CSSProperties;
-    }) =>
-      React.createElement(
+      utilsRef?: (utils: unknown) => void;
+    }) => {
+      React.useEffect(() => {
+        utilsRef?.({ getViewer: () => mocks.viewer });
+      }, [utilsRef]);
+      return React.createElement(
         'div',
         { 'data-testid': 'pdf-highlighter', style },
         React.createElement('span', { 'data-testid': 'hl-count' }, String(highlights.length)),
@@ -76,7 +85,8 @@ vi.mock('react-pdf-highlighter-extended', async () => {
           ),
         ),
         selectionTip,
-      ),
+      );
+    },
     TextHighlight: ({
       highlight,
       onClick,
@@ -161,6 +171,7 @@ function renderPane() {
 
 beforeEach(() => {
   mocks.selection = null;
+  mocks.viewer = null;
   mocks.fetchPdfUrl.mockReset();
   mocks.listHighlights.mockReset();
   mocks.createHighlight.mockReset();
@@ -370,5 +381,85 @@ describe('PdfReaderPane — export highlights to Zotero', () => {
 
     const button = await screen.findByRole('button', { name: /exporting/i });
     expect(button).toBeDisabled();
+  });
+});
+
+describe('PdfReaderPane — evidence anchor jump and quote flash', () => {
+  // The text layer is one span per LINE, and extraction hyphenates across
+  // them, so this page is written the way a real one breaks: the quote starts
+  // mid-line, crosses three spans, and is split by a hyphen.
+  const LINES = [
+    'The Transformer achieves 28.4 BLEU on the WMT',
+    '2014 English-to-German translation task, im-',
+    'proving over the best previously reported results.',
+  ];
+  const QUOTE = 'on the WMT 2014 English-to-German translation task, improving over';
+
+  function buildPageView(): { div: HTMLElement; spans: HTMLElement[] } {
+    const div = document.createElement('div');
+    const textLayer = document.createElement('div');
+    textLayer.className = 'textLayer';
+    const spans = LINES.map((line) => {
+      const span = document.createElement('span');
+      span.textContent = line;
+      span.scrollIntoView = vi.fn();
+      textLayer.appendChild(span);
+      return span;
+    });
+    div.appendChild(textLayer);
+    document.body.appendChild(div);
+    return { div, spans };
+  }
+
+  it('opens the requested page and flashes every span the quote overlaps', async () => {
+    const { div, spans } = buildPageView();
+    mocks.viewer = {
+      scrollPageIntoView: vi.fn(),
+      getPageView: vi.fn(() => ({ div })),
+    };
+    mocks.fetchPdfUrl.mockResolvedValue('blob:fake');
+    mocks.listHighlights.mockResolvedValue([]);
+
+    renderPane();
+    await screen.findByTestId('pdf-highlighter');
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:pdf-goto', { detail: { page: 3, quote: QUOTE } }),
+    );
+
+    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: 3 });
+    // Page numbers are 1-based; the viewer's page views are 0-based.
+    expect(mocks.viewer.getPageView).not.toHaveBeenCalledWith(3);
+
+    await waitFor(
+      () => expect(spans[0]!.style.backgroundColor).not.toBe(''),
+      { timeout: 3000 },
+    );
+    expect(spans[1]!.style.backgroundColor).not.toBe('');
+    expect(spans[2]!.style.backgroundColor).not.toBe('');
+    expect(spans[0]!.scrollIntoView).toHaveBeenCalled();
+
+    div.remove();
+  });
+
+  it('leaves the page alone when the quote is too short to identify', async () => {
+    const { div, spans } = buildPageView();
+    mocks.viewer = {
+      scrollPageIntoView: vi.fn(),
+      getPageView: vi.fn(() => ({ div })),
+    };
+    mocks.fetchPdfUrl.mockResolvedValue('blob:fake');
+    mocks.listHighlights.mockResolvedValue([]);
+
+    renderPane();
+    await screen.findByTestId('pdf-highlighter');
+
+    window.dispatchEvent(new CustomEvent('jarvis:pdf-goto', { detail: { page: 3, quote: 'the' } }));
+
+    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(spans.every((span) => span.style.backgroundColor === '')).toBe(true);
+
+    div.remove();
   });
 });

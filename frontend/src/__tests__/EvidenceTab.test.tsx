@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { EvidenceTab } from '@/components/paper/EvidenceTab';
 import type { KeyFinding, Summary } from '@/types';
@@ -44,17 +45,56 @@ function renderTab(s: Summary, paperId?: number) {
 }
 
 describe('EvidenceTab', () => {
-  it('renders a link to the paper when paperId is present', () => {
+  it('renders no self-link back to the paper the reader is already on', () => {
     renderTab(summary([keyFinding()]), 42);
-
-    const link = screen.getByRole('link', { name: /open paper/i });
-    expect(link).toHaveAttribute('href', '/paper/42');
-  });
-
-  it('renders no paper link when paperId is undefined', () => {
-    renderTab(summary([keyFinding()]), undefined);
 
     expect(screen.queryByRole('link', { name: /open paper/i })).not.toBeInTheDocument();
     expect(screen.getByText('Verified Findings')).toBeInTheDocument();
+  });
+});
+
+describe('EvidenceTab — evidence anchors', () => {
+  let sectionPdf: HTMLElement;
+  let sectionChunks: HTMLElement;
+
+  beforeEach(() => {
+    // Per-element stubs, so an assertion proves WHICH section was scrolled to.
+    sectionPdf = document.createElement('div');
+    sectionPdf.id = 'section-pdf';
+    sectionPdf.scrollIntoView = vi.fn();
+    sectionChunks = document.createElement('div');
+    sectionChunks.id = 'section-chunks';
+    sectionChunks.scrollIntoView = vi.fn();
+    document.body.append(sectionPdf, sectionChunks);
+  });
+
+  afterEach(() => {
+    sectionPdf.remove();
+    sectionChunks.remove();
+  });
+
+  it('page anchor scrolls to the reader and asks it for that page and quote', async () => {
+    const goto = vi.fn();
+    window.addEventListener('jarvis:pdf-goto', goto);
+    renderTab(summary([keyFinding()]), 42);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open page 7 in the PDF reader' }));
+
+    expect(sectionPdf.scrollIntoView).toHaveBeenCalled();
+    expect(goto).toHaveBeenCalledTimes(1);
+    expect((goto.mock.calls[0]![0] as CustomEvent).detail).toEqual({
+      page: 7,
+      quote: 'A supporting quote.',
+    });
+
+    window.removeEventListener('jarvis:pdf-goto', goto);
+  });
+
+  it('passage anchor scrolls to the source passages section', async () => {
+    renderTab(summary([keyFinding()]), 42);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open the source passages section' }));
+
+    expect(sectionChunks.scrollIntoView).toHaveBeenCalled();
   });
 });

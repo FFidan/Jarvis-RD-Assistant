@@ -13,6 +13,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { getCitationGraph } from '@/lib/api';
 import { PaperResearchLog } from '@/components/paper/PaperResearchLog';
 import type { Paper, Summary, Chunk, UserState } from '@/types';
 import { createTestQueryClient } from '@/__tests__/test-utils';
@@ -38,6 +39,8 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     fetchNotes: vi.fn().mockResolvedValue([]),
     fetchDecks: vi.fn().mockResolvedValue([]),
+    fetchPaperDetail: vi.fn().mockRejectedValue(new Error('not stubbed')),
+    getCitationGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
     zoteroGetLinkage: vi.fn().mockResolvedValue({
       zotero_item_key: null,
       zotero_citation_key: null,
@@ -283,10 +286,49 @@ describe('PaperResearchLog — coverage transparency', () => {
   });
 });
 
-describe('PaperResearchLog — cross-references', () => {
-  it('renders cross-reference data', () => {
+describe('PaperResearchLog — related work', () => {
+  it('renders semantic cross-reference data under its own heading', () => {
     renderLog();
+    expect(screen.getByText('Similar in your library')).toBeInTheDocument();
     expect(screen.getByText('Builds on seq2seq.')).toBeInTheDocument();
+  });
+
+  it('renders References and Cited by from the citation graph', async () => {
+    vi.mocked(getCitationGraph).mockResolvedValue({
+      nodes: [
+        { id: 1, title: 'Attention Is All You Need', citation_count: 95000, published_date: '2017-06-12', is_stub: false },
+        { id: 2, title: 'Sequence to Sequence Learning', citation_count: 20000, published_date: '2014-09-10', is_stub: false },
+        { id: 3, title: 'BERT', citation_count: 80000, published_date: '2018-10-11', is_stub: true },
+      ],
+      // 1 cites 2; 3 cites 1.
+      edges: [
+        { source: 1, target: 2, is_influential: true, context: null },
+        { source: 3, target: 1, is_influential: false, context: null },
+      ],
+    });
+
+    renderLog();
+
+    await waitFor(() => {
+      expect(screen.getByText('References')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Cited by')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sequence to Sequence Learning' })).toHaveAttribute(
+      'href',
+      '/paper/2',
+    );
+    expect(screen.getByRole('link', { name: 'BERT' })).toHaveAttribute('href', '/paper/3');
+    // Papers known only from a bibliography are labelled as such.
+    expect(screen.getByText('not in your library')).toBeInTheDocument();
+  });
+
+  it('offers a citation lookup when the paper has no citation data yet', async () => {
+    renderLog();
+
+    await waitFor(() => {
+      expect(screen.getByText('No citation data yet for this paper.')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Fetch citations/ })).toBeInTheDocument();
   });
 });
 
