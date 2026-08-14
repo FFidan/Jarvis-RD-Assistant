@@ -23,7 +23,7 @@ from telegram_bot.handlers.commands import (  # noqa: E402
     stats_command,
     tasks_command,
 )
-from telegram_bot.handlers.commands.paper_commands import _inbox_keyboard
+from telegram_bot.handlers.commands.paper_commands import _inbox_keyboard, discover_command
 from telegram_bot.handlers.commands.system_commands import focus_command
 
 pytestmark = pytest.mark.usefixtures("_clear_rate_limit_state")
@@ -198,35 +198,69 @@ async def test_papers_no_args_lists_library_via_api():
 
 @pytest.mark.asyncio
 async def test_papers_with_query_searches_api():
-    """/papers <query> calls the paper_ingestion search API."""
+    """/papers <query> searches the caller's library through the feed endpoint."""
     update, context, _, mock_http = _make_update_and_context(args=["transformer"])
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = [
-        {
-            "id": 1,
-            "title": "Transformers Paper",
-            "authors": ["Author"],
-            "published_date": None,
-            "source_type": "arxiv",
-            "url": "http://example.com",
-            "tldr": None,
-            "summary_brief": None,
-        },
-    ]
-    mock_http.post.return_value = mock_resp
+    # The real GET /api/papers/feed envelope (FeedResponse), not a bare list.
+    mock_resp.json.return_value = {
+        "papers": [
+            {
+                "id": 1,
+                "title": "Transformers Paper",
+                "authors": ["Author"],
+                "published_date": None,
+                "source_type": "arxiv",
+                "url": "http://example.com",
+                "tldr": None,
+                "summary_brief": None,
+                "state": "to_read",
+                "starred": False,
+                "discovery_origin": "user_initiated",
+            },
+        ],
+        "total": 1,
+        "search_mode": "bm25",
+    }
+    mock_http.get.return_value = mock_resp
+
     await papers_command(update, context)
-    mock_http.post.assert_awaited_once()
+
+    mock_http.post.assert_not_awaited()
+    mock_http.get.assert_awaited_once()
+    call = mock_http.get.await_args
+    assert "/api/papers/feed" in call.args[0]
+    params = call.kwargs["params"]
+    assert params["view"] == "library"
+    assert params["q"] == "transformer"
     text = update.message.reply_text.call_args[0][0]
     assert "Transformers Paper" in text
+
+
+@pytest.mark.asyncio
+async def test_papers_with_query_and_no_match_points_at_discover():
+    """/papers <query> with no library hit must not claim the library is empty."""
+    update, context, _, mock_http = _make_update_and_context(args=["quantum"])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"papers": [], "total": 0, "search_mode": "bm25"}
+    mock_http.get.return_value = mock_resp
+
+    await papers_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert 'No library papers match "quantum"' in text
+    assert "/discover quantum" in text
+    assert "Library is empty" not in text
 
 
 @pytest.mark.asyncio
 async def test_papers_api_failure_sends_error():
     """/papers <query> sends error message when API fails."""
     update, context, _, mock_http = _make_update_and_context(args=["test"])
-    mock_http.post.side_effect = Exception("Connection failed")
+    mock_http.get.side_effect = Exception("Connection failed")
     await papers_command(update, context)
     text = update.message.reply_text.call_args[0][0]
     assert "Failed" in text or "failed" in text.lower()
@@ -244,6 +278,123 @@ async def test_papers_empty_library_shows_empty_state():
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "Library is empty" in text
+
+
+# ---------------------------------------------------------------------------
+# Tests: /discover
+# ---------------------------------------------------------------------------
+
+
+def _multi_source_search_payload(*, failed: list[dict] | None = None) -> dict:
+    """Return a MultiSourceSearchResponse payload as POST /api/search returns it."""
+    return {
+        "results": [
+            {"title": "Paper A", "source_type": "arxiv", "external_id": "a1"},
+            {"title": "Paper B", "source_type": "pubmed", "external_id": "b1"},
+        ],
+        "total": 2,
+        "per_source_counts": {
+            "arxiv": 1,
+            "semantic_scholar": 0,
+            "openalex": 0,
+            "pubmed": 1,
+        },
+        "degraded_sources": ["openalex"],
+        "saved": [{"id": 11, "title": "Paper A"}, {"id": 12, "title": "Paper B"}],
+        "failed": failed or [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_discover_searches_all_sources_and_states_the_library_write():
+    """/discover <query> searches the four standard sources and says results were saved."""
+    update, context, _, mock_http = _make_update_and_context(args=["transformer"])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _multi_source_search_payload()
+    mock_http.post.return_value = mock_resp
+
+    await discover_command(update, context)
+
+    mock_http.post.assert_awaited_once()
+    call = mock_http.post.await_args
+    assert call.args[0].endswith("/api/search")
+    body = call.kwargs["json"]
+    assert body["query"] == "transformer"
+    assert set(body["source_types"]) == {"arxiv", "semantic_scholar", "openalex", "pubmed"}
+    # The backend worst case observed for this call is 70.5 s.
+    assert call.kwargs["timeout"] > 70.5
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Found 2 papers and saved them to your library." in text
+    assert "arxiv: 1" in text
+    assert "pubmed: 1" in text
+    assert "openalex" in text
+
+
+@pytest.mark.asyncio
+async def test_discover_reports_papers_that_could_not_be_saved():
+    """/discover must not claim every result was saved when persistence failed."""
+    update, context, _, mock_http = _make_update_and_context(args=["transformer"])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _multi_source_search_payload(
+        failed=[{"external_id": "b1", "error": "conflict"}]
+    )
+    mock_http.post.return_value = mock_resp
+
+    await discover_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "1 could not be saved" in text
+
+
+@pytest.mark.asyncio
+async def test_discover_without_a_query_shows_usage():
+    """/discover needs a query; it must not fire a source-wide search without one."""
+    update, context, _, mock_http = _make_update_and_context(args=[])
+
+    await discover_command(update, context)
+
+    mock_http.post.assert_not_awaited()
+    text = update.message.reply_text.call_args[0][0]
+    assert "/discover" in text
+
+
+@pytest.mark.asyncio
+async def test_discover_with_no_results_suggests_a_different_query():
+    """/discover reports an empty external search without claiming a library write."""
+    update, context, _, mock_http = _make_update_and_context(args=["obscure"])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "results": [],
+        "total": 0,
+        "per_source_counts": {},
+        "degraded_sources": [],
+        "saved": [],
+        "failed": [],
+    }
+    mock_http.post.return_value = mock_resp
+
+    await discover_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "saved" not in text.lower()
+    assert "obscure" in text
+
+
+@pytest.mark.asyncio
+async def test_discover_api_failure_sends_error():
+    """/discover surfaces a backend failure instead of a silent empty result."""
+    update, context, _, mock_http = _make_update_and_context(args=["transformer"])
+    mock_http.post.side_effect = Exception("Connection failed")
+
+    await discover_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "failed" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +692,7 @@ def test_format_help_contains_all_commands():
         "/start",
         "/help",
         "/papers",
+        "/discover",
         "/briefing",
         "/next",
         "/inbox",
@@ -678,14 +830,13 @@ async def test_papers_search_strips_bidi_chars():
     update, context, _, mock_http = _make_update_and_context(args=[bidi_query])
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = []
-    mock_http.post.return_value = mock_resp
+    mock_resp.json.return_value = {"papers": [], "total": 0, "search_mode": "bm25"}
+    mock_http.get.return_value = mock_resp
 
     await papers_command(update, context)
 
-    mock_http.post.assert_awaited_once()
-    call_kwargs = mock_http.post.await_args[1]
-    sent_query = call_kwargs["json"]["query"]
+    mock_http.get.assert_awaited_once()
+    sent_query = mock_http.get.await_args.kwargs["params"]["q"]
     assert "‮" not in sent_query, "RTL override must be stripped before forwarding"
     assert clean_query == sent_query, f"Expected {clean_query!r}, got {sent_query!r}"
 
@@ -699,16 +850,30 @@ async def test_papers_search_strips_zero_width_space():
     update, context, _, mock_http = _make_update_and_context(args=[query_with_zwsp])
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = []
-    mock_http.post.return_value = mock_resp
+    mock_resp.json.return_value = {"papers": [], "total": 0, "search_mode": "bm25"}
+    mock_http.get.return_value = mock_resp
 
     await papers_command(update, context)
 
-    mock_http.post.assert_awaited_once()
-    call_kwargs = mock_http.post.await_args[1]
-    sent_query = call_kwargs["json"]["query"]
+    mock_http.get.assert_awaited_once()
+    sent_query = mock_http.get.await_args.kwargs["params"]["q"]
     assert "​" not in sent_query, "Zero-width space must be stripped before forwarding"
     assert sent_query == clean_query
+
+
+@pytest.mark.asyncio
+async def test_discover_strips_bidi_chars():
+    """/discover forwards its query to external sources, so it must sanitize it too."""
+    update, context, _, mock_http = _make_update_and_context(args=["neural‮nets"])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _multi_source_search_payload()
+    mock_http.post.return_value = mock_resp
+
+    await discover_command(update, context)
+
+    sent_query = mock_http.post.await_args.kwargs["json"]["query"]
+    assert sent_query == "neuralnets"
 
 
 # ---------------------------------------------------------------------------

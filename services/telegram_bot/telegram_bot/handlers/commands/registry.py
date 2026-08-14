@@ -12,6 +12,7 @@ from telegram_bot.handlers.commands.pairing_commands import (
 )
 from telegram_bot.handlers.commands.paper_commands import (
     briefing_command,
+    discover_command,
     inbox_command,
     next_command,
     papers_command,
@@ -30,6 +31,7 @@ STANDARD_COMMAND_HANDLERS = {
     "start": start_command,
     "help": help_command,
     "papers": papers_command,
+    "discover": discover_command,
     "stats": stats_command,
     "briefing": briefing_command,
     "projects": projects_command,

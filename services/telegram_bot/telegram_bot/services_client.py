@@ -49,6 +49,7 @@ __all__ = [
     "check_authors",
     "search_papers",
     "fetch_papers_feed",
+    "search_papers_feed",
     "get_paper",
     "update_paper_action",
     "record_paper_feedback",
@@ -565,25 +566,43 @@ async def check_authors(
     return result
 
 
+#: Sources an external discovery search fans out to.  The endpoint's request
+#: model defaults to arXiv alone, so omitting the field silently searches one
+#: source; sources that are disabled or failing are the server's concern and
+#: come back in ``degraded_sources``.
+DISCOVERY_SOURCE_TYPES = ("arxiv", "semantic_scholar", "openalex", "pubmed")
+
+#: External discovery fans out to four upstream APIs and persists what it
+#: finds; 70.5 s has been observed end to end, so the client waits longer.
+DISCOVERY_TIMEOUT_SECONDS = 90.0
+
+
 async def search_papers(
     http: httpx.AsyncClient,
     config: BotConfig,
     user_id: int,
     query: str,
-) -> Any:
-    """POST {paper_ingestion}/api/search body {"query": query}.
+) -> dict[str, Any]:
+    """POST {paper_ingestion}/api/search — external discovery across all sources.
 
-    Returns the raw parsed JSON (a list, or a dict wrapping ``"papers"``
-    depending on backend version); callers narrow the shape themselves.
+    The endpoint also writes what it finds into the caller's library, so
+    callers must tell the user about that side effect.
+
+    Returns
+    -------
+    dict
+        A ``MultiSourceSearchResponse``: ``results`` (everything the sources
+        returned), ``total``, ``per_source_counts``, ``degraded_sources``,
+        ``saved`` (rows persisted into the caller's library) and ``failed``.
     """
     resp = await http.post(
         f"{config.paper_ingestion_url}/api/search",
-        json={"query": query},
+        json={"query": query, "source_types": list(DISCOVERY_SOURCE_TYPES)},
         headers=_owner_headers(config, user_id),
-        timeout=30.0,
+        timeout=DISCOVERY_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
-    result: Any = resp.json()
+    result: dict[str, Any] = resp.json()
     return result
 
 
@@ -594,21 +613,41 @@ async def fetch_papers_feed(
     *,
     view: str,
     limit: int,
+    q: str | None = None,
 ) -> Any:
-    """GET {paper_ingestion}/api/papers/feed?view=&limit=.
+    """GET {paper_ingestion}/api/papers/feed?view=&limit=[&q=].
 
-    Returns the raw parsed JSON (a list, or a dict wrapping ``"papers"``
-    depending on backend version); callers narrow the shape themselves.
+    Returns the raw parsed JSON envelope (``{papers, total, search_mode}``);
+    callers narrow the shape themselves.
     """
+    params: dict[str, Any] = {"view": view, "limit": limit}
+    if q:
+        params["q"] = q
     resp = await http.get(
         f"{config.paper_ingestion_url}/api/papers/feed",
-        params={"view": view, "limit": limit},
+        params=params,
         headers=_owner_headers(config, user_id),
         timeout=30.0,
     )
     resp.raise_for_status()
     result: Any = resp.json()
     return result
+
+
+async def search_papers_feed(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    query: str,
+    *,
+    limit: int = 10,
+) -> Any:
+    """Full-text search the caller's own library via the feed endpoint.
+
+    Unlike :func:`search_papers` this reads existing papers only; it never
+    reaches an external source and never writes to the library.
+    """
+    return await fetch_papers_feed(http, config, user_id, view="library", limit=limit, q=query)
 
 
 async def get_paper(

@@ -22,7 +22,20 @@ class CommandSpec:
 
 
 COMMAND_CATALOG: tuple[CommandSpec, ...] = (
-    CommandSpec("papers", "papers [query]", "List recent papers or search", "Papers", "standard"),
+    CommandSpec(
+        "papers",
+        "papers [query]",
+        "List recent library papers or search your library",
+        "Papers",
+        "standard",
+    ),
+    CommandSpec(
+        "discover",
+        "discover <query>",
+        "Search external sources and save results to your library",
+        "Papers",
+        "standard",
+    ),
     CommandSpec("briefing", "briefing", "Show the current briefing", "Papers", "standard"),
     CommandSpec("next", "next", "Show the next Pulse recommendation", "Papers", "standard"),
     CommandSpec("inbox", "inbox", "Show unread saved papers", "Papers", "standard"),

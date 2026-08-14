@@ -51,6 +51,7 @@ from telegram_bot.services_client import (
     pause_focus_session,
     record_paper_feedback,
     search_papers,
+    search_papers_feed,
     start_focus_session,
     submit_review_rating,
     trigger_pulse_generation,
@@ -784,8 +785,8 @@ async def test_log_focus_session_5xx_propagates(config: BotConfig) -> None:
 
 @pytest.mark.asyncio
 async def test_search_papers_correct_url_and_body(config: BotConfig) -> None:
-    papers = [{"id": 1, "title": "P1"}]
-    http = _make_http(make_http_response(papers))
+    payload = {"results": [{"title": "P1"}], "total": 1, "per_source_counts": {"arxiv": 1}}
+    http = _make_http(make_http_response(payload))
 
     result = await search_papers(http, config, USER_ID, "transformers")
 
@@ -793,9 +794,14 @@ async def test_search_papers_correct_url_and_body(config: BotConfig) -> None:
     call_args, call_kwargs = http.post.call_args
     url = call_args[0] if call_args else call_kwargs["url"]
     assert url == "http://paper:8000/api/search"
-    assert call_kwargs.get("json") == {"query": "transformers"}
+    # The request model defaults to arXiv alone, so the four sources are explicit.
+    assert call_kwargs.get("json") == {
+        "query": "transformers",
+        "source_types": ["arxiv", "semantic_scholar", "openalex", "pubmed"],
+    }
+    assert call_kwargs["timeout"] > 70.5
     _assert_owner_headers(call_kwargs)
-    assert result == papers
+    assert result == payload
 
 
 @pytest.mark.asyncio
@@ -832,6 +838,22 @@ async def test_fetch_papers_feed_5xx_propagates(config: BotConfig) -> None:
 
     with pytest.raises(httpx.HTTPStatusError):
         await fetch_papers_feed(http, config, USER_ID, view="library", limit=10)
+
+
+@pytest.mark.asyncio
+async def test_search_papers_feed_queries_the_library_view(config: BotConfig) -> None:
+    feed = {"papers": [{"id": 2}], "total": 1, "search_mode": "bm25"}
+    http = _make_http(make_http_response(feed))
+
+    result = await search_papers_feed(http, config, USER_ID, "transformers")
+
+    http.post.assert_not_called()
+    call_args, call_kwargs = http.get.call_args
+    url = call_args[0] if call_args else call_kwargs["url"]
+    assert url == "http://paper:8000/api/papers/feed"
+    assert call_kwargs.get("params") == {"view": "library", "limit": 10, "q": "transformers"}
+    _assert_owner_headers(call_kwargs)
+    assert result == feed
 
 
 # ---------------------------------------------------------------------------

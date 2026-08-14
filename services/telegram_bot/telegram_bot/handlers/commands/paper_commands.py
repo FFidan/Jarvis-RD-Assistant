@@ -1,8 +1,9 @@
-"""Paper-domain command handlers: /papers, /stats, /briefing, /next, /inbox."""
+"""Paper-domain command handlers: /papers, /discover, /stats, /briefing, /next, /inbox."""
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -10,6 +11,7 @@ from telegram.ext import ContextTypes
 
 from telegram_bot import services_client
 from telegram_bot.formatters import (
+    escape,
     format_morning_briefing,
     format_paper_card,
     format_pulse_card,
@@ -26,6 +28,14 @@ from telegram_bot.handlers.helpers import (
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
+
+
+def _feed_papers(data: object) -> list[dict[str, Any]]:
+    """Return the paper rows carried by a ``/api/papers/feed`` response envelope."""
+    if not isinstance(data, dict) or "papers" not in data:
+        return []
+    rows = data["papers"]
+    return rows if isinstance(rows, list) else []
 
 
 def _library_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
@@ -69,7 +79,7 @@ def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
 @rate_limit(max_calls=5, window_seconds=60)
 @auth_required
 async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/papers [query]`` — search paper_ingestion API or list Library papers."""
+    """Handle ``/papers [query]`` — list Library papers, or search within them."""
     if update.message is None:
         return
     query = sanitize_user_input(" ".join(context.args) if context.args else "", 500)
@@ -79,39 +89,36 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     jarvis_user_id = get_jarvis_user_id(context)
     assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
 
-    if query:
-        # Search via paper_ingestion API
-        try:
-            papers = await services_client.search_papers(http, config, jarvis_user_id, query)
-            if isinstance(papers, dict):
-                papers = papers.get("papers", [])
-        except Exception:
-            logger.exception("Paper search failed")
-            await update.message.reply_text(
-                "Failed to search papers. Please try again later.",
-                parse_mode="HTML",
+    try:
+        if query:
+            data = await services_client.search_papers_feed(
+                http, config, jarvis_user_id, query, limit=10
             )
-            return
-    else:
-        # List Library papers via feed API
-        try:
+        else:
             data = await services_client.fetch_papers_feed(
                 http, config, jarvis_user_id, view="library", limit=10
             )
-            papers = data.get("papers", []) if isinstance(data, dict) else []
-        except Exception:
-            logger.exception("Failed to fetch library feed")
-            await update.message.reply_text(
-                "Failed to load library. Please try again later.",
-                parse_mode="HTML",
-            )
-            return
-
-    if not papers:
+    except Exception:
+        logger.exception("Failed to fetch library feed")
         await update.message.reply_text(
-            "📚 Your Library is empty. Save papers from /inbox or /next to start building it.",
+            "Failed to load library. Please try again later.",
             parse_mode="HTML",
         )
+        return
+
+    papers = _feed_papers(data)
+    if not papers:
+        if query:
+            safe_query = escape(query)
+            message = (
+                f'No library papers match "{safe_query}". '
+                f"Try /discover {safe_query} to search external sources."
+            )
+        else:
+            message = (
+                "Your Library is empty. Save papers from /inbox or /next to start building it."
+            )
+        await update.message.reply_text(message, parse_mode="HTML")
         return
 
     for paper in papers[:10]:
@@ -125,6 +132,64 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup=_library_keyboard(paper_id),
             disable_web_page_preview=True,
         )
+
+
+def _format_discovery_result(query: str, response: dict[str, Any]) -> str:
+    """Render a discovery search, stating the library write it performed."""
+    results = response.get("results") or []
+    if not results:
+        return f'No external source returned a paper for "{escape(query)}". Try different terms.'
+
+    lines = [f"Found {len(results)} papers and saved them to your library."]
+    failed = response.get("failed") or []
+    if failed:
+        lines.append(f"{len(failed)} could not be saved.")
+    per_source_counts = response.get("per_source_counts") or {}
+    found_in = [
+        f"{escape(source)}: {count}" for source, count in per_source_counts.items() if count
+    ]
+    if found_in:
+        lines.append("From " + ", ".join(found_in) + ".")
+    degraded_sources = response.get("degraded_sources") or []
+    if degraded_sources:
+        lines.append(
+            "These sources did not answer: " + ", ".join(escape(s) for s in degraded_sources) + "."
+        )
+    return "\n".join(lines)
+
+
+@rate_limit(max_calls=3, window_seconds=60)
+@auth_required
+async def discover_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/discover <query>`` — search external sources and save what they return."""
+    if update.message is None:
+        return
+    query = sanitize_user_input(" ".join(context.args) if context.args else "", 500)
+    if not query:
+        await update.message.reply_text(
+            "Send a query, for example /discover protein folding. "
+            "Discovery searches arXiv, Semantic Scholar, OpenAlex and PubMed, "
+            "and saves what it finds to your library.",
+            parse_mode="HTML",
+        )
+        return
+
+    http = get_http(context)
+    config = get_config(context)
+    jarvis_user_id = get_jarvis_user_id(context)
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
+
+    try:
+        response = await services_client.search_papers(http, config, jarvis_user_id, query)
+    except Exception:
+        logger.exception("External paper discovery failed")
+        await update.message.reply_text(
+            "Discovery failed. Please try again later.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(_format_discovery_result(query, response), parse_mode="HTML")
 
 
 @rate_limit(max_calls=5, window_seconds=60)
@@ -289,12 +354,7 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    if isinstance(data, list):
-        papers = data
-    elif isinstance(data, dict):
-        papers = data.get("papers", [])
-    else:
-        papers = []
+    papers = _feed_papers(data)
     if not papers:
         await update.message.reply_text("📭 Inbox is empty — nothing to triage.", parse_mode="HTML")
         return
