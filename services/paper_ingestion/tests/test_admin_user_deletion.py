@@ -20,7 +20,8 @@ from tests._auth_fakes import (
     build_request_admin,
 )
 
-_NOW = datetime.now(UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 # Pool/request stubs delegated to shared _auth_fakes (D5-03).
 _build_mock_pool = build_mock_pool
@@ -42,7 +43,7 @@ def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
         "id": id,
         "email": email,
         "role": role,
-        "created_at": _NOW - timedelta(days=1),
+        "created_at": _FIXED_NOW - timedelta(days=1),
         "last_login_at": None,
     }
 
@@ -58,7 +59,7 @@ async def test_restore_clears_deleted_at_within_grace(monkeypatch) -> None:
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(
         side_effect=[
-            {**_user_row(id=5), "deleted_at": _NOW},
+            {**_user_row(id=5), "deleted_at": _FIXED_NOW},
             _user_row(id=5),
         ]
     )

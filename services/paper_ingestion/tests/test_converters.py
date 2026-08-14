@@ -25,7 +25,8 @@ from tests._embedder_fakes import _dict_to_record
 # Minimal row builder
 # ---------------------------------------------------------------------------
 
-_NOW = datetime.now(UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 _BASE_ROW: dict = {
     "id": 1,
@@ -34,14 +35,14 @@ _BASE_ROW: dict = {
     "title": "Test Paper",
     "authors": ["Alice", "Bob"],
     "abstract": "An abstract.",
-    "published_date": _NOW.date(),
+    "published_date": _FIXED_NOW.date(),
     "url": "https://example.com/paper",
     "pdf_url": None,
     "pdf_local_path": None,
     "pdf_downloaded": False,
     "citation_count": 0,
     "metadata": {},
-    "created_at": _NOW,
+    "created_at": _FIXED_NOW,
 }
 
 
@@ -97,13 +98,13 @@ def test_row_to_feed_paper_recent_feedback_present():
     row = _row(
         recent_feedback_signal="positive",
         recent_feedback_source="feed_thumbs",
-        recent_feedback_created_at=_NOW,
+        recent_feedback_created_at=_FIXED_NOW,
     )
     result = row_to_feed_paper(row)  # type: ignore[arg-type]
     assert result.recent_feedback is not None
     assert result.recent_feedback.signal == "positive"
     assert result.recent_feedback.source == "feed_thumbs"
-    assert result.recent_feedback.created_at == _NOW
+    assert result.recent_feedback.created_at == _FIXED_NOW
 
 
 def test_row_to_feed_paper_recent_feedback_absent():
@@ -155,7 +156,7 @@ _FULL_PAPER_ROW_DEFAULTS: dict = {
     "priority_score": None,
     "metadata": {},
     "discovered_at": None,
-    "created_at": _NOW,
+    "created_at": _FIXED_NOW,
 }
 
 

@@ -11,7 +11,8 @@ from unittest.mock import patch
 from jarvis_common.verify import QuoteVerifier
 from paper_ingestion.models import ChunkResponse
 
-_NOW = datetime.now(tz=UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def _make_chunk(
@@ -28,7 +29,7 @@ def _make_chunk(
         chunk_index=chunk_index if chunk_index is not None else chunk_id,
         content=content,
         page_number=page_number,
-        created_at=_NOW,
+        created_at=_FIXED_NOW,
     )
 
 
