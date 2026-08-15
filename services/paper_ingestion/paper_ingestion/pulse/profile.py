@@ -35,6 +35,30 @@ _CLASSIFIER_OPT_IN_WEIGHT = 0.1
 _RATING_HISTORY_LIMIT = 10
 
 
+def _with_classifier_opt_in(weights: dict[str, float], cfg: dict[str, Any]) -> dict[str, float]:
+    """Apply the reader's personal classifier setting over an unset weight.
+
+    Parameters
+    ----------
+    weights
+        Signal weights already resolved from configuration and clamped.
+    cfg
+        Raw configuration values for this reader.
+
+    Returns
+    -------
+    dict of str to float
+        The weights, with the classifier signal raised to its opt-in value only
+        when the reader accepted it and no weight was chosen deliberately. A
+        weight someone set themselves always wins.
+    """
+    if cfg.get("pulse.classifier_opt_in") is not True:
+        return weights
+    if weights.get("classifier", 0.0) != 0.0:
+        return weights
+    return {**weights, "classifier": _CLASSIFIER_OPT_IN_WEIGHT}
+
+
 class UserProfile(BaseModel):
     """Snapshot of user context consumed by the Pulse scoring pipeline."""
 
@@ -229,8 +253,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         weights = {k: min(1.0, max(0.0, w)) for k, w in weights.items()}
         if out_of_range:
             logger.warning("pulse profile weights had values outside [0, 1]; clamped")
-        if cfg.get("pulse.classifier_opt_in") is True and weights.get("classifier", 0.0) == 0.0:
-            weights["classifier"] = _CLASSIFIER_OPT_IN_WEIGHT
+        weights = _with_classifier_opt_in(weights, cfg)
         deck_size = int(cfg.get("pulse.deck_size", _DEFAULT_DECK_SIZE))
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 
