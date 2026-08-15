@@ -128,6 +128,26 @@ Respond in this exact JSON format:
 }
 """
 
+_BODY_FINDINGS_RULE = """\
+6. For key_findings, use supporting quotes from body sections, not the abstract.
+   Prefer Results and Methods. If the excerpt contains no body-section evidence,
+   return an empty key_findings list.
+"""
+
+_JSON_RESPONSE_MARKER = "Respond in this exact JSON format:"
+
+
+def _findings_system_prompt(system: str, chunks: list[ChunkResponse]) -> str:
+    """Apply the body-evidence rule only when a paper has chunks after its abstract."""
+    if not any(chunk.chunk_index > 0 for chunk in chunks):
+        return system
+    return system.replace(
+        _JSON_RESPONSE_MARKER,
+        f"{_BODY_FINDINGS_RULE}\n{_JSON_RESPONSE_MARKER}",
+        1,
+    )
+
+
 _SYSTEM_CONDENSE = """\
 You are a research assistant. Merge the following digests of consecutive sections
 of one paper into a single shorter digest.
@@ -516,6 +536,7 @@ async def _map_reduce_summary(
     verified_count = 0
     results = []
     offset = 0
+    findings_system = _findings_system_prompt(_SYSTEM_DIGEST, chunks)
     for window in windows:
         window_chunks = chunks[offset : offset + len(window)]
         offset += len(window)
@@ -532,7 +553,7 @@ async def _map_reduce_summary(
             prompt=SUMMARIZE_PROMPT_TEMPLATE.format(
                 title=safe_title, authors=safe_authors, text=block
             ),
-            system=_SYSTEM_DIGEST,
+            system=findings_system,
             max_tokens=_DIGEST_OUTPUT_TOKENS,
             model=model,
             paper_id=paper_id,
@@ -1007,7 +1028,7 @@ async def _generate_paper_summary(
             client,
             response_model=SummarizationOutput,
             prompt=prompt,
-            system=_SYSTEM_SUMMARIZE,
+            system=_findings_system_prompt(_SYSTEM_SUMMARIZE, chunks),
             max_tokens=_SUMMARY_OUTPUT_TOKENS,
             model=llm_model_name,
             paper_id=paper_id,

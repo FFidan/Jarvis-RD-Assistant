@@ -340,7 +340,12 @@ export function PaperResearchLog({
         id="section-findings"
         title={`Evidence / Key Findings${evidenceCount > 0 ? ` (${evidenceCount})` : ''}`}
       >
-        <EvidenceTab summary={summary} paperId={paperId} pdfAvailable={paper.pdf_downloaded} />
+        <EvidenceTab
+          summary={summary}
+          chunks={chunks}
+          paperId={paperId}
+          pdfAvailable={paper.pdf_downloaded}
+        />
       </ResearchSection>
 
       {/* ── § PDF Reader ─────────────────────────────────────────────── */}

@@ -363,8 +363,8 @@ describe('PaperDetailPage', () => {
       expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
     // Individual passage buttons are visible
-    expect(screen.getByText(/Passage 0/)).toBeInTheDocument();
-    expect(screen.getByText(/Passage 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 1 of/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 2 of/)).toBeInTheDocument();
   });
 
   it('shows notes in the scrolling column', async () => {

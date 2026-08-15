@@ -57,6 +57,7 @@ class ChunkLike(Protocol):
     """
 
     id: int
+    chunk_index: int | None
     content: str
     page_number: int | None
 
@@ -75,11 +76,12 @@ class DictChunk:
         result = QuoteVerifier().verify_quote(quote, full_text, chunk_objects)
     """
 
-    __slots__ = ("id", "content", "page_number")
+    __slots__ = ("id", "chunk_index", "content", "page_number")
 
     def __init__(self, data: dict) -> None:
-        """Unpack ``id``, ``content``, and ``page_number`` from a raw chunk dict."""
+        """Unpack passage identity and page data from a raw chunk dict."""
         self.id: int = data["id"]
+        self.chunk_index: int | None = data.get("chunk_index")
         self.content: str = data["content"]
         self.page_number: int | None = data.get("page_number")
 
@@ -93,6 +95,7 @@ class VerificationResult(BaseModel):
     match_score: float | None = None  # 0.0-1.0, only for fuzzy
     matched_text: str | None = None  # actual text that matched
     chunk_id: int | None = None
+    chunk_index: int | None = None
     page_number: int | None = None
     matched_span_start: int | None = None  # byte offset of matched_text in full_text (O(1) lookup)
 
@@ -151,7 +154,7 @@ class QuoteVerifier:
         if normalized_full is None:
             normalized_full = self._normalize_for_match(full_text)
         if normalized_quote in normalized_full:
-            chunk_id, page_number = self._find_chunk_for_quote(quote, chunks)
+            chunk_id, chunk_index, page_number = self._find_chunk_for_quote(quote, chunks)
             # Raw find may return -1 when normalization changed whitespace/Unicode.
             # Accept matched_span_start=None and rely on page_number from _find_chunk_for_quote.
             span_start = full_text.find(quote)
@@ -162,6 +165,7 @@ class QuoteVerifier:
                 match_score=1.0,
                 matched_text=quote,
                 chunk_id=chunk_id,
+                chunk_index=chunk_index,
                 page_number=page_number,
                 matched_span_start=span_start if span_start != -1 else None,
             )
@@ -187,6 +191,7 @@ class QuoteVerifier:
                 match_score=best_score / 100.0,
                 matched_text=best_chunk.content,
                 chunk_id=best_chunk.id,
+                chunk_index=best_chunk.chunk_index,
                 page_number=best_chunk.page_number,
                 matched_span_start=span_start if span_start != -1 else None,
             )
@@ -322,15 +327,15 @@ class QuoteVerifier:
         self,
         quote: str,
         chunks: list[ChunkLike],
-    ) -> tuple[int | None, int | None]:
-        """Return ``(chunk_id, page_number)`` for the chunk containing *quote*.
+    ) -> tuple[int | None, int | None, int | None]:
+        """Return passage identity and page for the chunk containing *quote*.
 
-        Returns ``(None, None)`` if no chunk contains the quote.
+        Returns three ``None`` values if no chunk contains the quote.
         """
         normalized_quote = self._normalize_for_match(quote)
         if not normalized_quote or not any(ch.isalnum() for ch in normalized_quote):
-            return None, None
+            return None, None, None
         for chunk in chunks:
             if normalized_quote in self._normalize_for_match(chunk.content):
-                return chunk.id, chunk.page_number
-        return None, None
+                return chunk.id, chunk.chunk_index, chunk.page_number
+        return None, None, None

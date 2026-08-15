@@ -22,6 +22,7 @@ PUBLIC_DOC_PATHS = [
     Path("docs/contracts/03-llm.md"),
     Path("docs/contracts/04-observability.md"),
     Path("docs/contracts/05-models-and-hardware.md"),
+    Path("docs/contracts/06-evidence-anchors.md"),
     Path("docs/contracts/07-testing.md"),
 ]
 
