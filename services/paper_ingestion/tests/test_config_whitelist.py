@@ -33,6 +33,35 @@ _REMOVED_NOTIFICATION_KEYS = {
 
 # New user-preferences key replacing notifications.timezone
 _USER_PREF_KEYS = {"user.timezone"}
+_UI_PREF_VALUES = {
+    "ui.appearance": {
+        "theme": "dark",
+        "accent": "forest",
+        "type": "editorial",
+        "density": "compact",
+    },
+    "ui.timer": {
+        "workMinutes": 50,
+        "shortBreakMinutes": 10,
+        "longBreakMinutes": 25,
+        "targetCycles": 6,
+    },
+    "ui.nav_mode": "full",
+}
+_MALFORMED_UI_PREF_VALUES = {
+    "ui.appearance": {
+        "accent": "forest",
+        "type": "editorial",
+        "density": "compact",
+    },
+    "ui.timer": {
+        "workMinutes": "50",
+        "shortBreakMinutes": 10,
+        "longBreakMinutes": 25,
+        "targetCycles": 6,
+    },
+    "ui.nav_mode": "wide",
+}
 
 
 def test_frontend_metadata_keys_all_allowed():
@@ -57,6 +86,23 @@ def test_user_timezone_allowed():
     """user.timezone must be in the whitelist as the replacement for notifications.timezone."""
     missing = _USER_PREF_KEYS - _ALLOWED_CONFIG_KEYS
     assert not missing, f"User-pref keys not in backend whitelist: {missing}"
+
+
+@pytest.mark.parametrize(("key", "value"), _UI_PREF_VALUES.items())
+def test_ui_preferences_are_allowed_personal_and_validated(key: str, value: object):
+    """Each interface preference passes every registry required by the write path."""
+    assert key in _ALLOWED_CONFIG_KEYS
+    assert key in PERSONAL_KEYS
+    assert key not in SYSTEM_KEYS
+    assert _classify_config_key(key) == "personal"
+    _CONFIG_VALIDATORS[key](value)
+
+
+@pytest.mark.parametrize(("key", "value"), _MALFORMED_UI_PREF_VALUES.items())
+def test_ui_preference_validators_reject_malformed_values(key: str, value: object):
+    """Malformed interface preferences cannot reach persistence."""
+    with pytest.raises(ValueError):
+        _CONFIG_VALIDATORS[key](value)
 
 
 def test_onboarding_dismissal_is_allowed_and_personal():

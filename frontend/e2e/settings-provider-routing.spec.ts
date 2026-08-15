@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { installMockedApiDefaults } from './helpers/setup';
+import { installMockedApiDefaults, RETURNING_USER_PREFERENCES } from './helpers/setup';
 
 const PROVIDERS = [
   {
@@ -73,6 +73,7 @@ const PROVIDERS = [
 ];
 
 const CONFIG = [
+  ...RETURNING_USER_PREFERENCES,
   { key: 'llm.openai.api_key', value: 'masked-key' },
   { key: 'llm.smart_model', value: 'qwen3:14b' },
   { key: 'llm.fast_model', value: 'qwen3:4b' },
@@ -191,6 +192,10 @@ async function setupProviderMocks(page: Page) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(CONFIG) });
   });
   await page.route('**/api/config/**', async (route: Route) => {
+    if (new URL(route.request().url()).pathname.startsWith('/api/config/ui.')) {
+      await route.fallback();
+      return;
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
   await page.route('**/api/providers', async (route: Route) => {

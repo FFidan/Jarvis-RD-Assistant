@@ -96,9 +96,17 @@ test.describe('Analytics IA (mocked)', () => {
     await installMockedApiDefaults(page);
     await mockAnalyticsRoutes(page);
     // Mock the setup config endpoint so the app doesn't block on setup gate
-    await page.route('**/api/config/**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ value: true }) }),
-    );
+    await page.route('**/api/config/**', async (route) => {
+      if (new URL(route.request().url()).pathname.startsWith('/api/config/ui.')) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ value: true }),
+      });
+    });
     // Mock any user/account endpoints
     await page.route('**/api/auth/**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true }) }),

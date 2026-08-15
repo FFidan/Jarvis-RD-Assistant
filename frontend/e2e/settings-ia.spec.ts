@@ -14,7 +14,7 @@
  * Test helpers write sessionStorage before first navigation.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { installMockedApiDefaults } from './helpers/setup';
+import { installMockedApiDefaults, RETURNING_USER_PREFERENCES } from './helpers/setup';
 
 const MOCK_ACCOUNT = {
   id: 1,
@@ -136,7 +136,11 @@ async function setupMocks(page: Page) {
   // Stub config endpoint
   await page.route('**/api/config', async (route) => {
     if (route.request().method() === 'GET') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(RETURNING_USER_PREFERENCES),
+      });
     } else {
       await route.continue();
     }
@@ -231,7 +235,11 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
     });
     await page.route('**/api/config', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(RETURNING_USER_PREFERENCES),
+      });
     });
     await page.route('**/api/topics', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
@@ -276,7 +284,11 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
     });
     await page.route('**/api/config', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(RETURNING_USER_PREFERENCES),
+      });
     });
     await page.route('**/api/topics', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });

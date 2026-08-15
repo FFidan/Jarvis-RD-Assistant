@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { APIRequestContext, Page, Route } from '@playwright/test';
 
 /**
  * Helpers for driving the first-run setup wizard in e2e tests.
@@ -60,10 +60,78 @@ const SETUP_STATUS = {
 
 export const NAV_PREFS_KEY = 'jarvis-nav-prefs';
 export const ONBOARDING_DISMISSED_KEY = 'jarvis-onboarding-dismissed';
+export const RETURNING_USER_PREFERENCES = [
+  {
+    key: 'ui.appearance',
+    value: { theme: 'system', accent: 'ink-blue', type: 'serif-calm', density: 'default' },
+  },
+  {
+    key: 'ui.timer',
+    value: { workMinutes: 25, shortBreakMinutes: 5, longBreakMinutes: 15, targetCycles: 4 },
+  },
+  { key: 'ui.nav_mode', value: 'full' },
+] as const;
+
+const preferenceState = new WeakMap<Page, Map<string, unknown>>();
+const preferenceRoutesInstalled = new WeakSet<Page>();
+
+function preferencesFor(page: Page): Map<string, unknown> {
+  let preferences = preferenceState.get(page);
+  if (preferences === undefined) {
+    preferences = new Map(RETURNING_USER_PREFERENCES.map(({ key, value }) => [key, value]));
+    preferenceState.set(page, preferences);
+  }
+  return preferences;
+}
+
+async function fulfillPreferenceRequest(route: Route, page: Page): Promise<boolean> {
+  const request = route.request();
+  const path = new URL(request.url()).pathname;
+  const method = request.method();
+  const preferences = preferencesFor(page);
+
+  if (method === 'GET' && path === '/api/config') {
+    await route.fulfill(
+      jsonResponse(Array.from(preferences, ([key, value]) => ({ key, value }))),
+    );
+    return true;
+  }
+
+  const key = path.startsWith('/api/config/') ? decodeURIComponent(path.slice(12)) : null;
+  if (key?.startsWith('ui.') && method === 'PUT') {
+    const body = request.postDataJSON() as { value?: unknown } | null;
+    if (body === null || !Object.hasOwn(body, 'value')) {
+      await route.fulfill(jsonResponse({ detail: 'Missing preference value' }, 400));
+      return true;
+    }
+    preferences.set(key, body.value);
+    await route.fulfill(jsonResponse({ key, value: body.value }));
+    return true;
+  }
+
+  if (key?.startsWith('ui.') && method === 'GET') {
+    if (!preferences.has(key)) {
+      await route.fulfill(jsonResponse({ detail: 'Preference not found' }, 404));
+      return true;
+    }
+    await route.fulfill(jsonResponse({ key, value: preferences.get(key) }));
+    return true;
+  }
+
+  return false;
+}
+
+async function ensurePreferenceRoutes(page: Page): Promise<void> {
+  if (preferenceRoutesInstalled.has(page)) return;
+  preferenceRoutesInstalled.add(page);
+  await page.route(/\/api\/config(?:\/ui\.(?:appearance|timer|nav_mode))?(?:\?|$)/, async (route) => {
+    if (!(await fulfillPreferenceRequest(route, page))) await route.fallback();
+  });
+}
 
 /**
  * Seed the shell state a returning researcher has: the grouped ("full") nav
- * and a dismissed onboarding tour.
+ * through the account endpoint and a dismissed onboarding tour.
  *
  * The product default is the short `simple` rail for everyone, so specs that
  * assert group labels or non-essential destinations must opt into the grouped
@@ -71,15 +139,13 @@ export const ONBOARDING_DISMISSED_KEY = 'jarvis-onboarding-dismissed';
  * `installMockedApiDefaults` applies this, so every mocked spec starts here.
  */
 export async function seedReturningUserShell(page: Page): Promise<void> {
+  preferencesFor(page).set('ui.nav_mode', 'full');
+  await ensurePreferenceRoutes(page);
   await page.addInitScript(
-    ([navKey, tourKey]) => {
-      window.localStorage.setItem(
-        navKey,
-        JSON.stringify({ state: { navMode: 'full' }, version: 0 }),
-      );
+    (tourKey) => {
       window.localStorage.setItem(tourKey, 'true');
     },
-    [NAV_PREFS_KEY, ONBOARDING_DISMISSED_KEY] as const,
+    ONBOARDING_DISMISSED_KEY,
   );
 }
 
@@ -89,6 +155,8 @@ export async function seedReturningUserShell(page: Page): Promise<void> {
  * Init scripts run in registration order, so call this after the defaults.
  */
 export async function seedFirstRunShell(page: Page): Promise<void> {
+  preferencesFor(page).delete('ui.nav_mode');
+  await ensurePreferenceRoutes(page);
   await page.addInitScript(
     ([navKey, tourKey]) => {
       window.localStorage.removeItem(navKey);
@@ -133,6 +201,8 @@ export async function installMockedApiDefaults(page: Page): Promise<void> {
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
+
+    if (await fulfillPreferenceRequest(route, page)) return;
 
     if (method === 'GET' && path === '/api/setup/status') {
       await route.fulfill(jsonResponse({ configured: true, setup_completed: true }));

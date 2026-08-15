@@ -1,7 +1,7 @@
 /**
  * Sidebar — grouped roman-numeral navigation per the Shell/Sidebar+Admin IA spec.
  *
- * Density modes (device-scoped, `useNavPrefsStore`):
+ * Density modes (saved to the account, `useNavPrefsStore`):
  *   - simple  — short essentials rail (My Day · Papers · Discover · Projects ·
  *               Ask · Learning Cards). The default until the researcher asks
  *               for more.
@@ -470,7 +470,7 @@ export function Sidebar({ drawer = false, onSearch }: SidebarProps) {
             </div>
           )}
 
-          {/* Nav-mode toggle — simple ⇄ full nav density (device-scoped) */}
+          {/* Nav-mode toggle — simple ⇄ full nav density, saved to the account */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

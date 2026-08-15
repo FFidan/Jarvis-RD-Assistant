@@ -1,13 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  APPEARANCE_CHANGED_EVENT,
   ACCENT_PRESETS, TYPE_PRESETS, DENSITY_PRESETS,
   loadAppearance, saveAppearance,
+  type AppearancePrefs,
   type AccentId, type TypeId, type DensityId,
 } from '@/lib/theme';
 import { MarkerLabel } from '@/components/typography/MarkerLabel';
 
 export function AppearanceSection() {
   const [prefs, setPrefs] = useState(() => loadAppearance());
+
+  useEffect(() => {
+    const updateFromCache = (event: Event) => {
+      setPrefs((event as CustomEvent<AppearancePrefs>).detail);
+    };
+    window.addEventListener(APPEARANCE_CHANGED_EVENT, updateFromCache);
+    return () => window.removeEventListener(APPEARANCE_CHANGED_EVENT, updateFromCache);
+  }, []);
 
   function handleAccent(id: AccentId) {
     setPrefs((p) => ({ ...p, accent: id }));
@@ -25,7 +35,7 @@ export function AppearanceSection() {
   return (
     <div className="space-y-8">
       <p className="text-sm text-muted-foreground">
-        Personalize the look of JARVIS — choose an accent color, type pairing, and information density.
+        Choose an accent color, type pairing, and information density. These settings follow your account.
       </p>
 
       {/* Accent color */}
