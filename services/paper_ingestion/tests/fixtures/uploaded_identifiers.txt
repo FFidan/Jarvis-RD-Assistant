@@ -1,0 +1,7 @@
+Journal of Reliable Research, 2024
+
+Precision-first document linking for scientific libraries
+
+The archival version is available at https://doi.org/10.5555/12345678.2024.9.
+A preprint is also available as arXiv:2403.01234v2.
+

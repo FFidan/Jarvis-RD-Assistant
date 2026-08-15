@@ -92,6 +92,27 @@ def _citation_source() -> MagicMock:
 
 
 @pytest.mark.asyncio
+async def test_resolved_bibliography_uses_reference_edge_insertion() -> None:
+    from paper_ingestion.citations import sync_bibliography_references
+
+    conn = AsyncMock()
+    references = [{"paperId": "reference-1", "title": "Referenced paper"}]
+    with patch(
+        "paper_ingestion.citations._sync_citation_direction",
+        AsyncMock(return_value=(1, 1)),
+    ) as sync_direction:
+        result = await sync_bibliography_references(conn, references, 7)
+
+    assert result == (1, 1)
+    sync_direction.assert_awaited_once_with(
+        conn,
+        references,
+        7,
+        related_paper_is_source=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_citation_sync_translates_doi_identifier_for_semantic_scholar() -> None:
     """The citation client must receive S2's DOI form, not the stored prefix."""
     from paper_ingestion.citations import sync_citations_for_paper
