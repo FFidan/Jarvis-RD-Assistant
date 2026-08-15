@@ -72,6 +72,7 @@ class TestFuzzyBestMatch:
         assert result.verified is True
         assert result.match_type == "fuzzy"
         assert result.chunk_id == 20, "Should select chunk_1 (best match), not chunk_0"
+        assert result.chunk_index == 1
         assert result.page_number == 5
         assert result.match_score == 1.0  # 100 / 100
 
@@ -134,6 +135,7 @@ class TestQuoteFormattingNoise:
         assert result.match_type == "exact"
         assert result.quote == quote
         assert result.chunk_id == 30
+        assert result.chunk_index == 30
         assert result.page_number == 3
 
     def test_rejects_below_threshold_paraphrase(self) -> None:

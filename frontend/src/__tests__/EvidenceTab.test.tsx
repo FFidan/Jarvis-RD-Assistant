@@ -1,10 +1,12 @@
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { EvidenceTab } from '@/components/paper/EvidenceTab';
+import { ChunksTab, passageAnchorId } from '@/components/paper/ChunksTab';
 import { PDF_GOTO_EVENT } from '@/lib/pdf-events';
-import type { KeyFinding, Summary } from '@/types';
+import type { Chunk, KeyFinding, Summary } from '@/types';
 
 function keyFinding(overrides: Partial<KeyFinding> = {}): KeyFinding {
   return {
@@ -42,6 +44,38 @@ function renderTab(s: Summary, paperId?: number, pdfAvailable = true) {
     <MemoryRouter>
       <EvidenceTab summary={s} paperId={paperId} pdfAvailable={pdfAvailable} />
     </MemoryRouter>,
+  );
+}
+
+function chunk(overrides: Partial<Chunk> = {}): Chunk {
+  return {
+    id: 12,
+    paper_id: 42,
+    chunk_index: 1,
+    content: 'A supporting quote in its full passage.',
+    page_number: 7,
+    start_char: 0,
+    end_char: 39,
+    embedding_id: null,
+    created_at: '2026-06-23T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function LazyPassages({ chunks }: { chunks: Chunk[] }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <section id="section-chunks">
+      <button
+        type="button"
+        data-testid="chunks-expand-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(true)}
+      >
+        Show passages
+      </button>
+      {expanded && <ChunksTab chunks={chunks} />}
+    </section>
   );
 }
 
@@ -91,18 +125,74 @@ describe('EvidenceTab — evidence anchors', () => {
     window.removeEventListener(PDF_GOTO_EVENT, goto);
   });
 
-  it('passage anchor scrolls to the source passages section', async () => {
-    renderTab(summary([keyFinding()]), 42);
+  it('passage chip targets and expands the stable chunk anchor', async () => {
+    const chunks = [chunk({ id: 99, chunk_index: 0 }), chunk()];
+    render(
+      <MemoryRouter>
+        <EvidenceTab summary={summary([keyFinding()])} chunks={chunks} paperId={42} />
+        <section id="section-chunks">
+          <ChunksTab chunks={chunks} />
+        </section>
+      </MemoryRouter>,
+    );
 
-    const anchor = screen.getByRole('button', { name: 'Open the source passages section' });
-    // The visible label promises the whole section, which is what the click
-    // delivers — never a jump to one numbered passage.
-    expect(anchor).toHaveTextContent('Source passages');
-    expect(anchor).not.toHaveTextContent(String(keyFinding().chunk_id));
+    const passage = document.getElementById(passageAnchorId(chunk().id));
+    expect(passage).toHaveAttribute('data-chunk-index', String(chunk().chunk_index));
+    expect(passage).not.toBeNull();
+    passage!.scrollIntoView = vi.fn();
 
-    await userEvent.click(anchor);
+    const chip = screen.getByRole('button', { name: 'Open passage 2 of 2' });
+    expect(chip).toHaveTextContent('Passage 2 of 2');
+    expect(chip).not.toHaveTextContent(String(keyFinding().chunk_id));
 
-    expect(sectionChunks.scrollIntoView).toHaveBeenCalled();
+    await userEvent.click(chip);
+
+    expect(passage!.scrollIntoView).toHaveBeenCalled();
+    expect(screen.getByText('A supporting quote in its full passage.')).toBeInTheDocument();
+    expect(screen.getByText('Passage 2 of 2 (Page 7)')).toBeInTheDocument();
+  });
+
+  it('opens the passage collection before revealing a lazy row', async () => {
+    sectionChunks.remove();
+    const chunks = [chunk({ id: 99, chunk_index: 0 }), chunk()];
+    const scrolledIds: string[] = [];
+    const originalScroll = HTMLElement.prototype.scrollIntoView;
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement) {
+        scrolledIds.push(this.id);
+      },
+    });
+    const animationFrame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      window.setTimeout(() => callback(0), 0);
+      return 1;
+    });
+
+    try {
+      render(
+        <MemoryRouter>
+          <EvidenceTab summary={summary([keyFinding()])} chunks={chunks} paperId={42} />
+          <LazyPassages chunks={chunks} />
+        </MemoryRouter>,
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'Open passage 2 of 2' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('A supporting quote in its full passage.')).toBeInTheDocument();
+      });
+      expect(scrolledIds).toContain(passageAnchorId(chunk().id));
+    } finally {
+      animationFrame.mockRestore();
+      if (originalScroll) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+          configurable: true,
+          value: originalScroll,
+        });
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+      }
+    }
   });
 
   it('states why the page anchor cannot act when the PDF is not downloaded', async () => {

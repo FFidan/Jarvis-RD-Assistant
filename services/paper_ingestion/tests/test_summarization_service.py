@@ -1119,6 +1119,21 @@ def test_system_summarize_contains_rules():
     assert "verbatim quote" in _SYSTEM_SUMMARIZE.lower() or "verbatim" in _SYSTEM_SUMMARIZE
 
 
+def test_body_findings_rule_is_conditional_on_chunks_after_the_abstract() -> None:
+    abstract_only = [SimpleNamespace(chunk_index=0)]
+    with_body = [*abstract_only, SimpleNamespace(chunk_index=1)]
+
+    abstract_system = summarization._findings_system_prompt(
+        summarization._SYSTEM_SUMMARIZE, abstract_only
+    )
+    body_system = summarization._findings_system_prompt(summarization._SYSTEM_SUMMARIZE, with_body)
+
+    assert summarization._BODY_FINDINGS_RULE not in abstract_system
+    assert summarization._BODY_FINDINGS_RULE in body_system
+    assert "Results and Methods" in body_system
+    assert "not the abstract" in body_system
+
+
 def test_summary_prompt_shapes_include_relevance_notes():
     """Prompt JSON examples should match the optional relevance_notes schema field."""
     from paper_ingestion.services.summarization import _SYSTEM_REDUCE, _SYSTEM_SUMMARIZE
@@ -1624,7 +1639,13 @@ async def test_map_reduce_reads_every_window_and_carries_window_verified_quotes(
         for c in llm_mock.call_args_list
         if c.kwargs["response_model"] is WindowDigest
     ]
+    digest_systems = [
+        c.kwargs["options"].system
+        for c in llm_mock.call_args_list
+        if c.kwargs["response_model"] is WindowDigest
+    ]
     assert len(digest_prompts) == 3
+    assert all(summarization._BODY_FINDINGS_RULE in system for system in digest_systems)
     for marker in ("unique alpha result", "distinctive beta outcome", "singular gamma effect"):
         assert sum(marker in p for p in digest_prompts) == 1
 
@@ -1746,9 +1767,101 @@ async def test_single_window_paper_keeps_single_call_and_prompt_shape():
     )
     options = kwargs["options"]
     assert options.system == summarization._SYSTEM_SUMMARIZE
+    assert summarization._BODY_FINDINGS_RULE not in options.system
     assert options.max_tokens == summarization._SUMMARY_OUTPUT_TOKENS
     assert result.passes == 1
     assert result.coverage == 1.0
+
+
+@pytest.mark.asyncio
+async def test_single_window_body_paper_applies_body_findings_rule() -> None:
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = _chunk_rows(
+        ["Abstract summary.", "Methods and results provide body evidence."]
+    )
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = _stored_row()
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=0,
+        verified_count=0,
+        confidence=Confidence.NONE,
+    )
+    output = SummarizationOutput(
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[],
+    )
+    patch_ctx, llm_mock = _patched_call_llm(return_value=output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    options = llm_mock.call_args.kwargs["options"]
+    assert summarization._BODY_FINDINGS_RULE in options.system
+
+
+@pytest.mark.asyncio
+async def test_abstract_only_paper_keeps_verified_findings() -> None:
+    abstract = "The abstract reports a reproducible improvement."
+    chunk = {**_chunk_row(), "content": abstract, "end_char": len(abstract)}
+    stored_finding = {
+        "finding": "The approach improves the reported outcome.",
+        "quote": abstract,
+        "page_number": 1,
+        "chunk_id": chunk["id"],
+        "verified": True,
+        "snapshot_path": None,
+    }
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [{**_paper_row(), "abstract": abstract}, None]
+    conn_phase1.fetch.return_value = [chunk]
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = _stored_row(key_findings=[stored_finding])
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    output = SummarizationOutput(
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[
+            KeyFindingOutput(
+                finding="The approach improves the reported outcome.",
+                quote=abstract,
+                page_number=1,
+            )
+        ],
+    )
+    patch_ctx, llm_mock = _patched_call_llm(return_value=output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=QuoteVerifier(),
+            embedder=MagicMock(),
+        )
+
+    options = llm_mock.call_args.kwargs["options"]
+    assert summarization._BODY_FINDINGS_RULE not in options.system
+    persisted_findings = conn_phase2.fetchrow.call_args.args[5]
+    assert [finding["quote"] for finding in persisted_findings] == [abstract]
+    assert result.summary.key_findings[0].quote == abstract
 
 
 # ---------------------------------------------------------------------------

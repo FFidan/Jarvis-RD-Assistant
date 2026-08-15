@@ -1,4 +1,4 @@
-import type { Summary } from '@/types';
+import type { Chunk, Summary } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
@@ -6,6 +6,7 @@ import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { EvidenceSnapshot } from '@/components/shared/EvidenceSnapshot';
 import { ShieldCheck } from 'lucide-react';
 import { PDF_GOTO_EVENT } from '@/lib/pdf-events';
+import { passageAnchorId } from './ChunksTab';
 
 /** Jump to the PDF Reader section and ask it to show `page` / flash `quote`.
  *  PdfReaderPane listens for the event; it is lazy-loaded and importing the
@@ -17,13 +18,30 @@ function jumpToPdfPage(page: number, quote?: string | null) {
   );
 }
 
-/** Scroll to the Source Passages section, where the cited passage lives. */
-function jumpToPassages() {
-  document.getElementById('section-chunks')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+/** Reveal and scroll to the exact source passage for a verified quote. */
+function jumpToPassage(chunkId: number) {
+  const reveal = () => {
+    const passage = document.getElementById(passageAnchorId(chunkId));
+    if (!passage) return false;
+
+    const toggle = passage.querySelector<HTMLButtonElement>('button[aria-expanded]');
+    if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+    passage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return true;
+  };
+
+  if (reveal()) return;
+
+  const section = document.getElementById('section-chunks');
+  section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const sectionToggle = section?.querySelector<HTMLButtonElement>('[data-testid="chunks-expand-toggle"]');
+  if (sectionToggle?.getAttribute('aria-expanded') === 'false') sectionToggle.click();
+  requestAnimationFrame(reveal);
 }
 
 interface EvidenceTabProps {
   summary: Summary | null;
+  chunks?: Chunk[];
   paperId?: number;
   /**
    * Whether this paper's PDF is downloaded. The reader section only renders
@@ -33,7 +51,12 @@ interface EvidenceTabProps {
   pdfAvailable?: boolean;
 }
 
-export function EvidenceTab({ summary, paperId, pdfAvailable = false }: EvidenceTabProps) {
+export function EvidenceTab({
+  summary,
+  chunks = [],
+  paperId,
+  pdfAvailable = false,
+}: EvidenceTabProps) {
   if (!summary) {
     return (
       <EmptyState
@@ -62,6 +85,7 @@ export function EvidenceTab({ summary, paperId, pdfAvailable = false }: Evidence
       <div className="space-y-3">
         {findings.map((kf) => {
           const pageNumber = kf.page_number;
+          const passage = chunks.find((chunk) => chunk.id === kf.chunk_id);
           const snapshot =
             kf.snapshot_path && paperId != null && pageNumber != null ? (
               <EvidenceSnapshot
@@ -105,11 +129,6 @@ export function EvidenceTab({ summary, paperId, pdfAvailable = false }: Evidence
                       <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none italic">{kf.quote}</MarkdownContent>
                     </blockquote>
                   )}
-                  {/* Each anchor names exactly what it does: the page anchor
-                      opens the reader at that page and flashes the quote, and
-                      is inert copy when there is no PDF to open; the passage
-                      anchor scrolls to Source Passages, which is the whole
-                      section rather than one passage. */}
                   <div className="flex flex-wrap items-center gap-2">
                     {pageNumber != null &&
                       (pdfAvailable ? (
@@ -131,12 +150,18 @@ export function EvidenceTab({ summary, paperId, pdfAvailable = false }: Evidence
                     {kf.chunk_id != null && (
                       <button
                         type="button"
-                        onClick={jumpToPassages}
+                        onClick={() => jumpToPassage(kf.chunk_id!)}
                         className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        aria-label="Open the source passages section"
+                        aria-label={
+                          passage
+                            ? `Open passage ${passage.chunk_index + 1} of ${chunks.length}`
+                            : 'Open the source passage'
+                        }
                       >
                         <Badge variant="outline" className="cursor-pointer text-xs hover:bg-accent">
-                          Source passages →
+                          {passage
+                            ? `Passage ${passage.chunk_index + 1} of ${chunks.length} →`
+                            : 'Source passage →'}
                         </Badge>
                       </button>
                     )}

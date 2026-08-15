@@ -14,9 +14,8 @@ goes stale is worse than no contract.
 | 03 | [LLM](03-llm.md) | The LLM call choke point — public surface, per-site contracts, retry/fallback policy, anti-hallucination integration. |
 | 04 | [Observability](04-observability.md) | Langfuse trace-boundary policy, span types, privacy rules, opt-in posture, headless provisioning. |
 | 05 | [Models and Hardware](05-models-and-hardware.md) | Curated model catalog, hardware-aware recommendations, pull/delete lifecycle, active defaults, and per-machine VRAM-fit / context controls. |
+| 06 | [Evidence Anchors](06-evidence-anchors.md) | Quote and page verification, body-section preference, passage identity, exact navigation, and fallback semantics. |
 | 07 | [Testing](07-testing.md) | The four legitimate test shapes, the four prohibited anti-patterns, the carve-out registry, and the rot-on-touch policy. |
-
-Numbering has a gap: contract 06 (hardware-aware settings) was consolidated into 05 and 07.
 
 ## How to read a contract
 

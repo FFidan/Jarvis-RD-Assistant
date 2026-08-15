@@ -170,6 +170,17 @@ function renderLog(
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('PaperResearchLog — section anchors', () => {
+  it('gives the evidence chip the passages it needs to number one', () => {
+    // Guards the wiring: EvidenceTab numbers a passage only when its parent
+    // hands down the chunk list. Without that prop the chip still renders, but
+    // unnumbered — a silent downgrade no EvidenceTab test can see.
+    renderLog({
+      chunks: [{ ...CHUNKS[0]!, id: 5, chunk_index: 12 }, CHUNKS[1]!],
+    });
+
+    expect(screen.getByText(/Passage 13 of 2/)).toBeInTheDocument();
+  });
+
   it('renders all required section ids', () => {
     renderLog();
     const requiredIds = [
@@ -374,8 +385,8 @@ describe('PaperResearchLog — chunks (lazy)', () => {
       expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
     // Individual chunk header buttons visible
-    expect(screen.getByText(/Passage 0/)).toBeInTheDocument();
-    expect(screen.getByText(/Passage 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 1 of/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 2 of/)).toBeInTheDocument();
   });
 
   it('collapses chunks when toggle is clicked a second time', async () => {
