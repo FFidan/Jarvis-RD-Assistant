@@ -1,10 +1,9 @@
 /**
- * LifecycleActionsCard — paper lifecycle actions for the 3-pane right rail.
+ * LifecycleActionsCard — paper lifecycle actions for the Paper Detail toolbar.
  *
- * Extracted from PaperHeader's action cluster during the F2 IA redesign: the
- * new research-log layout dropped PaperHeader, which would otherwise have
- * silently removed reading-state / star / trash / restore / hard-delete from
- * Paper Detail ("Preserve every live capability").
+ * Extracted from PaperHeader's action cluster when the reading-first layout
+ * dropped PaperHeader, which would otherwise have silently removed
+ * reading-state / star / trash / restore / hard-delete from Paper Detail.
  *
  * Behaviour mirrors PaperHeader exactly:
  *  - state-contextual primary/secondary buttons (inbox / to_read / reading /
@@ -18,7 +17,6 @@
 import { useState } from 'react';
 import type { LifecycleState } from '@/types';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { HardDeleteModal } from '@/components/feed/HardDeleteModal';
 import {
@@ -58,11 +56,6 @@ interface LifecycleActionsCardProps {
   state?: LifecycleState;
   /** Whether the paper is starred. */
   starred?: boolean;
-  /**
-   * 'card' renders the rail section (separator + heading); 'toolbar' renders
-   * only the button row for inline placement in the reading toolbar.
-   */
-  variant?: 'card' | 'toolbar';
 }
 
 export function LifecycleActionsCard({
@@ -70,7 +63,6 @@ export function LifecycleActionsCard({
   paperTitle,
   state = 'inbox',
   starred = false,
-  variant = 'card',
 }: LifecycleActionsCardProps) {
   const [hardDeleteOpen, setHardDeleteOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -275,76 +267,58 @@ export function LifecycleActionsCard({
     return null;
   };
 
-  const buttonRow = (
-    <div className="flex flex-wrap items-center gap-2">
-        {renderActionButtons()}
-
-        {/* Star toggle — always shown except trash */}
-        {state !== 'trash' && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={() => starMut.mutate()}
-            disabled={starMut.isPending}
-            title={starred ? 'Starred — click to unstar' : 'Star this paper'}
-            aria-label={starred ? 'Starred' : 'Star paper'}
-          >
-            {starred ? (
-              <StarOff className="h-4 w-4 text-yellow-400" />
-            ) : (
-              <Star className="h-4 w-4 text-muted-foreground" />
-            )}
-          </Button>
-        )}
-
-        {/* Trash — shown on all non-trash states */}
-        {state !== 'trash' && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0"
-            onClick={handleTrash}
-            disabled={trashMut.isPending}
-            title="Move to Trash"
-            aria-label="Trash paper"
-          >
-            <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-          </Button>
-        )}
-      </div>
-  );
-
-  const modal = (
-    <HardDeleteModal
-      open={hardDeleteOpen}
-      onOpenChange={setHardDeleteOpen}
-      paperId={paperId}
-      paperTitle={paperTitle}
-    />
-  );
-
-  if (variant === 'toolbar') {
-    return (
-      <>
-        {buttonRow}
-        {modal}
-      </>
-    );
-  }
-
   return (
-    <div className="space-y-4">
-      <Separator />
-      <h3 className="flex items-center gap-1 text-lg font-semibold">
-        Lifecycle
-        <InfoTooltip
-          content="Where this paper sits in your reading workflow: Inbox (unsorted) → Saved (to read) → Reading → Done (finished). Move papers to Trash to remove them."
-          side="right"
-        />
-      </h3>
-      {buttonRow}
-      {modal}
+    <div className="flex flex-wrap items-center gap-2">
+      {renderActionButtons()}
+
+      {/* Star toggle — always shown except trash */}
+      {state !== 'trash' && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={() => starMut.mutate()}
+          disabled={starMut.isPending}
+          title={starred ? 'Starred — click to unstar' : 'Star this paper'}
+          aria-label={starred ? 'Starred' : 'Star paper'}
+        >
+          {starred ? (
+            <StarOff className="h-4 w-4 text-yellow-400" />
+          ) : (
+            <Star className="h-4 w-4 text-muted-foreground" />
+          )}
+        </Button>
+      )}
+
+      {/* Trash — shown on all non-trash states */}
+      {state !== 'trash' && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={handleTrash}
+          disabled={trashMut.isPending}
+          title="Move to Trash"
+          aria-label="Trash paper"
+        >
+          <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+        </Button>
+      )}
+
+      {/* The buttons alone do not say what the reading states mean or what
+          order they run in, so the sequence stays available as an info icon
+          rather than another button competing for the toolbar. */}
+      <InfoTooltip
+        content="Where this paper sits in your reading workflow: Inbox (unsorted) → Reading List (saved to read) → Reading → Done (finished). Move papers to Trash to remove them."
+        side="bottom"
+      />
+
+      <HardDeleteModal
+        open={hardDeleteOpen}
+        onOpenChange={setHardDeleteOpen}
+        paperId={paperId}
+        paperTitle={paperTitle}
+      />
     </div>
   );
 }

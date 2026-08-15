@@ -1,9 +1,10 @@
 /**
- * PaperResearchLog — Center research-log column for the Paper Detail 3-pane.
+ * PaperResearchLog — the reading column of Paper Detail.
  *
  * Renders all §-sections in a single scrolling column with proper anchor IDs.
  * Each sub-component is already implemented; this file re-composes them as
- * named, anchored sections (no tabs, no pagination).
+ * named, anchored sections (no tabs, no pagination). Contents and the action
+ * panel sit beside or over this column and are owned by the page.
  *
  * Chunks are lazy/collapsed — hidden behind a toggle by default.
  */
@@ -174,7 +175,7 @@ export function PaperResearchLog({
       {/* ── Breadcrumb + score ─────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
         <nav aria-label="breadcrumb" className="flex items-center gap-1.5">
-          <span>Library</span>
+          <span>Papers</span>
           <span aria-hidden>/</span>
           <span className="capitalize">{stateLabel}</span>
           <span aria-hidden>/</span>
@@ -333,7 +334,7 @@ export function PaperResearchLog({
         id="section-findings"
         title={`Evidence / Key Findings${evidenceCount > 0 ? ` (${evidenceCount})` : ''}`}
       >
-        <EvidenceTab summary={summary} paperId={paperId} />
+        <EvidenceTab summary={summary} paperId={paperId} pdfAvailable={paper.pdf_downloaded} />
       </ResearchSection>
 
       {/* ── § PDF Reader ─────────────────────────────────────────────── */}

@@ -20,15 +20,11 @@
  */
 import { test, expect } from '@playwright/test';
 import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
-
-interface PdfGotoDetail {
-  page: number;
-  quote: string | null;
-}
+import { PDF_GOTO_EVENT, type PdfGotoDetail } from '../src/lib/pdf-events';
 
 declare global {
   interface WindowEventMap {
-    'jarvis:pdf-goto': CustomEvent<PdfGotoDetail>;
+    [PDF_GOTO_EVENT]: CustomEvent<PdfGotoDetail>;
   }
   interface Window {
     /** Evidence-anchor requests this spec records in the page, in order. */
@@ -332,14 +328,14 @@ test.describe('Paper Detail reading layout — desktop', () => {
     );
   });
 
-  test('center: breadcrumb shows Library / state / title', async ({ page }) => {
+  test('center: breadcrumb shows Papers / state / title', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    // Scope to breadcrumb nav to avoid strict-mode violation — "Library" also
-    // appears in the sidebar link and potentially the page heading.
+    // Scope to breadcrumb nav to avoid a strict-mode violation — "Papers" also
+    // names the sidebar link to the paper list.
     const breadcrumb = page.getByRole('navigation', { name: /breadcrumb/i });
-    await expect(breadcrumb.getByText('Library').first()).toBeVisible({ timeout: 8000 });
+    await expect(breadcrumb.getByText('Papers').first()).toBeVisible({ timeout: 8000 });
     await expect(breadcrumb.getByText('Reading')).toBeVisible();
   });
 
@@ -411,16 +407,24 @@ test.describe('Paper Detail reading layout — desktop', () => {
     await page.waitForLoadState('networkidle');
 
     const relatedWork = page.getByTestId('related-work');
-    await expect(relatedWork.getByText('References')).toBeVisible({ timeout: 8000 });
+    // Each row is checked inside its own list, so the two directions cannot be
+    // exchanged without failing here.
+    const references = relatedWork.getByTestId('citation-references');
+    const citedBy = relatedWork.getByTestId('citation-cited-by');
+    await expect(references.getByText('References')).toBeVisible({ timeout: 8000 });
     await expect(
-      relatedWork.getByRole('link', { name: 'REFERENCE_TITLE: Sequence to Sequence Learning' }),
+      references.getByRole('link', { name: 'REFERENCE_TITLE: Sequence to Sequence Learning' }),
     ).toHaveAttribute('href', '/paper/2');
-    await expect(relatedWork.getByText('Cited by')).toBeVisible();
+    await expect(references.getByRole('link', { name: 'CITEDBY_TITLE: BERT' })).toHaveCount(0);
+    await expect(citedBy.getByText('Cited by')).toBeVisible();
     await expect(
-      relatedWork.getByRole('link', { name: 'CITEDBY_TITLE: BERT' }),
+      citedBy.getByRole('link', { name: 'CITEDBY_TITLE: BERT' }),
     ).toHaveAttribute('href', '/paper/3');
+    await expect(
+      citedBy.getByRole('link', { name: 'REFERENCE_TITLE: Sequence to Sequence Learning' }),
+    ).toHaveCount(0);
     // A paper known only from a bibliography says so.
-    await expect(relatedWork.getByText('not in your library')).toBeVisible();
+    await expect(citedBy.getByText('not in your library')).toBeVisible();
 
     // The semantic-similarity list stays separate, and its link names its target.
     await expect(page.getByText('Similar in your library')).toBeVisible();
@@ -436,12 +440,12 @@ test.describe('Paper Detail reading layout — desktop', () => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    await page.evaluate(() => {
+    await page.evaluate((eventName) => {
       window.pdfGotoRequests = [];
-      window.addEventListener('jarvis:pdf-goto', (event) => {
+      window.addEventListener(eventName, (event) => {
         window.pdfGotoRequests?.push(event.detail);
       });
-    });
+    }, PDF_GOTO_EVENT);
 
     await page
       .getByRole('button', { name: 'Open page 8 in the PDF reader' })

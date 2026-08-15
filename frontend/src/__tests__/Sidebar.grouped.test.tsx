@@ -477,10 +477,20 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Projects');
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Extraction');
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Knowledge Graph');
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Citation Graph');
+    const cue = screen.getByTestId('advanced-workspace-cue');
+    expect(cue).toHaveTextContent('Extraction Table');
+    expect(cue).toHaveTextContent('Knowledge Graph');
+    expect(cue).toHaveTextContent('Citation Graph');
+    // Anything already in the simple rail is not something the toggle adds,
+    // so offering it would be a promise the rail has already kept.
+    const railLabels = screen
+      .getAllByRole('link')
+      .map((link) => link.textContent?.trim() ?? '')
+      .filter(Boolean);
+    expect(railLabels).toContain('Projects');
+    for (const label of railLabels) {
+      expect(cue).not.toHaveTextContent(label);
+    }
     expect(screen.getAllByTestId('advanced-workspace-cue')).toHaveLength(1);
   });
 

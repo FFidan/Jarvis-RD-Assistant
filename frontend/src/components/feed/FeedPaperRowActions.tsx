@@ -2,9 +2,10 @@
  * FeedPaperRowActions — the action bar of a paper row.
  *
  * One primary action for the paper's lifecycle state, plus View, plus an
- * overflow menu for the rest. A list page shows dozens of rows at once, so a
- * full six-control bar per row buries the one action that actually moves the
- * paper forward; the complete action set stays on Paper Detail.
+ * overflow menu holding the remaining lifecycle actions and citation export.
+ * A list page shows dozens of rows at once, so a full six-control bar per row
+ * buries the one action that actually moves the paper forward; the complete
+ * action set stays on Paper Detail.
  */
 
 import {
@@ -12,6 +13,7 @@ import {
   BookOpen,
   Check,
   MoreHorizontal,
+  Quote,
   RotateCcw,
   Save,
   SkipForward,
@@ -25,8 +27,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { CitationMenuItems } from '@/components/citation/CitationMenu';
 import type { LifecycleState } from '@/types';
 
 interface FeedPaperRowActionsProps {
@@ -170,32 +176,43 @@ export function FeedPaperRowActions({
           {viewLabel}
         </Button>
       )}
-      {availableOverflow.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              aria-label={`More actions for ${title}`}
+      {/* Always present: citing this paper needs no caller-supplied handler,
+          so the menu has something to offer even on a read-only row. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            aria-label={`More actions for ${title}`}
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {availableOverflow.map((action) => (
+            <DropdownMenuItem
+              key={action.label}
+              onClick={() => action.handler?.(paperId)}
+              className={action.destructive ? 'text-destructive focus:text-destructive' : undefined}
             >
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {availableOverflow.map((action) => (
-              <DropdownMenuItem
-                key={action.label}
-                onClick={() => action.handler?.(paperId)}
-                className={action.destructive ? 'text-destructive focus:text-destructive' : undefined}
-              >
-                {action.icon}
-                {action.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+              {action.icon}
+              {action.label}
+            </DropdownMenuItem>
+          ))}
+          {/* Citing one paper belongs here rather than on the row: it is a
+              real per-paper action, but not one worth a permanent control. */}
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Quote className="mr-2 h-3.5 w-3.5" />
+              Cite
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <CitationMenuItems paperIds={[paperId]} />
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

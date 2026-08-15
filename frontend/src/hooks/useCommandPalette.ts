@@ -6,6 +6,8 @@ import type { SearchPreviewResult } from '@/types';
 const DEBOUNCE_MS = 250;
 const SEARCH_TIMEOUT_MS = 8_000;
 const PALETTE_RESULT_LIMIT = 8;
+/** Every paper you hold, trash excluded — the scope the palette promises. */
+const PALETTE_VIEW = 'all_non_trash';
 
 /**
  * Controller hook for the global ⌘K command palette.
@@ -84,11 +86,12 @@ export function useCommandPaletteController() {
       );
       try {
         // The box is labelled as searching YOUR papers, so it searches the
-        // library feed, not external sources. External discovery lives in
-        // Discover, reachable from the palette footer. Results map into the
-        // palette's existing shape; every hit is by definition a library match.
+        // paper feed, not external sources. External discovery lives in
+        // Discover, reachable from the palette footer. `all_non_trash` is what
+        // makes the label true: papers still in Inbox are yours and reachable
+        // on the Papers page, papers you trashed are not.
         const response = await Promise.race([
-          fetchFeedPapers({ q: trimmed, limit: PALETTE_RESULT_LIMIT }),
+          fetchFeedPapers({ q: trimmed, limit: PALETTE_RESULT_LIMIT, view: PALETTE_VIEW }),
           timeout,
         ]);
         if (cancelled) return;

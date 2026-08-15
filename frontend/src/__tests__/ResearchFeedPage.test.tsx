@@ -845,7 +845,7 @@ describe('ResearchFeedPage', () => {
         metadata: {},
         library_match: null,
       },
-      expected: ['Save to Library', 'Open original'],
+      expected: ['Save to your papers', 'Open original'],
       absent: ['Open Paper Detail', 'Open Projects to Link', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
@@ -868,7 +868,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Open Projects to Link'],
-      absent: ['Save to Library', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
+      absent: ['Save to your papers', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Projects Paper',
@@ -890,7 +890,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Send to Zotero'],
-      absent: ['Save to Library', 'Open Projects to Link', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
+      absent: ['Save to your papers', 'Open Projects to Link', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Zotero Paper',
@@ -912,7 +912,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
-      absent: ['Save to Library', 'Open Projects to Link', 'Send to Zotero'],
+      absent: ['Save to your papers', 'Open Projects to Link', 'Send to Zotero'],
     },
   ])('shows the correct trailing actions for $title', async ({ result, expected, absent }) => {
     const user = userEvent.setup();
@@ -1694,9 +1694,9 @@ describe('ResearchFeedPage', () => {
     });
 
     await user.click(getPreviewRowPrimaryButton('Drawer Save Paper'));
-    expect(screen.getByRole('button', { name: /save to library/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save to your papers/i })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /save to library/i }));
+    await user.click(screen.getByRole('button', { name: /save to your papers/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /open paper detail/i })).toBeInTheDocument();
@@ -1739,7 +1739,7 @@ describe('ResearchFeedPage', () => {
     });
 
     await user.click(getPreviewRowPrimaryButton('Drawer Error Paper'));
-    await user.click(screen.getByRole('button', { name: /save to library/i }));
+    await user.click(screen.getByRole('button', { name: /save to your papers/i }));
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Save exploded');

@@ -9,7 +9,7 @@
  * - Breadcrumb reflects lifecycle state.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -192,9 +192,9 @@ describe('PaperResearchLog — section anchors', () => {
 });
 
 describe('PaperResearchLog — breadcrumb', () => {
-  it('shows Library / state / title in breadcrumb', () => {
+  it('shows Papers / state / title in breadcrumb', () => {
     renderLog();
-    expect(screen.getByText('Library')).toBeInTheDocument();
+    expect(screen.getByText('Papers')).toBeInTheDocument();
     expect(screen.getByText('reading')).toBeInTheDocument();
     // Title is in the breadcrumb + also in h1; at least one instance
     expect(screen.getAllByText('Attention Is All You Need').length).toBeGreaterThanOrEqual(1);
@@ -309,17 +309,26 @@ describe('PaperResearchLog — related work', () => {
 
     renderLog();
 
-    await waitFor(() => {
-      expect(screen.getByText('References')).toBeInTheDocument();
-    });
-    expect(screen.getByText('Cited by')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Sequence to Sequence Learning' })).toHaveAttribute(
+    // Each row is asserted inside the list it belongs to: this paper cites
+    // "Sequence to Sequence Learning" (a reference) and BERT cites this paper
+    // (a citing paper), so swapping the two lists must fail here.
+    const references = await screen.findByTestId('citation-references');
+    const citedBy = screen.getByTestId('citation-cited-by');
+    expect(within(references).getByRole('heading', { name: /References/ })).toBeInTheDocument();
+    expect(within(citedBy).getByRole('heading', { name: /Cited by/ })).toBeInTheDocument();
+    expect(
+      within(references).getByRole('link', { name: 'Sequence to Sequence Learning' }),
+    ).toHaveAttribute('href', '/paper/2');
+    expect(within(references).queryByRole('link', { name: 'BERT' })).not.toBeInTheDocument();
+    expect(within(citedBy).getByRole('link', { name: 'BERT' })).toHaveAttribute(
       'href',
-      '/paper/2',
+      '/paper/3',
     );
-    expect(screen.getByRole('link', { name: 'BERT' })).toHaveAttribute('href', '/paper/3');
+    expect(
+      within(citedBy).queryByRole('link', { name: 'Sequence to Sequence Learning' }),
+    ).not.toBeInTheDocument();
     // Papers known only from a bibliography are labelled as such.
-    expect(screen.getByText('not in your library')).toBeInTheDocument();
+    expect(within(citedBy).getByText('not in your library')).toBeInTheDocument();
   });
 
   it('offers a citation lookup when the paper has no citation data yet', async () => {

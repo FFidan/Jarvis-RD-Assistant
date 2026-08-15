@@ -5,7 +5,7 @@
  * announces itself in a toast carrying an Undo action, so a stray click on the
  * track can no longer silently change a server setting.
  */
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
@@ -42,6 +42,22 @@ export function ConfigSlider({
 }: ConfigSliderProps) {
   // Last value the server accepted; the Undo target.
   const committedRef = useRef(value);
+  // Last value this control itself pushed up. Anything else arriving in
+  // `value` came from the server (parents seed a fallback and reset on the
+  // real config), and is the new saved value — without adopting it, dragging
+  // back to the fallback looks like "no change" and never reaches the server.
+  const lastLocalRef = useRef(value);
+
+  useEffect(() => {
+    if (value === lastLocalRef.current) return;
+    lastLocalRef.current = value;
+    committedRef.current = value;
+  }, [value]);
+
+  const handleLocalChange = (v: number) => {
+    lastLocalRef.current = v;
+    onLocalChange(v);
+  };
 
   const handleCommit = (v: number) => {
     const previous = committedRef.current;
@@ -53,7 +69,7 @@ export function ConfigSlider({
         label: `Undo (${previous}${unit})`,
         onClick: () => {
           committedRef.current = previous;
-          onLocalChange(previous);
+          handleLocalChange(previous);
           onCommit(previous);
         },
       },
@@ -82,7 +98,7 @@ export function ConfigSlider({
         max={max}
         step={step}
         value={[value]}
-        onValueChange={([v]) => onLocalChange(v ?? value)}
+        onValueChange={([v]) => handleLocalChange(v ?? value)}
         onValueCommit={([v]) => handleCommit(v ?? value)}
         disabled={disabled}
         className="w-full"

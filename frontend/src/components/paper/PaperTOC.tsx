@@ -1,5 +1,6 @@
 /**
- * PaperTOC — Left rail for the Paper Detail 3-pane layout.
+ * PaperTOC — the Contents panel of Paper Detail. It docks beside the reading
+ * column on wide screens and opens as a sheet on narrow ones.
  *
  * Renders two panels:
  *  § Sections — scroll-jump navigation with active-section highlight.

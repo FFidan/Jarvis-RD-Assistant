@@ -769,5 +769,22 @@ describe('PaperDetailPage', () => {
       // Focus restoration is suppressed for the same reason.
       expect(screen.getByTestId('toc-sheet-trigger')).not.toHaveFocus();
     });
+
+    it('returns focus to the trigger when the Contents sheet is dismissed', async () => {
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('toc-sheet-trigger')).toBeInTheDocument();
+      });
+      await userEvent.click(screen.getByTestId('toc-sheet-trigger'));
+      await screen.findByRole('dialog');
+
+      await userEvent.keyboard('{Escape}');
+
+      // Only the navigate case may drop focus. Dismissing without navigating
+      // must hand it back, or the next Tab restarts at the top of the page.
+      await waitFor(() =>
+        expect(screen.getByTestId('toc-sheet-trigger')).toHaveFocus(),
+      );
+    });
   });
 });

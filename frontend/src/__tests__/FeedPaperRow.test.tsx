@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
@@ -7,6 +7,16 @@ import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
 import type { FeedPaper } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
+
+// Only the citation client is stubbed; everything else the row touches stays
+// real so the rest of this file keeps testing the row it ships.
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  copyPaperCitation: vi.fn(),
+}));
+
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 // FeedbackButtons uses useMutation — wrap with QueryClientProvider
 function renderRow(props: Parameters<typeof FeedPaperRow>[0]) {
@@ -178,6 +188,31 @@ describe('FeedPaperRow', () => {
     expect(onHardDelete).toHaveBeenCalledWith(trashPaper.id);
   });
 
+  it('citing one paper is reachable from the overflow, without its own row control', async () => {
+    const { copyPaperCitation } = await import('@/lib/api');
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(copyPaperCitation).mockResolvedValue('@article{x}');
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    renderRow({ paper, onSave: vi.fn() });
+
+    // The refined row spends no permanent control on citing.
+    expect(screen.queryByRole('button', { name: /^Cite$/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: `More actions for ${paper.title}` }));
+    await user.click(await screen.findByRole('menuitem', { name: /^Cite$/ }));
+    // A plain click event: userEvent's pointer sequence does not reach an item
+    // inside a Radix submenu portal under jsdom.
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Copy BibTeX/ }));
+
+    await waitFor(() => expect(copyPaperCitation).toHaveBeenCalledWith(paper.id, 'bibtex'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('@article{x}'));
+  });
+
   it('state=trash: no FeedbackButtons rendered', () => {
     renderRow({ paper: trashPaper });
     // FeedbackButtons renders thumbs-up/thumbs-down; should not be present for trash
@@ -239,13 +274,18 @@ describe('FeedPaperRow', () => {
     expect(screen.getByText(/★\s*Matches your topic profile/)).toBeInTheDocument();
   });
 
-  it('omits action buttons whose callback is not passed', () => {
+  it('omits action items whose callback is not passed', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderRow({ paper, onView: vi.fn() });
     expect(screen.queryByRole('button', { name: `Save ${paper.title}` })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: `More actions for ${paper.title}` }),
-    ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: `View ${paper.title} details` })).toBeInTheDocument();
+
+    // The overflow still opens for the actions that need no callback, and
+    // offers nothing it cannot carry out.
+    await user.click(screen.getByRole('button', { name: `More actions for ${paper.title}` }));
+    expect((await screen.findAllByRole('menuitem')).map((item) => item.textContent)).toEqual([
+      'Cite',
+    ]);
   });
 
   it('onToggleSelect (new API) works for bulk selection', async () => {

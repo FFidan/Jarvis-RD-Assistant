@@ -5,11 +5,11 @@
  *  - ⌘K (the global keydown registered by the controller hook) opens the
  *    palette via the store.
  *  - Esc closes it.
- *  - Typing a query runs the debounced library search and renders results
- *    (title + authors).
+ *  - Typing a query runs the debounced search over the caller's own papers,
+ *    scoped so trashed papers cannot appear, and renders results.
  *  - Selecting a result navigates to /paper/:id and closes the palette.
  *  - External discovery is a separate, labelled action into Discover — never
- *    mixed into the library results.
+ *    mixed into results from the caller's own papers.
  *  - A failed search shows the friendly error state (no throw).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -70,7 +70,7 @@ describe('CommandPaletteSearch', () => {
   it('opens via the global ⌘K keydown registered by the hook', () => {
     renderPalette();
     expect(
-      screen.getByRole('button', { name: /Search your library/ }),
+      screen.getByRole('button', { name: /Search your papers/ }),
     ).toBeInTheDocument();
     expect(useCommandPalette.getState().isOpen).toBe(false);
 
@@ -95,7 +95,7 @@ describe('CommandPaletteSearch', () => {
 
     act(() => useCommandPalette.getState().open());
 
-    const input = await screen.findByPlaceholderText(/search your library…/i);
+    const input = await screen.findByPlaceholderText(/search your papers…/i);
     await user.type(input, 'attention');
 
     // Flush the 250ms debounce.
@@ -103,10 +103,15 @@ describe('CommandPaletteSearch', () => {
       vi.advanceTimersByTime(300);
     });
 
-    // The box says it searches YOUR library, so it must hit the paper feed —
-    // not the external-source preview.
+    // The box says it searches YOUR papers, so it must hit the paper feed —
+    // not the external-source preview — and it must ask the server for the
+    // scope it advertises, or trashed papers come back as "your papers".
     await waitFor(() =>
-      expect(mockFetchFeedPapers).toHaveBeenCalledWith({ q: 'attention', limit: 8 }),
+      expect(mockFetchFeedPapers).toHaveBeenCalledWith({
+        q: 'attention',
+        limit: 8,
+        view: 'all_non_trash',
+      }),
     );
 
     const result = await screen.findByText('Attention Is All You Need');
@@ -123,7 +128,7 @@ describe('CommandPaletteSearch', () => {
 
     act(() => useCommandPalette.getState().open());
 
-    const input = await screen.findByPlaceholderText(/search your library/i);
+    const input = await screen.findByPlaceholderText(/search your papers/i);
     await user.type(input, 'broken');
 
     await act(async () => {
@@ -141,7 +146,7 @@ describe('CommandPaletteSearch', () => {
 
     act(() => useCommandPalette.getState().open());
 
-    const input = await screen.findByPlaceholderText(/search your library/i);
+    const input = await screen.findByPlaceholderText(/search your papers/i);
     await user.type(input, 'slow');
 
     // Advance past debounce (250 ms) — search is now in-flight.
@@ -182,7 +187,7 @@ describe('CommandPaletteSearch', () => {
 
     act(() => useCommandPalette.getState().open());
 
-    const input = await screen.findByPlaceholderText(/search your library/i);
+    const input = await screen.findByPlaceholderText(/search your papers/i);
     await user.type(input, 'residual');
 
     await act(async () => {
@@ -200,13 +205,13 @@ describe('CommandPaletteSearch', () => {
     );
   });
 
-  it('never labels a library result as missing from the library', async () => {
+  it('never labels one of your own papers as missing from your papers', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPalette();
 
     act(() => useCommandPalette.getState().open());
 
-    const input = await screen.findByPlaceholderText(/search your library/i);
+    const input = await screen.findByPlaceholderText(/search your papers/i);
     await user.type(input, 'attention');
 
     await act(async () => {
@@ -219,21 +224,21 @@ describe('CommandPaletteSearch', () => {
     expect(screen.queryByText(/Not in your library yet/i)).not.toBeInTheDocument();
   });
 
-  it('reports an empty result set as no library matches', async () => {
+  it('reports an empty result set as no matches in your papers', async () => {
     mockFetchFeedPapers.mockResolvedValue({ papers: [], total: 0 });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPalette();
 
     act(() => useCommandPalette.getState().open());
 
-    const input = await screen.findByPlaceholderText(/search your library/i);
+    const input = await screen.findByPlaceholderText(/search your papers/i);
     await user.type(input, 'nothing');
 
     await act(async () => {
       vi.advanceTimersByTime(300);
     });
 
-    expect(await screen.findByText(/No matches in your library/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No matches in your papers/i)).toBeInTheDocument();
   });
 
   it('renders an accessible description for the dialog (a11y)', async () => {

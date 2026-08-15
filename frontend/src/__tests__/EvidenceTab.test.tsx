@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { EvidenceTab } from '@/components/paper/EvidenceTab';
+import { PDF_GOTO_EVENT } from '@/lib/pdf-events';
 import type { KeyFinding, Summary } from '@/types';
 
 function keyFinding(overrides: Partial<KeyFinding> = {}): KeyFinding {
@@ -36,10 +37,10 @@ function summary(findings: KeyFinding[]): Summary {
   };
 }
 
-function renderTab(s: Summary, paperId?: number) {
+function renderTab(s: Summary, paperId?: number, pdfAvailable = true) {
   return render(
     <MemoryRouter>
-      <EvidenceTab summary={s} paperId={paperId} />
+      <EvidenceTab summary={s} paperId={paperId} pdfAvailable={pdfAvailable} />
     </MemoryRouter>,
   );
 }
@@ -75,7 +76,7 @@ describe('EvidenceTab — evidence anchors', () => {
 
   it('page anchor scrolls to the reader and asks it for that page and quote', async () => {
     const goto = vi.fn();
-    window.addEventListener('jarvis:pdf-goto', goto);
+    window.addEventListener(PDF_GOTO_EVENT, goto);
     renderTab(summary([keyFinding()]), 42);
 
     await userEvent.click(screen.getByRole('button', { name: 'Open page 7 in the PDF reader' }));
@@ -87,14 +88,34 @@ describe('EvidenceTab — evidence anchors', () => {
       quote: 'A supporting quote.',
     });
 
-    window.removeEventListener('jarvis:pdf-goto', goto);
+    window.removeEventListener(PDF_GOTO_EVENT, goto);
   });
 
   it('passage anchor scrolls to the source passages section', async () => {
     renderTab(summary([keyFinding()]), 42);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Open the source passages section' }));
+    const anchor = screen.getByRole('button', { name: 'Open the source passages section' });
+    // The visible label promises the whole section, which is what the click
+    // delivers — never a jump to one numbered passage.
+    expect(anchor).toHaveTextContent('Source passages');
+    expect(anchor).not.toHaveTextContent(String(keyFinding().chunk_id));
+
+    await userEvent.click(anchor);
 
     expect(sectionChunks.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('states why the page anchor cannot act when the PDF is not downloaded', async () => {
+    const goto = vi.fn();
+    window.addEventListener(PDF_GOTO_EVENT, goto);
+    renderTab(summary([keyFinding()]), 42, false);
+
+    expect(
+      screen.queryByRole('button', { name: 'Open page 7 in the PDF reader' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Page 7 — download the PDF to open it here/)).toBeInTheDocument();
+    expect(goto).not.toHaveBeenCalled();
+
+    window.removeEventListener(PDF_GOTO_EVENT, goto);
   });
 });

@@ -5,7 +5,7 @@ test.describe('@live-smoke Live app smoke', () => {
   test('shell loads with sidebar, health labels, and dashboard heading', async ({ page }) => {
     await ensureAuthenticated(page);
 
-    await expect(page.getByRole('link', { name: 'Library' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Papers' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'My Day' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Projects' })).toBeVisible();
     await expect(page.getByText('Paper Ingestion')).toBeVisible();
@@ -15,13 +15,11 @@ test.describe('@live-smoke Live app smoke', () => {
   test('feed, projects, and settings pages render stable live headings', async ({ page }) => {
     await ensureAuthenticated(page);
 
-    await page.getByRole('link', { name: 'Library' }).click();
-    await expect(page).toHaveURL(/\/feed$/);
-    await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible({
+    await page.getByRole('link', { name: 'Papers' }).click();
+    await expect(page).toHaveURL(/\/feed\?surface=library$/);
+    await expect(page.getByRole('heading', { name: 'Papers' })).toBeVisible({
       timeout: 10000,
     });
-    // Discover entry point is visible on the Library page (top of the facet rail)
-    await expect(page.getByTestId('facet-discover-block')).toBeVisible();
 
     await page.getByRole('link', { name: 'Projects' }).click();
     await expect(page).toHaveURL(/\/projects$/);

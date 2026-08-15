@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
-import { screen, within, waitFor } from '@testing-library/react';
+import { act, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ScaledPosition } from 'react-pdf-highlighter-extended';
 import { PdfReaderPane } from '@/components/paper/PdfReaderPane';
+import { PDF_GOTO_EVENT } from '@/lib/pdf-events';
 import type { Highlight } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
@@ -395,6 +396,13 @@ describe('PdfReaderPane — evidence anchor jump and quote flash', () => {
   ];
   const QUOTE = 'on the WMT 2014 English-to-German translation task, improving over';
 
+  // The event carries a 1-based page number; the viewer indexes its page views
+  // from 0. Only this index holds the page, so an off-by-one returns nothing
+  // and the flash cannot happen — which is what makes the flash assertions
+  // below a real guard on the conversion.
+  const REQUESTED_PAGE = 3;
+  const PAGE_VIEW_INDEX = REQUESTED_PAGE - 1;
+
   function buildPageView(): { div: HTMLElement; spans: HTMLElement[] } {
     const div = document.createElement('div');
     const textLayer = document.createElement('div');
@@ -411,12 +419,17 @@ describe('PdfReaderPane — evidence anchor jump and quote flash', () => {
     return { div, spans };
   }
 
+  /** A viewer that only knows the page at PAGE_VIEW_INDEX, like a real one. */
+  function mockViewerFor(div: HTMLElement) {
+    return {
+      scrollPageIntoView: vi.fn(),
+      getPageView: vi.fn((index: number) => (index === PAGE_VIEW_INDEX ? { div } : undefined)),
+    };
+  }
+
   it('opens the requested page and flashes every span the quote overlaps', async () => {
     const { div, spans } = buildPageView();
-    mocks.viewer = {
-      scrollPageIntoView: vi.fn(),
-      getPageView: vi.fn(() => ({ div })),
-    };
+    mocks.viewer = mockViewerFor(div);
     mocks.fetchPdfUrl.mockResolvedValue('blob:fake');
     mocks.listHighlights.mockResolvedValue([]);
 
@@ -424,17 +437,19 @@ describe('PdfReaderPane — evidence anchor jump and quote flash', () => {
     await screen.findByTestId('pdf-highlighter');
 
     window.dispatchEvent(
-      new CustomEvent('jarvis:pdf-goto', { detail: { page: 3, quote: QUOTE } }),
+      new CustomEvent(PDF_GOTO_EVENT, { detail: { page: REQUESTED_PAGE, quote: QUOTE } }),
     );
 
-    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: 3 });
-    // Page numbers are 1-based; the viewer's page views are 0-based.
-    expect(mocks.viewer.getPageView).not.toHaveBeenCalledWith(3);
+    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: REQUESTED_PAGE });
 
     await waitFor(
       () => expect(spans[0]!.style.backgroundColor).not.toBe(''),
       { timeout: 3000 },
     );
+    // Asserted inside the same settled state as the flash, so the lookup has
+    // provably already happened by the time the index is checked.
+    expect(mocks.viewer.getPageView).toHaveBeenCalledWith(PAGE_VIEW_INDEX);
+    expect(mocks.viewer.getPageView).not.toHaveBeenCalledWith(REQUESTED_PAGE);
     expect(spans[1]!.style.backgroundColor).not.toBe('');
     expect(spans[2]!.style.backgroundColor).not.toBe('');
     expect(spans[0]!.scrollIntoView).toHaveBeenCalled();
@@ -444,21 +459,59 @@ describe('PdfReaderPane — evidence anchor jump and quote flash', () => {
 
   it('leaves the page alone when the quote is too short to identify', async () => {
     const { div, spans } = buildPageView();
-    mocks.viewer = {
-      scrollPageIntoView: vi.fn(),
-      getPageView: vi.fn(() => ({ div })),
-    };
+    mocks.viewer = mockViewerFor(div);
     mocks.fetchPdfUrl.mockResolvedValue('blob:fake');
     mocks.listHighlights.mockResolvedValue([]);
 
     renderPane();
     await screen.findByTestId('pdf-highlighter');
 
-    window.dispatchEvent(new CustomEvent('jarvis:pdf-goto', { detail: { page: 3, quote: 'the' } }));
+    window.dispatchEvent(
+      new CustomEvent(PDF_GOTO_EVENT, { detail: { page: REQUESTED_PAGE, quote: 'the' } }),
+    );
 
-    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: 3 });
+    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: REQUESTED_PAGE });
     await new Promise((resolve) => setTimeout(resolve, 900));
     expect(spans.every((span) => span.style.backgroundColor === '')).toBe(true);
+
+    div.remove();
+  });
+
+  it('replays a jump that arrived before the PDF had finished loading', async () => {
+    const { div, spans } = buildPageView();
+    const viewer = mockViewerFor(div);
+    mocks.viewer = viewer;
+    // The blob is still downloading, so the reader renders its loading state
+    // and there is no viewer to act on yet.
+    let deliverPdf: (url: string) => void = () => {};
+    mocks.fetchPdfUrl.mockReturnValue(
+      new Promise<string>((resolve) => {
+        deliverPdf = resolve;
+      }),
+    );
+    mocks.listHighlights.mockResolvedValue([]);
+
+    renderPane();
+    await screen.findByTestId('pdf-reader-loading');
+
+    window.dispatchEvent(
+      new CustomEvent(PDF_GOTO_EVENT, { detail: { page: REQUESTED_PAGE, quote: QUOTE } }),
+    );
+    expect(viewer.scrollPageIntoView).not.toHaveBeenCalled();
+
+    await act(async () => {
+      deliverPdf('blob:fake');
+    });
+    await screen.findByTestId('pdf-highlighter');
+
+    // The jump is honoured once the reader can act on it, rather than lost.
+    await waitFor(() =>
+      expect(viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: REQUESTED_PAGE }),
+    );
+    await waitFor(
+      () => expect(spans[0]!.style.backgroundColor).not.toBe(''),
+      { timeout: 3000 },
+    );
 
     div.remove();
   });

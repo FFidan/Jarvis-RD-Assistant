@@ -35,13 +35,22 @@ interface CitationRowData {
   isInfluential: boolean;
 }
 
-function CitationList({ label, rows }: { label: string; rows: CitationRowData[] }) {
+function CitationList({
+  label,
+  rows,
+  testId,
+}: {
+  label: string;
+  rows: CitationRowData[];
+  /** Scopes each list so a test can bind a row to the direction it belongs to. */
+  testId: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   if (rows.length === 0) return null;
   const shown = expanded ? rows : rows.slice(0, PREVIEW_COUNT);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-testid={testId}>
       <h4 className="text-sm font-semibold">
         {label} <span className="font-normal text-muted-foreground">({rows.length})</span>
       </h4>
@@ -166,8 +175,8 @@ export function RelatedWorkSection({ paperId }: RelatedWorkSectionProps) {
         </div>
       ) : (
         <>
-          <CitationList label="References" rows={references} />
-          <CitationList label="Cited by" rows={citedBy} />
+          <CitationList label="References" rows={references} testId="citation-references" />
+          <CitationList label="Cited by" rows={citedBy} testId="citation-cited-by" />
         </>
       )}
     </div>

@@ -51,7 +51,7 @@ export function CommandPaletteSearch() {
       >
         <Search className="h-3.5 w-3.5 text-meta shrink-0" />
         <span className="flex-1 text-[13px] text-meta select-none">
-          Search your library…
+          Search your papers…
         </span>
         <span className="flex items-center gap-0.5 shrink-0">
           <kbd className="font-mono text-[10px] px-1.5 py-0.5 rounded border border-hair bg-paper text-meta">
@@ -65,14 +65,14 @@ export function CommandPaletteSearch() {
 
       <Dialog open={isOpen} onOpenChange={(next) => (next ? open() : close())}>
         <DialogContent className="max-w-xl p-0 gap-0 overflow-hidden">
-          <DialogTitle className="sr-only">Search your library</DialogTitle>
+          <DialogTitle className="sr-only">Search your papers</DialogTitle>
           <DialogDescription className="sr-only">
-            Search papers in your library. Press Enter to open a paper, or jump to Discover to
-            search external sources.
+            Search the papers you have saved. Press Enter to open a paper, or jump to Discover
+            to search external sources.
           </DialogDescription>
           <Command
             shouldFilter={false}
-            label="Search your library"
+            label="Search your papers"
             className="flex flex-col"
           >
             <div className="flex items-center gap-2 border-b border-hair px-3">
@@ -85,7 +85,7 @@ export function CommandPaletteSearch() {
               <Command.Input autoFocus
                 value={query}
                 onValueChange={setQuery}
-                placeholder="Search your library…"
+                placeholder="Search your papers…"
                 className="flex-1 h-12 bg-transparent text-sm outline-none placeholder:text-faint"
               />
             </div>
@@ -93,7 +93,7 @@ export function CommandPaletteSearch() {
             <Command.List className="max-h-[60vh] overflow-y-auto p-2">
               {!hasQuery && (
                 <p className="px-3 py-6 text-center text-[13px] text-faint">
-                  Start typing to search your library.
+                  Start typing to search your papers.
                 </p>
               )}
 
@@ -113,7 +113,7 @@ export function CommandPaletteSearch() {
                   an item, so cmdk would never consider the list empty. */}
               {hasQuery && !loading && !errored && results.length === 0 && (
                 <p className="px-3 py-6 text-center text-[13px] text-faint">
-                  No matches in your library.
+                  No matches in your papers.
                 </p>
               )}
 
@@ -137,7 +137,7 @@ export function CommandPaletteSearch() {
                 ))}
 
               {/* External discovery is one action away, never silently mixed
-                  into library results. */}
+                  into results from your own papers. */}
               {hasQuery && !loading && (
                 <Command.Item
                   value="__discover__"

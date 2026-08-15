@@ -390,7 +390,7 @@ export function ResearchFeedPage() {
         </h1>
       </div>
 
-      {/* ── 3-pane layout ──────────────────────────────────────────────── */}
+      {/* ── 3-pane layout — 2 on Discover, which has no facet rail ────── */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left: §-facet rail. Discover hides it: its STATUS/TOPIC counts
             describe the caller's own papers, which is not what either

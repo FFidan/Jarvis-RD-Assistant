@@ -151,6 +151,23 @@ const SIMPLE_NAV_PATHS = new Set([
   '/ask',
 ]);
 
+// What the "Show all features" toggle actually adds to the rail, read off the
+// same set the rail is built from so the cue cannot drift out of step with it.
+// Admin tools are excluded: they are not research features, and the cue is
+// shown to every user regardless of role.
+const ADVANCED_NAV_LABELS = navGroups
+  .filter((group) => !group.adminOnly)
+  .flatMap((group) => group.items)
+  .filter((item) => !SIMPLE_NAV_PATHS.has(item.path))
+  .map((item) => item.label);
+
+function joinWithAnd(labels: string[]): string {
+  const last = labels[labels.length - 1] ?? '';
+  return labels.length > 1 ? `${labels.slice(0, -1).join(', ')}, and ${last}` : last;
+}
+
+const ADVANCED_NAV_SENTENCE = joinWithAnd(ADVANCED_NAV_LABELS);
+
 // ---------------------------------------------------------------------------
 // NavLink atom
 // ---------------------------------------------------------------------------
@@ -415,8 +432,8 @@ export function Sidebar() {
             >
               <div className="flex items-start gap-2">
                 <p className="leading-relaxed">
-                  Ready for the next step? Show all features to use Projects, Extraction,
-                  Knowledge Graph, and Citation Graph.
+                  Ready for the next step? Show all features to add {ADVANCED_NAV_SENTENCE} to
+                  the sidebar.
                 </p>
                 <Button
                   variant="ghost"

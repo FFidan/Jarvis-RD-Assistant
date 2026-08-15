@@ -93,6 +93,8 @@ export const fetchFeedPapers = (params: {
   date_to?: string;
   recommended?: boolean;
   include_zotero_notes?: boolean;
+  /** Named server-side view predicate, e.g. `all_non_trash`. */
+  view?: string;
 }): Promise<FeedResponse> => {
   const searchParams = new URLSearchParams();
   const { recommended, ...rest } = params;

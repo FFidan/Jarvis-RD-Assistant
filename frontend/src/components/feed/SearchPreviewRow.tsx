@@ -173,7 +173,7 @@ export function SearchPreviewRow({
               disabled={isSaving}
             >
               {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Save to Library
+              Save to your papers
             </DropdownMenuItem>
           )}
 

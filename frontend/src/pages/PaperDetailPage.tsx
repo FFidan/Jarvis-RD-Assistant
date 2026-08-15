@@ -18,7 +18,7 @@ import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { FileText, ArrowLeft, Menu, List } from 'lucide-react';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { fetchPaperDetail, fetchNotes, fetchContradictions } from '@/lib/api';
 import { useOnlineStatus } from '@/hooks/use-online-status';
 import { getPersistedCacheTimestamp } from '@/lib/query-persister';
@@ -108,6 +108,11 @@ export function PaperDetailPage() {
   const spySectionIds = useMemo(() => (data ? SECTION_IDS : []), [data]);
   const activeId = usePaperScrollSpy(spySectionIds);
 
+  // Set only when the Contents sheet closes because the reader picked a
+  // section, so focus restoration is suppressed for that one close and Escape
+  // or a dismiss still hands focus back to the trigger.
+  const tocClosedByNavigationRef = useRef(false);
+
   // Scroll a section into view when the reader picks it from Contents.
   // The docked panel is not in the way, so it scrolls straight away. The
   // sheet must CLOSE FIRST and scroll only once the close has settled: Radix
@@ -121,6 +126,7 @@ export function PaperDetailPage() {
         scrollToSection();
         return;
       }
+      tocClosedByNavigationRef.current = true;
       setTocSheetOpen(false);
       window.setTimeout(scrollToSection, SHEET_CLOSE_SETTLE_MS);
     },
@@ -278,7 +284,8 @@ export function PaperDetailPage() {
         <ContradictionsPanel paperId={paperId} />
         <p className="text-xs text-muted-foreground">
           Reading state, star, and citation export live in the toolbar above the paper. Notes
-          belong in the Your Notes section.
+          belong in the Your Notes section. Rating and flagging a paper are no longer part of
+          Paper Detail.
         </p>
       </div>
     </div>
@@ -321,7 +328,6 @@ export function PaperDetailPage() {
             paperTitle={paper.title}
             state={user_state?.state ?? 'inbox'}
             starred={user_state?.starred ?? false}
-            variant="toolbar"
           />
           <CitationMenu paperIds={[paperId]} />
           <div className="mx-1 h-5 w-px bg-hair" aria-hidden="true" />
@@ -359,7 +365,11 @@ export function PaperDetailPage() {
               <SheetContent
                 side="left"
                 className="w-72 overflow-y-auto"
-                onCloseAutoFocus={(e) => e.preventDefault()}
+                onCloseAutoFocus={(e) => {
+                  if (!tocClosedByNavigationRef.current) return;
+                  tocClosedByNavigationRef.current = false;
+                  e.preventDefault();
+                }}
               >
                 <SheetHeader>
                   <SheetTitle>Sections</SheetTitle>
