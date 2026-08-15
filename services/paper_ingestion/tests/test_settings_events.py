@@ -11,9 +11,31 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing import RoleMiddleware
 from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 from tests.conftest import _make_pool_and_conn
+
+_UI_PREF_VALUES = {
+    "ui.appearance": {
+        "theme": "dark",
+        "accent": "forest",
+        "type": "editorial",
+        "density": "compact",
+    },
+    "ui.timer": {
+        "workMinutes": 50,
+        "shortBreakMinutes": 10,
+        "longBreakMinutes": 25,
+        "targetCycles": 6,
+    },
+    "ui.nav_mode": "full",
+}
+_MALFORMED_UI_PREF_VALUES = {
+    "ui.appearance": {"theme": "dark"},
+    "ui.timer": {"workMinutes": 50},
+    "ui.nav_mode": "wide",
+}
 
 
 @pytest.fixture()
@@ -98,6 +120,78 @@ async def test_settings_save_emits_event(_app) -> None:
     assert config_kwargs["source"] == "settings"
     ctx_payload = config_kwargs.get("context", {})
     assert ctx_payload.get("key") == "pulse.enabled"
+
+
+@pytest.mark.parametrize(("key", "value"), _UI_PREF_VALUES.items())
+@pytest.mark.asyncio
+async def test_non_admin_writes_each_preference_to_own_row(_app, key: str, value: object) -> None:
+    """A regular browser session writes each interface preference under its user id."""
+    from paper_ingestion.routers import settings as settings_module
+
+    app, conn, _mock_http = _app
+    conn.execute = AsyncMock(return_value=None)
+    conn.fetchrow = AsyncMock(return_value=None)
+    settings_module.require_admin.reset_mock()
+
+    with patch("paper_ingestion.routers.settings._log_event", new=AsyncMock()):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=RoleMiddleware(app, "user")),
+            base_url="http://test",
+        ) as client:
+            response = await client.put(
+                f"/api/config/{key}",
+                json={"key": key, "value": value},
+            )
+
+    assert response.status_code == 200, response.text
+    settings_module.require_admin.assert_not_awaited()
+    bound_writes = [call.args[1:] for call in conn.execute.await_args_list]
+    assert (1, key, value) in bound_writes
+
+
+@pytest.mark.parametrize(("key", "value"), _MALFORMED_UI_PREF_VALUES.items())
+@pytest.mark.asyncio
+async def test_malformed_preference_is_rejected_before_write(_app, key: str, value: object) -> None:
+    """Malformed interface preferences return 400 without a database write."""
+    app, conn, _mock_http = _app
+    conn.execute = AsyncMock(return_value=None)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=RoleMiddleware(app, "user")),
+        base_url="http://test",
+    ) as client:
+        response = await client.put(
+            f"/api/config/{key}",
+            json={"key": key, "value": value},
+        )
+
+    assert response.status_code == 400, response.text
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_preference_get_does_not_expose_another_users_value(_app) -> None:
+    """A regular browser session cannot read another user's preference row."""
+    app, conn, _mock_http = _app
+    other_users_row = {
+        "key": "ui.nav_mode",
+        "value": "full",
+        "encrypted_value": None,
+        "user_id": 2,
+    }
+
+    async def fetchrow_for_user(_query: str, key: str, user_id: int):
+        return other_users_row if (key, user_id) == ("ui.nav_mode", 2) else None
+
+    conn.fetchrow = AsyncMock(side_effect=fetchrow_for_user)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=RoleMiddleware(app, "user")),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/config/ui.nav_mode")
+
+    assert response.status_code == 404, response.text
+    assert conn.fetchrow.await_args.args[1:] == ("ui.nav_mode", 1)
 
 
 @pytest.mark.asyncio

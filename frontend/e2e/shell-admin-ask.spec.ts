@@ -15,6 +15,7 @@
 import { test, expect } from '@playwright/test';
 import {
   installMockedApiDefaults,
+  RETURNING_USER_PREFERENCES,
   seedFirstRunShell,
   seedReturningUserShell,
 } from './helpers/setup';
@@ -189,7 +190,11 @@ async function mockFirstUseEndpoints(page: Page) {
     }),
   );
   await page.route('**/api/config', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(RETURNING_USER_PREFERENCES),
+    }),
   );
   await page.route('**/api/config/onboarding.dismissed', (route) =>
     route.fulfill({

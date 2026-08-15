@@ -15,7 +15,7 @@ export function TimerSection() {
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <p className="text-sm text-muted-foreground">
-          Customize your focus and break durations.
+          Customize your focus and break durations. These settings follow your account.
         </p>
         {isActive && (
           <p className="text-sm text-yellow-600 dark:text-yellow-400 mt-1">

@@ -400,7 +400,55 @@ def _validate_timezone(v: Any) -> None:
         raise ValueError(f"unknown timezone: {v!r}")
 
 
+_APPEARANCE_KEYS = frozenset({"theme", "accent", "type", "density"})
+
+_APPEARANCE_VALUES = {
+    "theme": frozenset({"light", "dark", "system"}),
+    "accent": frozenset({"ink-blue", "forest", "burgundy", "slate", "plum"}),
+    "type": frozenset({"serif-calm", "sans-modern", "editorial", "legacy"}),
+    "density": frozenset({"comfortable", "default", "compact"}),
+}
+_TIMER_RANGES = {
+    "workMinutes": (15, 60),
+    "shortBreakMinutes": (3, 15),
+    "longBreakMinutes": (10, 30),
+    "targetCycles": (2, 8),
+}
+
+
+def _validate_ui_appearance(value: Any) -> None:
+    """Validate the complete account-backed appearance preference."""
+    if not isinstance(value, dict) or set(value) != _APPEARANCE_KEYS:
+        raise ValueError("ui.appearance must contain theme, accent, type, and density")
+    for field, allowed in _APPEARANCE_VALUES.items():
+        if not isinstance(value[field], str) or value[field] not in allowed:
+            raise ValueError(f"ui.appearance.{field} has an unsupported value")
+
+
+def _validate_ui_timer(value: Any) -> None:
+    """Validate the complete account-backed timer preference."""
+    if not isinstance(value, dict) or set(value) != set(_TIMER_RANGES):
+        raise ValueError("ui.timer must contain all four timer settings")
+    for field, (minimum, maximum) in _TIMER_RANGES.items():
+        field_value = value[field]
+        if (
+            isinstance(field_value, bool)
+            or not isinstance(field_value, int)
+            or not minimum <= field_value <= maximum
+        ):
+            raise ValueError(f"ui.timer.{field} must be an integer from {minimum} to {maximum}")
+
+
+def _validate_ui_nav_mode(value: Any) -> None:
+    """Validate the account-backed navigation density preference."""
+    if not isinstance(value, str) or value not in {"simple", "full"}:
+        raise ValueError("ui.nav_mode must be 'simple' or 'full'")
+
+
 _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
+    "ui.appearance": _validate_ui_appearance,
+    "ui.timer": _validate_ui_timer,
+    "ui.nav_mode": _validate_ui_nav_mode,
     # FSRS
     "fsrs.desired_retention": _validate_fsrs_retention,
     "fsrs.learning_steps": _validate_fsrs_learning_steps,

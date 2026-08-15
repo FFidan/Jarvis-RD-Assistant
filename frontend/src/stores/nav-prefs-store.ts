@@ -33,9 +33,8 @@ export const useNavPrefsStore = create<NavPrefsState>()(
       },
     }),
     {
-      // Device-scoped: own persist key (NOT inside UI_STORE_KEY, which logout
-      // removes) and deliberately NOT registered with session-reset, so the
-      // chosen nav density survives logout — mirrors theme-store.
+      // Account-backed with a dedicated local cache: the saved value provides
+      // the first paint, survives logout, and is reconciled after sign-in.
       name: NAV_PREFS_STORE_KEY,
       partialize: (state) => ({ navMode: state.navMode }),
     },

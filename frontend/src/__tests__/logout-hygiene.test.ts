@@ -45,6 +45,9 @@ const { useChatStore, registerStream, useStreamRegistry } = await import('@/stor
 const { useJobStore } = await import('@/stores/job-store');
 const { useBulkSelection } = await import('@/stores/bulk-selection-store');
 const { usePomodoroStore } = await import('@/stores/pomodoro-store');
+const { useThemeStore } = await import('@/stores/theme-store');
+const { useNavPrefsStore } = await import('@/stores/nav-prefs-store');
+const { loadAppearance, saveAppearance } = await import('@/lib/theme');
 const { useKeyboardShortcuts } = await import('@/stores/keyboard-shortcuts-store');
 const { useCommandPalette } = await import('@/stores/command-palette-store');
 
@@ -149,6 +152,35 @@ describe('logout-hygiene', () => {
     await flushPromises();
     expect(usePomodoroStore.getState().phase).toBe('idle');
     expect(usePomodoroStore.getState().startedAt).toBeNull();
+  });
+
+  it('preserves appearance, timer, and navigation preferences on logout', async () => {
+    saveAppearance({ accent: 'forest', type: 'editorial', density: 'compact' });
+    useThemeStore.getState().setTheme('dark');
+    usePomodoroStore.setState({
+      workMinutes: 50,
+      shortBreakMinutes: 10,
+      longBreakMinutes: 25,
+      targetCycles: 6,
+    });
+    useNavPrefsStore.getState().setNavMode('full');
+
+    useAuthStore.getState().logout();
+    await flushPromises();
+
+    expect(loadAppearance()).toEqual({
+      accent: 'forest',
+      type: 'editorial',
+      density: 'compact',
+    });
+    expect(useThemeStore.getState().theme).toBe('dark');
+    expect(usePomodoroStore.getState()).toMatchObject({
+      workMinutes: 50,
+      shortBreakMinutes: 10,
+      longBreakMinutes: 25,
+      targetCycles: 6,
+    });
+    expect(useNavPrefsStore.getState().navMode).toBe('full');
   });
 
   it('resets keyboard-shortcuts-store to closed on logout', async () => {

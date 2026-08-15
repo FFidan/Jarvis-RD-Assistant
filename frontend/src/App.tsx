@@ -22,6 +22,7 @@ import { AskPage } from '@/pages/AskPage';
 import { ApiError, fetchAccount, getFirstRunStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
+import { PreferenceSync } from '@/hooks/usePreferenceSync';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
 import { LogsRoute } from '@/components/auth/LogsRoute';
 
@@ -254,6 +255,7 @@ export function App() {
     <ErrorBoundary>
         <NavigateBridgeRegistrar />
         <PomodoroAutoLogger />
+        <PreferenceSync />
         <Routes>
           {/* Setup is complete (the gate above handles the incomplete case).
               Resolve old deep links so stale /setup and /first-run URLs land

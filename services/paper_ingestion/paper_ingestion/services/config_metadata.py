@@ -54,6 +54,9 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         # User preferences
         "user.timezone",
         "onboarding.dismissed",
+        "ui.appearance",
+        "ui.timer",
+        "ui.nav_mode",
         # Recommendation engine
         "recommendation.liked_weight",
         "recommendation.project_weight",
@@ -176,6 +179,10 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
         "user.timezone",
         # Per-user first-use guidance preference
         "onboarding.dismissed",
+        # Per-user interface preferences
+        "ui.appearance",
+        "ui.timer",
+        "ui.nav_mode",
         # Per-user recommendation feed weights
         "recommendation.liked_weight",
         "recommendation.project_weight",
