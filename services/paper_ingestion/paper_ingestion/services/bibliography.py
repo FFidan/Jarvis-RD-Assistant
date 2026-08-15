@@ -630,7 +630,7 @@ async def process_uploaded_document_citations(
                 "metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb "
                 "WHERE id = $3 AND external_id = $4",
                 identified.external_id,
-                json.dumps(metadata_patch),
+                metadata_patch,
                 paper_id,
                 paper["external_id"],
             )
@@ -655,6 +655,6 @@ async def process_uploaded_document_citations(
         await conn.execute(
             "UPDATE papers SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb "
             "WHERE id = $2",
-            json.dumps({"bibliography": stored_entries}),
+            {"bibliography": stored_entries},
             paper_id,
         )
