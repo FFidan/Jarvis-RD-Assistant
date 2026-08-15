@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -275,7 +275,8 @@ async def test_identified_upload_uses_existing_citation_refresh() -> None:
     refresh.assert_awaited_once_with(pool, source, [7])
     update_args = conn.execute.await_args.args
     assert update_args[1] == "s2:canonical-paper"
-    assert json.loads(update_args[2])["s2_id"] == "canonical-paper"
+    assert isinstance(update_args[2], Mapping), "identified metadata must be bound as a mapping"
+    assert update_args[2]["s2_id"] == "canonical-paper"
     assert update_args[3:] == (7, "local:uploaded-paper.pdf")
 
 
@@ -350,7 +351,9 @@ async def test_resolved_entries_become_edges_and_unresolved_entries_persist() ->
     sync_references.assert_awaited_once()
     assert sync_references.await_args.args[2] == 9
     assert sync_references.await_args.args[1][0]["title"] == "Attention Is All You Need"
-    stored = json.loads(conn.execute.await_args.args[1])["bibliography"]
+    bound_metadata = conn.execute.await_args.args[1]
+    assert isinstance(bound_metadata, Mapping), "bibliography metadata must be bound as a mapping"
+    stored = bound_metadata["bibliography"]
     assert [entry["resolved"] for entry in stored] == [True, False, False]
     assert stored[1]["raw_text"].startswith("[2] Rivera")
     assert stored[1]["title"] == "Notes on laboratory indexing"
