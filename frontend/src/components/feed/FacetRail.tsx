@@ -161,7 +161,7 @@ function FacetItem({ icon, label, count, active, onClick, ...rest }: FacetItemPr
     >
       {icon && <span className="shrink-0 opacity-70 group-hover:opacity-100">{icon}</span>}
       <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-      {count != null && count > 0 && (
+      {count != null && (
         <span
           className={cn(
             'ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] tabular-nums leading-none',
@@ -213,7 +213,8 @@ function FacetListContent({
   const byTopic = counts?.by_topic ?? [];
   const untagged = counts?.untagged ?? 0;
   const hasSourceFacets = Object.keys(bySource).length > 0;
-  const hasTopicFacets = byTopic.length > 0 || untagged > 0;
+  const showUntaggedFacet = untagged > 0 || selection.topicFacet === 'untagged';
+  const hasTopicFacets = byTopic.length > 0 || showUntaggedFacet;
 
   const starActive = selection.surface === 'library' && selection.filter === 'starred';
   const starCount = counts?.starred ?? 0;
@@ -301,7 +302,7 @@ function FacetListContent({
               data-testid={`facet-topic-${topic_id}`}
             />
           ))}
-          {untagged > 0 && (
+          {showUntaggedFacet && (
             <FacetItem
               icon={<Tag size={14} className="opacity-40" />}
               label="Untagged"

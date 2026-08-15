@@ -213,6 +213,18 @@ describe('FacetRail', () => {
     expect(screen.getByTestId('facet-topic-untagged')).toHaveTextContent('5');
   });
 
+  it('renders an active Untagged bucket with an honest zero count', () => {
+    render(
+      <FacetRail
+        counts={EMPTY_COUNTS}
+        selection={{ ...BASE_SELECTION, topicFacet: 'untagged' }}
+        onSelect={onSelect}
+      />,
+    );
+    expect(screen.getByTestId('facet-topic-untagged')).toHaveTextContent('Untagged');
+    expect(screen.getByTestId('facet-topic-untagged')).toHaveTextContent('0');
+  });
+
   it('clicking a topic facet calls onSelect with that topicFacet', () => {
     render(<FacetRail counts={makeRich()} selection={BASE_SELECTION} onSelect={onSelect} />);
     fireEvent.click(screen.getByTestId('facet-topic-1'));

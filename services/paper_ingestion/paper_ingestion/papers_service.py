@@ -31,14 +31,19 @@ from jarvis_common.paper_state import (
 from jarvis_common.paper_state import (
     trash_paper as _trash_paper,
 )
-from jarvis_common.paper_visibility import paper_visibility_sql
 
 from paper_ingestion.ingestion.embedder import delete_paper_vectors
 from paper_ingestion.models import (
     FeedCountsResponse,
     TopicFacetCount,
 )
-from paper_ingestion.queries.predicates import VIEW_PREDICATES
+from paper_ingestion.queries.predicates import (
+    VIEW_PREDICATES,
+    paper_topic_id_sql,
+    paper_untagged_sql,
+    paper_visible_sql,
+    source_types_sql,
+)
 from paper_ingestion.services.feed_query import fetch_feed_facet_counts
 from paper_ingestion.services.paper_state_helpers import (
     _upsert_recommendation_feedback,
@@ -234,12 +239,41 @@ async def get_feed_counts(
     scope: str,
     db_pool: asyncpg.Pool,
     user_id: int | None,
+    *,
+    view: str | None = None,
+    source: str | None = None,
+    topic_id: int | None = None,
+    untagged: bool = False,
 ) -> FeedCountsResponse:
     """Return feed and facet counts under the requested visibility scope.
 
     Library scope counts exact caller membership. Authenticated corpus scope
     counts persisted public rows plus the caller's private library rows. A
-    `None` caller uses the trusted internal corpus path.
+    ``None`` caller uses the trusted internal corpus path. Status counts apply
+    source and topic-group filters but intentionally ignore ``view``; every
+    other group likewise ignores its own active selection.
+
+    Parameters
+    ----------
+    scope : str
+        ``"library"`` for exact membership or ``"corpus"`` for visible papers.
+    db_pool : asyncpg.Pool
+        Database pool used for the aggregate queries.
+    user_id : int | None
+        Authenticated caller ID, or ``None`` for the trusted corpus path.
+    view : str | None
+        Active status selection.
+    source : str | None
+        Active source selection.
+    topic_id : int | None
+        Active topic selection.
+    untagged : bool
+        Whether the active topic selection requires papers without tags.
+
+    Returns
+    -------
+    FeedCountsResponse
+        Conditioned status, source, topic, and untagged counts.
     """
     # Normalise sentinel: .__wrapped__ callers bypass FastAPI DI so `scope`
     # may arrive as the Query(…) FieldInfo object rather than a plain str.
@@ -249,6 +283,11 @@ async def get_feed_counts(
         raise HTTPException(
             status_code=422,
             detail=f"Unknown scope {scope!r}. Valid values: ['corpus', 'library']",
+        )
+    if view is not None and view not in VIEW_PREDICATES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}",
         )
 
     def _sum(view_key: str, alias: str) -> str:
@@ -276,7 +315,8 @@ async def get_feed_counts(
           LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
             AND pus.user_id IS NULL
         """
-        query_args: tuple[object, ...] = ()
+        query_args: list[object] = []
+        conditions: list[str] = []
     elif scope == "library":
         from_sql = """
           FROM papers p
@@ -284,16 +324,27 @@ async def get_feed_counts(
           LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
             AND pus.user_id = $1
         """
-        query_args = (user_id,)
+        query_args = [user_id]
+        conditions = []
     else:
-        from_sql = f"""
+        from_sql = """
           FROM papers p
           LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
             AND pus.user_id = $1
-         WHERE {paper_visibility_sql(1, alias="p")}
         """
-        query_args = (user_id,)
-    sql = select_sql + from_sql
+        query_args = [user_id]
+        conditions = [paper_visible_sql(1, alias="p")]
+
+    if source is not None:
+        conditions.append(source_types_sql(len(query_args) + 1, 1))
+        query_args.append(source)
+    if topic_id is not None:
+        conditions.append(paper_topic_id_sql(len(query_args) + 1))
+        query_args.append(topic_id)
+    if untagged:
+        conditions.append(paper_untagged_sql())
+    where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
+    sql = select_sql + from_sql + where_sql
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(sql, *query_args)
         if row is None:
@@ -302,8 +353,14 @@ async def get_feed_counts(
             )
 
         # UI v3 facet rail: by_source / by_topic / untagged — honour requested scope.
-        by_source, by_topic_rows, untagged = await fetch_feed_facet_counts(
-            conn, user_id, scope=scope
+        by_source, by_topic_rows, untagged_count = await fetch_feed_facet_counts(
+            conn,
+            user_id,
+            scope=scope,
+            view=view,
+            source=source,
+            topic_id=topic_id,
+            untagged=untagged,
         )
 
     return FeedCountsResponse(
@@ -319,7 +376,7 @@ async def get_feed_counts(
         all_non_trash=row["all_non_trash"],
         by_source=by_source,
         by_topic=[TopicFacetCount(**t) for t in by_topic_rows],
-        untagged=untagged,
+        untagged=untagged_count,
     )
 
 

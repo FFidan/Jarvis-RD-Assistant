@@ -7,6 +7,7 @@ import {
   batchSavePapers,
   fetchSources,
   fetchFeedCounts,
+  resolveFeedView,
 } from '@/lib/api';
 import { useOnlineStatus } from '@/hooks/use-online-status';
 import { getPersistedCacheTimestamp } from '@/lib/query-persister';
@@ -143,6 +144,11 @@ export function ResearchFeedPage() {
   // Scoped list-filter: title/author text filter within the active faceted view
   const [listFilter, setListFilter] = useState('');
 
+  const effectiveSourceTypes: string | null = sourceFacet ?? inboxSource ?? null;
+  const effectiveTopicId: number | null = typeof topicFacet === 'number' ? topicFacet : null;
+  const effectiveUntagged: boolean = topicFacet === 'untagged';
+  const facetCountView = resolveFeedView(surface, filter, 'library');
+
   // Clear bulk selection + list filter on surface/filter/facet change
   useEffect(() => {
     useBulkSelection.getState().clear();
@@ -160,8 +166,20 @@ export function ResearchFeedPage() {
   // The rail only ever describes the caller's own papers, so its facet counts
   // are always library-scoped.
   const { data: countsWithFacets } = useQuery<FeedCountsWithFacets>({
-    queryKey: QUERY_KEYS.feed.counts('library'),
-    queryFn: () => fetchFeedCounts('library'),
+    queryKey: QUERY_KEYS.feed.counts(
+      'library',
+      facetCountView,
+      effectiveSourceTypes,
+      effectiveTopicId,
+      effectiveUntagged,
+    ),
+    queryFn: () => fetchFeedCounts({
+      scope: 'library',
+      view: facetCountView,
+      source: effectiveSourceTypes,
+      topicId: effectiveTopicId,
+      untagged: effectiveUntagged,
+    }),
     staleTime: 5_000,
   });
 
@@ -385,10 +403,6 @@ export function ResearchFeedPage() {
   // §Source drives the `sourceTypes` param; the §Topic facet drives `topicId`.
   // The 'untagged' sentinel has no backend topic id, so it drives a separate
   // `untagged` boolean rather than a topic_id filter.
-  const effectiveSourceTypes: string | null = sourceFacet ?? inboxSource ?? null;
-  const effectiveTopicId: number | null = typeof topicFacet === 'number' ? topicFacet : null;
-  const effectiveUntagged: boolean = topicFacet === 'untagged';
-
   // ─── render ───────────────────────────────────────────────────────────────
 
   return (

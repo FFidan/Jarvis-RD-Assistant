@@ -810,6 +810,106 @@ async def test_a71_get_feed_counts_reflects_user_library(
     )
 
 
+async def test_feed_counts_condition_each_group_on_other_filters(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Facet alternatives reflect other active groups without filtering themselves."""
+    user_id = contract_two_users.user_a_id
+    alpha_name = f"conditioned-alpha-{user_id}"
+    beta_name = f"conditioned-beta-{user_id}"
+    topic_rows = await contract_conn.fetch(
+        """INSERT INTO topics (name, query_terms)
+           VALUES ($1, ARRAY['conditioned-alpha']), ($2, ARRAY['conditioned-beta'])
+           RETURNING id, name""",
+        alpha_name,
+        beta_name,
+    )
+    topic_ids = {row["name"]: row["id"] for row in topic_rows}
+    alpha_id = topic_ids[alpha_name]
+    beta_id = topic_ids[beta_name]
+
+    paper_specs = (
+        ("arxiv", alpha_id, "to_read"),
+        ("pubmed", alpha_id, "inbox"),
+        ("pubmed", beta_id, "to_read"),
+        ("arxiv", None, "inbox"),
+        ("pubmed", None, "to_read"),
+    )
+    for position, (source_type, topic_id, state) in enumerate(paper_specs, start=1):
+        paper_id = await contract_conn.fetchval(
+            """INSERT INTO papers
+                   (external_id, source_type, title, authors, url, discovered_by)
+               VALUES ($1, $2, $3, ARRAY['Researcher'], $4, $5)
+               RETURNING id""",
+            f"conditioned-counts-{user_id}-{position}",
+            source_type,
+            f"Conditioned counts paper {position}",
+            f"https://example.test/conditioned-counts-{user_id}-{position}",
+            user_id,
+        )
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+            user_id,
+            paper_id,
+        )
+        if topic_id is not None:
+            await contract_conn.execute(
+                "INSERT INTO paper_topics (paper_id, topic_id, relevance_score) VALUES ($1, $2, 0.9)",
+                paper_id,
+                topic_id,
+            )
+        await contract_conn.execute(
+            """INSERT INTO paper_user_state (paper_id, user_id, state)
+               VALUES ($1, $2, $3)""",
+            paper_id,
+            user_id,
+            state,
+        )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        response = await client.get(
+            "/api/papers/feed/counts",
+            params={"view": "library", "source": "pubmed", "topic_id": alpha_id},
+        )
+
+    assert response.status_code == 200, response.text[:300]
+    body = response.json()
+    topic_counts = {row["topic_id"]: row["count"] for row in body["by_topic"]}
+
+    assert body["library"] == 0
+    assert body["inbox"] == 1
+    assert body["by_source"]["pubmed"] == 0
+    assert body["by_source"]["arxiv"] == 1
+    assert topic_counts[alpha_id] == 0
+    assert topic_counts[beta_id] == 1
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        all_topics_response = await client.get(
+            "/api/papers/feed/counts",
+            params={"view": "library"},
+        )
+        untagged_response = await client.get(
+            "/api/papers/feed/counts",
+            params={"view": "library", "untagged": "true"},
+        )
+
+    assert all_topics_response.status_code == 200, all_topics_response.text[:300]
+    assert untagged_response.status_code == 200, untagged_response.text[:300]
+    all_topics_body = all_topics_response.json()
+    untagged_body = untagged_response.json()
+    untagged_topic_counts = {row["topic_id"]: row["count"] for row in untagged_body["by_topic"]}
+
+    assert all_topics_body["library"] > untagged_body["library"]
+    assert all_topics_body["inbox"] > untagged_body["inbox"]
+    assert all_topics_body["by_source"]["arxiv"] > untagged_body["by_source"]["arxiv"]
+    assert all_topics_body["by_source"]["pubmed"] > untagged_body["by_source"]["pubmed"]
+    assert untagged_topic_counts[alpha_id] == 1
+    assert untagged_topic_counts[beta_id] == 1
+
+
 # --- A74: PUT /api/papers/{paper_id}/skip — owner can skip inbox paper ---
 
 

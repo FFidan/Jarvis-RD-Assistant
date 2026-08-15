@@ -2,7 +2,7 @@
 // recommendation feedback, discovery, PDF upload/processing, paper detail,
 // notes, foundational papers, citations, knowledge graph, and the extraction
 // table + CSV export.
-import type { LibraryFilter } from '@/types';
+import type { FeedScope, LibraryFilter, SurfaceView } from '@/types';
 
 import { apiFetchJson, apiFetchRaw, apiFetchVoid, triggerBlobDownload } from './core';
 import {
@@ -162,23 +162,32 @@ export async function bulkAction(body: { paper_ids: number[]; action: BulkAction
   return apiFetchJson('/api/papers/bulk', bulkActionResponseSchema, { method: 'POST', body: JSON.stringify(body) });
 }
 
-/**
- * Fetch feed counts for all surfaces.
- *
- * Always returns the full `FeedCountsWithFacets` payload which is structurally
- * compatible with the numeric-only `FeedCountsResponse` subset — existing
- * `keyof`-indexed consumers (e.g. `CountsBadge`) work unchanged.
- *
- * Pass `scope` to honour the active library/corpus scope for facet counts
- * (C-FACET-BE: backend `get_feed_counts` accepts ?scope= and passes it to
- * `fetch_feed_facet_counts`).
- */
-export async function fetchFeedCounts(scope?: 'library' | 'corpus'): Promise<FeedCountsWithFacets> {
-  const qs = scope ? `?scope=${scope}` : '';
-  return apiFetchJson(`/api/papers/feed/counts${qs}`, feedCountsSchema);
+export type BackendView =
+  | 'inbox' | 'library' | 'reading_list' | 'reading' | 'done'
+  | 'starred' | 'trash' | 'active' | 'kept' | 'all_non_trash';
+
+export interface FeedCountSelection {
+  scope?: FeedScope;
+  view?: BackendView;
+  source?: string | null;
+  topicId?: number | null;
+  untagged?: boolean;
 }
 
-/** @deprecated Use `fetchFeedCounts(scope)` instead. */
+/** Fetch feed counts conditioned on the active facet selection. */
+export async function fetchFeedCounts(
+  selection: FeedCountSelection = {},
+): Promise<FeedCountsWithFacets> {
+  const searchParams = new URLSearchParams();
+  if (selection.scope) searchParams.set('scope', selection.scope);
+  if (selection.view) searchParams.set('view', selection.view);
+  if (selection.source) searchParams.set('source', selection.source);
+  if (selection.topicId != null) searchParams.set('topic_id', String(selection.topicId));
+  if (selection.untagged) searchParams.set('untagged', 'true');
+  const query = searchParams.toString();
+  return apiFetchJson(`/api/papers/feed/counts${query ? `?${query}` : ''}`, feedCountsSchema);
+}
+
 // --- Lifecycle mutations (additive) ---
 // Return type for simple state transitions: { status: string; paper_id: number }
 
@@ -303,10 +312,6 @@ export async function deleteRecommendationFeedback(topicId: number): Promise<Del
  * NOT the same as frontend `SurfaceView` (5 UI surfaces). When a user selects
  * `surface=library` + `filter=to_read`, the backend query needs `?view=reading_list`.
  */
-type BackendView =
-  | 'inbox' | 'library' | 'reading_list' | 'reading' | 'done'
-  | 'starred' | 'trash' | 'active' | 'kept' | 'all_non_trash';
-
 const LIBRARY_FILTER_TO_BACKEND_VIEW: Record<
   LibraryFilter,
   BackendView
@@ -321,6 +326,24 @@ function isLibraryFilter(value: string): value is LibraryFilter {
   return value in LIBRARY_FILTER_TO_BACKEND_VIEW;
 }
 
+/** Resolve a UI surface and optional library filter to its backend view. */
+export function resolveFeedView(
+  view: SurfaceView | undefined,
+  filter: string | null | undefined,
+  scope?: FeedScope,
+): BackendView | undefined {
+  if (view === 'library' && filter && isLibraryFilter(filter)) {
+    return LIBRARY_FILTER_TO_BACKEND_VIEW[filter];
+  }
+  if (view === 'library' && scope === 'corpus') {
+    return 'all_non_trash';
+  }
+  if (view === 'inbox' || view === 'library' || view === 'trash') {
+    return view;
+  }
+  return undefined;
+}
+
 /** Surface-aware feed fetch for FeedView. Passes view= directly to the
  * backend so VIEW_PREDICATES (canonical lifecycle predicates) are used
  * — the legacy unread_only/statuses path uses different SQL that does
@@ -331,9 +354,9 @@ function isLibraryFilter(value: string): value is LibraryFilter {
  * starred maps to view=starred.
  */
 export async function fetchFeed(params: {
-  view?: import('@/types').SurfaceView;
+  view?: SurfaceView;
   filter?: string | null;
-  scope?: import('@/types').FeedScope;
+  scope?: FeedScope;
   limit?: number;
   offset?: number;
   sourceTypes?: string | null;
@@ -343,16 +366,7 @@ export async function fetchFeed(params: {
 }): Promise<FeedResponse> {
   const { view, filter, scope, limit = 30, offset = 0, sourceTypes, topicId, untagged, q } = params;
 
-  // Map (surface=library, filter=X) → backend view name. Otherwise the surface
-  // value itself is already a valid backend view (inbox/library/trash overlap).
-  let resolvedView: BackendView | undefined;
-  if (view === 'library' && filter && isLibraryFilter(filter)) {
-    resolvedView = LIBRARY_FILTER_TO_BACKEND_VIEW[filter];
-  } else if (view === 'library' && scope === 'corpus') {
-    resolvedView = 'all_non_trash';
-  } else if (view === 'inbox' || view === 'library' || view === 'trash') {
-    resolvedView = view;
-  }
+  const resolvedView = resolveFeedView(view, filter, scope);
 
   const searchParams = new URLSearchParams();
   if (resolvedView) {

@@ -185,12 +185,24 @@ async def list_papers(
 async def get_feed_counts(
     request: Request,
     scope: str = Query(default="library", max_length=16),
+    view: str | None = Query(default=None, max_length=64),
+    source: SourceType | None = None,
+    topic_id: int | None = None,
+    untagged: bool = False,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
 ) -> FeedCountsResponse:
     """Return per-bucket paper counts (C3: delegates to papers_service)."""
     _ = request  # required by @limiter.limit; not used in body
-    return await papers_service.get_feed_counts(scope, db_pool, user_id)
+    return await papers_service.get_feed_counts(
+        scope,
+        db_pool,
+        user_id,
+        view=view,
+        source=source.value if source is not None else None,
+        topic_id=topic_id,
+        untagged=untagged,
+    )
 
 
 # ---------------------------------------------------------------------------
