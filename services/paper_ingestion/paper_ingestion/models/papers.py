@@ -133,6 +133,8 @@ class CrossReference(BaseModel):
     """A link between two related papers discovered via cross-reference check."""
 
     related_paper_id: int
+    related_title: str | None = None
+    related_year: int | None = None
     relationship: str
     explanation: str
     related_quote: str | None = None

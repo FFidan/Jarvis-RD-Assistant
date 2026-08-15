@@ -16,6 +16,7 @@ from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion.citations import (
     _filter_visible_paper_ids,
+    _refresh_stale_citations,
     build_citation_graph,
     sync_citations_for_paper,
 )
@@ -48,6 +49,14 @@ async def get_citation_graph(
         # Per-id loop is O(n) DB round-trips but correct and simple (YAGNI).
         for pid in paper_ids:
             await assert_paper_ownership(conn, pid, user_id)
+
+    s2_source = getattr(request.app.state, "s2_source", None)
+    if s2_source is None:
+        s2_source = getattr(request.app.state, "sources", {}).get("semantic_scholar")
+    if s2_source is not None:
+        await _refresh_stale_citations(db_pool, s2_source, paper_ids)
+
+    async with db_pool.acquire() as conn:
         return await build_citation_graph(conn, paper_ids, depth, user_id=user_id)
 
 

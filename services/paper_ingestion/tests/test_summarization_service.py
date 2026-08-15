@@ -10,6 +10,7 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 from jarvis_common.testing_db import make_multi_acquire_pool
 from jarvis_common.verify import QuoteVerifier
 
@@ -96,8 +97,8 @@ async def test_find_cross_references_prefers_semantic_results():
     # candidates and decides nothing. Scope is covered separately by
     # test_cross_references_background_job_ignores_discovery_attribution.
     conn.fetch.return_value = [
-        {"id": 2, "content_generation": 4},
-        {"id": 3, "content_generation": 7},
+        {"id": 2, "title": "Second Paper", "published_year": 2024, "content_generation": 4},
+        {"id": 3, "title": "Third Paper", "published_year": 2025, "content_generation": 7},
     ]
     embedder = AsyncMock()
     embedder.search_similar.return_value = [
@@ -109,6 +110,8 @@ async def test_find_cross_references_prefers_semantic_results():
     result = await summarization._find_cross_references(conn, 7, "Test Paper", embedder=embedder)
 
     assert [item.related_paper_id for item in result] == [2, 3]
+    assert [item.related_title for item in result] == ["Second Paper", "Third Paper"]
+    assert [item.related_year for item in result] == [2024, 2025]
     assert [item.content_generation for item in result] == [4, 7]
     assert all(item.relationship == "semantic_similarity" for item in result)
 
@@ -162,6 +165,124 @@ async def test_generate_paper_summary_returns_existing_summary():
     assert result.passes == 0
     llm_mock.assert_not_called()
     convert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_successful_summary_synchronizes_citations_without_propagating_failure(monkeypatch):
+    """A completed summary remains successful when citation synchronization fails."""
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), {"id": 1, "cross_references": []}]
+    pool = _make_pool(conn)
+    source = MagicMock()
+    monkeypatch.setattr(summarization.svc, "sources", {"semantic_scholar": source})
+
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "row_to_summary_response", return_value="existing-summary"),
+        patch.object(
+            summarization,
+            "_refresh_stale_citations",
+            AsyncMock(side_effect=RuntimeError("unavailable")),
+        ) as sync,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=MagicMock(),
+            embedder=MagicMock(),
+        )
+
+    assert result.summary == "existing-summary"
+    # Routed through the staleness check, so a re-summarize cannot re-fetch a
+    # paper whose citations are still current.
+    sync.assert_awaited_once_with(pool, source, [7])
+
+
+@pytest.mark.asyncio
+async def test_summary_response_joins_related_title_and_preserves_missing_reference():
+    """The response enriches available targets and retains missing-target context."""
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {
+            "id": 2,
+            "title": "Available Related Paper",
+            "published_year": 2023,
+            "content_generation": 4,
+        }
+    ]
+    stored_references = [
+        {
+            "related_paper_id": 2,
+            "relationship": "semantic_similarity",
+            "explanation": "Related evidence",
+            "content_generation": 4,
+        },
+        {
+            "related_paper_id": 99,
+            "relationship": "semantic_similarity",
+            "explanation": "The target was removed",
+            "content_generation": 1,
+        },
+    ]
+
+    enriched = await summarization.filter_current_cross_references(conn, stored_references, 11)
+    response = summarization.row_to_summary_response(
+        _stored_row(cross_references=stored_references),
+        cross_references=enriched,
+    )
+
+    payload = response.model_dump()
+    assert len(payload["cross_references"]) == 2
+    assert payload["cross_references"][0]["related_title"] == "Available Related Paper"
+    assert payload["cross_references"][0]["related_year"] == 2023
+    assert payload["cross_references"][1]["related_title"] is None
+    assert payload["cross_references"][1]["related_paper_id"] == 99
+
+
+@pytest.mark.asyncio
+async def test_cross_reference_titles_are_scoped_to_the_caller():
+    """A stored reference cannot disclose a title the caller may no longer see."""
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+    stored_references = [
+        {
+            "related_paper_id": 2,
+            "relationship": "semantic_similarity",
+            "explanation": "Visible when stored, private now",
+            "content_generation": 4,
+        }
+    ]
+
+    enriched = await summarization.filter_current_cross_references(conn, stored_references, 11)
+
+    # The behavioural proof that another user's title stays hidden lives in the
+    # database-backed contract suite; here we pin that the caller's identity is
+    # bound into the lookup at all, and that an unreachable target yields no title.
+    assert 11 in conn.fetch.await_args.args, "the caller's identity must reach the lookup"
+    assert enriched[0]["related_title"] is None
+
+
+@pytest.mark.asyncio
+async def test_background_cross_reference_titles_are_limited_to_public_papers():
+    """A caller-less background read sees public papers only, as generation does."""
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+
+    await summarization.filter_current_cross_references(
+        conn,
+        [
+            {
+                "related_paper_id": 2,
+                "relationship": "semantic_similarity",
+                "explanation": "Background read",
+                "content_generation": 4,
+            }
+        ],
+        None,
+    )
+
+    assert PUBLIC_VISIBILITY_SCOPE in conn.fetch.await_args.args
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ metadata->>'stub' = 'true'. They can be promoted to full papers later.
 
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -27,6 +27,57 @@ from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSourc
 
 logger = logging.getLogger(__name__)
 
+# How long a successful citation fetch stays authoritative. Semantic Scholar is
+# rate limited, so every automatic path re-reads this rather than re-fetching.
+CITATION_REFRESH_INTERVAL = timedelta(days=30)
+
+
+async def _refresh_stale_citations(
+    db_pool: asyncpg.Pool,
+    s2_source: SemanticScholarSource,
+    paper_ids: list[int],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Refresh citation data whose last successful fetch has aged out.
+
+    Shared by every automatic caller so a paper is never re-fetched on two
+    different schedules. A failure here leaves the stored graph as it was.
+
+    Parameters
+    ----------
+    db_pool : asyncpg.Pool
+        Pool used per paper, so no connection is held across an API call.
+    s2_source : SemanticScholarSource
+        Client used for the refresh.
+    paper_ids : list[int]
+        Candidates; those fetched recently are skipped.
+    now : datetime | None
+        Injectable clock for tests.
+    """
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, citations_fetched_at FROM papers WHERE id = ANY($1::bigint[])",
+            paper_ids,
+        )
+
+    cutoff = (now or datetime.now(UTC)) - CITATION_REFRESH_INTERVAL
+    stale_ids = [
+        int(row["id"])
+        for row in rows
+        if row["citations_fetched_at"] is None or row["citations_fetched_at"] <= cutoff
+    ]
+    for paper_id in stale_ids:
+        try:
+            await sync_citations_for_paper(db_pool, s2_source, paper_id)
+        except Exception:
+            logger.warning(
+                "Citation refresh failed for paper %d; serving the stored graph",
+                paper_id,
+                exc_info=True,
+            )
+
+
 # Nodes one graph response may carry, so the payload stays renderable.
 _MAX_GRAPH_NODES = 200
 
@@ -43,6 +94,26 @@ _INSERT_CITATION_SQL = """INSERT INTO paper_citations (source_paper_id, cited_pa
    VALUES ($1, $2, $3, $4, $5)
    ON CONFLICT (source_paper_id, cited_paper_id) DO NOTHING
    RETURNING 1"""
+
+
+def _semantic_scholar_paper_id(external_id: str, metadata: dict[str, Any]) -> str | None:
+    """Translate a stored paper identifier into an S2 paper lookup identifier."""
+    if external_id.startswith("local:"):
+        return None
+
+    if metadata.get("s2_id"):
+        return str(metadata["s2_id"])
+
+    if external_id.startswith("s2:"):
+        return external_id.removeprefix("s2:")
+    if external_id.startswith("doi:"):
+        return f"DOI:{external_id.removeprefix('doi:')}"
+    if external_id.startswith("openalex:"):
+        if metadata.get("doi"):
+            return f"DOI:{metadata['doi']}"
+        openalex_id = external_id.removeprefix("openalex:")
+        return f"URL:https://openalex.org/{openalex_id}"
+    return external_id
 
 
 async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
@@ -206,12 +277,13 @@ async def sync_citations_for_paper(
     if not paper:
         raise ValueError(f"Paper {paper_id} not found")
 
-    s2_id = paper["external_id"].removeprefix("s2:")
+    external_id = str(paper["external_id"] or "")
     metadata = paper["metadata"] or {}
     if isinstance(metadata, str):
         metadata = json.loads(metadata)
-    if metadata.get("s2_id"):
-        s2_id = metadata["s2_id"]
+    s2_id = _semantic_scholar_paper_id(external_id, metadata)
+    if s2_id is None:
+        return CitationFetchResponse(citations_added=0, references_added=0, stubs_created=0)
 
     # --- S2 API calls (no DB connection held) ---
     try:

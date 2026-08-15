@@ -92,7 +92,9 @@ async def get_paper_detail(
             user_id,
         )
         current_cross_references = (
-            await filter_current_cross_references(conn, list(summary_row["cross_references"] or []))
+            await filter_current_cross_references(
+                conn, list(summary_row["cross_references"] or []), user_id
+            )
             if summary_row
             else []
         )
