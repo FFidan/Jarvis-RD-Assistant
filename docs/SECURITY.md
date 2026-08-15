@@ -220,6 +220,31 @@ of those two files by hand.
 
 ---
 
+## Database privilege boundary
+
+The v1.2.6 database contract is tracked in
+[`db/ownership-manifest.json`](../db/ownership-manifest.json). Platform,
+Research, and Learning each have a NOLOGIN owner role and a distinct runtime
+role. Operations has a NOLOGIN owner role; product runtimes reach only approved
+job capabilities rather than receiving a general Operations writer role.
+Runtime roles receive DML only in their own domain, selected cross-domain reads
+or capabilities, and no DDL authority. `PUBLIC` does not receive application
+schema creation or function execution by default.
+
+The ownership contract is validated independently of production grants. A
+real-PostgreSQL test projects its table privileges inside a rollback
+transaction, grants owner and same-domain runtime access, and confirms that
+foreign-domain roles have no table privileges. The source inventory separately
+fails unclassified cross-domain writes and unreviewed computed SQL.
+
+The physical schema and service credentials remain in compatibility mode until
+the declared schemas, roles, and secrets are installed. During that interval,
+services still share the existing database login. The manifest and projection
+test specify the cutover boundary; they do not by themselves provide runtime
+isolation.
+
+---
+
 ## Proxy-Trust and Source-IP Allowlisting
 
 Two auth surfaces use `request.client.host` to determine source IP for
@@ -311,6 +336,23 @@ resource, timestamp). This is the one sanctioned mutation: it brackets the
 transaction (RULEs are query-rewrite and role-independent, so `SECURITY DEFINER`
 cannot bypass them); the rule is re-enabled before commit, so ordinary writes
 remain no-ops.
+
+The v1.2.6 erasure contract removes that runtime DDL exception. Platform first
+disables the account and records an idempotent erasure request. Research must
+durably acknowledge Qdrant deletion or redaction and a residual scan showing
+zero attributable points; Research and Learning must also acknowledge their
+owner-local cleanup. Only then may an isolated execute-only principal invoke
+audited, DML-only finalization procedures. Qdrant unavailability, residual
+points, or a domain cleanup failure leaves the account disabled in a visible,
+retryable state; retry exhaustion requires operator attention rather than
+silently deleting relational data first.
+
+Immutable audit events must not retain directly erasable identity or free-form
+personal data. The schema cutover moves that link and erasable metadata into a
+mutable Platform-owned subject mapping, sanitizes historical rows once through
+the migrator, and limits runtime erasure to deleting or anonymizing the mapping.
+The compatibility implementation above remains in effect until that migration
+and DML-only path are installed.
 
 ---
 

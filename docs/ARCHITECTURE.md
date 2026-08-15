@@ -220,6 +220,42 @@ Fresh schema is defined in `db/init.sql`; existing installs advance through
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.
 
+### Database ownership contract
+
+[`db/ownership-manifest.json`](../db/ownership-manifest.json) is the executable
+v1.2.6 ownership contract. It assigns every current table, sequence, function,
+type, trigger, rule, and background-job kind to exactly one of four domains:
+
+- Platform owns identity, sessions, configuration, pairing, audit, and system
+  events.
+- Research owns papers, discovery, ingestion, extraction, retrieval, Pulse,
+  recommendations, and source state.
+- Learning owns cards, reviews, projects, tasks, journal entries, daily
+  activity, and scheduled nudges.
+- Operations owns migration metadata and PostgreSQL-backed job infrastructure.
+
+The manifest also records computed-SQL sources, supported database scripts,
+and every temporary cross-domain write. `scripts/database_inventory.py --check`
+compares those declarations with the current schema and production Python. An
+unowned object, an unreviewed computed query path, or an unclassified
+cross-domain write fails validation.
+
+The manifest distinguishes the v1.2.6 target from its exact v1.2.5
+compatibility fingerprint. Until schema and credential cutover is applied, the
+physical objects remain in `public` and the services still use the shared
+compatibility login. The declared roles and schemas are therefore an
+executable cutover contract, not a claim that runtime privilege isolation is
+already active. A real-PostgreSQL contract test projects the declared grants in
+a rollback transaction and verifies same-domain access and foreign-domain
+denial for every table.
+
+Cross-domain mutation must converge on an owner API, an idempotent outbox
+consumer, or a narrowly scoped database capability. Telegram pairing and
+nudges, Research writes to Learning activity/project/dependent rows, shared
+audit and event writes, session renewal, erasure, and unified job maintenance
+remain explicitly listed transition seams until their replacement paths are
+live and the direct writes are removed.
+
 ## Frontend Contract Boundary
 
 The React dashboard contains meaningful workflow logic and API assumptions.
