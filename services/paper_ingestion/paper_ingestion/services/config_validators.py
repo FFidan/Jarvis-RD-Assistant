@@ -460,6 +460,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.lookback_days": _validate_lookback_days,
     "pulse.startup_grace_seconds": _validate_startup_grace_seconds,
     "pulse.enabled": _validate_bool,
+    "pulse.classifier_opt_in": _validate_bool,
     "recommendation.enabled": _validate_bool,
     "setup.completed": _validate_bool,
     "onboarding.dismissed": _validate_bool,

@@ -70,6 +70,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "pulse.l2_lambda",
         "pulse.lookback_days",
         "pulse.startup_grace_seconds",
+        "pulse.classifier_opt_in",
         # Setup wizard
         "setup.completed",
         # Multi-tenant API-key-login gate (admin-flippable recovery toggle;
@@ -187,6 +188,8 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
         "recommendation.liked_weight",
         "recommendation.project_weight",
         "recommendation.enabled",
+        # Per-user acceptance of the automatically enabled classifier signal
+        "pulse.classifier_opt_in",
         # Zotero integration (per-user library credentials)
         "zotero.api_key",
         "zotero.user_id",

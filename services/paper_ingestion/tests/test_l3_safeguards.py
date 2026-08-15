@@ -77,6 +77,7 @@ def _make_10_fetch_side_effect(
     *,
     topic_rows: list | None = None,
     dampened_topic_rows: list | None = None,
+    config_rows: list | None = None,
 ) -> list:
     """Return a 10-element list for conn.fetch.side_effect.
 
@@ -87,12 +88,14 @@ def _make_10_fetch_side_effect(
     dampened_topic_rows:
         Rows returned by the L3 dampened-topics query (fetch call #9).
         Defaults to empty.
+    config_rows:
+        Rows returned by the user-config query (fetch call #4). Defaults to empty.
     """
     return [
         topic_rows or [],  # 1. topics
         [],  # 2. tracked_authors
         [],  # 3. engaged papers
-        [],  # 4. user_config (no keys → defaults)
+        config_rows or [],  # 4. user_config
         [],  # 5. positive ratings
         [],  # 6. negative ratings
         [],  # 7. L1 negative topics
@@ -367,10 +370,60 @@ async def test_no_negatives_baseline(caplog) -> None:
     assert profile.negative_centroid is None, (
         "negative_centroid must be None when there are no negatives"
     )
-
-    # No warnings should be emitted
     warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert not warning_msgs, f"Expected no warnings; got: {warning_msgs}"
+
+
+@pytest.mark.asyncio
+async def test_untrained_classifier_keeps_zero_weight_and_disabled_reason() -> None:
+    """A profile with no ratings or opt-in keeps the existing disabled behavior."""
+    from paper_ingestion.pulse.job import _run_optional_signals
+    from paper_ingestion.pulse.profile import load_profile
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.side_effect = _make_10_fetch_side_effect()
+    profile = await load_profile(pool, embedder=AsyncMock(), user_id=42)
+
+    _, classifier_meta, degraded_reason = await _run_optional_signals(pool, [], profile, user_id=42)
+
+    assert profile.weights["classifier"] == 0.0
+    assert classifier_meta["degradation_reason"] == "classifier weight is disabled"
+    assert degraded_reason is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_weight", "expected_weight"),
+    [(0.0, 0.1), (0.35, 0.35)],
+)
+async def test_classifier_opt_in_only_replaces_zero_weight(
+    configured_weight: float, expected_weight: float
+) -> None:
+    """Automatic weighting must preserve an explicit non-zero classifier weight."""
+    from paper_ingestion.pulse.profile import load_profile
+
+    config_rows = [
+        FakeRecord(
+            {
+                "key": "pulse.weights",
+                "value": {"classifier": configured_weight},
+                "user_id": 42,
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "pulse.classifier_opt_in",
+                "value": True,
+                "user_id": 42,
+            }
+        ),
+    ]
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.side_effect = _make_10_fetch_side_effect(config_rows=config_rows)
+
+    profile = await load_profile(pool, embedder=AsyncMock(), user_id=42)
+
+    assert profile.weights["classifier"] == expected_weight
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +490,6 @@ async def test_dismissed_paper_reaches_no_card_while_the_deck_still_fills(
                     weights={"embedding": 1.0},
                     deck_size=deck_size,
                     stage2_top_k=10,
-                    liked_paper_ids=[],
                     recent_positive_titles=[],
                     recent_negative_titles=[],
                     lookback_days=7,
