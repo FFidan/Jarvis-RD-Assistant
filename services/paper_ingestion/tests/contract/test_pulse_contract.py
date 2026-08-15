@@ -504,6 +504,9 @@ async def test_load_profile_user_id_isolates_ratings(contract_conn, contract_two
     user_a_id = contract_two_users.user_a_id
     user_b_id = contract_two_users.user_b_id
     paper_id_a = contract_two_users.paper_id_a
+    paper_title_a = await contract_conn.fetchval(
+        "SELECT title FROM papers WHERE id = $1", paper_id_a
+    )
 
     # Seed a positive recommendation feedback row for user A
     # Unique constraint: (paper_id, user_id, source) — all three needed for ON CONFLICT.
@@ -519,18 +522,18 @@ async def test_load_profile_user_id_isolates_ratings(contract_conn, contract_two
     mock_embedder = AsyncMock()
     mock_embedder.embed_texts.return_value = []
 
-    # load_profile for user A must see the liked paper
+    # load_profile for user A must see the positively rated paper title
     profile_a = await load_profile(pool, embedder=mock_embedder, user_id=user_a_id)
-    assert paper_id_a in profile_a.liked_paper_ids, (
-        f"User A's liked paper {paper_id_a} must appear in load_profile(user_id={user_a_id}). "
-        f"Got liked_paper_ids={profile_a.liked_paper_ids}"
+    assert paper_title_a in profile_a.recent_positive_titles, (
+        f"User A's positively rated paper must appear in load_profile(user_id={user_a_id}). "
+        f"Got recent_positive_titles={profile_a.recent_positive_titles}"
     )
 
-    # load_profile for user B must NOT see user A's liked paper
+    # load_profile for user B must NOT see user A's positively rated paper
     profile_b = await load_profile(pool, embedder=mock_embedder, user_id=user_b_id)
-    assert paper_id_a not in profile_b.liked_paper_ids, (
-        f"User B must not see User A's liked paper {paper_id_a} in their profile. "
-        f"Got liked_paper_ids={profile_b.liked_paper_ids} — user_id isolation failure."
+    assert paper_title_a not in profile_b.recent_positive_titles, (
+        "User B must not see User A's positively rated paper in their profile. "
+        f"Got recent_positive_titles={profile_b.recent_positive_titles}."
     )
 
 
@@ -1304,7 +1307,6 @@ def _empty_pipeline_profile() -> object:
         weights={"embedding": 1.0},
         deck_size=5,
         stage2_top_k=10,
-        liked_paper_ids=[],
         recent_positive_titles=[],
         recent_negative_titles=[],
         lookback_days=7,

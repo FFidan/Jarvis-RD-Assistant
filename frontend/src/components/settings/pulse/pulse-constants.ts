@@ -15,6 +15,8 @@ export type PulseWeightKey =
   | 'citation_adamic_adar'
   | 'classifier';
 
+export const CLASSIFIER_OPT_IN_CONFIG_KEY = 'pulse.classifier_opt_in';
+
 export const DEFAULT_PULSE_WEIGHTS: Record<PulseWeightKey, number> = {
   embedding: 0.2,
   topic: 0.2,

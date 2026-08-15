@@ -13,6 +13,7 @@ from paper_ingestion.services.config_validators import _CONFIG_VALIDATORS
 
 _LANGFUSE_KEY = "observability.langfuse_dashboard_url"
 _ONBOARDING_DISMISSED_KEY = "onboarding.dismissed"
+_CLASSIFIER_OPT_IN_KEY = "pulse.classifier_opt_in"
 
 # Keys the frontend renders in IngestionSection.tsx CONFIG_METADATA
 _FRONTEND_KEYS = {
@@ -115,6 +116,19 @@ def test_onboarding_dismissal_is_allowed_and_personal():
     validator(True)
     with pytest.raises(ValueError):
         validator("true")
+
+
+def test_classifier_opt_in_is_allowed_personal_and_boolean():
+    """Classifier opt-in must be writable by the user who owns the model."""
+    assert _CLASSIFIER_OPT_IN_KEY in _ALLOWED_CONFIG_KEYS
+    assert _CLASSIFIER_OPT_IN_KEY in PERSONAL_KEYS
+    assert _CLASSIFIER_OPT_IN_KEY not in SYSTEM_KEYS
+    assert _classify_config_key(_CLASSIFIER_OPT_IN_KEY) == "personal"
+    validator = _CONFIG_VALIDATORS[_CLASSIFIER_OPT_IN_KEY]
+    validator(True)
+    validator(False)
+    with pytest.raises(ValueError):
+        validator("false")
 
 
 def test_unknown_key_not_allowed():

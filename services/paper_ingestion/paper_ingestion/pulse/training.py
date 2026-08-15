@@ -310,5 +310,26 @@ async def _pulse_train_classifier_job(
     user_id = payload.get("user_id")
     await ctx.update_progress(0.1, "Training Pulse classifier")
     result = await train_classifier_model(pool, user_id=user_id)
+    if (
+        user_id is not None
+        and result.get("trained") is True
+        and result.get("available") is True
+        and result.get("sample_count", 0) >= MIN_RATINGS
+    ):
+        async with pool.acquire() as conn:
+            opt_in_exists = await conn.fetchval(
+                """SELECT EXISTS (
+                       SELECT 1 FROM user_config
+                       WHERE user_id = $1 AND key = 'pulse.classifier_opt_in'
+                   )""",
+                user_id,
+            )
+            if not opt_in_exists:
+                await conn.execute(
+                    """INSERT INTO user_config (user_id, key, value)
+                       VALUES ($1, 'pulse.classifier_opt_in', 'true'::jsonb)
+                       ON CONFLICT (user_id, key) DO NOTHING""",
+                    user_id,
+                )
     await ctx.update_progress(1.0, "Done")
     return result

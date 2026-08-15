@@ -29,6 +29,9 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
     "citation_adamic_adar": 0.0,
     "classifier": 0.0,
 }
+# Match the novelty signal: enough to inform ranking without making a newly
+# trained personal model dominate the established relevance signals.
+_CLASSIFIER_OPT_IN_WEIGHT = 0.1
 _RATING_HISTORY_LIMIT = 10
 
 
@@ -44,7 +47,6 @@ class UserProfile(BaseModel):
     stage2_top_k: int
     recent_positive_titles: list[str]
     recent_negative_titles: list[str]
-    liked_paper_ids: list[int] = Field(default_factory=list)
     # Lifecycle redesign fields
     user_id: int | None = None
     negative_topics: list[str] = Field(default_factory=list)
@@ -198,7 +200,8 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             SELECT key, value, user_id FROM user_config
             WHERE key IN (
                 'pulse.weights', 'pulse.deck_size', 'pulse.stage2_top_k', 'pulse.l2_lambda',
-                'pulse.lookback_days', 'pulse.startup_grace_seconds'
+                'pulse.lookback_days', 'pulse.startup_grace_seconds',
+                'pulse.classifier_opt_in'
             )
             AND (user_id IS NOT DISTINCT FROM $1 OR user_id IS NULL)
             ORDER BY key, user_id NULLS LAST
@@ -226,6 +229,8 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         weights = {k: min(1.0, max(0.0, w)) for k, w in weights.items()}
         if out_of_range:
             logger.warning("pulse profile weights had values outside [0, 1]; clamped")
+        if cfg.get("pulse.classifier_opt_in") is True and weights.get("classifier", 0.0) == 0.0:
+            weights["classifier"] = _CLASSIFIER_OPT_IN_WEIGHT
         deck_size = int(cfg.get("pulse.deck_size", _DEFAULT_DECK_SIZE))
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 
@@ -246,6 +251,8 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         # GROUP BY + MAX(created_at) gives "N most recent distinct papers";
         # SELECT DISTINCT + ORDER BY rf.created_at is invalid (Postgres
         # rejects: ORDER BY columns must appear in SELECT list under DISTINCT).
+        # Keep p.id selected and grouped even though only titles leave this
+        # function: same-titled papers must remain distinct before LIMIT 10.
         positive_rows = await conn.fetch(
             """
             SELECT p.id, p.title
@@ -280,7 +287,6 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         )
 
         recent_positive_titles = [r["title"] for r in positive_rows][:_RATING_HISTORY_LIMIT]
-        liked_paper_ids = [r.get("id") for r in positive_rows if r.get("id") is not None]
         recent_negative_titles = [r["title"] for r in negative_rows][:_RATING_HISTORY_LIMIT]
 
         # 7. L1 — negative topics (top 10 by negative-feedback count, 90-day window).
@@ -418,7 +424,6 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         stage2_top_k=stage2_top_k,
         recent_positive_titles=recent_positive_titles,
         recent_negative_titles=recent_negative_titles,
-        liked_paper_ids=liked_paper_ids,
         user_id=user_id,
         negative_topics=negative_topics,
         negative_authors=negative_authors,

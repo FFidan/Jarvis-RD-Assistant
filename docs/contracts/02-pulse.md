@@ -80,7 +80,6 @@ Defined at [profile.py:35-60](https://github.com/limitcycle-oss/jarvis-rd-assist
 | `recent_positive_titles`, `recent_negative_titles` | `recommendation_feedback` 90-day window |
 | `negative_centroid` | mean embedding of papers with negative `recommendation_feedback` |
 | `negative_topics`, `negative_authors`, `dampened_topics` | L3 dampening signals; `dampened_topics` is consumed by stage-1 topic similarity (multiplicative 0.5 on the positive domain) |
-| `liked_paper_ids` | starred papers |
 
 The HTTP call to embed library abstracts is intentionally outside any DB
 connection scope — the connection is acquired twice in `load_profile`,
@@ -114,7 +113,7 @@ multiplier separately; see [01-settings.md §2.1](01-settings.md#21-active-keys-
 ### 3.2 Conditional signals (LIVE-CONDITIONAL)
 
 These four signals default to weight 0.0 in `_DEFAULT_WEIGHTS` and `_PULSE_REQUIRED_WEIGHT_KEYS`
-(absent from `_PULSE_REQUIRED_WEIGHT_KEYS` at [config_validators.py:45-47](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/config_validators.py#L45-L47), so they are OPTIONAL on PUT). They are **populated only when the user assigns a non-zero weight** AND the gating dependency is available.
+(absent from `_PULSE_REQUIRED_WEIGHT_KEYS` at [config_validators.py:45-47](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/config_validators.py#L45-L47), so they are OPTIONAL on PUT). They are populated only when their effective weight is non-zero and the gating dependency is available.
 
 | Signal | Computed by | Activation gate | Dependency | Failure mode |
 |---|---|---|---|---|
@@ -123,10 +122,15 @@ These four signals default to weight 0.0 in `_DEFAULT_WEIGHTS` and `_PULSE_REQUI
 | `citation_adamic_adar` | Same | Same | `paper_citations` edges + at least one liked paper in `recommendation_feedback` | Returns 0.0 if no liked papers or no edges |
 | `classifier` | [training.py:classifier_scores](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/training.py) | `profile.weights["classifier"] > 0` ([job.py:258](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L258)) | `scikit-learn` + ≥30 rows in `recommendation_feedback` with both positive and negative labels | If sklearn missing → `available=False`, all candidates score 0.0; if not enough ratings → same; trained model persisted via `pulse.train_classifier` job after each Pulse run ([job.py:373](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L373)) |
 
-**Important contract:** these signals are NOT ghost UI. The Settings sliders
-defaulting to 0.0 (per [SettingsPage Pulse tab](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/frontend/src/components/settings/PulseSection.tsx)) is intentional. The user opts in by raising
-the weight; the pipeline respects the opt-in but degrades gracefully when
-the optional dependency is missing.
+**Important contract:** these signals are NOT ghost UI. The citation signals
+remain user-selected through their weights. After a user's classifier trains
+successfully with at least 30 ratings, the training job creates the personal
+`pulse.classifier_opt_in` setting once. Profile loading then applies a 0.1
+classifier weight only while that setting is true and the configured classifier
+weight remains 0.0. A non-zero configured weight wins. Turning the personal
+setting off prevents later training jobs from enabling it again. The setting is
+personal and readable by its owner, so the Pulse settings surface states that the
+change happened and offers it in both directions.
 
 The Pulse diagnostics surface (Settings → Pulse → Diagnostics panel; backed
 by `pulse_decks.stats`) MUST report:

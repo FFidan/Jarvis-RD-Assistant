@@ -76,7 +76,6 @@ def _minimal_profile() -> MagicMock:
         weights={"embedding": 1.0},
         deck_size=5,
         stage2_top_k=10,
-        liked_paper_ids=[],
         recent_positive_titles=[],
         recent_negative_titles=[],
         lookback_days=7,

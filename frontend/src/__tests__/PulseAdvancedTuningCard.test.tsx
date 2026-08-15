@@ -161,4 +161,69 @@ describe('PulseAdvancedTuningCard — recommendation.enabled toggle', () => {
     expect(screen.getByText(/need citation data for the papers being ranked/i)).toBeInTheDocument();
     expect(screen.getByText(/becomes useful after about 30 pulse ratings/i)).toBeInTheDocument();
   });
+
+  it('tells a user their ratings now affect ranking without expanding the card', () => {
+    renderCard({
+      configs: makeConfigs([{ key: 'pulse.classifier_opt_in', value: true }]),
+      setMut: makeMut(),
+      settingsControlsDisabled: false,
+      hasNetworkx: true,
+      hasSklearn: true,
+    });
+
+    expect(screen.getByTestId('classifier-opt-in-notice')).toBeInTheDocument();
+    expect(screen.getByText(/influence how papers are ranked/i)).toBeInTheDocument();
+  });
+
+  it('turns the personal classifier off without touching the shared weights', () => {
+    const mutate = vi.fn();
+    renderCard({
+      configs: makeConfigs([{ key: 'pulse.classifier_opt_in', value: true }]),
+      setMut: makeMut(mutate),
+      settingsControlsDisabled: false,
+      hasNetworkx: true,
+      hasSklearn: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /stop using my ratings/i }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      { key: 'pulse.classifier_opt_in', value: false },
+      { onError: expect.any(Function) },
+    );
+    // pulse.weights is admin-only to write; routing the undo through it would
+    // fail for exactly the users the notice is addressed to.
+    expect(mutate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'pulse.weights' }),
+      expect.anything(),
+    );
+  });
+
+  it('lets a user who declined turn it back on', () => {
+    const mutate = vi.fn();
+    renderCard({
+      configs: makeConfigs([{ key: 'pulse.classifier_opt_in', value: false }]),
+      setMut: makeMut(mutate),
+      settingsControlsDisabled: false,
+      hasNetworkx: true,
+      hasSklearn: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /use my ratings/i }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      { key: 'pulse.classifier_opt_in', value: true },
+      { onError: expect.any(Function) },
+    );
+  });
+
+  it('says nothing to a user who has not reached the threshold', () => {
+    renderCard({
+      configs: makeConfigs(),
+      setMut: makeMut(),
+      settingsControlsDisabled: false,
+      hasNetworkx: true,
+      hasSklearn: true,
+    });
+
+    expect(screen.queryByTestId('classifier-opt-in-notice')).not.toBeInTheDocument();
+  });
 });
