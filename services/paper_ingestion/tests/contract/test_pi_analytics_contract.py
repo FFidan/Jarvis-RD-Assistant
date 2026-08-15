@@ -212,12 +212,32 @@ async def test_c7_04_feedback_summary_shape_and_user_isolation(
     # Verified: services/paper_ingestion/paper_ingestion/routers/analytics.py:141
     # (feedback_summary scoped via WHERE rf.user_id = $1).
     """
+    # A second paper of the caller's, so recency ordering between two papers is
+    # observable; the fixture seeds only one.
+    recent_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('iso-ext-a-recent', 'arxiv', 'Recent Favourite', ARRAY['A. Author'],
+                   'https://example.test/a-recent', $1)
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        contract_two_users.user_a_id,
+        recent_paper_id,
+    )
     await contract_conn.execute(
         """
-        INSERT INTO recommendation_feedback (paper_id, user_id, signal, source)
-        VALUES ($1, $2, 'positive', 'feed_thumbs')
+        INSERT INTO recommendation_feedback (paper_id, user_id, signal, source, created_at)
+        VALUES
+          ($1, $3, 'positive', 'feed_thumbs', NOW() - INTERVAL '2 days'),
+          ($1, $3, 'positive', 'pulse_thumbs', NOW() - INTERVAL '3 days'),
+          ($2, $3, 'positive', 'pulse_thumbs', NOW() - INTERVAL '100 days'),
+          ($2, $3, 'positive', 'feed_thumbs', NOW() + INTERVAL '1 second')
         """,
         contract_two_users.paper_id_a,
+        recent_paper_id,
         contract_two_users.user_a_id,
     )
 
@@ -227,6 +247,16 @@ async def test_c7_04_feedback_summary_shape_and_user_isolation(
     body_a = resp_a.json()
     for key in ("top_positive", "top_negative"):
         assert key in body_a, f"Missing key {key!r}: {body_a}"
+    # The older paper carries MORE feedback than the newest one, so ordering by
+    # recency and ordering by count disagree — this pins recency, not volume.
+    assert [item["paper_id"] for item in body_a["top_positive"][:2]] == [
+        recent_paper_id,
+        contract_two_users.paper_id_a,
+    ]
+    by_paper = {item["paper_id"]: item for item in body_a["top_positive"]}
+    assert by_paper[contract_two_users.paper_id_a]["count"] == 2
+    # The newest paper's other vote is a hundred days old and outside the window.
+    assert by_paper[recent_paper_id]["count"] == 1
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
         resp_b = await c.get("/api/analytics/feedback-summary")

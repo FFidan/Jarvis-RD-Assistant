@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import { StaleBadge } from '@/components/pulse/StaleBadge';
 import {
   fetchPulseToday,
   fetchPulseStats,
+  fetchConfig,
   ApiError,
 } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
@@ -52,6 +53,13 @@ export function PulseDeck() {
     queryKey: QUERY_KEYS.pulse.statsAll(),
     queryFn: () => fetchPulseStats(),
   });
+  const { data: configs, isLoading: configLoading } = useQuery({
+    queryKey: QUERY_KEYS.config.all(),
+    queryFn: fetchConfig,
+  });
+  const pulseTurnedOff = configs?.some(
+    (config) => config.key === 'pulse.enabled' && config.value === false,
+  );
 
   const startJob = useJobStore((s) => s.startJob);
   const isGenerating = useJobStore((s) => s.hasRunning('pulse.generate'));
@@ -68,7 +76,7 @@ export function PulseDeck() {
     navigate(`/paper/${paperId}`);
   };
 
-  if (isLoading) {
+  if (isLoading || configLoading) {
     return (
       <div className="space-y-3">
         <Skeleton className="h-6 w-48" />
@@ -111,6 +119,22 @@ export function PulseDeck() {
     });
   };
 
+  if (pulseTurnedOff && (!deck || deck.cards.length === 0)) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg">Your Pulse</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-start gap-3">
+          <p className="text-sm text-muted-foreground">Pulse is turned off in Settings.</p>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/settings?section=system&item=pulse">Open Settings</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (!deck) {
     return (
       <Card>
@@ -133,7 +157,7 @@ export function PulseDeck() {
             {isGenerating ? 'Generating...' : 'Generate now'}
           </Button>
           <p className="text-xs text-muted-foreground">
-            Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
+            Your daily AI-curated paper recommendations, personalized to your reading history and research interests.
           </p>
         </CardContent>
       </Card>
@@ -162,7 +186,7 @@ export function PulseDeck() {
             {isGenerating ? 'Generating...' : 'Generate now'}
           </Button>
           <p className="text-xs text-muted-foreground">
-            Once you have papers in your library, Pulse will rank and curate a personalised daily deck.
+            Once you have papers in your library, Pulse will rank and curate a personalized daily deck.
           </p>
         </CardContent>
       </Card>
@@ -215,7 +239,7 @@ export function PulseDeck() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground -mt-1">
-        Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
+        Your daily AI-curated paper recommendations, personalized to your reading history and research interests.
       </p>
       {stats?.has_learned_model === false && (
         <p className="text-xs text-muted-foreground">

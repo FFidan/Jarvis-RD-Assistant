@@ -114,7 +114,7 @@ test.describe('Analytics IA (mocked)', () => {
   test('breadcrumb shows Learn / Analytics', async ({ page }) => {
     // h1 is the page name "Analytics"; the breadcrumb group is the real sidebar group "Learn".
     await expect(page.getByRole('heading', { name: 'Analytics' })).toBeVisible();
-    await expect(page.locator('main nav')).toContainText('Learn');
+    await expect(page.locator('main nav').getByRole('link', { name: 'Learn' })).toBeVisible();
     // The breadcrumb link "Analytics" is in the main content area nav
     await expect(page.locator('main nav').getByRole('link', { name: 'Analytics' })).toBeVisible();
   });

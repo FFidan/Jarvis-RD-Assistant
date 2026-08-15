@@ -48,6 +48,7 @@ vi.mock('@/stores/job-store', () => ({
 }));
 
 vi.mock('@/lib/api', () => ({
+  fetchConfig: vi.fn(),
   fetchPulseToday: vi.fn(),
   ratePulseCard: vi.fn(),
   fetchMyDay: vi.fn(),
@@ -59,7 +60,7 @@ vi.mock('@/lib/api', () => ({
   logFocusSession: vi.fn().mockResolvedValue({ status: 'ok', recorded_hours: 0 }),
 }));
 
-const { fetchPulseToday, fetchFeed, fetchThreads } = await import('@/lib/api');
+const { fetchConfig, fetchPulseToday, fetchFeed, fetchThreads } = await import('@/lib/api');
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -91,6 +92,7 @@ describe('HeroNow', () => {
       cyclesCompleted: 0,
       targetCycles: 4,
     };
+    vi.mocked(fetchConfig).mockResolvedValue([]);
     vi.mocked(fetchPulseToday).mockResolvedValue(null);
     vi.mocked(fetchFeed).mockResolvedValue({ papers: [], total: 0 } as never);
     vi.mocked(fetchThreads).mockResolvedValue([]);

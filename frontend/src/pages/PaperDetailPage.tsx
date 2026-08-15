@@ -38,6 +38,7 @@ import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
 import { CitationMenu } from '@/components/citation/CitationMenu';
 import { ContradictionsPanel } from '@/components/paper/ContradictionsPanel';
 import { PaperTOC, type TOCSection } from '@/components/paper/PaperTOC';
+import { paperStateLabel } from '@/lib/labels/paperState';
 import { PaperResearchLog } from '@/components/paper/PaperResearchLog';
 import { usePaperScrollSpy } from '@/hooks/paper-scroll-spy';
 import { errorMessage } from '@/lib/errors';
@@ -413,7 +414,7 @@ export function PaperDetailPage() {
               summary={summary}
               chunks={chunks}
               userState={user_state}
-              surfaceLabel={user_state?.state?.replace('_', ' ')}
+              surfaceLabel={user_state?.state ? paperStateLabel(user_state.state) : undefined}
               recommendationScore={null /* Paper-detail has no recommendation_score */}
               paperId={paperId}
               evidenceCount={evidenceCount}

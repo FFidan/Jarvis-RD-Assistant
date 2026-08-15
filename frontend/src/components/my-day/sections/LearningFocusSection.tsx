@@ -70,8 +70,7 @@ export function LearningFocusSection() {
               )}
 
               <p className="font-mono text-[10px] text-meta mt-3">
-                {stats.streak_days}d streak
-                {' · '}
+                {stats.streak_days > 0 ? `${stats.streak_days}d streak · ` : ''}
                 {stats.reviewed_today} reviewed today
                 {' · '}
                 {Math.round((stats.average_retention || 0) * 100)}% 30d retention
@@ -106,10 +105,13 @@ export function LearningFocusSection() {
 
           <Progress value={focusProgress} className="h-1 mt-2" />
 
-          <p className="font-mono text-[10px] text-meta mt-2">
-            {focusStreakDays}d streak
-            {attachedItem?.title ? ` · last: ${attachedItem.title}` : ''}
-          </p>
+          {(focusStreakDays > 0 || attachedItem?.title) && (
+            <p className="font-mono text-[10px] text-meta mt-2">
+              {focusStreakDays > 0 ? `${focusStreakDays}d streak` : ''}
+              {focusStreakDays > 0 && attachedItem?.title ? ' · ' : ''}
+              {attachedItem?.title ? `last: ${attachedItem.title}` : ''}
+            </p>
+          )}
         </div>
       </div>
     </section>

@@ -23,13 +23,14 @@ import {
   ThumbsDown,
   X,
 } from 'lucide-react';
-import type { BulkAction, SurfaceView } from '@/types';
+import type { BulkAction, FeedScope, SurfaceView } from '@/types';
 import { HardDeleteModal } from './HardDeleteModal';
 import { CitationMenu } from '@/components/citation/CitationMenu';
 import { errorMessage } from '@/lib/errors';
 
 interface BulkToolbarProps {
   surface: SurfaceView;
+  scope: FeedScope;
   /** IDs of papers currently rendered on the page — used for Select All. */
   papersOnPage: number[];
 }
@@ -62,7 +63,7 @@ const ACTION_CONFIG: Record<BulkAction, ActionConfig> = {
   hard_delete:       { label: 'Permanently delete',    tooltip: 'Permanently delete the selected papers (cannot be undone)',     icon: <X className="h-3.5 w-3.5" /> },
 };
 
-export function BulkToolbar({ surface, papersOnPage }: BulkToolbarProps) {
+export function BulkToolbar({ surface, scope, papersOnPage }: BulkToolbarProps) {
   const { selectedIds, clear, selectMany } = useBulkSelection();
   const queryClient = useQueryClient();
 
@@ -83,7 +84,7 @@ export function BulkToolbar({ surface, papersOnPage }: BulkToolbarProps) {
     },
   });
 
-  const actions = SURFACE_ACTIONS[surface];
+  const actions = scope === 'corpus' ? SURFACE_ACTIONS.inbox.slice(0, 1) : SURFACE_ACTIONS[surface];
 
   // Don't render the toolbar on surfaces with no actions or when the page is empty
   if (actions.length === 0 || papersOnPage.length === 0) return null;

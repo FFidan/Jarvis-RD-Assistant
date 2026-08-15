@@ -213,7 +213,7 @@ describe('AdminBackupsPage', () => {
         'Last backup attempt failed — check the backup service.',
       ),
     );
-    expect(screen.getByTestId('backup-status')).toHaveTextContent(/\(\d+m ago\)/);
+    expect(screen.getByTestId('backup-status')).toHaveTextContent(/\(.+ ago\)/);
   });
 
   it('warns that a succeeded run captured no vectors', async () => {

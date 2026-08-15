@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import type { Deck } from '@/types';
 
 export interface SessionProgress {
@@ -47,7 +48,7 @@ export function useSessionProgress(currentTotal: number): SessionProgress {
 
 interface BreadcrumbProps {
   deckName: string | null;
-  /** Callback when user clicks "Flashcards" to return to Library view. */
+  /** Callback when user clicks "Learning Cards" to return to the library view. */
   onNavigateToLibrary: () => void;
 }
 
@@ -57,18 +58,20 @@ export function SessionBreadcrumb({ deckName, onNavigateToLibrary }: BreadcrumbP
       aria-label="Breadcrumb"
       className="flex items-center gap-1 text-xs text-muted-foreground tracking-wide"
     >
-      <span>Learn</span>
+      <Link to="/cards?mode=library" className="hover:text-foreground hover:underline">
+        Learn
+      </Link>
       <ChevronRight className="h-3 w-3" />
       <button
         type="button"
         onClick={onNavigateToLibrary}
         className="hover:text-foreground transition-colors underline-offset-2 hover:underline"
       >
-        Flashcards
+        Learning Cards
       </button>
       <ChevronRight className="h-3 w-3" />
       <span className="text-foreground font-medium">
-        {deckName ? `${deckName} · session` : 'All decks · session'}
+        {deckName ? `${deckName} · Review` : 'All decks · Review'}
       </span>
     </nav>
   );

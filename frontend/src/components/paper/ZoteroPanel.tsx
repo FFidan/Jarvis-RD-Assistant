@@ -5,6 +5,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import {
   ApiError,
+  fetchConfig,
   zoteroGetLinkage,
   zoteroPushPaper,
   zoteroResync,
@@ -36,6 +37,14 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
   const { data: linkage, isLoading, isError, error } = useQuery({
     queryKey: QUERY_KEYS.zotero.linkage(paperId),
     queryFn: () => zoteroGetLinkage(paperId),
+  });
+  const {
+    data: configs,
+    isPending: configsPending,
+    isError: configsError,
+  } = useQuery({
+    queryKey: QUERY_KEYS.config.all(),
+    queryFn: fetchConfig,
   });
 
   const pushMutation = useMutation({
@@ -87,23 +96,40 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
   const isPushed = !!linkage?.zotero_item_key;
   const pushing = pushMutation.isPending || pushRunning;
   const resyncing = resyncMutation.isPending || resyncRunning;
+  const configValues = new Map(configs?.map((entry) => [entry.key, entry.value]) ?? []);
+  const libraryType = configValues.get('zotero.library_type') ?? 'user';
+  const zoteroConfigured =
+    Boolean(configValues.get('zotero.api_key')) &&
+    Boolean(configValues.get('zotero.user_id')) &&
+    (libraryType !== 'group' || Boolean(configValues.get('zotero.group_id')));
+  const settingsUnavailable = configsPending || configsError;
+  const pushDisabledReason = settingsUnavailable
+    ? configsError
+      ? 'Zotero settings could not be checked. Reload this page before sending.'
+      : 'Checking Zotero settings.'
+    : !zoteroConfigured
+      ? 'Configure your Zotero API key and library in Settings before sending.'
+      : !hasProjectLinks
+        ? 'Link this paper to a project first. The project determines its Zotero collection.'
+        : null;
 
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-semibold">Zotero</h3>
       {!isPushed ? (
         <div className="space-y-2">
-          {!hasProjectLinks && (
+          {pushDisabledReason && (
             <p className="text-xs text-muted-foreground">
-              Link this paper to a project first. The project determines its Zotero collection.
+              {pushDisabledReason}
             </p>
           )}
           <div className="flex items-center gap-1">
             <Button
               size="sm"
               variant="outline"
-              disabled={!hasProjectLinks || pushing}
+              disabled={pushDisabledReason !== null || pushing}
               onClick={() => pushMutation.mutate()}
+              title={pushing ? 'A Zotero send is already running.' : (pushDisabledReason ?? 'Send to Zotero')}
             >
               <Send className="h-3 w-3 mr-1" />
               {pushing ? 'Sending…' : 'Send to Zotero'}
@@ -118,9 +144,11 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
             Sends citation metadata first (the PDF is not attached). You can then synchronize
             annotations and highlights.
           </p>
-          <a href="/settings?section=integrations&item=zotero" className="text-xs text-primary underline">
-            Configure Zotero in Settings
-          </a>
+          {!zoteroConfigured && !configsPending && (
+            <a href="/settings?section=integrations&item=zotero" className="text-xs text-primary underline">
+              Configure Zotero in Settings
+            </a>
+          )}
           {pushMutation.isError && <p className="text-xs text-destructive">Push failed. Try again.</p>}
         </div>
       ) : (
@@ -174,7 +202,7 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
               variant="ghost"
               disabled={resyncing}
               onClick={() => resyncMutation.mutate()}
-              title="Re-push to Zotero"
+              title={resyncing ? 'Zotero synchronization is already running.' : 'Re-push to Zotero'}
               aria-label="Re-push to Zotero"
             >
               <RefreshCw className={`h-3 w-3 ${resyncing ? 'animate-spin' : ''}`} />

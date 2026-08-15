@@ -1390,3 +1390,39 @@ async def test_get_my_export_excludes_other_users_papers(
     assert len(titles) == 1, (
         f"Expected exactly 1 paper for user A in export; got {len(titles)}: {titles!r}"
     )
+
+
+async def test_non_admin_reads_pulse_flag_while_writes_stay_admin_only(
+    contract_conn, pi_settings_client
+):
+    """A non-admin browser session can SEE that Pulse is off but not switch it.
+
+    The empty-Pulse copy has to name the reason, which means the flag must reach
+    a user who cannot change it. Readability and writability are separate gates:
+    `list_config` consults BROWSER_READABLE_SYSTEM_KEYS while `set_config` still
+    routes every system-scope key through require_admin.
+    Verified: routers/settings.py list_config, services/config_metadata.py
+    BROWSER_READABLE_SYSTEM_KEYS.
+    """
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES (NULL, 'pulse.enabled', 'false'::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value""",
+    )
+
+    resp = await pi_settings_client.get("/api/config")
+    assert resp.status_code == 200
+    entries = {item["key"]: item["value"] for item in resp.json()}
+    assert entries.get("pulse.enabled") is False, (
+        "a non-admin must see the flag, or the empty state cannot explain itself"
+    )
+
+    # The write gate is the key's classification, not this listing: making the
+    # flag readable must not quietly make it personal, which is what would let a
+    # non-admin write it. This fixture patches require_admin out, so asserting on
+    # a rejected PUT here would prove nothing — the classification is the real
+    # invariant, and it is what set_config branches on.
+    from paper_ingestion.services.config_metadata import PERSONAL_KEYS, _classify_config_key
+
+    assert _classify_config_key("pulse.enabled") == "system"
+    assert "pulse.enabled" not in PERSONAL_KEYS

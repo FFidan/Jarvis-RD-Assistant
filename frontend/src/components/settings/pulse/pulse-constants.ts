@@ -69,7 +69,7 @@ export const PULSE_WEIGHT_LABELS: Record<PulseWeightKey, string> = {
   recency: 'Recency',
   citation_pagerank: 'Citation PageRank',
   citation_count: 'Citation count',
-  citation_adamic_adar: 'Shared citation neighbourhood',
+  citation_adamic_adar: 'Shared citation neighborhood',
   classifier: 'Personal classifier',
 };
 
@@ -81,7 +81,7 @@ export const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
   llm_relevance:
     'How relevant this paper is to your research focus, scored by a language model. Slower but more accurate than keyword matching. High weight = quality over speed.',
   llm_novelty:
-    "How novel or surprising this paper is given your reading history, scored by a language model. High weight = prioritise papers you're unlikely to have already seen.",
+    "How novel or surprising this paper is given your reading history, scored by a language model. High weight = prioritize papers you're unlikely to have already seen.",
   author_bonus:
     'Additive bonus for papers co-authored by anyone in your tracked Authors list. High weight = always surface papers by your followed researchers.',
   recency:
@@ -91,7 +91,7 @@ export const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
   citation_count:
     'Boosts papers with more citations from source metadata. Needs citation data — fetch citations for some papers first.',
   citation_adamic_adar:
-    'Boosts candidates that share specific citation neighbours with papers you liked, without computing the full graph. Needs citation data — fetch citations for some papers first.',
+    'Boosts candidates that share specific citation neighbors with papers you liked, without computing the full graph. Needs citation data — fetch citations for some papers first.',
   classifier:
     'Probability from a personal classifier trained on your Pulse ratings. Gets better as you rate more papers — best after about 30 ratings.',
 };
@@ -134,12 +134,12 @@ export const WEIGHT_PRESETS: {
 }[] = [
   {
     label: 'Balanced',
-    description: 'Equal emphasis on relevance, novelty, and semantic similarity.',
+    description: 'Uses the default mix of relevance, similarity, topics, novelty, authors, and recency.',
     weights: { ...DEFAULT_PULSE_WEIGHTS },
   },
   {
     label: 'Semantic-first',
-    description: 'Surface papers closely matching your existing reading, minimise LLM cost.',
+    description: 'Favors semantic similarity and topic match over model scores and recency.',
     weights: {
       embedding: 0.4,
       topic: 0.35,
@@ -155,7 +155,7 @@ export const WEIGHT_PRESETS: {
   },
   {
     label: 'Freshness-first',
-    description: 'Always surface the newest papers, regardless of similarity.',
+    description: 'Gives recent publication dates the largest single weight while retaining relevance and similarity signals.',
     weights: {
       embedding: 0.15,
       topic: 0.1,

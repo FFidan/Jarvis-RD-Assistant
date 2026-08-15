@@ -88,7 +88,7 @@ export const ALL_SECTIONS: RailSection[] = [
     items: [
       { section: 'research', item: 'topics', label: 'Topics' },
       { section: 'research', item: 'authors', label: 'Authors' },
-      { section: 'research', item: 'spaced-repetition', label: 'Spaced Repetition' },
+      { section: 'research', item: 'spaced-repetition', label: 'Learning Cards' },
     ],
   },
 ];

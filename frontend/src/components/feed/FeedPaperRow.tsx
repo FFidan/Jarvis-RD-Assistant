@@ -12,6 +12,7 @@ import { FeedPaperRowActions } from '@/components/feed/FeedPaperRowActions';
 import { formatAuthors, formatDate } from '@/lib/utils';
 import { type FeedPaper, type SurfaceView } from '@/types';
 import { priorityLevel } from '@/lib/priority';
+import { paperStateLabel } from '@/lib/labels/paperState';
 
 // Map lifecycle state to badge colour classes (B.2)
 const STATE_BADGE_CLASSES: Record<string, string> = {
@@ -165,11 +166,11 @@ function FeedPaperRowInner({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge variant="outline" className={STATE_BADGE_CLASSES[state] ?? ''}>
-                  {state.toUpperCase()}
+                  {paperStateLabel(state)}
                 </Badge>
               </TooltipTrigger>
               <TooltipContent side="left" className="max-w-xs text-xs">
-                {STATE_TOOLTIP[state] ?? `State: ${state}`}
+                {STATE_TOOLTIP[state] ?? `State: ${paperStateLabel(state)}`}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>

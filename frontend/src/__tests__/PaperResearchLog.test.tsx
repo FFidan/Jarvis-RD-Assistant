@@ -194,10 +194,21 @@ describe('PaperResearchLog — section anchors', () => {
 describe('PaperResearchLog — breadcrumb', () => {
   it('shows Papers / state / title in breadcrumb', () => {
     renderLog();
-    expect(screen.getByText('Papers')).toBeInTheDocument();
-    expect(screen.getByText('reading')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Papers' })).toHaveAttribute('href', '/feed?surface=library');
+    expect(screen.getByRole('link', { name: 'Reading' })).toHaveAttribute(
+      'href',
+      '/feed?surface=library&filter=reading',
+    );
     // Title is in the breadcrumb + also in h1; at least one instance
     expect(screen.getAllByText('Attention Is All You Need').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('uses the shared Reading List label for the to_read state', () => {
+    renderLog({ userState: { ...USER_STATE, state: 'to_read' } });
+    expect(screen.getByRole('link', { name: 'Reading List' })).toHaveAttribute(
+      'href',
+      '/feed?surface=library&filter=to_read',
+    );
   });
 
   it('does NOT render recommendation_score when null', () => {

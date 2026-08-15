@@ -17,6 +17,16 @@ export function formatDate(isoString: string | null | undefined): string {
   });
 }
 
+/** Format an ISO datetime or Date with the browser's local date and time. */
+export function formatDateTime(
+  value: string | Date | null | undefined,
+  fallback = 'N/A',
+): string {
+  if (!value) return fallback;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString();
+}
+
 /** Format an author list for display, truncating if >3 authors. */
 export function formatAuthors(authors: string[] | null | undefined): string {
   if (!authors || authors.length === 0) return 'Unknown';

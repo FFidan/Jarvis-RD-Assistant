@@ -25,13 +25,13 @@ export function AppearanceSection() {
   return (
     <div className="space-y-8">
       <p className="text-sm text-muted-foreground">
-        Personalise the look of JARVIS — choose an accent colour, type pairing, and information density.
+        Personalize the look of JARVIS — choose an accent color, type pairing, and information density.
       </p>
 
-      {/* Accent colour */}
+      {/* Accent color */}
       <div>
         <MarkerLabel as="h3" className="mb-3">
-          Accent colour
+          Accent color
         </MarkerLabel>
         <div className="flex gap-3 flex-wrap">
           {ACCENT_PRESETS.map((p) => (

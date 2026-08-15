@@ -167,8 +167,10 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
 
     // h2 detail pane heading should say "Topics"
     await expect(page.getByRole('heading', { name: 'Topics', level: 2 })).toBeVisible({ timeout: 8000 });
-    // Breadcrumb should show Topics
-    await expect(page.getByRole('navigation', { name: 'breadcrumb' })).toContainText('Topics');
+    const breadcrumb = page.getByRole('navigation', { name: 'breadcrumb' });
+    await expect(breadcrumb.getByRole('link', { name: 'Settings' })).toBeVisible();
+    await expect(breadcrumb.getByRole('link', { name: 'Research' })).toBeVisible();
+    await expect(breadcrumb).toContainText('Topics');
   });
 
   test('Account section header appears in rail', async ({ page }) => {
@@ -196,7 +198,7 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
     // Detail pane heading
     await expect(page.getByRole('heading', { name: 'Profile & Email', level: 2 })).toBeVisible({ timeout: 8000 });
     // Breadcrumb updated
-    await expect(page.getByRole('navigation', { name: 'breadcrumb' })).toContainText('Account');
+    await expect(page.getByRole('navigation', { name: 'breadcrumb' }).getByRole('link', { name: 'Account' })).toBeVisible();
     // AccountSection renders profile data
     await expect(page.getByTestId('display-name-value')).toContainText('Ada Test');
     await expect(page.getByTestId('email-value')).toContainText('test@example.com');

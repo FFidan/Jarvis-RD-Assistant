@@ -10,7 +10,7 @@ import { ScoreStack } from './ScoreStack';
 import { WhyChips } from '@/components/my-day/primitives/WhyChips';
 import { ErrorSentinel } from '@/components/shared/ErrorSentinel';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { fetchPulseToday } from '@/lib/api';
+import { fetchConfig, fetchPulseToday } from '@/lib/api';
 import { toScoreParts } from '@/lib/score-utils';
 import { usePulseRating } from '@/hooks/usePulseRating';
 import type { PulseDeck } from '@/types';
@@ -22,7 +22,15 @@ import type { PulseDeck } from '@/types';
  * backend's no-data 404 to `null`, so `isError` only fires on genuine
  * failures; reaching here means there is simply no deck to triage today.
  */
-function PulseEmptyState({ message }: { message: string }) {
+function PulseEmptyState({
+  message,
+  actionLabel = 'Open Pulse Deck',
+  actionTarget = '/pulse',
+}: {
+  message: string;
+  actionLabel?: string;
+  actionTarget?: string;
+}) {
   return (
     <div className="flex flex-col items-center gap-3 py-8 text-center">
       <Sparkles className="h-7 w-7 text-faint" aria-hidden />
@@ -30,7 +38,7 @@ function PulseEmptyState({ message }: { message: string }) {
       {/* Points at the surface that actually has the control: Generate lives
           on /pulse, and Papers has no Pulse affordance. */}
       <Button asChild size="sm" variant="outline">
-        <Link to="/pulse">Open Pulse Deck</Link>
+        <Link to={actionTarget}>{actionLabel}</Link>
       </Button>
     </div>
   );
@@ -45,6 +53,13 @@ export function HeroPulse() {
     queryKey: QUERY_KEYS.pulse.today(),
     queryFn: fetchPulseToday,
   });
+  const { data: configs, isLoading: configLoading } = useQuery({
+    queryKey: QUERY_KEYS.config.all(),
+    queryFn: fetchConfig,
+  });
+  const pulseTurnedOff = configs?.some(
+    (config) => config.key === 'pulse.enabled' && config.value === false,
+  );
 
   useEffect(() => {
     if (!deck) return;
@@ -64,7 +79,7 @@ export function HeroPulse() {
     onSuccess: () => setCurrentIndex((prev) => prev + 1),
   });
 
-  if (isLoading) {
+  if (isLoading || configLoading) {
     return (
       <div className="space-y-3">
         <Skeleton className="h-5 w-48" />
@@ -88,6 +103,16 @@ export function HeroPulse() {
   }
 
   const card = deck?.cards[currentIndex];
+
+  if (!card && pulseTurnedOff) {
+    return (
+      <PulseEmptyState
+        message="Pulse is turned off in Settings."
+        actionLabel="Open Settings"
+        actionTarget="/settings?section=system&item=pulse"
+      />
+    );
+  }
 
   // Cleared (rated all) — only when deck exists and we've advanced past last card
   if (deck && currentIndex >= deck.cards.length) {

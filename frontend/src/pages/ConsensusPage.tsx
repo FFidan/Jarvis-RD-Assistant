@@ -168,12 +168,14 @@ export function ConsensusPage() {
       ? 'The last contradiction scan failed before consensus data could be refreshed.'
       : scanSucceeded
         ? succeededScanDescription(scanCounts)
-        : 'Run a contradiction scan across related papers to see where they agree and disagree.';
+        : 'Scan for contradictions across related papers to see where they agree and disagree.';
 
   return (
     <div className="space-y-6 p-6">
-      <nav className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
-        <span>Read</span>
+      <nav aria-label="breadcrumb" className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
+        <Link to="/projects" className="transition-colors hover:text-strong">
+          Workspace
+        </Link>
         <span>/</span>
         <Link to="/consensus" className="text-meta transition-colors hover:text-strong">
           Consensus
@@ -213,7 +215,7 @@ export function ConsensusPage() {
               <EmptyState
                 title={emptyTitle}
                 description={emptyDescription}
-                actionLabel={pending ? 'Scanning…' : 'Run consensus scan'}
+                actionLabel={pending ? 'Scanning…' : 'Scan for contradictions'}
                 onAction={() => {
                   if (!pending) scanMutation.mutate();
                 }}

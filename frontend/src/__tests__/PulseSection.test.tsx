@@ -30,6 +30,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchConfig: vi.fn(),
     setConfig: vi.fn().mockResolvedValue({ key: '', value: null }),
     fetchPulseStats: vi.fn(),
+    fetchFeedbackSummary: vi.fn(),
     fetchPulseDebug: vi.fn().mockResolvedValue({
       deck_date: '2026-04-17',
       card_count: 5,
@@ -66,6 +67,7 @@ vi.mock('@/stores/auth-store', () => ({
 const {
   fetchConfig,
   fetchPulseStats,
+  fetchFeedbackSummary,
   setConfig,
   createJob,
   getSystemCapabilities,
@@ -129,6 +131,7 @@ describe('PulseSection', () => {
       { key: 'pulse.stage2_top_k', value: 40 },
     ]);
     vi.mocked(fetchPulseStats).mockResolvedValue(baseStats);
+    vi.mocked(fetchFeedbackSummary).mockResolvedValue({ top_positive: [], top_negative: [] });
     vi.mocked(getSystemCapabilities).mockResolvedValue(capableSystem);
     // Default: non-admin user
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -162,6 +165,19 @@ describe('PulseSection', () => {
       expect(screen.getByText(/decks generated/i)).toBeInTheDocument();
     });
     expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
+  it('describes the recommender feedback window and recency ordering', async () => {
+    vi.mocked(fetchFeedbackSummary).mockResolvedValue({
+      top_positive: [{ paper_id: 7, title: 'Recent example', count: 2 }],
+      top_negative: [],
+    });
+    renderSection();
+
+    expect(await screen.findByText('Recent example')).toBeInTheDocument();
+    expect(screen.getByText(/distinct papers you liked in the past 90 days/i)).toBeInTheDocument();
+    expect(screen.getByText(/ordered by your most recent feedback/i)).toBeInTheDocument();
+    expect(screen.getByText(/positive examples when ranking new papers/i)).toBeInTheDocument();
   });
 
   // ── Badge state tests ──────────────────────────────────────────────────────
@@ -293,7 +309,7 @@ describe('PulseSection', () => {
     });
   });
 
-  it('gate tooltip for classifier contains plain-language message about scikit-learn', async () => {
+  it('classifier option explains that this server build lacks the capability', async () => {
     vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: false, structured_output_enforced: false });
     const user = userEvent.setup();
     renderSection();
@@ -301,11 +317,11 @@ describe('PulseSection', () => {
     const trigger = await screen.findByTestId('gate-tooltip-trigger-classifier');
     await user.hover(trigger);
     await waitFor(() => {
-      expect(screen.getAllByText(/scikit-learn/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/personal classifier is not available on this server build/i).length).toBeGreaterThan(0);
     });
   });
 
-  it('gate tooltip for citation_pagerank contains plain-language message about networkx', async () => {
+  it('citation option explains that this server build lacks the capability', async () => {
     vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: false, scikit_learn: true, structured_output_enforced: false });
     const user = userEvent.setup();
     renderSection();
@@ -313,7 +329,7 @@ describe('PulseSection', () => {
     const trigger = await screen.findByTestId('gate-tooltip-trigger-citation_pagerank');
     await user.hover(trigger);
     await waitFor(() => {
-      expect(screen.getAllByText(/networkx/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/citation-based signals are not available on this server build/i).length).toBeGreaterThan(0);
     });
   });
 

@@ -136,7 +136,7 @@ describe('AutomationSection', () => {
     ]);
     renderSection();
     await waitFor(() => {
-      expect(screen.getByText('Flashcard Review Reminder')).toBeInTheDocument();
+      expect(screen.getByText('Learning Card Review Reminder')).toBeInTheDocument();
     });
   });
 
@@ -178,7 +178,7 @@ describe('AutomationSection', () => {
 
     renderSection();
     await waitFor(() => {
-      expect(screen.getByText('Flashcard Review Reminder')).toBeInTheDocument();
+      expect(screen.getByText('Learning Card Review Reminder')).toBeInTheDocument();
     });
 
     // The Radix mock overwrites _selectOnValueChange on each rendered Select, so it

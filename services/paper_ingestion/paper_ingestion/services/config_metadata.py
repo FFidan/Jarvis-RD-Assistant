@@ -16,6 +16,7 @@ from paper_ingestion.services.llm_provider_registry import (
 __all__ = [
     "API_KEY_LOGIN_CONFIG_KEY",
     "_ALLOWED_CONFIG_KEYS",
+    "BROWSER_READABLE_SYSTEM_KEYS",
     "PERSONAL_KEYS",
     "SYSTEM_KEYS",
     "_ZOTERO_LIBRARY_SCOPE_KEYS",
@@ -189,6 +190,12 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
         "zotero.auto_push_on_star",
     }
 )
+
+# System keys a non-admin browser session may READ but never write: `set_config`
+# routes every system-scope key through `require_admin` regardless of this set.
+# Someone whose Pulse was switched off for the whole instance still has to be
+# told why their deck is empty, so the flag itself has to reach them.
+BROWSER_READABLE_SYSTEM_KEYS: frozenset[str] = frozenset({"pulse.enabled"})
 
 SYSTEM_KEYS: frozenset[str] = (
     frozenset(

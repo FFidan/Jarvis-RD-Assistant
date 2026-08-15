@@ -338,22 +338,21 @@ export function PulseAdvancedTuningCard({
             <div className="space-y-3 rounded-md border border-dashed p-3">
               <div>
                 <h5 className="text-xs font-semibold">
-                  Optional signals — need extra data or dependencies
+                  Optional signals
                 </h5>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  These signals are inactive by default. Enable them once the prerequisites are in
-                  place.
+                  These signals are inactive by default. Standard installations include their
+                  required packages; some signals also need enough research data.
                 </p>
                 <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
                   <li>
                     <span className="font-medium">Citation signals</span> (Citation PageRank,
-                    Citation count, Shared citation neighbourhood) — need the{' '}
-                    <code className="rounded bg-muted px-0.5">networkx</code> package on the server.
+                    Citation count, Shared citation neighborhood) — need citation data for the
+                    papers being ranked.
                   </li>
                   <li>
-                    <span className="font-medium">Personal classifier</span> — needs the{' '}
-                    <code className="rounded bg-muted px-0.5">scikit-learn</code> package on the
-                    server, plus ~30 Pulse ratings.
+                    <span className="font-medium">Personal classifier</span> — becomes useful after
+                    about 30 Pulse ratings.
                   </li>
                 </ul>
                 <p className="mt-1.5 text-[11px] text-muted-foreground">

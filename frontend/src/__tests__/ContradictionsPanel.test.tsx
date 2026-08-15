@@ -161,9 +161,9 @@ describe('ContradictionsPanel', () => {
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Scan contradictions' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Scan for contradictions' })).toBeEnabled();
     });
-    await user.click(screen.getByRole('button', { name: 'Scan contradictions' }));
+    await user.click(screen.getByRole('button', { name: 'Scan for contradictions' }));
 
     expect(mockScanPaperContradictions).toHaveBeenCalledWith(42, { limit: 20 });
     await waitFor(() => {

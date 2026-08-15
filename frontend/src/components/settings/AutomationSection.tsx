@@ -20,7 +20,7 @@ import type { Nudge } from '@/types';
 
 const nudgeLabels: Record<string, string> = {
   research_pulse: 'Background Paper Search',
-  review_reminder: 'Flashcard Review Reminder',
+  review_reminder: 'Learning Card Review Reminder',
   deadline_warning: 'Project Deadline Alert',
   daily_summary: 'Daily Briefing',
   paper_digest: 'Paper Digest',
@@ -29,7 +29,7 @@ const nudgeLabels: Record<string, string> = {
 
 const nudgeDescriptions: Record<string, string> = {
   research_pulse: 'Automatically searches for new papers matching your topics',
-  review_reminder: 'Reminds you when flashcards are due for spaced repetition review',
+  review_reminder: 'Reminds you when learning cards are due for review',
   deadline_warning: 'Alerts you about upcoming project deadlines',
   daily_summary: 'Morning briefing with new papers, due cards, and project updates',
   paper_digest: 'Weekly digest of the most relevant papers from your sources',

@@ -162,6 +162,7 @@ describe('MyDayPage', () => {
     expect(await screen.findByText(/RESEARCH LOG/)).toBeInTheDocument();
     expect(container.querySelector('main')).toBeNull();
     expect(container.querySelector('section.max-w-page')).toBeInTheDocument();
+    expect(screen.queryByText(/Anon\./i)).not.toBeInTheDocument();
   });
 
   it('renders headings without skipping a level', async () => {

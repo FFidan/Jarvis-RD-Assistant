@@ -127,14 +127,14 @@ test.describe('Learning Cards IA — review session', () => {
     await page.goto('/cards');
   });
 
-  test('shows breadcrumb with Learn / Flashcards / All decks · session', async ({ page }) => {
+  test('shows breadcrumb with Learn / Learning Cards / All decks Review', async ({ page }) => {
     // Scope to the breadcrumb nav — "Learn" also appears as a sidebar section
     // header and "Learning Cards" nav link (both contain "Learn"), so an
     // unscoped getByText('Learn') is a strict-mode violation.
     const breadcrumb = page.getByRole('navigation', { name: 'Breadcrumb' });
-    await expect(breadcrumb.getByText('Learn', { exact: true })).toBeVisible({ timeout: 8000 });
-    await expect(breadcrumb.getByRole('button', { name: /flashcards/i })).toBeVisible();
-    await expect(breadcrumb.getByText(/all decks · session/i)).toBeVisible();
+    await expect(breadcrumb.getByRole('link', { name: 'Learn' })).toBeVisible({ timeout: 8000 });
+    await expect(breadcrumb.getByRole('button', { name: 'Learning Cards' })).toBeVisible();
+    await expect(breadcrumb.getByText(/all decks · review/i)).toBeVisible();
   });
 
   test('shows PROGRESS bar on review entry', async ({ page }) => {
@@ -198,14 +198,14 @@ test.describe('Learning Cards IA — review session', () => {
 });
 
 test.describe('Learning Cards IA — library navigation', () => {
-  test('breadcrumb Flashcards link navigates to Library view', async ({ page }) => {
+  test('breadcrumb Learning Cards control navigates to Library view', async ({ page }) => {
     await seedAuthedSession(page);
     await installMockedApiDefaults(page);
     await seedRoutes(page);
     await page.goto('/cards');
-    await expect(page.getByRole('button', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
-    await page.getByRole('button', { name: /flashcards/i }).click();
-    await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: 'Learning Cards' })).toBeVisible({ timeout: 8000 });
+    await page.getByRole('button', { name: 'Learning Cards' }).click();
+    await expect(page.getByRole('heading', { name: 'Learning Cards' })).toBeVisible({ timeout: 5000 });
   });
 
   test('Library view shows StatsHeader tiles', async ({ page }) => {
@@ -254,7 +254,7 @@ test.describe('Learning Cards IA — library navigation', () => {
     await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 5 });
     await page.goto('/cards');
-    await expect(page.getByText(/all decks · session/i)).toBeVisible({ timeout: 8000 });
+    await expect(page.getByText(/all decks · review/i)).toBeVisible({ timeout: 8000 });
     // Stats tiles should NOT be visible in session mode
     await expect(page.getByText('Total Cards')).not.toBeVisible();
   });

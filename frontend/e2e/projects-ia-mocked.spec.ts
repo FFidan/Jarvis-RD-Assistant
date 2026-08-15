@@ -251,9 +251,9 @@ test.describe('Projects IA Redesign (mocked)', () => {
   // ── 3.7 Auto-select ────────────────────────────────────────────────────────────
 
   test('first chapter is auto-selected on load (pane shows breadcrumb)', async ({ page }) => {
-    // Breadcrumb shows "Projects" — scope to breadcrumb nav to avoid strict-mode
-    // (title also appears in the page heading and sidebar label).
-    await expect(page.getByLabel('breadcrumb').getByText('Projects')).toBeVisible({ timeout: 8_000 });
+    const breadcrumb = page.getByRole('navigation', { name: 'breadcrumb' });
+    await expect(breadcrumb.getByRole('link', { name: 'Workspace' })).toBeVisible({ timeout: 8_000 });
+    await expect(breadcrumb.getByRole('link', { name: 'Projects' })).toBeVisible();
     await expect(page.getByText('RGS Thesis').first()).toBeVisible();
   });
 

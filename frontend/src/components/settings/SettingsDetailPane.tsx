@@ -23,6 +23,7 @@ import { TopicSection } from './TopicSection';
 import { AuthorSection } from './AuthorSection';
 import { SourceDetailPane } from './SourceDetailPane';
 import { SourcesList } from './SourcesList';
+import { Link } from 'react-router-dom';
 import { SmtpSection } from './SmtpSection';
 import { TelegramBotTokenSection } from './TelegramBotTokenSection';
 import { AccessModeSection } from './AccessModeSection';
@@ -76,7 +77,7 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
   research: {
     topics: 'Topics',
     authors: 'Authors',
-    'spaced-repetition': 'Spaced Repetition',
+    'spaced-repetition': 'Learning Cards',
   },
 };
 
@@ -85,17 +86,21 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
 // ---------------------------------------------------------------------------
 
 function Breadcrumb({
+  section,
   sectionTitle,
   itemLabel,
 }: {
+  section: string;
   sectionTitle: string;
   itemLabel: string;
 }) {
   return (
     <nav aria-label="breadcrumb" className="flex items-center gap-1.5 text-xs text-muted-foreground mb-4">
-      <span>Settings</span>
+      <Link to="/settings" className="hover:text-foreground hover:underline">Settings</Link>
       <span aria-hidden>/</span>
-      <span>{sectionTitle}</span>
+      <Link to={`/settings?section=${section}`} className="hover:text-foreground hover:underline">
+        {sectionTitle}
+      </Link>
       <span aria-hidden>/</span>
       <span className="text-foreground font-medium">{itemLabel}</span>
     </nav>
@@ -231,7 +236,7 @@ export function SettingsDetailPane({ section, item, modelPickerRequest, provider
 
   return (
     <div className="flex-1 overflow-y-auto p-6 min-w-0">
-      <Breadcrumb sectionTitle={sectionTitle} itemLabel={itemLabel} />
+      <Breadcrumb section={section} sectionTitle={sectionTitle} itemLabel={itemLabel} />
       <h2 className="font-serif text-3xl tracking-tight text-strong mb-6">{itemLabel}</h2>
       <DetailContent
         section={section}

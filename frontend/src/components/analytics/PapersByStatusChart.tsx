@@ -7,6 +7,7 @@ import {
   Legend,
 } from 'recharts';
 import type { StatusCountRow } from '@/types';
+import { paperStateLabel } from '@/lib/labels/paperState';
 
 const COLORS: Record<string, string> = {
   new: 'hsl(221, 83%, 53%)',
@@ -23,19 +24,23 @@ interface PapersByStatusChartProps {
 }
 
 export function PapersByStatusChart({ data }: PapersByStatusChartProps) {
+  const labeledData = data.map((entry) => ({
+    ...entry,
+    statusLabel: paperStateLabel(entry.status),
+  }));
   return (
     <ResponsiveContainer width="100%" height={300}>
       <PieChart>
         <Pie
-          data={data}
+          data={labeledData}
           dataKey="count"
-          nameKey="status"
+          nameKey="statusLabel"
           cx="50%"
           cy="50%"
           outerRadius={100}
           label={({ name, value }) => `${name} (${value})`}
         >
-          {data.map((entry, idx) => (
+          {labeledData.map((entry, idx) => (
             <Cell key={idx} fill={COLORS[entry.status] ?? FALLBACK_COLOR} />
           ))}
         </Pie>

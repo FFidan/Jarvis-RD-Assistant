@@ -37,6 +37,7 @@ from paper_ingestion.services.config_db import (
 )
 from paper_ingestion.services.config_metadata import (
     _ENCRYPTED_KEYS,
+    BROWSER_READABLE_SYSTEM_KEYS,
     PERSONAL_KEYS,
     _classify_config_key,
     _is_allowed_config_key,
@@ -132,12 +133,16 @@ async def list_config(
 ) -> list[ConfigEntry]:
     """Return all config entries.
 
-    Browser users only receive personal settings unless they are admins.
-    API-key-only callers preserve the legacy single-tenant view.
+    Browser users receive their personal settings plus the few system flags in
+    ``BROWSER_READABLE_SYSTEM_KEYS`` that the interface has to explain to them;
+    everything else stays admin-only. Being readable implies nothing about being
+    writable — ``set_config`` sends every system-scope key through
+    ``require_admin`` regardless. API-key-only callers preserve the legacy
+    single-tenant view.
     """
     browser_session = _has_browser_session(request)
     role = getattr(request.state, "user_role", None)
-    personal_keys = sorted(PERSONAL_KEYS)
+    readable_keys = sorted(PERSONAL_KEYS | BROWSER_READABLE_SYSTEM_KEYS)
     async with db_pool.acquire() as conn:
         if browser_session and role != "admin":
             rows = await conn.fetch(
@@ -146,7 +151,7 @@ async def list_config(
                    WHERE key = ANY($1::text[])
                      AND (user_id = $2 OR user_id IS NULL)
                    ORDER BY key, user_id IS NULL""",
-                personal_keys,
+                readable_keys,
                 caller_user_id,
             )
         elif browser_session and caller_user_id is not None:

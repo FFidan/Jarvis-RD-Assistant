@@ -88,6 +88,25 @@ describe('App', () => {
     expect(dashboards.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('offers Papers and Discover links on an unknown route', async () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      user: { id: 1, email: 'admin.com', role: 'admin' },
+    });
+    renderApp(['/missing-page']);
+
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Papers' })).toHaveAttribute(
+      'href',
+      '/feed?surface=library',
+    );
+    expect(screen.getByRole('link', { name: 'Open Discover' })).toHaveAttribute(
+      'href',
+      '/feed?surface=search',
+    );
+  });
+
 
   it('redirects authenticated magic-link visits home without reusing the token', async () => {
     useAuthStore.setState({

@@ -28,7 +28,7 @@ function FavoriteTopicsPanel() {
   if (!data?.top_positive.length) return null;
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium">Papers you&apos;ve 👍 most</p>
+      <p className="text-sm font-medium">Recently liked papers</p>
       <ul className="space-y-1">
         {data.top_positive.slice(0, 5).map((item) => (
           <li key={item.paper_id} className="flex items-center justify-between text-sm">
@@ -38,7 +38,7 @@ function FavoriteTopicsPanel() {
         ))}
       </ul>
       <p className="text-xs text-muted-foreground">
-        These papers are weighted higher in your research feed recommendations.
+        Pulse uses these recent choices as positive examples when ranking new papers.
       </p>
     </div>
   );
@@ -116,10 +116,9 @@ export function PulseSection() {
       {/* ── Favorite papers card ── */}
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
-          <CardTitle className="text-base">Papers you&apos;ve liked</CardTitle>
+          <CardTitle className="text-base">Recently liked papers</CardTitle>
           <CardDescription>
-            Papers with the most 👍 feedback. These raise the weight of related papers in your
-            research feed.
+            Distinct papers you liked in the past 90 days, ordered by your most recent feedback.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -130,10 +129,10 @@ export function PulseSection() {
       {/* ── Rejected topics card ── */}
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
-          <CardTitle className="text-base">Topics you&apos;ve rejected</CardTitle>
+          <CardTitle className="text-base">Topics linked to disliked papers</CardTitle>
           <CardDescription>
-            Topics with the most 👎 feedback. Reset to allow recommendations from these topics
-            again.
+            Negative feedback can lower the ranking of related topics. Reset clears every rating
+            you have given a topic, the positive ones included.
           </CardDescription>
         </CardHeader>
         <CardContent>

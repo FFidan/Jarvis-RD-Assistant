@@ -3,7 +3,7 @@
  *
  * Two destinations within /cards:
  *   Review session  (default when due_now > 0, or ?mode=review)
- *   Library         (?mode=library, or breadcrumb "Flashcards" link)
+ *   Library         (?mode=library, or breadcrumb "Learning Cards" control)
  *
  * Route default: shows Review if due_now > 0; Library otherwise.
  *
@@ -130,7 +130,7 @@ export function LearningCardsPage() {
         {/* Library header */}
         <div className="flex items-center justify-between">
           <h1 className="text-[32px] leading-tight tracking-tight text-strong">
-            Flashcards
+            Learning Cards
           </h1>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setShowGenerate(true)}>

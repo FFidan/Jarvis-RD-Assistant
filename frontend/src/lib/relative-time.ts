@@ -2,6 +2,18 @@
  * Shared time-formatting utilities used across multiple components.
  */
 
+import { formatDistanceToNow } from 'date-fns';
+
+/** Format an ISO datetime as a relative age, preserving invalid input for diagnosis. */
+export function formatRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  try {
+    return formatDistanceToNow(new Date(iso), { addSuffix: true });
+  } catch {
+    return iso;
+  }
+}
+
 /** Format an ISO datetime string as a short HH:MM (24-hour) time. */
 export function formatTime(iso: string): string {
   try {

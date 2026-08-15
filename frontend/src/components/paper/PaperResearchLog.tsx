@@ -25,6 +25,7 @@ import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { formatDate, formatAuthors, cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, ExternalLink, AlertTriangle, ShieldCheck, Wand2 } from 'lucide-react';
 import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
+import { PAPER_STATE_LABELS, paperStateLabel } from '@/lib/labels/paperState';
 
 // The in-PDF reader pulls in pdf.js (~heavy); load it on demand so it only ships
 // to (and renders on) papers that actually have a downloaded PDF.
@@ -166,18 +167,23 @@ export function PaperResearchLog({
   // Resolve lifecycle state for breadcrumb
   const stateLabel =
     surfaceLabel ??
-    (userState?.state
-      ? userState.state.replace('_', ' ')
-      : 'inbox');
+    (userState?.state ? paperStateLabel(userState.state) : PAPER_STATE_LABELS.inbox);
+  const stateTarget = userState?.state === 'inbox'
+    ? '/feed?surface=inbox'
+    : userState?.state === 'trash'
+      ? '/feed?surface=trash'
+      : userState?.state
+        ? `/feed?surface=library&filter=${userState.state}`
+        : '/feed?surface=inbox';
 
   return (
     <div className="space-y-10">
       {/* ── Breadcrumb + score ─────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
         <nav aria-label="breadcrumb" className="flex items-center gap-1.5">
-          <span>Papers</span>
+          <Link to="/feed?surface=library" className="hover:text-foreground hover:underline">Papers</Link>
           <span aria-hidden>/</span>
-          <span className="capitalize">{stateLabel}</span>
+          <Link to={stateTarget} className="hover:text-foreground hover:underline">{stateLabel}</Link>
           <span aria-hidden>/</span>
           <span className="text-foreground line-clamp-1 max-w-[200px]" title={paper.title}>
             {paper.title}

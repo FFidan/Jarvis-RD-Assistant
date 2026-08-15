@@ -5,13 +5,6 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchMyDay, fetchPulseToday, fetchFeed } from '@/lib/api';
 import type { MyDayResponse, PulseDeck } from '@/types';
 
-const ATTRIBUTED_QUOTES = [
-  { text: '"Read deeply. Think slowly. Note generously."', author: '—Anon.' },
-  { text: '"The questions you ask shape the answers you find."', author: '—Anon.' },
-  { text: '"What is one paper you wish you understood better?"', author: '—Anon.' },
-  { text: '"Today is for finishing what tomorrow remembers."', author: '—Anon.' },
-];
-
 interface MiniStatProps {
   value: number | string;
   label: string;
@@ -40,16 +33,13 @@ export function DateMasthead() {
 
   // Re-render once a minute so the time/date stays current across midnight
   // and across long-lived sessions. The mounted-now timestamp is the source
-  // of truth for date/time/quote/entry-num.
+  // of truth for the displayed date and time.
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 60_000);
     return () => window.clearInterval(id);
   }, []);
 
-  const hash = Array.from(now.toDateString()).reduce((a, c) => a + c.charCodeAt(0), 0);
-  // use hash (already computed) to pick a quote; fallback to first entry (array is a non-empty constant)
-  const attributedQuote = ATTRIBUTED_QUOTES[hash % ATTRIBUTED_QUOTES.length] ?? ATTRIBUTED_QUOTES[0] ?? { text: '', author: '' };
   const dateStr =
     now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) + '.';
   const timeStr = now.toLocaleTimeString('en-US', {
@@ -92,10 +82,6 @@ export function DateMasthead() {
           RESEARCH LOG · {timeStr}
         </p>
         <h1 className="font-serif text-[36px] leading-tight text-strong">{dateStr}</h1>
-        <p className="font-serif italic text-[15px] text-zinc-600 dark:text-zinc-400 mt-1">
-          {attributedQuote.text}{' '}
-          <span className="not-italic font-mono text-[11px] text-meta">{attributedQuote.author}</span>
-        </p>
       </div>
 
       <div className="flex flex-wrap sm:flex-nowrap gap-x-5 gap-y-1 text-right justify-end max-w-full">

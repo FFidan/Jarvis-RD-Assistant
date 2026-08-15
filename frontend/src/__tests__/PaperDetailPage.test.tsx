@@ -19,6 +19,7 @@ vi.mock('@/lib/api', async () => {
   return {
     ...actual,
     fetchPaperDetail: vi.fn(),
+    fetchConfig: vi.fn(),
     fetchContradictions: vi.fn(),
     scanPaperContradictions: vi.fn(),
     fetchNotes: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock('@/hooks/use-streaming-chat', () => ({
 
 import {
   fetchPaperDetail,
+  fetchConfig,
   fetchContradictions,
   fetchNotes,
   fetchDecks,
@@ -62,6 +64,7 @@ import {
 } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 const mockFetchPaperDetail = vi.mocked(fetchPaperDetail);
+const mockFetchConfig = vi.mocked(fetchConfig);
 const mockFetchContradictions = vi.mocked(fetchContradictions);
 const mockFetchNotes = vi.mocked(fetchNotes);
 const mockFetchDecks = vi.mocked(fetchDecks);
@@ -197,6 +200,11 @@ describe('PaperDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetCitationGraph.mockResolvedValue({ nodes: [], edges: [] });
+    mockFetchConfig.mockResolvedValue([
+      { key: 'zotero.api_key', value: 'configured' },
+      { key: 'zotero.user_id', value: '12345' },
+      { key: 'zotero.library_type', value: 'user' },
+    ]);
     mockFetchDecks.mockResolvedValue([]);
     mockFetchContradictions.mockResolvedValue({ contradictions: [], total: 0 });
     mockFetchNotes.mockImplementation((_paperId, source) =>

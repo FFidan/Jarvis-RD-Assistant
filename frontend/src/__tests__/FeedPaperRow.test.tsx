@@ -149,6 +149,8 @@ describe('FeedPaperRow', () => {
     const onMarkReading = vi.fn();
     const onMarkDone = vi.fn();
     renderRow({ paper: toReadPaper, onMarkReading, onMarkDone });
+    expect(screen.getByText('Reading List')).toBeInTheDocument();
+    expect(screen.queryByText('TO_READ')).not.toBeInTheDocument();
     await user.click(
       screen.getByRole('button', { name: `Start reading ${toReadPaper.title}` }),
     );

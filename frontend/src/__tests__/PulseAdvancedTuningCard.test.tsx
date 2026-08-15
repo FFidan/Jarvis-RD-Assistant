@@ -146,4 +146,19 @@ describe('PulseAdvancedTuningCard — recommendation.enabled toggle', () => {
     fireEvent.click(screen.getByTestId('recommendation-enabled-toggle'));
     expect(mutate).not.toHaveBeenCalled();
   });
+
+  it('states the real data prerequisites for optional signals', () => {
+    renderCard({
+      configs: makeConfigs(),
+      setMut: makeMut(),
+      settingsControlsDisabled: false,
+      hasNetworkx: true,
+      hasSklearn: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /advanced tuning/i }));
+
+    expect(screen.getByText(/standard installations include their required packages/i)).toBeInTheDocument();
+    expect(screen.getByText(/need citation data for the papers being ranked/i)).toBeInTheDocument();
+    expect(screen.getByText(/becomes useful after about 30 pulse ratings/i)).toBeInTheDocument();
+  });
 });
