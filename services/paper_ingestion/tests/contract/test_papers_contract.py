@@ -650,6 +650,10 @@ async def test_paper_detail_filters_cross_reference_when_only_target_generation_
     assert current.json()["summary"]["cross_references"] == [
         {
             "related_paper_id": related_id,
+            # The payload carries the target's title so the client does not
+            # fetch each related paper just to name the link.
+            "related_title": "Cross-reference target",
+            "related_year": None,
             "relationship": "supports",
             "explanation": "Related evidence",
             "related_quote": "target evidence",

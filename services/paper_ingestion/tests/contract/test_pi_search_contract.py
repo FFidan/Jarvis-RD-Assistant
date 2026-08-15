@@ -503,3 +503,69 @@ async def test_sr07_search_preview_zotero_item_key_is_per_user(
         "search-preview must surface user A's own Zotero link key, not user B's key "
         f"and not the global papers.zotero_item_key; got {surfaced_key!r}"
     )
+
+
+async def test_sr_preview_reports_a_rate_limited_source_over_http(
+    contract_two_users, _pi_app_with_pool, _configure_api_key, monkeypatch
+):
+    """A source throttled mid-search is reported, not counted as a success.
+
+    Drives the real swallow branch — an httpx transport returning 429 underneath
+    the live SemanticScholarSource._fetch_json — through the actual route, so it
+    also covers the response assembly at search.py, where degraded_sources is
+    rebuilt from source_errors and a locally appended list would be discarded.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/search.py
+    # (search_papers_preview: degraded_sources=list(source_errors.keys())).
+    """
+    import httpx
+
+    from paper_ingestion.models import PaperSourceConfig, SourceType
+    from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
+
+    request_count = 0
+
+    def rate_limited(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(429, headers={"Retry-After": "3"})
+
+    throttled_client = httpx.AsyncClient(transport=httpx.MockTransport(rate_limited))
+    semantic_scholar = SemanticScholarSource(
+        PaperSourceConfig(id=2, source_type=SourceType.SEMANTIC_SCHOLAR, enabled=True, config={}),
+        throttled_client,
+    )
+    monkeypatch.setattr(semantic_scholar, "_rate_limit", AsyncMock())
+
+    async def _stub_resolver(source_types, db_pool, http_client, request):
+        return {SourceType.SEMANTIC_SCHOLAR: semantic_scholar}, {}
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.search._resolve_sources_for_search", _stub_resolver
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.search_helpers._load_local_library_matches",
+        _stub_no_library_matches,
+    )
+
+    try:
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.post(
+                "/api/search-preview",
+                json={
+                    "query": "graph neural networks",
+                    "source_types": ["semantic_scholar"],
+                    "max_results": 10,
+                },
+            )
+    finally:
+        await throttled_client.aclose()
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert request_count == 1, "the real HTTP layer must have been reached"
+    assert body["degraded_sources"] == ["semantic_scholar"]
+    error = body["source_errors"]["semantic_scholar"]
+    assert error["kind"] == "rate_limit"
+    assert error["status_code"] == 429
+    assert error["retry_after_s"] == 3

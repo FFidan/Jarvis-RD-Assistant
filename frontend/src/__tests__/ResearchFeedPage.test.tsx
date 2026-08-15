@@ -122,7 +122,7 @@ vi.mock('@/lib/api', async () => {
     fetchSources: async () => ([
       { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
       { id: 2, source_type: 'semantic_scholar', enabled: true, config: {}, priority: 2, display_order: 2, created_at: '2025-01-01T00:00:00Z' },
-      { id: 3, source_type: 'openalex', enabled: true, config: {}, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
+      { id: 3, source_type: 'openalex', enabled: true, config: { requires_key: true, api_key: 'configured' }, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
       { id: 4, source_type: 'pubmed', enabled: true, config: {}, priority: 4, display_order: 4, created_at: '2025-01-01T00:00:00Z' },
       { id: 5, source_type: 'local', enabled: true, config: {}, priority: 5, display_order: 5, created_at: '2025-01-01T00:00:00Z' },
     ]),
@@ -352,6 +352,21 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByLabelText('Uploaded PDF')).not.toBeInTheDocument();
   });
 
+  it('leaves a source without its required key unselected and explains why', async () => {
+    const { fetchSources } = await import('@/lib/api');
+    vi.mocked(fetchSources).mockResolvedValueOnce([
+      { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
+      { id: 3, source_type: 'openalex', enabled: true, config: { requires_key: true, key_env: 'OPENALEX_API_KEY' }, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
+    ]);
+
+    renderPage('/feed?surface=search');
+
+    const openalex = await screen.findByLabelText('OpenAlex');
+    expect(openalex).not.toBeChecked();
+    expect(openalex).toBeDisabled();
+    expect(screen.getByText('API key required')).toBeInTheDocument();
+  });
+
   it('associates every advanced search label with its form control', async () => {
     const user = userEvent.setup();
     renderPage('/feed?surface=search');
@@ -472,6 +487,10 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(screen.getByText(/PubMed rate limit reached/i)).toBeInTheDocument();
     });
+    expect(screen.getByTestId('source-summary-arxiv')).toHaveTextContent('1 result');
+    expect(screen.getByTestId('source-summary-pubmed')).toHaveTextContent(
+      'PubMed rate limit reached. Retry later.',
+    );
     expect(screen.getByText(/Status 429/i)).toBeInTheDocument();
     expect(screen.getByText(/Retry after 2s/i)).toBeInTheDocument();
   });

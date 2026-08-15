@@ -83,7 +83,13 @@ class SemanticScholarSource(PaperSource):
             headers["x-api-key"] = self._api_key
         return headers
 
-    async def _fetch_json(self, path: str, params: dict | None = None) -> dict[str, Any]:
+    async def _fetch_json(
+        self,
+        path: str,
+        params: dict | None = None,
+        *,
+        raise_on_transient: bool = False,
+    ) -> dict[str, Any]:
         """Make a rate-limited GET request to the S2 API and return JSON.
 
         Parameters
@@ -92,6 +98,9 @@ class SemanticScholarSource(PaperSource):
             API path relative to the base URL (e.g., ``/paper/search``).
         params : dict | None
             Query parameters.
+        raise_on_transient : bool
+            Raise transient HTTP errors so interactive callers can report the
+            affected source. Background callers retain empty-result behavior.
 
         Returns
         -------
@@ -103,7 +112,8 @@ class SemanticScholarSource(PaperSource):
         OutboundEgressBlockedError
             If restored credentials await review before the request.
         httpx.HTTPStatusError
-            If the request returns a non-2xx status.
+            If the request returns a non-2xx status, or a transient status when
+            ``raise_on_transient`` is true.
         """
         ensure_outbound_egress_allowed("Semantic Scholar request")
         await self._rate_limit()
@@ -113,8 +123,10 @@ class SemanticScholarSource(PaperSource):
             url, params=params, headers=self._build_headers(), timeout=30.0
         )
         if response.status_code in (429, 500, 502, 503, 504):
-            logger.warning("S2 transient %d — returning empty", response.status_code)
+            logger.warning("S2 transient response: %d", response.status_code)
             self._record_transient_poll_diagnostic(response)
+            if raise_on_transient:
+                response.raise_for_status()
             return {}
         response.raise_for_status()
         self._clear_poll_diagnostic()
@@ -261,8 +273,12 @@ class SemanticScholarSource(PaperSource):
         list[PaperCreate]
             Papers parsed from S2 API response.
         """
+        search_query = query.strip()
+        if len(search_query) >= 2 and search_query.startswith('"') and search_query.endswith('"'):
+            search_query = search_query[1:-1].strip()
+
         params: dict = {
-            "query": query,
+            "query": search_query,
             "limit": min(max_results, 100),  # S2 API max is 100
             "fields": S2_FIELDS,
         }
@@ -277,7 +293,9 @@ class SemanticScholarSource(PaperSource):
         if sort_by == "date":
             logger.debug("S2 search: sort_by='date' not natively supported by S2 API")
 
-        response_data = await self._fetch_json("/paper/search", params=params)
+        response_data = await self._fetch_json(
+            "/paper/search", params=params, raise_on_transient=True
+        )
 
         papers = []
         for item in response_data.get("data") or []:

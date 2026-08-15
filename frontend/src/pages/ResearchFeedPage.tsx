@@ -27,7 +27,6 @@ import { cn } from '@/lib/utils';
 import { errorMessage } from '@/lib/errors';
 import { SearchBar } from '@/components/feed/SearchBar';
 import { PreviewResults } from '@/components/feed/PreviewResults';
-import { SearchSourceErrors } from '@/components/feed/SearchSourceErrors';
 import { SOURCE_LABELS } from '@/components/feed/source-labels';
 import { FeedView } from '@/components/feed/FeedView';
 import { FacetRail } from '@/components/feed/FacetRail';
@@ -69,6 +68,13 @@ type DiscoverMode = (typeof DISCOVER_MODES)[number]['value'];
 
 function SectionInfo({ children }: { children: React.ReactNode }) {
   return <p className="text-sm text-muted-foreground mb-4">{children}</p>;
+}
+
+function sourceUnavailableReason(source: SourceConfig): string | null {
+  if (source.config?.requires_key === true && !source.config.api_key) {
+    return 'API key required';
+  }
+  return null;
 }
 
 // ─── main component ──────────────────────────────────────────────────────────
@@ -201,6 +207,7 @@ export function ResearchFeedPage() {
   // ── search/save state (preserved from original) ──────────────────────────
   const [previewResults, setPreviewResults] = useState<SearchPreviewResult[]>([]);
   const [sourceErrors, setSourceErrors] = useState<Record<string, SearchPreviewSourceError>>({});
+  const [perSourceCounts, setPerSourceCounts] = useState<Record<string, number>>({});
   const [selectedSourceTypes, setSelectedSourceTypes] = useState<string[]>([]);
   const queryClient = useQueryClient();
 
@@ -229,7 +236,11 @@ export function ResearchFeedPage() {
   useEffect(() => {
     if (!sourcesInitialisedRef.current && externalSources.length > 0) {
       sourcesInitialisedRef.current = true;
-      setSelectedSourceTypes(externalSources.map((s) => s.source_type));
+      setSelectedSourceTypes(
+        externalSources
+          .filter((source) => sourceUnavailableReason(source) === null)
+          .map((source) => source.source_type),
+      );
     }
   }, [externalSources]);
 
@@ -248,10 +259,12 @@ export function ResearchFeedPage() {
     onSuccess: (data) => {
       setPreviewResults(data.results);
       setSourceErrors(data.source_errors ?? {});
+      setPerSourceCounts(data.per_source_counts ?? {});
     },
     onError: () => {
       setPreviewResults([]);
       setSourceErrors({});
+      setPerSourceCounts({});
     },
   });
 
@@ -301,6 +314,8 @@ export function ResearchFeedPage() {
   function handleClearPreview() {
     setPreviewResults([]);
     setSourceErrors({});
+    setPerSourceCounts({});
+    searchMutation.reset();
   }
 
   const searchErrorMessage =
@@ -664,31 +679,43 @@ export function ResearchFeedPage() {
                     <div className="space-y-1">
                       <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
                         <span className="text-xs font-medium text-muted-foreground">Sources:</span>
-                        {externalSources.map((source) => (
-                          <label
-                            key={source.source_type}
-                            className="flex items-center gap-1.5 cursor-pointer select-none"
-                          >
-                            <input
-                              id={`discover-source-${source.source_type}`}
-                              name="source-types"
-                              value={source.source_type}
-                              type="checkbox"
-                              className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
-                              checked={selectedSourceTypes.includes(source.source_type)}
-                              onChange={(e) => {
-                                setSelectedSourceTypes((prev) =>
-                                  e.target.checked
-                                    ? [...prev, source.source_type]
-                                    : prev.filter((t) => t !== source.source_type),
-                                );
-                              }}
-                            />
-                            <span className="text-sm">
-                              {SOURCE_LABELS[source.source_type] ?? source.source_type}
-                            </span>
-                          </label>
-                        ))}
+                        {externalSources.map((source) => {
+                          const unavailableReason = sourceUnavailableReason(source);
+                          const sourceLabel = SOURCE_LABELS[source.source_type] ?? source.source_type;
+                          return (
+                            <label
+                              key={source.source_type}
+                              className={cn(
+                                'flex items-center gap-1.5 select-none',
+                                unavailableReason ? 'cursor-not-allowed' : 'cursor-pointer',
+                              )}
+                            >
+                              <input
+                                id={`discover-source-${source.source_type}`}
+                                aria-label={sourceLabel}
+                                name="source-types"
+                                value={source.source_type}
+                                type="checkbox"
+                                className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
+                                checked={selectedSourceTypes.includes(source.source_type)}
+                                disabled={unavailableReason !== null}
+                                onChange={(e) => {
+                                  setSelectedSourceTypes((prev) =>
+                                    e.target.checked
+                                      ? [...prev, source.source_type]
+                                      : prev.filter((t) => t !== source.source_type),
+                                  );
+                                }}
+                              />
+                              <span className="text-sm">{sourceLabel}</span>
+                              {unavailableReason && (
+                                <span className="text-xs text-muted-foreground">
+                                  {unavailableReason}
+                                </span>
+                              )}
+                            </label>
+                          );
+                        })}
                       </div>
                       {selectedSourceTypes.length === 0 && (
                         <p className="text-xs text-destructive">Select at least one source</p>
@@ -715,13 +742,14 @@ export function ResearchFeedPage() {
                   {searchErrorMessage && (
                     <p className="text-sm text-destructive">{searchErrorMessage}</p>
                   )}
-                  <SearchSourceErrors sourceErrors={sourceErrors} />
-                  {previewResults.length > 0 && (
+                  {searchMutation.isSuccess && (
                     <PreviewResults
                       papers={previewResults}
                       onSave={handleSave}
                       onClear={handleClearPreview}
                       isSaving={saveMutation.isPending}
+                      perSourceCounts={perSourceCounts}
+                      sourceErrors={sourceErrors}
                     />
                   )}
 

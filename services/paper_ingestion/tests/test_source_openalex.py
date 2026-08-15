@@ -285,20 +285,20 @@ async def test_fetch_new_since_deduplication():
 
 
 # ---------------------------------------------------------------------------
-# Missing API key → no request and an empty return shape
+# Missing API key -> no request and path-specific failure behavior
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
-async def test_search_missing_api_key_returns_empty(caplog):
-    """Missing API key returns [] and logs at INFO level (exactly once)."""
+async def test_search_missing_api_key_raises_without_http_request(caplog):
+    """Interactive search reports the missing key without opening HTTP."""
     route = respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(200, json=SEARCH_FIXTURE))
     source = _make_source(api_key=None)
 
     with caplog.at_level(logging.INFO, logger="paper_ingestion.sources.openalex_source"):
-        papers = await source.search("neural networks")
+        with pytest.raises(RuntimeError, match="Settings > Sources"):
+            await source.search("neural networks")
 
-    assert papers == []
     assert route.call_count == 0
     assert any("OPENALEX_API_KEY" in r.message for r in caplog.records)
 
@@ -333,8 +333,10 @@ async def test_missing_key_logged_only_once(caplog):
     source = _make_source(api_key=None)
 
     with caplog.at_level(logging.INFO, logger="paper_ingestion.sources.openalex_source"):
-        await source.search("a")
-        await source.search("b")
+        with pytest.raises(RuntimeError, match="API key"):
+            await source.search("a")
+        with pytest.raises(RuntimeError, match="API key"):
+            await source.search("b")
         await source.fetch_new_since(since=datetime(2026, 1, 1, tzinfo=UTC), topics=[], limit=5)
 
     key_msgs = [r for r in caplog.records if "OPENALEX_API_KEY" in r.message]
@@ -368,7 +370,11 @@ async def test_whitespace_database_and_settings_keys_never_open_http(monkeypatch
         settings_key="\t ",
     )
     try:
-        assert await source.search("test") == []
+        # Interactive search now refuses loudly rather than returning an empty
+        # list the caller would report as a successful search; what this test
+        # guards is that neither shape reaches the network.
+        with pytest.raises(RuntimeError, match="no API key is configured"):
+            await source.search("test")
         assert await source.fetch_by_id("W12345") is None
         assert (
             await source.fetch_new_since(

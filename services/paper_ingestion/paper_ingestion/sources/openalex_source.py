@@ -4,8 +4,9 @@ Uses the OpenAlex Works API (https://api.openalex.org/works).
 
 OpenAlex requires an API key for API access. Pass your free key via the ``OPENALEX_API_KEY``
 environment variable or the ``api_key`` field in the source config. If no
-key is present, list-returning methods return ``[]``, ``fetch_by_id`` returns
-``None``, and the source logs once at INFO level rather than raising.
+key is present, background list methods return ``[]`` and ``fetch_by_id``
+returns ``None``. Interactive search raises so callers can report the source as
+unavailable instead of presenting an empty result as success.
 
 Abstract reconstruction note
 ------------------------------
@@ -208,7 +209,7 @@ class OpenAlexSource(PaperSource):
         if not self._missing_key_warned:
             logger.info(
                 "OpenAlex source: OPENALEX_API_KEY is required. "
-                "Set a free OpenAlex API key; returning empty results."
+                "Set a free OpenAlex API key to enable requests."
             )
             self._missing_key_warned = True
         return False
@@ -337,18 +338,22 @@ class OpenAlexSource(PaperSource):
         Returns
         -------
         list[PaperCreate]
-            Papers parsed from the OpenAlex response.  Returns ``[]`` if
-            ``OPENALEX_API_KEY`` is not configured,
-            or on HTTP 429/5xx.
+            Papers parsed from the OpenAlex response. Returns ``[]`` on HTTP
+            429/5xx.
 
         Raises
         ------
         OutboundEgressBlockedError
             If restored credentials await review before the request.
+        RuntimeError
+            If no OpenAlex API key is configured for interactive search.
 
         """
         if not self._check_api_key():
-            return []
+            raise RuntimeError(
+                "OpenAlex search was skipped because no API key is configured. "
+                "Add an OpenAlex API key in Settings > Sources."
+            )
         ensure_outbound_egress_allowed("OpenAlex search")
 
         await self._rate_limit()
