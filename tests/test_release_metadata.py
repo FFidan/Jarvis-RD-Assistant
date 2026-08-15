@@ -20,6 +20,20 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _image_scan_contract(workflow: str, step_name: str) -> tuple[str, dict[str, str]]:
+    step = workflow.split(f"- name: {step_name}", 1)[1].split("\n      - name:", 1)[0]
+    action = re.search(r"^\s*uses:\s*(\S+)", step, re.MULTILINE)
+    assert action is not None, f"{step_name} no longer invokes an action"
+    settings = dict(
+        re.findall(
+            r"^\s*(scan-type|severity|ignore-unfixed|exit-code):\s*(\S+)",
+            step,
+            re.MULTILINE,
+        )
+    )
+    return action.group(1), settings
+
+
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
@@ -136,6 +150,30 @@ def test_release_docs_match_the_exact_sha_publish_and_promotion_contract() -> No
     assert 'update_to="$MERGED_SHA"' in release
     assert 'update_mode="$UPDATE_MODE"' in release
     assert "downloads its named digest receipt from that exact run" in release_words
+
+
+def test_scheduled_image_scan_matches_publish_scan_contract() -> None:
+    publish_workflow = _read(".github/workflows/ghcr-publish.yml")
+    scheduled_workflow = _read(".github/workflows/nightly-llm-smoke.yml")
+
+    publish_contract = _image_scan_contract(publish_workflow, "Vulnerability report")
+    scheduled_contract = _image_scan_contract(scheduled_workflow, "Scan the pinned image")
+
+    # Both sides are read from the workflows, so an empty match on both would
+    # agree with itself and prove nothing. Pin what must have been found.
+    assert set(publish_contract[1]) == {
+        "scan-type",
+        "severity",
+        "ignore-unfixed",
+        "exit-code",
+    }, f"the publish scan no longer states its blocking contract: {publish_contract[1]}"
+
+    assert scheduled_contract[0] == publish_contract[0], (
+        "scheduled image scan action differs from the publish scan action"
+    )
+    assert scheduled_contract[1] == publish_contract[1], (
+        "scheduled image scan settings differ from the publish scan settings"
+    )
 
 
 def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> None:

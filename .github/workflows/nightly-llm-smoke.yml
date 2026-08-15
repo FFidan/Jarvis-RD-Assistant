@@ -99,3 +99,84 @@ jobs:
 
       - name: Model-catalog freshness
         run: python3 scripts/check-model-catalog-freshness.py
+
+  pinned-image-matrix:
+    # Unlike catalog freshness, current image pins should also be inspectable
+    # on demand when a maintainer manually dispatches this workflow.
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Build the digest-pinned image matrix
+        id: matrix
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          entries = []
+          with open("versions.env", encoding="utf-8") as versions:
+              for raw_line in versions:
+                  name, separator, image = raw_line.strip().partition("=")
+                  if not separator or not name.endswith("_IMAGE") or "@sha256:" not in image:
+                      continue
+                  reference = image.rsplit("@sha256:", 1)[0]
+                  final_component = reference.rsplit("/", 1)[-1]
+                  kind = "build base" if ":" in final_component else "runtime image"
+                  entries.append({"image": image, "kind": kind})
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"matrix={json.dumps({'include': entries}, separators=(',', ':'))}\n")
+          PY
+
+  pinned-image-scan:
+    if: github.event.repository.private == false
+    needs: pinned-image-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.pinned-image-matrix.outputs.matrix) }}
+    steps:
+      - name: Scan the pinned image
+        id: scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ matrix.image }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          output: trivy.txt
+
+      # The scan fails this job on a finding, so the report has to be published
+      # unconditionally — otherwise a red run arrives with nothing to read.
+      - name: Summarize the pinned image scan
+        if: ${{ always() }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          KIND: ${{ matrix.kind }}
+          RESULT: ${{ steps.scan.outcome }}
+        run: |
+          {
+            echo "| Image | Kind | Result |"
+            echo "| --- | --- | --- |"
+            printf '| `%s` | %s | %s |\n' "$IMAGE" "$KIND" "$RESULT"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ -f trivy.txt ] || exit 0
+          {
+            echo "### Trivy report — ${IMAGE}"
+            echo '```'
+            cat trivy.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail when the scan found a blocking advisory
+        if: ${{ steps.scan.outcome == 'failure' }}
+        run: exit 1
