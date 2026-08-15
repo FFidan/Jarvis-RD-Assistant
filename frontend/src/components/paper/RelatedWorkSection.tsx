@@ -35,6 +35,33 @@ interface CitationRowData {
   isInfluential: boolean;
 }
 
+interface StoredBibliographyEntry {
+  rawText: string;
+  title: string | null;
+  authors: string[];
+  year: number | null;
+  venue: string | null;
+}
+
+function unresolvedBibliographyEntries(metadata: Record<string, unknown>): StoredBibliographyEntry[] {
+  const bibliography = metadata.bibliography;
+  if (!Array.isArray(bibliography)) return [];
+  return bibliography.flatMap((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const entry = value as Record<string, unknown>;
+    if (entry.resolved !== false || typeof entry.raw_text !== 'string') return [];
+    return [{
+      rawText: entry.raw_text,
+      title: typeof entry.title === 'string' ? entry.title : null,
+      authors: Array.isArray(entry.authors)
+        ? entry.authors.filter((author): author is string => typeof author === 'string')
+        : [],
+      year: typeof entry.year === 'number' ? entry.year : null,
+      venue: typeof entry.venue === 'string' ? entry.venue : null,
+    }];
+  });
+}
+
 function CitationList({
   label,
   rows,
@@ -96,9 +123,43 @@ function CitationList({
   );
 }
 
+function UnresolvedBibliographyList({ rows }: { rows: StoredBibliographyEntry[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="space-y-2" data-testid="citation-unresolved-references">
+      <h4 className="text-sm font-semibold">
+        Unresolved bibliography entries{' '}
+        <span className="font-normal text-muted-foreground">({rows.length})</span>
+      </h4>
+      <ul className="space-y-2">
+        {rows.map((row, index) => (
+          <li key={`${index}-${row.rawText}`} className="text-sm">
+            <p>{row.rawText}</p>
+            {row.title && (
+              <p className="text-xs text-muted-foreground">
+                {[row.title, row.authors.join(', '), row.year, row.venue]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function RelatedWorkSection({ paperId }: RelatedWorkSectionProps) {
   const queryClient = useQueryClient();
   const graphKey = QUERY_KEYS.citation.graph([paperId], GRAPH_DEPTH);
+  const paperDetail = queryClient.getQueryData<{
+    paper: { external_id: string; metadata: Record<string, unknown> };
+  }>(QUERY_KEYS.papers.detail(paperId));
+  const paperMetadata = paperDetail?.paper.metadata ?? {};
+  const unresolvedReferences = unresolvedBibliographyEntries(paperMetadata);
+  const citedByUnavailable = Boolean(
+    paperDetail?.paper.external_id.startsWith('local:') && !paperMetadata.s2_id,
+  );
 
   const { data: graph, isLoading } = useQuery({
     queryKey: graphKey,
@@ -151,7 +212,8 @@ export function RelatedWorkSection({ paperId }: RelatedWorkSectionProps) {
     return { references, citedBy };
   }, [graph, paperId]);
 
-  const isEmpty = references.length === 0 && citedBy.length === 0;
+  const isEmpty = references.length === 0 && citedBy.length === 0
+    && unresolvedReferences.length === 0 && !citedByUnavailable;
 
   return (
     <div className="space-y-5" data-testid="related-work">
@@ -176,7 +238,18 @@ export function RelatedWorkSection({ paperId }: RelatedWorkSectionProps) {
       ) : (
         <>
           <CitationList label="References" rows={references} testId="citation-references" />
-          <CitationList label="Cited by" rows={citedBy} testId="citation-cited-by" />
+          <UnresolvedBibliographyList rows={unresolvedReferences} />
+          {citedByUnavailable ? (
+            <div className="space-y-1" data-testid="citation-cited-by-unavailable">
+              <h4 className="text-sm font-semibold">Cited by</h4>
+              <p className="text-sm text-muted-foreground">
+                Citation-index data is unavailable because this document has not been identified
+                in Semantic Scholar.
+              </p>
+            </div>
+          ) : (
+            <CitationList label="Cited by" rows={citedBy} testId="citation-cited-by" />
+          )}
         </>
       )}
     </div>

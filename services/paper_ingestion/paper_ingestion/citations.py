@@ -230,6 +230,35 @@ async def _sync_citation_direction(
     return added, stubs_created
 
 
+async def sync_bibliography_references(
+    conn: ConnLike,
+    references: list[dict[str, Any]],
+    paper_id: int,
+) -> tuple[int, int]:
+    """Persist resolved bibliography references through citation insertion.
+
+    Parameters
+    ----------
+    conn : ConnLike
+        Connection used only after all provider lookups have completed.
+    references : list[dict[str, Any]]
+        Semantic Scholar paper payloads for references the parser resolved.
+    paper_id : int
+        Uploaded paper that cites every supplied reference.
+
+    Returns
+    -------
+    tuple[int, int]
+        Inserted edge count and number of referenced stub papers.
+    """
+    return await _sync_citation_direction(
+        conn,
+        references,
+        paper_id,
+        related_paper_is_source=False,
+    )
+
+
 async def sync_citations_for_paper(
     conn_or_pool: ConnLike | asyncpg.Pool,
     s2_source: SemanticScholarSource,
