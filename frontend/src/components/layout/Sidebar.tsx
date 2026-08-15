@@ -347,7 +347,12 @@ function SimpleNav({ groups, isAdmin, collapsed, pathname, searchParams }: NavBo
   );
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  drawer?: boolean;
+  onSearch?: () => void;
+}
+
+export function Sidebar({ drawer = false, onSearch }: SidebarProps) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
@@ -364,6 +369,7 @@ export function Sidebar() {
   const isSimple = navMode === 'simple';
   const hasResearchMilestone = completedMilestones.save || completedMilestones.analyze;
   const showAdvancedCue = isSimple && hasResearchMilestone && !advancedCueDismissed;
+  const collapsed = drawer ? false : sidebarCollapsed;
 
   const handleNavModeToggle = () => {
     if (showAdvancedCue) dismissAdvancedCue();
@@ -375,29 +381,45 @@ export function Sidebar() {
       <div
         className={cn(
           'flex h-full flex-col border-r border-hair bg-paper transition-all duration-300',
-          sidebarCollapsed ? 'w-16' : 'w-64',
+          collapsed ? 'w-16' : 'w-64',
         )}
         data-testid="sidebar"
       >
         {/* Header */}
         <div className="flex h-14 items-center justify-between px-4">
-          {!sidebarCollapsed && <BrandMark />}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidebar}
-            className="ml-auto"
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? (
-              <ChevronRight className="h-4 w-4" />
-            ) : (
-              <ChevronLeft className="h-4 w-4" />
-            )}
-          </Button>
+          {!collapsed && <BrandMark />}
+          {!drawer && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleSidebar}
+              className="ml-auto"
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {collapsed ? (
+                <ChevronRight className="h-4 w-4" />
+              ) : (
+                <ChevronLeft className="h-4 w-4" />
+              )}
+            </Button>
+          )}
         </div>
 
         <Separator />
+
+        {drawer && onSearch && (
+          <div className="p-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onSearch}
+              className="w-full justify-start"
+            >
+              <Search className="mr-2 h-4 w-4" aria-hidden="true" />
+              Search your papers…
+            </Button>
+          </div>
+        )}
 
         {/* Nav — full grouped layout, or the short simple-mode rail */}
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Main navigation">
@@ -405,7 +427,7 @@ export function Sidebar() {
             <SimpleNav
               groups={navGroups}
               isAdmin={isAdmin}
-              collapsed={sidebarCollapsed}
+              collapsed={collapsed}
               pathname={location.pathname}
               searchParams={searchParams}
             />
@@ -413,7 +435,7 @@ export function Sidebar() {
             <GroupedNav
               groups={navGroups}
               isAdmin={isAdmin}
-              collapsed={sidebarCollapsed}
+              collapsed={collapsed}
               pathname={location.pathname}
               searchParams={searchParams}
             />
@@ -424,7 +446,7 @@ export function Sidebar() {
 
         {/* Footer: Nav-mode toggle · Settings · HealthDots · Sign out */}
         <div className="p-3 space-y-2">
-          {showAdvancedCue && !sidebarCollapsed && (
+          {showAdvancedCue && !collapsed && (
             <div
               className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs text-muted-foreground"
               data-testid="advanced-workspace-cue"
@@ -453,19 +475,19 @@ export function Sidebar() {
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size={sidebarCollapsed ? 'icon' : 'sm'}
+                size={collapsed ? 'icon' : 'sm'}
                 onClick={handleNavModeToggle}
                 className="w-full"
                 data-testid="nav-mode-toggle"
                 aria-label={isSimple ? 'Show all features' : 'Simple view'}
               >
                 <Sliders className="h-4 w-4 shrink-0" aria-hidden="true" />
-                {!sidebarCollapsed && (
+                {!collapsed && (
                   <span className="ml-2">{isSimple ? 'Show all features' : 'Simple view'}</span>
                 )}
               </Button>
             </TooltipTrigger>
-            {sidebarCollapsed && (
+            {collapsed && (
               <TooltipContent side="right">
                 {isSimple ? 'Show all features' : 'Simple view'}
               </TooltipContent>
@@ -473,7 +495,7 @@ export function Sidebar() {
           </Tooltip>
 
           {/* Settings — footer utility link (not in any numbered group) */}
-          {sidebarCollapsed ? (
+          {collapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Link
@@ -507,12 +529,12 @@ export function Sidebar() {
 
           {/* HealthDots: admin users navigate to /admin/system-health; others expand in-place */}
           <HealthDots
-            compact={sidebarCollapsed}
-            adminLink={isAdmin && !sidebarCollapsed ? '/admin/system-health' : undefined}
+            compact={collapsed}
+            adminLink={isAdmin && !collapsed ? '/admin/system-health' : undefined}
           />
 
           {/* Build version — muted caption, hidden when collapsed (no room for text) */}
-          {!sidebarCollapsed && (
+          {!collapsed && (
             <p
               className="px-2 text-[10px] text-muted-foreground text-center"
               data-testid="sidebar-app-version"
@@ -526,15 +548,15 @@ export function Sidebar() {
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size={sidebarCollapsed ? 'icon' : 'sm'}
+                size={collapsed ? 'icon' : 'sm'}
                 onClick={logout}
                 className="w-full"
               >
                 <LogOut className="h-4 w-4" />
-                {!sidebarCollapsed && <span className="ml-2">Sign out</span>}
+                {!collapsed && <span className="ml-2">Sign out</span>}
               </Button>
             </TooltipTrigger>
-            {sidebarCollapsed && (
+            {collapsed && (
               <TooltipContent side="right">Sign out</TooltipContent>
             )}
           </Tooltip>

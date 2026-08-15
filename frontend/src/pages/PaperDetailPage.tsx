@@ -407,7 +407,7 @@ export function PaperDetailPage() {
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-          <main className="mx-auto w-full min-w-0 max-w-[860px]">
+          <section className="mx-auto w-full min-w-0 max-w-[860px]">
             <PaperResearchLog
               paper={paper}
               summary={summary}
@@ -422,7 +422,7 @@ export function PaperDetailPage() {
               noteCount={noteCount}
               isOnline={online}
             />
-          </main>
+          </section>
         </div>
 
         {actionsDocked && (

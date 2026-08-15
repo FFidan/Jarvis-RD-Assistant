@@ -217,7 +217,7 @@ describe('PaperDetailPage', () => {
       user_state: MOCK_USER_STATE,
     });
 
-    renderPage();
+    const { container } = renderPage();
 
     // Title appears in both h1 and breadcrumb; check for h1 specifically
     await waitFor(() => {
@@ -226,6 +226,10 @@ describe('PaperDetailPage', () => {
     expect(screen.getByText('Vaswani, A., Shazeer, N., Parmar, N.')).toBeInTheDocument();
     expect(screen.getByText('arXiv')).toBeInTheDocument();
     expect(screen.getByText('95000 citations')).toBeInTheDocument();
+    expect(container.querySelector('main')).toBeNull();
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' }).closest('section'),
+    ).toHaveClass('max-w-[860px]');
   });
 
   // ── Section navigation (replaces old tab tests) ───────────────────────────

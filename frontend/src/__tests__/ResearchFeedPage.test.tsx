@@ -246,9 +246,11 @@ describe('ResearchFeedPage', () => {
   });
 
   it('renders the page heading as "Papers"', () => {
-    renderPage();
+    const { container } = renderPage();
     expect(screen.getByRole('heading', { name: /^Papers$/ })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^Library$/ })).not.toBeInTheDocument();
+    expect(container.querySelector('main')).toBeNull();
+    expect(container.querySelector('section.flex-1')).toBeInTheDocument();
   });
 
   // ── Papers and Discover are disjoint surfaces ────────────────────────────

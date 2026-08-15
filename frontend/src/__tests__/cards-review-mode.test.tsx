@@ -25,6 +25,50 @@ import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-uti
 const mockGetNextReview = vi.mocked(getNextReview);
 const mockFetchDecks = vi.mocked(fetchDecks);
 
+// The palette ships as oklch(), which jsdom cannot resolve, so the sRGB
+// equivalents are pinned here. Regenerate them if the Tailwind major changes —
+// stale values would measure a colour the product no longer renders.
+const TAILWIND_BACKGROUND_COLORS = {
+  'red-500': '#fb2c36',
+  'red-600': '#e7000b',
+  'red-700': '#c10007',
+  'orange-500': '#ff6900',
+  'orange-600': '#f54900',
+  'orange-700': '#ca3500',
+  'orange-800': '#9f2d00',
+  'blue-500': '#2b7fff',
+  'blue-600': '#155dfc',
+  'blue-700': '#1447e6',
+  'green-500': '#00c950',
+  'green-600': '#00a63e',
+  'green-700': '#008236',
+  'green-800': '#016630',
+} as const;
+
+function relativeLuminance(hex: string): number {
+  const channels = [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)].map((channel) => {
+    const value = Number.parseInt(channel, 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+}
+
+function contrastAgainstWhite(hex: string): number {
+  return 1.05 / (relativeLuminance(hex) + 0.05);
+}
+
+function renderedBackground(button: HTMLElement, state: 'default' | 'hover'): string {
+  const pattern = state === 'default'
+    ? /^bg-(red|orange|blue|green)-\d+$/
+    : /^hover:bg-(red|orange|blue|green)-\d+$/;
+  const className = [...button.classList].find((candidate) => pattern.test(candidate));
+  expect(className, `${state} background class`).toBeDefined();
+  const colorName = className!.replace(/^hover:bg-|^bg-/, '') as keyof typeof TAILWIND_BACKGROUND_COLORS;
+  const hex = TAILWIND_BACKGROUND_COLORS[colorName];
+  expect(hex, `${className} must resolve to a tested Tailwind color`).toBeDefined();
+  return hex;
+}
+
 const CARD_FIXTURE: Card = {
   id: 42,
   deck_id: 1,
@@ -146,6 +190,20 @@ describe('ReviewMode', () => {
     expect(screen.getByRole('button', { name: /hard/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /good/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /easy/i })).toBeInTheDocument();
+  });
+
+  it('keeps every grading fill and hover color at 4.5:1 contrast against white', async () => {
+    renderReview({});
+    await screen.findByText(CARD_FIXTURE.front);
+    await userEvent.click(screen.getByText(/click to reveal answer/i));
+
+    for (const label of ['Again', 'Hard', 'Good', 'Easy']) {
+      const button = screen.getByRole('button', { name: label });
+      for (const state of ['default', 'hover'] as const) {
+        const ratio = contrastAgainstWhite(renderedBackground(button, state));
+        expect(ratio, `${label} ${state} contrast`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
   it('calls submitReviewFn (the offline seam) on rating click', async () => {

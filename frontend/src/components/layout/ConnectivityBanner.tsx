@@ -110,7 +110,7 @@ function InstallAffordance() {
         onClick={handleInstall}
         data-testid="install-affordance-button"
         className={cn(
-          'rounded px-2 py-0.5 text-xs font-medium',
+          'rounded px-2 py-1 -my-0.5 text-xs font-medium',
           'bg-primary text-primary-foreground hover:bg-primary/90',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           'transition-colors',
@@ -123,7 +123,7 @@ function InstallAffordance() {
         data-testid="install-affordance-dismiss"
         aria-label="Dismiss install prompt"
         className={cn(
-          'rounded p-0.5 text-muted-foreground hover:text-foreground',
+          'rounded p-[5px] -m-[3px] text-muted-foreground hover:text-foreground',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           'transition-colors',
         )}

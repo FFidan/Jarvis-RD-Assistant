@@ -157,9 +157,24 @@ describe('MyDayPage', () => {
   });
 
   it('renders DateMasthead with research log header', async () => {
-    renderSubject();
+    const { container } = renderSubject();
     // DateMasthead renders "RESEARCH LOG · ENTRY…" monospace header
     expect(await screen.findByText(/RESEARCH LOG/)).toBeInTheDocument();
+    expect(container.querySelector('main')).toBeNull();
+    expect(container.querySelector('section.max-w-page')).toBeInTheDocument();
+  });
+
+  it('renders headings without skipping a level', async () => {
+    vi.mocked(api.fetchPulseToday).mockResolvedValue(makeDeck([makePulseCard()]));
+    renderSubject();
+
+    await screen.findByRole('heading', { level: 2, name: 'Attention Is All You Need' });
+    const headings = await screen.findAllByRole('heading');
+    const levels = headings.map((heading) => Number(heading.tagName.slice(1)));
+    expect(levels.slice(0, 2)).toEqual([1, 2]);
+    for (let index = 1; index < levels.length; index += 1) {
+      expect(levels[index]!).toBeLessThanOrEqual(levels[index - 1]! + 1);
+    }
   });
 
   it('renders DateMasthead counter labels', async () => {

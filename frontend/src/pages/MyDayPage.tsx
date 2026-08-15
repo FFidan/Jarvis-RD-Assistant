@@ -113,14 +113,14 @@ export function MyDayPage() {
 
   return (
     <div className="bg-paper min-h-screen">
-      <main className="max-w-page mx-auto px-4 py-6 sm:px-10 sm:py-10 space-y-8 sm:space-y-12">
+      <section className="max-w-page mx-auto px-4 py-6 sm:px-10 sm:py-10 space-y-8 sm:space-y-12">
         <DateMasthead />
         <YesterdaySection />
         <HeroNow />
         <IntentSection />
         <TodaysPulseSection />
         <FocusedMoreSections sections={DEMOTED_SECTIONS} />
-      </main>
+      </section>
     </div>
   );
 }

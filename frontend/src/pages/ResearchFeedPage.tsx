@@ -405,7 +405,7 @@ export function ResearchFeedPage() {
         )}
 
         {/* Right: main list pane */}
-        <main className="flex min-w-0 flex-1 flex-col overflow-y-auto px-4 py-3 sm:px-6">
+        <section className="flex min-w-0 flex-1 flex-col overflow-y-auto px-4 py-3 sm:px-6">
           {/* Scoped list-filter (NOT intent-routing) */}
           {(surface === 'inbox' || surface === 'library' || surface === 'trash') && (
             <div className="mb-3 flex items-center gap-3">
@@ -741,7 +741,7 @@ export function ResearchFeedPage() {
             </div>
           )}
 
-        </main>
+        </section>
       </div>
 
     </div>

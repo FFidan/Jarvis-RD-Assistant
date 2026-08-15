@@ -27,10 +27,10 @@ import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { computeLastSeenDays, resolveDeckName } from '@/components/cards/SessionShell';
 
 const RATING_LABELS: Record<number, { label: string; color: string }> = {
-  1: { label: 'Again', color: 'bg-red-500 hover:bg-red-600 text-white' },
-  2: { label: 'Hard', color: 'bg-orange-500 hover:bg-orange-600 text-white' },
-  3: { label: 'Good', color: 'bg-blue-500 hover:bg-blue-600 text-white' },
-  4: { label: 'Easy', color: 'bg-green-500 hover:bg-green-600 text-white' },
+  1: { label: 'Again', color: 'bg-red-600 hover:bg-red-700 text-white' },
+  2: { label: 'Hard', color: 'bg-orange-700 hover:bg-orange-800 text-white' },
+  3: { label: 'Good', color: 'bg-blue-600 hover:bg-blue-700 text-white' },
+  4: { label: 'Easy', color: 'bg-green-700 hover:bg-green-800 text-white' },
 };
 
 export interface ReviewModeProps {

@@ -48,7 +48,7 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
         data-touch-target
         onClick={() => completeMutation.mutate()}
         disabled={completeMutation.isPending}
-        className="flex items-center justify-center shrink-0 disabled:opacity-40"
+        className="flex items-center justify-center shrink-0 p-[5px] -m-[5px] disabled:opacity-40"
         aria-label="Mark task done"
       >
         <span
