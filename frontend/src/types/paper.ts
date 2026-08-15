@@ -40,6 +40,8 @@ export interface KeyFinding {
 
 export interface CrossReference {
   related_paper_id: number;
+  related_title?: string | null;
+  related_year?: number | null;
   relationship: string;
   explanation: string;
   related_quote: string | null;

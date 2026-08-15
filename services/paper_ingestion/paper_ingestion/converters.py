@@ -8,6 +8,7 @@ from datetime import UTC
 from typing import Any
 
 import asyncpg
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 
 from paper_ingestion.db_types import ConnLike
 from paper_ingestion.models import (
@@ -20,6 +21,7 @@ from paper_ingestion.models import (
     SourceType,
     SummaryResponse,
 )
+from paper_ingestion.queries.predicates import paper_visible_sql
 
 
 def _base_paper_fields(row: asyncpg.Record) -> dict[str, Any]:
@@ -118,23 +120,68 @@ def row_to_chunk_response(row: asyncpg.Record) -> ChunkResponse:
 async def filter_current_cross_references(
     conn: ConnLike,
     cross_references: list[dict],
+    requester_id: int | None,
 ) -> list[dict]:
-    """Keep references whose stored target generation is still current."""
+    """Enrich current references and retain a usable entry for a missing target.
+
+    Visibility is re-checked on every read rather than trusted from the moment
+    the reference was stored: a paper that has since left the caller's reach
+    must not disclose its title, so it is treated exactly like a deleted one.
+    ``requester_id`` of ``None`` is a background caller and sees public papers
+    only, matching the scope the references were generated under.
+
+    Parameters
+    ----------
+    conn : ConnLike
+        Open connection used for the visibility-scoped lookup.
+    cross_references : list[dict]
+        Stored reference payloads carrying ``related_paper_id``.
+    requester_id : int | None
+        Authenticated caller, or ``None`` for a background job.
+
+    Returns
+    -------
+    list[dict]
+        References still current, each enriched with the related title and year
+        when the caller may see the target.
+    """
     if not cross_references:
         return []
 
     paper_ids = sorted({int(ref["related_paper_id"]) for ref in cross_references})
-    rows = await conn.fetch(
-        "SELECT id, content_generation FROM papers WHERE id = ANY($1::bigint[])",
-        paper_ids,
+    columns = (
+        "SELECT p.id, p.title, p.content_generation,"
+        " EXTRACT(YEAR FROM p.published_date)::int AS published_year FROM papers p"
     )
-    current_generations = {int(row["id"]): int(row["content_generation"]) for row in rows}
-    return [
-        ref
-        for ref in cross_references
-        if int(ref.get("content_generation", 0))
-        == current_generations.get(int(ref["related_paper_id"]))
-    ]
+    if requester_id is None:
+        rows = await conn.fetch(
+            f"{columns} WHERE p.id = ANY($1::bigint[]) AND p.visibility_scope = $2",
+            paper_ids,
+            PUBLIC_VISIBILITY_SCOPE,
+        )
+    else:
+        rows = await conn.fetch(
+            f"{columns} WHERE p.id = ANY($1::bigint[]) AND {paper_visible_sql(2)}",
+            paper_ids,
+            requester_id,
+        )
+    papers_by_id = {int(row["id"]): row for row in rows}
+    current_references: list[dict] = []
+    for ref in cross_references:
+        related_paper = papers_by_id.get(int(ref["related_paper_id"]))
+        if related_paper is None:
+            current_references.append({**ref, "related_title": None, "related_year": None})
+            continue
+        if int(ref.get("content_generation", 0)) != int(related_paper["content_generation"]):
+            continue
+        current_references.append(
+            {
+                **ref,
+                "related_title": related_paper.get("title"),
+                "related_year": related_paper.get("published_year"),
+            }
+        )
+    return current_references
 
 
 def row_to_summary_response(
