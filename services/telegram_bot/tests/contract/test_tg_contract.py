@@ -12,11 +12,20 @@ Run with:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import asyncpg
+import httpx
 import pytest
-from jarvis_common.testing import PTBContextOptions, make_ptb_context, seed_user_row
+from fastapi import FastAPI
+from jarvis_common.identity_capabilities import ServicePrincipal
+from jarvis_common.testing import (
+    PTBContextOptions,
+    SharedConnPool,
+    make_ptb_context,
+    seed_user_row,
+)
 from telegram_bot.config import BotConfig
 
 pytestmark = [
@@ -27,59 +36,58 @@ pytestmark = [
 
 
 # ---------------------------------------------------------------------------
-# Pool adapter
+# Platform contract client
 # ---------------------------------------------------------------------------
-# whoami_command calls db_pool.fetchrow() directly on the pool object (no
-# acquire()).  pair_command / unpair_command call pool.acquire() and then
-# call methods on the returned connection.
-#
-# TgContractPool wraps a single real asyncpg connection and satisfies BOTH
-# call patterns within the same outer transaction (so all writes are rolled
-# back by the contract_conn fixture at teardown).
+# The bot remains database-free: every pairing operation traverses the real
+# Platform HTTP router. Platform alone receives the rollback-scoped connection.
 
 
-class _SharedAcquireCM:
-    """Async CM returned by TgContractPool.acquire()."""
+class TgContractPlatformClient:
+    """HTTP-shaped client backed by Platform's real Telegram router.
 
-    def __init__(self, conn: Any) -> None:
-        self._conn = conn
-
-    async def __aenter__(self) -> Any:
-        return self._conn
-
-    async def __aexit__(self, *_: Any) -> None:
-        return None
-
-
-class TgContractPool:
-    """Pool-shaped adapter that wraps a single real asyncpg connection.
-
-    Supports both:
-      - pool.acquire() → async CM yielding the same conn (for pair/unpair)
-      - pool.fetchrow() / pool.fetchval() / pool.fetch() → delegates to conn
-        (for whoami_command which calls pool methods directly)
+    Parameters
+    ----------
+    conn : Any
+        Rollback-scoped PostgreSQL contract connection owned by Platform.
     """
 
     def __init__(self, conn: Any) -> None:
-        self._conn = conn
+        from platform_api.deps import authenticate_service_principal, get_db_pool
+        from platform_api.routers import internal_telegram
 
-    def acquire(self) -> _SharedAcquireCM:
-        return _SharedAcquireCM(self._conn)
+        shared = SharedConnPool(conn)
+        app = FastAPI()
+        app.include_router(internal_telegram.router)
 
-    async def fetchrow(self, query: str, *args: Any) -> Any:
-        return await self._conn.fetchrow(query, *args)
+        def principal_override() -> ServicePrincipal:
+            return "telegram"
 
-    async def fetchval(self, query: str, *args: Any) -> Any:
-        return await self._conn.fetchval(query, *args)
+        def pool_override() -> asyncpg.Pool:
+            return cast(asyncpg.Pool, shared)
 
-    async def fetch(self, query: str, *args: Any) -> Any:
-        return await self._conn.fetch(query, *args)
+        app.dependency_overrides[authenticate_service_principal] = principal_override
+        app.dependency_overrides[get_db_pool] = pool_override
+        self._app = app
 
-    async def execute(self, query: str, *args: Any) -> Any:
-        return await self._conn.execute(query, *args)
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Dispatch one request through the in-process Platform boundary."""
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=self._app),
+            base_url="http://platform:8003",
+        ) as client:
+            return await client.request(method, url, **kwargs)
 
-    async def close(self) -> None:
-        return None
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Dispatch a GET request to Platform."""
+        return await self._request("GET", url, **kwargs)
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Dispatch a POST request to Platform."""
+        return await self._request("POST", url, **kwargs)
+
+    async def delete(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Dispatch a DELETE request to Platform."""
+        return await self._request("DELETE", url, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +116,17 @@ async def _seed_pairing_token(
     return token
 
 
-def _make_context(pool: Any, config: Any = None, *, args: list[str] | None = None) -> MagicMock:
-    """Build a minimal PTB context mock wired to the given pool."""
+def _build_context(
+    platform_client: Any,
+    config: Any = None,
+    *,
+    args: list[str] | None = None,
+) -> MagicMock:
+    """Build a PTB context wired to the in-process Platform client."""
     from jarvis_common.testing import make_bot_config
 
     return make_ptb_context(
-        pool,
+        platform_client,
         config or make_bot_config(BotConfig),
         options=PTBContextOptions(args=args, with_bot=True),
     )
@@ -171,9 +184,9 @@ async def test_pair_command_persists_pairing(contract_conn):
     user_id = await seed_user_row(contract_conn, "tg-contract-pair@test.local")
     token = await _seed_pairing_token(contract_conn, user_id, "contract-pair-token-001")
 
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     update = make_telegram_update(chat_id=8801, username="contractuser")
-    context = _make_context(pool, args=[token])
+    context = _build_context(platform_client, args=[token])
 
     await pair_command(update, context)
 
@@ -228,11 +241,11 @@ async def test_whoami_command_reads_real_pairing(contract_conn):
         "whoamiuser",
     )
 
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     update = make_telegram_update(chat_id=9901)
     #
     config = make_bot_config(BotConfig)
-    context = _make_context(pool, config=config)
+    context = _build_context(platform_client, config=config)
 
     await whoami_command(update, context)
 
@@ -282,9 +295,9 @@ async def test_unpair_command_deletes_pairing(contract_conn):
         "unpairuser",
     )
 
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     update = make_telegram_update(chat_id=7701)
-    context = _make_context(pool, args=[])
+    context = _build_context(platform_client, args=[])
 
     with patch(
         "telegram_bot.handlers.commands._auth.auth_check",
@@ -330,9 +343,9 @@ async def test_pair_command_rejects_expired_token(contract_conn):
         expires_in=timedelta(minutes=-5),  # already expired
     )
 
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     update = make_telegram_update(chat_id=5501)
-    context = _make_context(pool, args=[token])
+    context = _build_context(platform_client, args=[token])
 
     await pair_command(update, context)
 
@@ -462,7 +475,7 @@ async def test_tg_paper_detail_callback_owner_sees_paper(contract_conn, contract
     chat_id = 20001
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = _make_http_mock(
         method="get",
@@ -478,7 +491,7 @@ async def test_tg_paper_detail_callback_owner_sees_paper(contract_conn, contract
     )
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper_detail_{paper_id_a}")
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.application.bot_data["http_client"] = mock_http
 
     await paper_detail_callback(update, context)
@@ -519,14 +532,14 @@ async def test_tg_paper_detail_callback_other_user_404(contract_conn, contract_t
     # User B's chat_id has NO pairing row → auth_check denies
     chat_id_b_unpaired = 20099
 
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = AsyncMock()
 
     update = _make_callback_update(
         chat_id=chat_id_b_unpaired, callback_data=f"paper_detail_{paper_id_a}"
     )
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.application.bot_data["http_client"] = mock_http
 
     await paper_detail_callback(update, context)
@@ -561,12 +574,12 @@ async def test_tg_paper_action_save_transitions_state(contract_conn, contract_tw
     chat_id = 20002
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:save:{paper_id_a}")
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.application.bot_data["http_client"] = mock_http
 
     await paper_action_callback(update, context)
@@ -600,12 +613,12 @@ async def test_tg_paper_action_done_transitions_state(contract_conn, contract_tw
     chat_id = 20003
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:done:{paper_id_a}")
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.application.bot_data["http_client"] = mock_http
 
     await paper_action_callback(update, context)
@@ -638,12 +651,12 @@ async def test_tg_paper_action_trash_transitions_state(contract_conn, contract_t
     chat_id = 20004
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:trash:{paper_id_a}")
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.application.bot_data["http_client"] = mock_http
 
     await paper_action_callback(update, context)
@@ -677,14 +690,14 @@ async def test_tg_paper_feedback_persists_with_correct_source(contract_conn, con
     chat_id = 20005
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = _make_http_mock(method="post")
 
     update = _make_callback_update(
         chat_id=chat_id, callback_data=f"paper:feedback_pos:{paper_id_a}:feed_thumbs"
     )
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.application.bot_data["http_client"] = mock_http
 
     await paper_feedback_callback(update, context)
@@ -724,7 +737,7 @@ async def test_tg_paper_feedback_idor_rejected(contract_conn, contract_two_users
     # chat_id with no pairing row → denied
     chat_id_unpaired = 20098
 
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = AsyncMock()
 
@@ -732,7 +745,7 @@ async def test_tg_paper_feedback_idor_rejected(contract_conn, contract_two_users
         chat_id=chat_id_unpaired,
         callback_data=f"paper:feedback_pos:{paper_id_a}:feed_thumbs",
     )
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.application.bot_data["http_client"] = mock_http
 
     await paper_feedback_callback(update, context)
@@ -768,7 +781,7 @@ async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contra
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id_a)
     await _seed_tg_pairing(contract_conn, user_b_id, chat_id_b)
 
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
 
     for user_id, chat_id in [(user_a_id, chat_id_a), (user_b_id, chat_id_b)]:
@@ -784,7 +797,7 @@ async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contra
             },
         )
         update = _make_update_with_text("/stats", chat_id=chat_id)
-        context = _make_context(pool, config)
+        context = _build_context(platform_client, config)
         context.application.bot_data["http_client"] = mock_http
         context.user_data = {}
 
@@ -821,11 +834,11 @@ async def test_tg_focus_command_starts_scoped_durable_session(contract_conn, con
     chat_id = 20020
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
 
     update = _make_update_with_text("/focus 25", chat_id=chat_id)
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.user_data = {"jarvis_user_id": user_a_id}
     context.job_queue = MagicMock()
     context.job_queue.run_once = MagicMock()
@@ -889,12 +902,12 @@ async def test_tg_pulse_now_command_enqueues_pulse_job(contract_conn, contract_t
     chat_id = 20030
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
     mock_http = _make_http_mock(method="post")
 
     update = _make_update_with_text("/pulse_now", chat_id=chat_id)
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.user_data = {"jarvis_user_id": user_a_id}
     context.application.bot_data["http_client"] = mock_http
 
@@ -945,11 +958,11 @@ async def test_tg_start_command_welcome_path_no_pair_token(contract_conn, contra
     chat_id = 20040
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
-    pool = TgContractPool(contract_conn)
+    platform_client = TgContractPlatformClient(contract_conn)
     config = make_bot_config(BotConfig)
 
     update = _make_update_with_text("/start", chat_id=chat_id)
-    context = _make_context(pool, config)
+    context = _build_context(platform_client, config)
     context.user_data = {}
 
     pairing_count_before = await contract_conn.fetchval(

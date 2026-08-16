@@ -148,31 +148,6 @@ async def test_qdrant_pipeline_runs_generation_repair_and_cancels_before_close(
     qdrant.close.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_telegram_username_refresh_refuses_quarantine_before_secrets(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    """The startup helper must not load or transmit a restored Telegram token."""
-    from paper_ingestion.services import telegram_bootstrap
-
-    quarantine = tmp_path / ".outbound-quarantine.json"
-    quarantine.touch()
-    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
-
-    def unexpected_settings_read():
-        raise AssertionError("quarantine must be checked before secrets are loaded")
-
-    monkeypatch.setattr(telegram_bootstrap, "get_secrets_settings", unexpected_settings_read)
-    pool = AsyncMock()
-    http_client = AsyncMock()
-
-    await telegram_bootstrap.refresh_telegram_bot_username(pool, http_client)
-
-    pool.acquire.assert_not_called()
-    http_client.get.assert_not_awaited()
-
-
 # ---------------------------------------------------------------------------
 # Behavioural test of the broker hook itself, via a minimal lifespan
 # ---------------------------------------------------------------------------

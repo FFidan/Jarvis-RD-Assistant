@@ -16,18 +16,15 @@ def test_every_sensitive_egress_path_uses_the_pinned_boundary() -> None:
     """New endpoint-specific clients cannot silently restore hostname connects."""
     app_factory = _source("libs/jarvis_common/jarvis_common/app_factory.py")
     paper_main = _source("services/paper_ingestion/paper_ingestion/main.py")
-    provider_test = _source("services/paper_ingestion/paper_ingestion/services/provider_test.py")
+    provider_test = _source("libs/jarvis_common/jarvis_common/provider_test.py")
     litellm_api = _source("services/paper_ingestion/paper_ingestion/services/litellm_api.py")
-    model_assignment = _source(
-        "services/paper_ingestion/paper_ingestion/services/model_assignment.py"
-    )
     system_models = _source(
         "services/paper_ingestion/paper_ingestion/services/system_models_view.py"
     )
     zotero = _source("services/paper_ingestion/paper_ingestion/integrations/zotero_client.py")
     email = _source("libs/jarvis_common/jarvis_common/email.py")
     health = _source("libs/jarvis_common/jarvis_common/health.py")
-    setup = _source("services/paper_ingestion/paper_ingestion/routers/setup.py")
+    setup = _source("services/platform_api/platform_api/routers/setup.py")
     telegram = _source("services/telegram_bot/telegram_bot/main.py")
     launcher = _source("litellm/pinned_launcher.py")
 
@@ -36,7 +33,6 @@ def test_every_sensitive_egress_path_uses_the_pinned_boundary() -> None:
     assert "CachingTransport(PinnedAsyncTransport(JARVIS_SERVICE_POLICY))" in paper_main
     assert "pinned_async_client(" in provider_test
     assert "pinned_async_client(JARVIS_SERVICE_POLICY" in litellm_api
-    assert "pinned_async_client(JARVIS_SERVICE_POLICY" in model_assignment
     assert "pinned_async_client(JARVIS_SERVICE_POLICY" in system_models
     assert "async with pinned_async_client(policy" in zotero
     assert "connect_pinned_socket(" in email

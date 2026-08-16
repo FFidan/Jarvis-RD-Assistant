@@ -14,6 +14,7 @@ import asyncpg
 import httpx
 from fastapi import Request
 from jarvis_common.hardware_fit import recommend_models
+from jarvis_common.llm_provider_registry import PROVIDER_REGISTRY, provider_for_prefix
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from pydantic import Field
 
@@ -24,7 +25,6 @@ from paper_ingestion.ingestion.embedder import (
     validate_embedding_configuration,
 )
 from paper_ingestion.models import SystemModelsResponse
-from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY, provider_for_prefix
 from paper_ingestion.services.model_assignment import provider_access_configured
 from paper_ingestion.services.model_lifecycle import (
     MODEL_CATALOG,

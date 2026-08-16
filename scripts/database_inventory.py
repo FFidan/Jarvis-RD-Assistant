@@ -406,6 +406,7 @@ def production_python_files(root: Path = REPO_ROOT) -> list[Path]:
 
     """
     roots = [
+        root / "services" / "platform_api" / "platform_api",
         root / "services" / "paper_ingestion" / "paper_ingestion",
         root / "services" / "learning_engine" / "learning_engine",
         root / "services" / "telegram_bot" / "telegram_bot",
@@ -528,16 +529,17 @@ def database_caller_scripts(root: Path = REPO_ROOT) -> list[str]:
 
 
 def _writer_for_path(path: str) -> tuple[str, str | None]:
-    if path.startswith("services/paper_ingestion/"):
-        return "paper_ingestion", "research"
-    if path.startswith("services/learning_engine/"):
-        return "learning_engine", "learning"
-    if path.startswith("services/telegram_bot/"):
-        return "telegram_bot", None
-    if path.startswith("libs/jarvis_common/"):
-        return "jarvis_common", None
-    if path.startswith("scripts/"):
-        return "operator_scripts", None
+    owners = (
+        ("services/platform_api/", "platform_api", "platform"),
+        ("services/paper_ingestion/", "paper_ingestion", "research"),
+        ("services/learning_engine/", "learning_engine", "learning"),
+        ("services/telegram_bot/", "telegram_bot", None),
+        ("libs/jarvis_common/", "jarvis_common", None),
+        ("scripts/", "operator_scripts", None),
+    )
+    for prefix, writer, domain in owners:
+        if path.startswith(prefix):
+            return writer, domain
     return "unknown", None
 
 

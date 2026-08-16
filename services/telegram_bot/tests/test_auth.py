@@ -1,178 +1,224 @@
-"""Regression tests for auth_check — telegram_user_pairings is the sole identity.
-
-The 2-valued contract:
-- (True, real_user_id) when a telegram_user_pairings row exists for the chat_id
-- (False, None) otherwise (no chat / DB error / no pairing row)
-
-Invariant: authorized is True ⟺ user_id is not None.
-"""
+"""Scoped Telegram pairing and downstream assertion contracts."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import json
+from collections.abc import Awaitable, Callable
 
+import httpx
 import pytest
-from jarvis_common.testing import (
-    make_bot_config,
-    make_pool_and_conn,
-    make_ptb_context,
-    make_telegram_update,
-)
+from jarvis_common.testing import make_bot_config, make_ptb_context, make_telegram_update
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import auth_check as _auth_check
+from telegram_bot.handlers.helpers import auth_check
+from telegram_bot.service_auth import TelegramBackendAuth
 
 
-def _make_pool(*, fetchrow_return=None) -> MagicMock:
-    """Build a minimal pool mock covering the telegram_user_pairings lookup."""
-    return make_pool_and_conn(fetchrow_return=fetchrow_return, direct_methods=True)[0]
-
-
-# ---------------------------------------------------------------------------
-# auth_check — pairing-only contract
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_auth_check_accepts_paired_user():
-    """chat_id present in telegram_user_pairings grants access with its user_id."""
-    pairing_row = {"user_id": 1}
-    pool = _make_pool(fetchrow_return=pairing_row)
-    update = make_telegram_update(chat_id=999)
-    config = make_bot_config(BotConfig)
-
-    authorized, user_id = await _auth_check(update, config, pool)
-
-    assert authorized is True
-    assert user_id == 1
-    # Ensure the pairing query was actually made
-    pool.fetchrow.assert_awaited_once()
-    call_sql = pool.fetchrow.await_args.args[0]
-    assert "telegram_user_pairings" in call_sql
-    assert pool.fetchrow.await_args.args[1] == 999
-
-
-@pytest.mark.asyncio
-async def test_auth_check_rejects_unpaired_unknown_chat():
-    """chat_id absent from the pairings table -> (False, None)."""
-    pool = _make_pool(fetchrow_return=None)
-    update = make_telegram_update(chat_id=12345)
-    config = make_bot_config(BotConfig)
-
-    authorized, user_id = await _auth_check(update, config, pool)
-
-    assert authorized is False
-    assert user_id is None
-    pool.fetchrow.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_auth_check_returns_user_id_for_paired_chat():
-    """Paired chats expose the DB user_id for downstream scoping."""
-    pool = _make_pool(fetchrow_return={"user_id": 7})
-    update = make_telegram_update(chat_id=999)
-    config = make_bot_config(BotConfig)
-
-    assert await _auth_check(update, config, pool) == (True, 7)
-
-
-@pytest.mark.asyncio
-async def test_auth_check_db_error_denies():
-    """A DB error during the pairing lookup denies the request (fail-closed)."""
-    pool = MagicMock()
-    pool.fetchrow = AsyncMock(side_effect=RuntimeError("db down"))
-    update = make_telegram_update(chat_id=999)
-    config = make_bot_config(BotConfig)
-
-    assert await _auth_check(update, config, pool) == (False, None)
-
-
-@pytest.mark.asyncio
-async def test_auth_check_denies_non_private_chat_even_when_paired():
-    """A group/supergroup chat is denied WITHOUT resolving identity, even when a
-    stale telegram_user_pairings row exists for its (negative) chat_id.
-
-    Identity binds to chat_id, so a group pairing would let every member act as
-    the paired user.  The gate must fire before the DB lookup so stale group
-    pairings become inert for authed ops.
-    """
-    pool = _make_pool(fetchrow_return={"user_id": 1})  # stale group pairing present
-    update = make_telegram_update(chat_id=-1001234567890, chat_type="group")
-    config = make_bot_config(BotConfig)
-
-    assert await _auth_check(update, config, pool) == (False, None)
-    pool.fetchrow.assert_not_awaited()  # identity never resolved for a group chat
-
-
-# ---------------------------------------------------------------------------
-# @auth_required — unpaired callers get the /pair reply and the handler is skipped
-# ---------------------------------------------------------------------------
-
-
-def _make_decorator_context() -> MagicMock:
-    pool, _conn = make_pool_and_conn(
-        fetchrow_return=None,  # unpaired
-        fetchval_return=None,
-        execute_return="OK",
-        direct_methods=True,
+def _config() -> BotConfig:
+    return make_bot_config(
+        BotConfig,
+        platform_api_url="http://platform:8003",
+        paper_ingestion_url="http://research:8000",
+        learning_engine_url="http://learning:8001",
     )
-    return make_ptb_context(pool, make_bot_config(BotConfig))
+
+
+def _client(handler: Callable[[httpx.Request], Awaitable[httpx.Response]]) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
 @pytest.mark.asyncio
-async def test_auth_required_unpaired_replies_pair_guidance_and_skips_handler():
-    """S6: an unpaired user gets the /pair guidance reply and the wrapped
-    handler is NOT invoked."""
-    called: list[bool] = []
+async def test_auth_check_accepts_platform_pairing() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/pairings/999")
+        return httpx.Response(
+            200,
+            json={
+                "user_id": 7,
+                "chat_id": 999,
+                "telegram_username": None,
+                "paired_at": None,
+            },
+        )
+
+    async with _client(handler) as platform_client:
+        result = await auth_check(
+            make_telegram_update(chat_id=999),
+            _config(),
+            platform_client,
+        )
+
+    assert result == (True, 7)
+
+
+@pytest.mark.asyncio
+async def test_auth_check_rejects_unpaired_chat() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    async with _client(handler) as platform_client:
+        result = await auth_check(
+            make_telegram_update(chat_id=999),
+            _config(),
+            platform_client,
+        )
+
+    assert result == (False, None)
+
+
+@pytest.mark.asyncio
+async def test_auth_check_platform_outage_denies() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    async with _client(handler) as platform_client:
+        result = await auth_check(
+            make_telegram_update(chat_id=999),
+            _config(),
+            platform_client,
+        )
+
+    assert result == (False, None)
+
+
+@pytest.mark.asyncio
+async def test_auth_check_denies_group_without_platform_lookup() -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200)
+
+    async with _client(handler) as platform_client:
+        result = await auth_check(
+            make_telegram_update(chat_id=-1001, chat_type="group"),
+            _config(),
+            platform_client,
+        )
+
+    assert result == (False, None)
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_required_unpaired_skips_handler() -> None:
+    called = False
 
     @auth_required
-    async def _handler(update, context):
-        called.append(True)
+    async def handler(update, context) -> None:
+        nonlocal called
+        called = True
 
-    update = make_telegram_update(chat_id=4242, text="/help")
-    context = _make_decorator_context()
+    async def platform_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
 
-    await _handler(update, context)
+    async with _client(platform_handler) as platform_client:
+        context = make_ptb_context(platform_client, _config())
+        update = make_telegram_update(chat_id=4242, text="/help")
+        await handler(update, context)
 
-    assert called == [], "wrapped handler must not run for an unpaired chat"
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "/pair" in text
+    assert called is False
+    assert "/pair" in update.message.reply_text.await_args.args[0]
 
 
 @pytest.mark.asyncio
-async def test_auth_required_paired_runs_handler_and_stashes_user_id():
-    """A paired chat runs the handler and stashes the real user_id."""
+async def test_auth_required_stashes_platform_user() -> None:
     seen: list[int | None] = []
 
     @auth_required
-    async def _handler(update, context):
+    async def handler(update, context) -> None:
         seen.append(context.user_data.get("jarvis_user_id"))
 
-    update = make_telegram_update(chat_id=4242, text="/help")
-    context = _make_decorator_context()
-    context.application.bot_data["db_pool"].fetchrow = AsyncMock(return_value={"user_id": 99})
+    async def platform_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"user_id": 99, "chat_id": 4242, "telegram_username": None, "paired_at": None},
+        )
 
-    await _handler(update, context)
+    async with _client(platform_handler) as platform_client:
+        context = make_ptb_context(platform_client, _config())
+        await handler(make_telegram_update(chat_id=4242, text="/help"), context)
 
     assert seen == [99]
 
 
 @pytest.mark.asyncio
-async def test_auth_required_denies_group_chat_even_when_paired():
-    """An authed op invoked in a group chat is denied and the handler is skipped,
-    even when a telegram_user_pairings row exists for that chat_id."""
-    called: list[bool] = []
+async def test_backend_auth_exchanges_and_strips_local_owner_marker() -> None:
+    platform_requests: list[dict[str, object]] = []
+    backend_headers: httpx.Headers | None = None
 
-    @auth_required
-    async def _handler(update, context):
-        called.append(True)
+    async def platform_handler(request: httpx.Request) -> httpx.Response:
+        platform_requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"assertion": "signed-assertion"})
 
-    update = make_telegram_update(chat_id=-1001234567890, chat_type="group", text="/help")
-    context = _make_decorator_context()
-    context.application.bot_data["db_pool"].fetchrow = AsyncMock(return_value={"user_id": 99})
+    async def backend_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal backend_headers
+        backend_headers = request.headers
+        return httpx.Response(200, json={"ok": True})
 
-    await _handler(update, context)
+    config = _config()
+    async with (
+        _client(platform_handler) as platform_client,
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(backend_handler),
+            auth=TelegramBackendAuth(config, platform_client),
+        ) as backend_client,
+    ):
+        response = await backend_client.get(
+            "http://research:8000/api/papers/42",
+            headers={"X-Owner-User-Id": "7", "X-API-Key": "must-not-leave"},
+        )
 
-    assert called == [], "authed handler must not run in a group chat"
-    update.message.reply_text.assert_awaited_once()
+    assert response.status_code == 200
+    assert platform_requests[0]["audience"] == "research"
+    assert platform_requests[0]["user_id"] == 7
+    assert backend_headers is not None
+    assert backend_headers["X-Jarvis-Identity"] == "signed-assertion"
+    assert "X-Request-Id" in backend_headers
+    assert "X-Owner-User-Id" not in backend_headers
+    assert "X-API-Key" not in backend_headers
+
+
+@pytest.mark.asyncio
+async def test_backend_auth_denies_unmanifested_route_before_exchange() -> None:
+    exchanges = 0
+
+    async def platform_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal exchanges
+        exchanges += 1
+        return httpx.Response(200, json={"assertion": "unexpected"})
+
+    config = _config()
+    async with (
+        _client(platform_handler) as platform_client,
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200)),
+            auth=TelegramBackendAuth(config, platform_client),
+        ) as backend_client,
+    ):
+        with pytest.raises(RuntimeError, match="not allowlisted"):
+            await backend_client.delete(
+                "http://research:8000/api/admin/users/7",
+                headers={"X-Owner-User-Id": "7"},
+            )
+
+    assert exchanges == 0
+
+
+@pytest.mark.asyncio
+async def test_backend_auth_requires_paired_user_marker() -> None:
+    config = _config()
+    async with (
+        _client(lambda request: _response(200)) as platform_client,
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200)),
+            auth=TelegramBackendAuth(config, platform_client),
+        ) as backend_client,
+    ):
+        with pytest.raises(RuntimeError, match="paired user"):
+            await backend_client.get("http://research:8000/api/papers/42")
+
+
+async def _response(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code)

@@ -188,6 +188,23 @@ async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _platform_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
+    """Wire the Platform app to the per-test contract connection."""
+    from platform_api.deps import get_db_pool, limiter
+    from platform_api.main import app as platform_app
+
+    shared = SharedConnPool(contract_conn)
+    with patch_pi_test_app(
+        shared,
+        app=platform_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(remove_owner_override=True),
+    ) as app:
+        yield app
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app(contract_conn: Any) -> AsyncIterator[Any]:
     """Wire service doubles for PI endpoint contract tests."""
     from paper_ingestion.deps import get_db_pool, limiter
@@ -241,12 +258,26 @@ def _clear_settings_caches():
     """Clear all lru_cache'd settings + the module-level API-key cache."""
     from jarvis_common.auth import refresh_api_key_cache
     from jarvis_common.settings import get_secrets_settings
+    from platform_api.config import get_platform_settings
 
     get_secrets_settings.cache_clear()
+    get_platform_settings.cache_clear()
     refresh_api_key_cache()
     yield
     get_secrets_settings.cache_clear()
+    get_platform_settings.cache_clear()
     refresh_api_key_cache()
+
+
+@pytest.fixture(autouse=True)
+def _disable_platform_rate_limiter_for_direct_router_tests():
+    """Disable Platform's limiter when legacy tests call moved handlers directly."""
+    from platform_api.deps import limiter as platform_limiter
+
+    was_enabled = platform_limiter.enabled
+    platform_limiter.enabled = False
+    yield
+    platform_limiter.enabled = was_enabled
 
 
 @pytest.fixture(autouse=True)

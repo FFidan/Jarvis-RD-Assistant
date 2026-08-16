@@ -18,7 +18,8 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 import asyncpg
-from unittest.mock import AsyncMock
+import httpx
+from unittest.mock import AsyncMock, MagicMock
 from jarvis_common.testing import A_PAPER_TITLE, SharedConnPool
 
 pytestmark = [
@@ -30,53 +31,97 @@ pytestmark = [
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def pi_settings_client(contract_conn, contract_two_users):
-    """ASGI client wired to the real per-test transaction via SharedConnPool.
+    """Serve Platform config through the signed in-process Research command."""
+    from functools import partial
 
-    Sets BOTH overrides so routes that use Depends(get_db_pool) AND any that
-    read request.app.state.db_pool directly (system.py lines 241, 303, 628)
-    both reach the same transactional connection.
-
-    Also patches ``require_admin`` in the settings router namespace because
-    ``set_config`` calls it directly (not via Depends), so dependency_overrides
-    cannot intercept it — same technique as the mock-unit _app fixture.
-    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from fastapi import Depends, FastAPI
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import require_admin
+    from jarvis_common.identity_assertions import (
+        IdentityAssertionSigner,
+        IdentityAssertionVerifier,
+        VerificationKey,
+    )
+    from jarvis_common.identity_capabilities import required_identity_scopes
+    from jarvis_common.identity_middleware import IdentityAssertionMiddleware
     from jarvis_common.testing_contract_apps import (
         make_contract_client,
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-    from paper_ingestion.routers import settings as _settings_mod
-
-    async def _allow_all(request=None) -> None:  # noqa: ARG001
-        return None
+    from paper_ingestion.deps import get_db_pool as get_research_db_pool
+    from paper_ingestion.routers import internal_config
+    from platform_api.deps import get_db_pool as get_platform_db_pool
+    from platform_api.deps import get_identity_signer
+    from platform_api.deps import limiter as platform_limiter
+    from platform_api.main import app as platform_app
 
     shared = SharedConnPool(contract_conn)
-    # Idiomatic mock carve-out: set_config reads request.app.state.http_client for
-    # the LiteLLM model-validation probe (outbound HTTP — never touches the DB).
-    _orig_require_admin = _settings_mod.require_admin
-    _settings_mod.require_admin = _allow_all
-    app.state.limiter.enabled = False
+    await contract_conn.execute(
+        "UPDATE users SET role = 'admin' WHERE id = $1",
+        contract_two_users.user_a_id,
+    )
+    private_key = Ed25519PrivateKey.generate()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="contract-current",
+        signing_key=private_key,
+    )
+    verifier = IdentityAssertionVerifier(
+        issuer="jarvis-platform",
+        audience="research",
+        keys={"contract-current": VerificationKey(private_key.public_key())},
+    )
+    research_app = FastAPI(dependencies=[Depends(verify_api_key)])
+    research_app.include_router(internal_config.router)
+    research_app.add_middleware(
+        IdentityAssertionMiddleware,
+        verifier=verifier,
+        scope_resolver=partial(required_identity_scopes, "research"),
+    )
+    platform_limiter.enabled = False
     try:
-        with (
-            patch_app_state(app, {"db_pool": shared, "http_client": AsyncMock()}),
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    get_db_pool: lambda: shared,
-                    verify_api_key: lambda: None,
-                    require_admin: _allow_all,
-                },
-            ),
-        ):
-            async with make_contract_client(app, contract_two_users.cookie_a) as client:
-                yield client
+        research_transport = httpx.ASGITransport(app=research_app)
+        async with httpx.AsyncClient(
+            transport=research_transport,
+            base_url="http://paper_ingestion:8000",
+        ) as research_client:
+            with (
+                patch_app_state(
+                    research_app,
+                    {
+                        "db_pool": shared,
+                        "http_client": AsyncMock(spec=httpx.AsyncClient),
+                        "scheduler": MagicMock(),
+                    },
+                ),
+                patch_dependency_overrides(
+                    research_app,
+                    set_overrides={
+                        get_research_db_pool: lambda: shared,
+                        verify_api_key: lambda: None,
+                    },
+                ),
+                patch_app_state(
+                    platform_app,
+                    {"db_pool": shared, "http_client": research_client},
+                ),
+                patch_dependency_overrides(
+                    platform_app,
+                    set_overrides={
+                        get_platform_db_pool: lambda: shared,
+                        get_identity_signer: lambda: signer,
+                        verify_api_key: lambda: None,
+                    },
+                ),
+            ):
+                async with make_contract_client(
+                    platform_app,
+                    contract_two_users.cookie_a,
+                ) as client:
+                    yield client
     finally:
-        _settings_mod.require_admin = _orig_require_admin
-        app.state.limiter.enabled = True
+        platform_limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +213,8 @@ async def test_put_encrypted_key_masked_sentinel_does_not_clobber_secret(
 ):
     """Re-submitting the masked display value of an encrypted key must NOT overwrite the stored secret.
 
-    Verified: config_write.py:388 (encrypt_secret(str(value))), config_db.py:122
-    (mask_secret on read), crypto.py:236 ('****'+last4 sentinel).
+    Verified: Research ``config_write`` encrypts new values and shared
+    ``config_store`` masks reads using the ``crypto`` sentinel contract.
     """
     from cryptography.fernet import Fernet
     from jarvis_common.crypto import decrypt_secret, mask_secret, refresh_fernet_cache
@@ -429,7 +474,7 @@ async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_clien
     record cannot be reassigned through the admin config surface.
     """
     from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
-    from paper_ingestion.services.config_metadata import _ALLOWED_CONFIG_KEYS
+    from jarvis_common.config_metadata import _ALLOWED_CONFIG_KEYS
 
     assert OWNER_USER_ID_CONFIG_KEY not in _ALLOWED_CONFIG_KEYS
 
@@ -452,8 +497,8 @@ async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_clien
 #
 # Verified: config_metadata.py (_ALLOWED_CONFIG_KEYS, PERSONAL_KEYS, SYSTEM_KEYS)
 # Verified: config_validators.py (_CONFIG_VALIDATORS)
-# Verified: config_db.py (_write_config_row — UPSERT)
-# Verified: config_db.py (_fetch_effective_config_row — scoped GET)
+# Verified: jarvis_common.config_store (_write_config_row — UPSERT)
+# Verified: jarvis_common.config_store (_fetch_effective_config_row — scoped GET)
 # ---------------------------------------------------------------------------
 
 
@@ -468,7 +513,7 @@ async def test_put_fsrs_desired_retention_round_trip(
     """PUT /api/config/fsrs.desired_retention persists; GET reads it back.
 
     Verified: config_validators.py (_validate_fsrs_retention),
-              config_db.py (_write_config_row UPSERT path).
+              jarvis_common.config_store (_write_config_row UPSERT path).
     Survivor-of: test_settings.py fsrs key round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -515,7 +560,7 @@ async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client)
     """PUT /api/config/pulse.l2_lambda persists in user_config (user_id IS NULL).
 
     Verified: config_validators.py (_validate_l2_lambda),
-              config_db.py (_write_config_row NULL-scoped UPSERT).
+              jarvis_common.config_store (_write_config_row NULL-scoped UPSERT).
     Survivor-of: test_settings.py l2_lambda round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -576,7 +621,7 @@ async def test_put_setup_completed_persists_true(contract_conn, pi_settings_clie
     """PUT /api/config/setup.completed stores True in user_config.
 
     Verified: config_validators.py (_validate_bool guard),
-              config_db.py (_write_config_row UPSERT).
+              jarvis_common.config_store (_write_config_row UPSERT).
     Survivor-of: test_settings.py setup.completed round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -646,7 +691,7 @@ async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_
     """PUT /api/config/telegram.owner_chat_id stores integer; GET reads it back.
 
     Verified: config_validators.py (telegram.owner_chat_id → _validate_optional_int),
-              config_db.py (_fetch_effective_config_row system path).
+              jarvis_common.config_store (_fetch_effective_config_row system path).
     Survivor-of: test_settings.py telegram.owner_chat_id round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -753,7 +798,7 @@ async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_c
     # reconciler pass must re-deliver the STORED (old) model back to LiteLLM.
     monkeypatch.undo()
 
-    import paper_ingestion.services.config_db as _config_db
+    import jarvis_common.config_store as _config_db
     import paper_ingestion.services.litellm_config as _litellm_cfg
     from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
 
@@ -777,11 +822,11 @@ async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_c
 
     monkeypatch.setattr(_litellm_cfg, "get_litellm_deployments", _fake_deployments)
     monkeypatch.setattr(_litellm_cfg, "update_litellm_model", _capture_delivery)
-    # The PUT route binds update_litellm_model early (settings.py passes it as
-    # update_litellm_model_fn) — patch the router namespace too.
-    import paper_ingestion.routers.settings as _settings_router
+    # The private Research command binds update_litellm_model at import time,
+    # so patch that namespace in addition to the implementation module.
+    import paper_ingestion.routers.internal_config as _internal_config_router
 
-    monkeypatch.setattr(_settings_router, "update_litellm_model", _capture_delivery)
+    monkeypatch.setattr(_internal_config_router, "update_litellm_model", _capture_delivery)
 
     # Model-key PUTs verify the model against Ollama tags first; no Ollama here.
     async def _allow_model(*args: object, **kwargs: object) -> None:
@@ -916,7 +961,7 @@ async def _ai_settings_client(contract_conn, tmp_path_factory):
 
     - SharedConnPool for dismiss-banner DB writes (within per-test txn).
     - require_admin patched in the settings_ai module namespace (it is a *local*
-      function from paper_ingestion.routers.admin, not jarvis_common.auth, so
+      function from platform_api.routers.admin, not jarvis_common.auth, so
       dependency_overrides cannot intercept it; direct attribute patch required).
     - A minimal llm-tier-candidates.yaml with one valid ge-48 ollama candidate
       (qwen3:14b — tier=2, assignable=True, smart role — present in catalog).
@@ -954,9 +999,9 @@ async def _ai_settings_client(contract_conn, tmp_path_factory):
     async def _allow_admin(request=None) -> None:  # noqa: ARG001
         return None
 
-    # require_admin in settings_ai.py is imported from paper_ingestion.routers.admin
+    # require_admin in settings_ai.py is imported from platform_api.routers.admin
     # (not jarvis_common.auth), so we must override that specific function object.
-    from paper_ingestion.routers.admin import require_admin as _pi_require_admin
+    from platform_api.routers.admin import require_admin as _pi_require_admin
 
     shared = SharedConnPool(contract_conn)
     _orig_config_path = _sai_mod._CONFIG_PATH
@@ -1401,8 +1446,8 @@ async def test_non_admin_reads_pulse_flag_while_writes_stay_admin_only(
     a user who cannot change it. Readability and writability are separate gates:
     `list_config` consults BROWSER_READABLE_SYSTEM_KEYS while `set_config` still
     routes every system-scope key through require_admin.
-    Verified: routers/settings.py list_config, services/config_metadata.py
-    BROWSER_READABLE_SYSTEM_KEYS.
+    Verified: Platform ``configuration.list_config`` and shared
+    ``config_metadata.BROWSER_READABLE_SYSTEM_KEYS``.
     """
     await contract_conn.execute(
         """INSERT INTO user_config (user_id, key, value)
@@ -1422,7 +1467,7 @@ async def test_non_admin_reads_pulse_flag_while_writes_stay_admin_only(
     # non-admin write it. This fixture patches require_admin out, so asserting on
     # a rejected PUT here would prove nothing — the classification is the real
     # invariant, and it is what set_config branches on.
-    from paper_ingestion.services.config_metadata import PERSONAL_KEYS, _classify_config_key
+    from jarvis_common.config_metadata import PERSONAL_KEYS, _classify_config_key
 
     assert _classify_config_key("pulse.enabled") == "system"
     assert "pulse.enabled" not in PERSONAL_KEYS

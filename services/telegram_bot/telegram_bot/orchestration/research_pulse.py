@@ -9,15 +9,14 @@ from __future__ import annotations
 
 import logging
 
-import asyncpg
 import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_pulse_card, format_pulse_deck_status, truncate
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
+from telegram_bot.platform_client import list_user_pairings
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +136,7 @@ async def _deliver_pulse_to_chat(
 
 async def run_research_pulse(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
     *,
@@ -153,14 +152,14 @@ async def run_research_pulse(
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool used to list active pairings.
+    platform_client : httpx.AsyncClient
+        Scoped Platform client used to list active pairings.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
         Bot configuration (service URLs and API key).
     """
-    pairings = await _owner.list_user_pairings(db_pool)
+    pairings = await list_user_pairings(platform_client, config)
     if not pairings:
         logger.warning(
             "research_pulse skipped: no Telegram pairings exist — use /pair in Telegram to set up"

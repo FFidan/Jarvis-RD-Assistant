@@ -7,7 +7,6 @@ and router registration.  Endpoint logic lives in
 Extracted modules
 -----------------
 * ``jarvis_common.migrations`` — ``run_migrations()``
-* ``paper_ingestion.services.telegram_bootstrap`` — ``refresh_telegram_bot_username()``
 * ``paper_ingestion.routers.system`` — ``GET /api/system/models``
 
 Lifespan + middleware + error handlers are wired via
@@ -24,6 +23,7 @@ import dataclasses
 import logging
 import socket
 from collections.abc import Mapping, Sequence
+from functools import partial
 from typing import Any
 
 import asyncpg
@@ -50,7 +50,11 @@ from jarvis_common.app_factory import (
 )
 from jarvis_common.auth import validate_runtime_config
 from jarvis_common.cached_transport import CachingTransport
+from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
+from jarvis_common.identity_capabilities import required_identity_scopes
+from jarvis_common.identity_keys import load_identity_verifier_from_settings
+from jarvis_common.identity_middleware import IdentityAssertionMiddleware
 from jarvis_common.migrations import run_migrations
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from jarvis_common.settings import get_core_settings, get_secrets_settings
@@ -90,13 +94,14 @@ from paper_ingestion.services.model_lifecycle import (
     safe_num_ctx,
 )
 from paper_ingestion.services.source_helper import _decrypt_config_api_key
-from paper_ingestion.services.telegram_bootstrap import refresh_telegram_bot_username
 from paper_ingestion.sources.registry import get_source_class
 
 configure_logging("paper_ingestion", log_level=get_core_settings().log_level)
 maybe_init_sentry("paper_ingestion")
 
 logger = logging.getLogger(__name__)
+
+_identity_settings = get_jarvis_common_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -167,25 +172,6 @@ async def _run_hw_probe_hook(app: FastAPI) -> None:
     from paper_ingestion.hw_probe import run_boot_probe  # noqa: PLC0415
 
     await run_boot_probe(app.state.db_pool)
-
-
-async def _migrate_plaintext_secrets_hook(app: FastAPI) -> None:
-    """Eagerly re-encrypt any legacy plaintext secret rows in user_config.
-
-    Runs after migrations so the schema is at the latest version. Best-effort:
-    failures are logged inside the helper so this hook never blocks startup.
-    """
-    from paper_ingestion.services.config_db import (  # noqa: PLC0415
-        migrate_plaintext_secrets,
-    )
-
-    try:
-        await migrate_plaintext_secrets(app.state.db_pool)
-    except Exception:
-        logger.warning(
-            "migrate_plaintext_secrets failed during startup — continuing",
-            exc_info=True,
-        )
 
 
 async def _init_qdrant_and_pdf_pipeline(app: FastAPI) -> None:
@@ -264,11 +250,6 @@ async def _init_source_singletons(app: FastAPI) -> None:
     set_services(sources=app.state.sources)
 
 
-async def _refresh_telegram_username(app: FastAPI) -> None:
-    """Refresh cached Telegram bot username for setup-wizard pairing links."""
-    await refresh_telegram_bot_username(app.state.db_pool, app.state.http_client)
-
-
 # Keep below jarvis_common.health._PROBE_TIMEOUT_S so Qdrant metadata slowness
 # is classified by _probe_qdrant as "unknown", not by the outer sweep as
 # degraded "timeout".
@@ -337,7 +318,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
     ``llm.<machine>.<role>_num_ctx`` row seeded alongside the model is picked
     up by that same delivery (``update_litellm_model`` → ``_get_num_ctx``).
     """
-    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS  # noqa: PLC0415
+    from jarvis_common.config_metadata import ROLE_TO_ALIAS  # noqa: PLC0415
 
     pool = app.state.db_pool
 
@@ -493,6 +474,22 @@ async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
     await shutdown_procrastinate_worker_common(app)
 
 
+async def _load_identity_verifier_hook(app: FastAPI) -> None:
+    """Load the Research verifier before domain-specific startup hooks run.
+
+    Parameters
+    ----------
+    app : FastAPI
+        Research application whose state receives the audience-bound verifier.
+    """
+    if not _identity_settings.identity_assertions_required:
+        return
+    app.state.identity_verifier = load_identity_verifier_from_settings(
+        _identity_settings,
+        audience="research",
+    )
+
+
 # ---------------------------------------------------------------------------
 # App creation + middleware + error handlers
 # ---------------------------------------------------------------------------
@@ -506,15 +503,14 @@ _lifespan_config = ServiceLifespanConfig(
         "transport": CachingTransport(PinnedAsyncTransport(JARVIS_SERVICE_POLICY)),
     },
     custom_init_tasks=[
+        _load_identity_verifier_hook,
         make_init_langfuse_hook(_set_openai_client),
         _validate_bbt_url_hook,
         _run_migrations_hook,
         _validate_runtime_config_hook,
         _run_hw_probe_hook,
-        _migrate_plaintext_secrets_hook,
         _init_qdrant_and_pdf_pipeline,
         _init_source_singletons,
-        _refresh_telegram_username,
         _autoconfigure_models_hook,
         _start_litellm_reconciler,
         _start_scheduler_hook,
@@ -530,15 +526,14 @@ _lifespan_config = ServiceLifespanConfig(
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
+        None,  # _load_identity_verifier_hook
         None,  # init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook
         None,  # _validate_runtime_config_hook
         None,  # _run_hw_probe_hook
-        None,  # _migrate_plaintext_secrets_hook
         _shutdown_qdrant,  # _init_qdrant_and_pdf_pipeline
         None,  # _init_source_singletons
-        None,  # _refresh_telegram_username
         None,  # _autoconfigure_models_hook
         _shutdown_litellm_reconciler,  # _start_litellm_reconciler
         _shutdown_scheduler,  # _start_scheduler_hook
@@ -591,13 +586,16 @@ async def _qdrant_unavailable_handler(
 from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
 
 app.add_middleware(SessionMiddleware)
+if _identity_settings.identity_assertions_required:
+    app.add_middleware(
+        IdentityAssertionMiddleware,
+        scope_resolver=partial(required_identity_scopes, "research"),
+    )
 
 # ---------------------------------------------------------------------------
 # Router registration
 # ---------------------------------------------------------------------------
 
-from paper_ingestion.routers import account as account_router  # noqa: E402
-from paper_ingestion.routers import admin as admin_router  # noqa: E402
 from paper_ingestion.routers import (  # noqa: E402
     analytics,
     analyze,
@@ -609,9 +607,9 @@ from paper_ingestion.routers import (  # noqa: E402
     extractions,
     highlights,
     infra_events,
+    internal_config,
     jobs,
     knowledge_graph,
-    logs,
     my_day,
     notes,
     papers,
@@ -627,26 +625,18 @@ from paper_ingestion.routers import (  # noqa: E402
     system,
     system_capabilities,
     system_readiness,
-    telegram,
     threads,
     topics,
 )
-from paper_ingestion.routers import audit_admin as audit_admin_router  # noqa: E402
-from paper_ingestion.routers import auth as auth_router  # noqa: E402
-from paper_ingestion.routers import auth_passkeys as auth_passkeys_router  # noqa: E402
 from paper_ingestion.routers import backups as backups_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
 from paper_ingestion.routers import settings_ai as settings_ai_router  # noqa: E402
-from paper_ingestion.routers import setup as setup_router  # noqa: E402
 from paper_ingestion.routers import source_config as source_config_router  # noqa: E402
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
-app.include_router(auth_router.router)
-app.include_router(auth_passkeys_router.router)
-app.include_router(admin_router.router)
 app.include_router(backups_router.router)
+app.include_router(internal_config.router)
 app.include_router(settings_ai_router.router)
-app.include_router(setup_router.router)
 app.include_router(topics.router)
 app.include_router(settings.router)
 app.include_router(analytics.router)
@@ -673,18 +663,12 @@ app.include_router(highlights.router)
 app.include_router(rag.router)
 app.include_router(pulse_router.router)
 app.include_router(zotero_router.router)
-app.include_router(telegram.router)
 app.include_router(system.router)
 app.include_router(system_readiness.router)
 app.include_router(system_capabilities.router)
 app.include_router(jobs.router)
-app.include_router(logs.router)
-app.include_router(audit_admin_router.router)
 app.include_router(source_config_router.router)
 app.include_router(infra_events.router)
-# Account — self-service current-user profile (GET/PATCH /api/account
-# + verified email change). Distinct from admin user-mgmt (/api/admin/*).
-app.include_router(account_router.router)
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,4 @@
-"""Tests that set_config emits config-change events.
-
-Verifies that ``PUT /api/config/{key}`` calls ``log_event`` with
-category='config', message='setting_changed' after a successful UPSERT.
-"""
+"""Platform configuration and provider event contract tests."""
 
 from __future__ import annotations
 
@@ -10,10 +6,17 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import FastAPI
 from httpx import ASGITransport
-from jarvis_common.testing import RoleMiddleware
-from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+from jarvis_common import verify_api_key
+from jarvis_common.auth import current_user_id_strict
+from jarvis_common.identity_assertions import IdentityAssertionSigner
+from jarvis_common.provider_test import ProviderTestResult
+from jarvis_common.testing import SignedIdentityMiddleware
 
+from platform_api.deps import get_db_pool, get_identity_signer, limiter
+from platform_api.routers import configuration, providers
 from tests.conftest import _make_pool_and_conn
 
 _UI_PREF_VALUES = {
@@ -31,111 +34,103 @@ _UI_PREF_VALUES = {
     },
     "ui.nav_mode": "full",
 }
-_MALFORMED_UI_PREF_VALUES = {
-    "ui.appearance": {"theme": "dark"},
-    "ui.timer": {"workMinutes": 50},
-    "ui.nav_mode": "wide",
-}
 
 
 @pytest.fixture()
 def _app():
-    """Create a minimal app instance with mocked DB pool and disabled auth."""
-    from jarvis_common import verify_api_key
-    from jarvis_common.auth import current_user_id_strict, require_admin
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
-    from paper_ingestion.routers import settings as _settings_mod
+    """Create a minimal Platform app with deterministic owner dependencies."""
+    pool, conn = _make_pool_and_conn()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform-test",
+        key_id="settings-events",
+        signing_key=Ed25519PrivateKey.generate(),
+    )
+    research_client = AsyncMock(spec=httpx.AsyncClient)
 
-    mock_pool, conn = _make_pool_and_conn()
-    mock_http = AsyncMock()
+    async def apply_config(
+        url: str,
+        *,
+        json: dict[str, object],
+        **_kwargs: object,
+    ) -> httpx.Response:
+        key = url.rsplit("/", maxsplit=1)[-1]
+        return httpx.Response(
+            200,
+            json={"key": key, "value": json["value"], "schedule_apply_warnings": []},
+            request=httpx.Request("PUT", url),
+        )
 
-    # The module-symbol swap is a seam the shared helper deliberately does not
-    # cover; restore it manually alongside the helper's scoped restore.
-    _orig_require_admin = _settings_mod.require_admin
-    _settings_mod.require_admin = AsyncMock(return_value=None)
+    research_client.put.side_effect = apply_config
+    research_client.post.return_value = httpx.Response(
+        204,
+        request=httpx.Request(
+            "POST",
+            "http://paper_ingestion:8000/internal/platform/providers/openrouter/cache/invalidate",
+        ),
+    )
+    app = FastAPI()
+    app.include_router(configuration.router)
+    app.include_router(providers.router)
+    app.state.db_pool = pool
+    app.state.http_client = research_client
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_identity_signer] = lambda: signer
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
+    app.dependency_overrides[verify_api_key] = lambda: None
+    limiter_was_enabled = limiter.enabled
+    limiter.enabled = False
     try:
-        with patch_pi_test_app(
-            mock_pool,
-            app=app,
-            get_db_pool=get_db_pool,
-            limiter=limiter,
-            options=PITestAppOptions(
-                remove_owner_override=False,
-                override_db_dependency=True,
-                disable_limiter=True,
-                state_overrides={"http_client": mock_http},
-                dependency_overrides={
-                    verify_api_key: lambda: None,
-                    # set_config resolves the caller via
-                    # Depends(current_user_id_strict); steer it to a concrete
-                    # user (the route hard-401s sessionless callers otherwise).
-                    current_user_id_strict: lambda: 1,
-                    # Admin-gate the settings endpoints (see test_settings._app).
-                    require_admin: lambda: None,
-                },
-            ),
-        ):
-            yield app, conn, mock_http
+        yield app, conn, research_client
     finally:
-        _settings_mod.require_admin = _orig_require_admin
+        limiter.enabled = limiter_was_enabled
+
+
+def _identity_app(app: FastAPI, role: str | None = "admin") -> SignedIdentityMiddleware:
+    """Wrap the Platform app in deterministic browser identity state."""
+    return SignedIdentityMiddleware(
+        app,
+        audience="research",
+        verifier_app=app,
+        user_id=1,
+        role=role,
+    )
 
 
 @pytest.mark.asyncio
 async def test_settings_save_emits_event(_app) -> None:
-    """PUT /api/config/{key} emits log_event with category='config' and message='setting_changed'."""
-    app, conn, _mock_http = _app
-    # Mock DB UPSERT to succeed silently
-    conn.execute = AsyncMock(return_value=None)
-    # Mock fetchrow used for pulse.cron pre-read (not triggered here)
-    conn.fetchrow = AsyncMock(return_value=None)
-    # Use pulse.enabled (bool, non-ROLE_TO_ALIAS) to avoid Ollama model
-    # validation HTTP calls. This keeps the test purely unit-level.
-
-    log_event_mock = AsyncMock()
-    with patch("paper_ingestion.routers.settings._log_event", new=log_event_mock):
+    """A confirmed configuration write records one Platform-owned event."""
+    app, _conn, _research_client = _app
+    event = AsyncMock()
+    with patch.object(configuration, "log_event", new=event):
         async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=_identity_app(app)),
+            base_url="http://test",
         ) as client:
-            resp = await client.put(
+            response = await client.put(
                 "/api/config/pulse.enabled",
                 json={"key": "pulse.enabled", "value": True},
             )
 
-    # A 200 means the endpoint succeeded
-    assert resp.status_code == 200, f"Unexpected status: {resp.status_code} — {resp.text}"
-
-    log_event_mock.assert_awaited()
-    config_calls = [
-        c
-        for c in log_event_mock.await_args_list
-        if c.kwargs.get("category") == "config" and c.kwargs.get("message") == "setting_changed"
-    ]
-    assert config_calls, (
-        f"Expected log_event(category='config', message='setting_changed') call, "
-        f"got calls: {[c.kwargs for c in log_event_mock.await_args_list]}"
-    )
-    config_kwargs = config_calls[0].kwargs
-    assert config_kwargs["level"] == "info"
-    assert config_kwargs["source"] == "settings"
-    ctx_payload = config_kwargs.get("context", {})
-    assert ctx_payload.get("key") == "pulse.enabled"
+    assert response.status_code == 200, response.text
+    event.assert_awaited_once()
+    kwargs = event.await_args.kwargs
+    assert kwargs["category"] == "config"
+    assert kwargs["message"] == "setting_changed"
+    assert kwargs["context"] == {"key": "pulse.enabled", "new_value": "True"}
 
 
 @pytest.mark.parametrize(("key", "value"), _UI_PREF_VALUES.items())
 @pytest.mark.asyncio
-async def test_non_admin_writes_each_preference_to_own_row(_app, key: str, value: object) -> None:
-    """A regular browser session writes each interface preference under its user id."""
-    from paper_ingestion.routers import settings as settings_module
-
-    app, conn, _mock_http = _app
-    conn.execute = AsyncMock(return_value=None)
-    conn.fetchrow = AsyncMock(return_value=None)
-    settings_module.require_admin.reset_mock()
-
-    with patch("paper_ingestion.routers.settings._log_event", new=AsyncMock()):
+async def test_non_admin_forwards_each_personal_preference(
+    _app,
+    key: str,
+    value: object,
+) -> None:
+    """A member can forward each allowlisted personal preference to Research."""
+    app, _conn, research_client = _app
+    with patch.object(configuration, "log_event", new=AsyncMock()):
         async with httpx.AsyncClient(
-            transport=ASGITransport(app=RoleMiddleware(app, "user")),
+            transport=ASGITransport(app=_identity_app(app, "member")),
             base_url="http://test",
         ) as client:
             response = await client.put(
@@ -144,35 +139,40 @@ async def test_non_admin_writes_each_preference_to_own_row(_app, key: str, value
             )
 
     assert response.status_code == 200, response.text
-    settings_module.require_admin.assert_not_awaited()
-    bound_writes = [call.args[1:] for call in conn.execute.await_args_list]
-    assert (1, key, value) in bound_writes
+    assert research_client.put.await_args.kwargs["json"] == {"value": value}
 
 
-@pytest.mark.parametrize(("key", "value"), _MALFORMED_UI_PREF_VALUES.items())
 @pytest.mark.asyncio
-async def test_malformed_preference_is_rejected_before_write(_app, key: str, value: object) -> None:
-    """Malformed interface preferences return 400 without a database write."""
-    app, conn, _mock_http = _app
-    conn.execute = AsyncMock(return_value=None)
-
+async def test_downstream_preference_validation_is_preserved(_app) -> None:
+    """A safe Research validation failure remains a public 400 response."""
+    app, conn, research_client = _app
+    research_client.put.side_effect = None
+    research_client.put.return_value = httpx.Response(
+        400,
+        json={"detail": "Invalid value for 'ui.nav_mode'"},
+        request=httpx.Request(
+            "PUT",
+            "http://paper_ingestion:8000/internal/platform/config/ui.nav_mode",
+        ),
+    )
     async with httpx.AsyncClient(
-        transport=ASGITransport(app=RoleMiddleware(app, "user")),
+        transport=ASGITransport(app=_identity_app(app, "member")),
         base_url="http://test",
     ) as client:
         response = await client.put(
-            f"/api/config/{key}",
-            json={"key": key, "value": value},
+            "/api/config/ui.nav_mode",
+            json={"key": "ui.nav_mode", "value": "wide"},
         )
 
-    assert response.status_code == 400, response.text
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid value for 'ui.nav_mode'"}
     conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_preference_get_does_not_expose_another_users_value(_app) -> None:
-    """A regular browser session cannot read another user's preference row."""
-    app, conn, _mock_http = _app
+    """A member cannot read a preference row belonging to another user."""
+    app, conn, _research_client = _app
     other_users_row = {
         "key": "ui.nav_mode",
         "value": "full",
@@ -185,126 +185,84 @@ async def test_preference_get_does_not_expose_another_users_value(_app) -> None:
 
     conn.fetchrow = AsyncMock(side_effect=fetchrow_for_user)
     async with httpx.AsyncClient(
-        transport=ASGITransport(app=RoleMiddleware(app, "user")),
+        transport=ASGITransport(app=_identity_app(app, "member")),
         base_url="http://test",
     ) as client:
         response = await client.get("/api/config/ui.nav_mode")
 
-    assert response.status_code == 404, response.text
+    assert response.status_code == 404
     assert conn.fetchrow.await_args.args[1:] == ("ui.nav_mode", 1)
 
 
 @pytest.mark.asyncio
-async def test_settings_save_event_failure_does_not_block_response(_app) -> None:
-    """If log_event raises, set_config still returns 200 (best-effort logging)."""
-    app, conn, _mock_http = _app
-    conn.execute = AsyncMock(return_value=None)
-    conn.fetchrow = AsyncMock(return_value=None)
-
-    failing_log_event = AsyncMock(side_effect=RuntimeError("DB connection lost"))
-    with patch("paper_ingestion.routers.settings._log_event", new=failing_log_event):
+async def test_settings_event_failure_does_not_block_response(_app) -> None:
+    """A best-effort event failure does not turn a confirmed write into failure."""
+    app, _conn, _research_client = _app
+    failing_event = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    with patch.object(configuration, "log_event", new=failing_event):
         async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=_identity_app(app)),
+            base_url="http://test",
         ) as client:
-            resp = await client.put(
+            response = await client.put(
                 "/api/config/pulse.enabled",
                 json={"key": "pulse.enabled", "value": True},
             )
 
-    assert resp.status_code == 200, f"log_event failure should not block 200: {resp.text}"
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.asyncio
 async def test_route_assignment_uses_dedicated_audit_and_event(_app) -> None:
-    """Quick/Main assignments are distinguishable from ordinary setting changes."""
-    from paper_ingestion.services.config_write import ConfigWriteResult
-
-    app, _conn, _mock_http = _app
-    write_config_mock = AsyncMock(return_value=ConfigWriteResult(display_value="qwen3:8b"))
-    event_mock = AsyncMock()
-    audit_mock = AsyncMock()
+    """Model assignments remain distinguishable from ordinary setting changes."""
+    app, _conn, _research_client = _app
+    event = AsyncMock()
+    audit = AsyncMock()
     with (
-        patch("paper_ingestion.routers.settings.write_config", new=write_config_mock),
-        patch("paper_ingestion.routers.settings._log_event", new=event_mock),
-        patch("paper_ingestion.routers.settings.log_audit", new=audit_mock),
+        patch.object(configuration, "log_event", new=event),
+        patch.object(configuration, "log_audit", new=audit),
     ):
         async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=_identity_app(app)),
+            base_url="http://test",
         ) as client:
             response = await client.put(
                 "/api/config/llm.fast_model",
                 json={"key": "llm.fast_model", "value": "qwen3:8b"},
             )
 
-    assert response.status_code == 200
-    assert audit_mock.await_args.kwargs["action"] == "llm.route.change"
-    assert audit_mock.await_args.kwargs["resource"] == "llm.fast_model"
-    event_kwargs = event_mock.await_args.kwargs
-    assert event_kwargs["message"] == "llm/route_changed"
-    assert event_kwargs["context"] == {"key": "llm.fast_model", "role": "fast"}
-
-
-@pytest.mark.parametrize(
-    ("key", "provider_id"),
-    [
-        ("llm.providers.openrouter.api_key", "openrouter"),
-        ("llm.providers.custom_openai_compatible.base_url", "custom_openai_compatible"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_provider_config_change_invalidates_only_its_model_cache(
-    _app, key: str, provider_id: str
-) -> None:
-    from paper_ingestion.services.config_write import ConfigWriteResult
-
-    app, _conn, _mock_http = _app
-    write_config_mock = AsyncMock(return_value=ConfigWriteResult(display_value="configured"))
-    with (
-        patch("paper_ingestion.routers.settings.write_config", new=write_config_mock),
-        patch(
-            "paper_ingestion.routers.settings.invalidate_provider_model_cache",
-            new=AsyncMock(),
-        ) as invalidate_mock,
-    ):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            response = await client.put(
-                f"/api/config/{key}",
-                json={"key": key, "value": "replacement"},
-            )
-
-    assert response.status_code == 200
-    invalidate_mock.assert_awaited_once_with(provider_id)
+    assert response.status_code == 200, response.text
+    assert audit.await_args.kwargs["action"] == "llm.route.change"
+    assert audit.await_args.kwargs["resource"] == "llm.fast_model"
+    assert event.await_args.kwargs["message"] == "llm/route_changed"
+    assert event.await_args.kwargs["context"] == {"key": "llm.fast_model", "role": "fast"}
 
 
 @pytest.mark.asyncio
 async def test_provider_connection_test_emits_sanitized_event(_app) -> None:
-    """Connection events identify the provider and stable outcome without a secret or body."""
-    from paper_ingestion.services.provider_test import ProviderTestResult
-
-    app, conn, _mock_http = _app
-    conn.fetchrow.return_value = {"value": "ignored", "encrypted_value": None}
-    event_mock = AsyncMock()
+    """Provider probe events retain only the provider and stable outcome code."""
+    app, _conn, _research_client = _app
+    event = AsyncMock()
     with (
-        patch("paper_ingestion.routers.settings.resolve_secret_row", return_value="test-token"),
-        patch(
-            "paper_ingestion.routers.settings.test_provider_connectivity",
+        patch.object(providers, "_read_system_secret", new=AsyncMock(return_value="test-token")),
+        patch.object(
+            providers,
+            "test_provider_connectivity",
             new=AsyncMock(
                 return_value=ProviderTestResult(ok=False, error="provider request failed")
             ),
         ),
-        patch("paper_ingestion.routers.settings._log_event", new=event_mock),
+        patch.object(providers, "log_event", new=event),
     ):
         async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=_identity_app(app)),
+            base_url="http://test",
         ) as client:
             response = await client.post("/api/providers/openrouter/test")
 
     assert response.status_code == 200
-    event_kwargs = event_mock.await_args.kwargs
-    assert event_kwargs["message"] == "llm/provider_connection_checked"
-    assert event_kwargs["context"] == {
+    assert event.await_args.kwargs["message"] == "llm/provider_connection_checked"
+    assert event.await_args.kwargs["context"] == {
         "provider": "openrouter",
         "success": False,
         "code": "connection_failed",
@@ -313,18 +271,21 @@ async def test_provider_connection_test_emits_sanitized_event(_app) -> None:
 
 @pytest.mark.asyncio
 async def test_missing_provider_key_still_emits_connection_event(_app) -> None:
-    """A local configuration failure is a checked connection outcome, not silent state."""
-    app, conn, _mock_http = _app
-    conn.fetchrow.return_value = None
-    event_mock = AsyncMock()
-    with patch("paper_ingestion.routers.settings._log_event", new=event_mock):
+    """A missing credential remains a visible checked-connection outcome."""
+    app, _conn, _research_client = _app
+    event = AsyncMock()
+    with (
+        patch.object(providers, "_read_system_secret", new=AsyncMock(return_value=None)),
+        patch.object(providers, "log_event", new=event),
+    ):
         async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=_identity_app(app)),
+            base_url="http://test",
         ) as client:
             response = await client.post("/api/providers/openrouter/test")
 
     assert response.status_code == 200
-    assert event_mock.await_args.kwargs["context"] == {
+    assert event.await_args.kwargs["context"] == {
         "provider": "openrouter",
         "success": False,
         "code": "api_key_unavailable",

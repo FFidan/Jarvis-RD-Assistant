@@ -7,12 +7,12 @@ import uuid
 from functools import wraps
 from typing import Any
 
-from jarvis_common.event_log import log_event
 from jarvis_common.logging_config import correlation_id_var
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from telegram_bot.handlers.helpers import auth_check, get_config, get_db
+from telegram_bot.handlers.helpers import auth_check, get_config, get_platform_http
+from telegram_bot.platform_client import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -47,23 +47,23 @@ def auth_required(func: Any) -> Any:
         token = correlation_id_var.set(corr)
         try:
             config = get_config(context)
-            db_pool = get_db(context)
+            platform_client = get_platform_http(context)
 
             # --- first-chat auth event (per-session, not module-global) ---
             if update.effective_chat is not None and context.user_data is not None:
                 if not context.user_data.get("_auth_seen"):
                     context.user_data["_auth_seen"] = True
-                    await log_event(
-                        pool=db_pool,
+                    await record_event(
+                        platform_client,
+                        config,
                         level="info",
                         category="auth",
-                        source="telegram_bot",
                         message="chat_active",
                         context={"chat_id": update.effective_chat.id},
                     )
 
             # --- auth gate (pairing is the sole identity mechanism) ---
-            authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+            authorized, jarvis_user_id = await auth_check(update, config, platform_client)
             if not authorized:
                 chat_id = update.effective_chat.id if update.effective_chat else "unknown"
                 logger.warning(

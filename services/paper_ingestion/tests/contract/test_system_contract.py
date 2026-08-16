@@ -30,6 +30,8 @@ SharedConnPool stmt-cache caveat:
 
 from __future__ import annotations
 
+import asyncpg
+import httpx
 import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool
@@ -233,120 +235,72 @@ async def test_models_bypass_routes_return_200(pi_test_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Setup-status: uses Depends(get_db_pool) — NOT a bypass route, but verifies
-# the full dual-override fixture works end-to-end.
+# Research setup status uses Depends(get_db_pool), so it verifies the
+# dependency-override side of the fixture end to end.
 # ---------------------------------------------------------------------------
 
 
-async def test_setup_status_via_contract_conn(pi_test_client, monkeypatch):
-    """GET /api/system/setup-status reads user_config via Depends(get_db_pool).
+async def _models_not_ready() -> tuple[bool, list[str]]:
+    return False, []
 
-    Proves the dependency_overrides[get_db_pool] side of the dual override.
-    Fresh contract DB has no user_config rows → setup_completed=False.
+
+async def _no_model_warnings() -> list[str]:
+    return []
+
+
+async def test_research_setup_status_via_contract_conn(
+    pi_test_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return only Research-owned setup state from the contract database.
+
+    A fresh contract database has no topics. Model probes are replaced with
+    deterministic local results so the test exercises only the route contract.
     """
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    # Patch _probe_ollama so the route doesn't try to reach the network.
     import paper_ingestion.routers.system as system_mod
 
-    orig_probe = system_mod._probe_ollama
-
-    async def _fake_probe():
-        return False, []
-
-    system_mod._probe_ollama = _fake_probe
-    try:
-        resp = await pi_test_client.get("/api/system/setup-status")
-    finally:
-        system_mod._probe_ollama = orig_probe
+    monkeypatch.setattr(system_mod, "_probe_ollama", _models_not_ready)
+    monkeypatch.setattr(system_mod, "_compute_model_warnings", _no_model_warnings)
+    resp = await pi_test_client.get("/api/system/setup-status/research")
 
     assert resp.status_code == 200, f"setup-status failed: {resp.text}"
     body = resp.json()
-    assert body["setup_completed"] is False
-    assert body["telegram_configured"] is False
-    assert body["topics_count"] == 0
+    assert body == {
+        "models_ready": False,
+        "models_downloading": [],
+        "topics_count": 0,
+        "model_warnings": [],
+    }
 
 
 # ---------------------------------------------------------------------------
-# Setup-status topics_count reflects real DB rows
+# Research setup status reflects real topic rows
 # ---------------------------------------------------------------------------
 
 
-# §A-SYS-05 — GET /api/system/setup-status: topics_count reflects real topics table
-# Verified: system.py:193 (SELECT COUNT(*) AS n FROM topics)
-
-
-async def test_setup_status_topics_count_reflects_real_db(
-    pi_test_client, contract_conn, monkeypatch
-):
-    """GET /api/system/setup-status topics_count reflects the real topics table row count.
+async def test_research_setup_status_topics_count_reflects_real_db(
+    pi_test_client: httpx.AsyncClient,
+    contract_conn: asyncpg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return the topic count from the real Research contract database.
 
     Inserts a topic row in the same transaction as the ASGI request (shared
-    contract_conn) and asserts topics_count >= 1.  Proves the dual-override
-    fixture shares the transactional connection for the topics COUNT query.
+    contract connection) and verifies that the route observes it.
     """
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     import paper_ingestion.routers.system as system_mod
 
-    # Insert a topic inside the contract transaction — visible to the ASGI route
     await contract_conn.execute(
         "INSERT INTO topics (name, query_terms) VALUES ('sys-contract-topic', ARRAY['test'])"
     )
 
-    orig_probe = system_mod._probe_ollama
-
-    async def _fake_probe():
-        return False, []
-
-    system_mod._probe_ollama = _fake_probe
-    try:
-        resp = await pi_test_client.get("/api/system/setup-status")
-    finally:
-        system_mod._probe_ollama = orig_probe
+    monkeypatch.setattr(system_mod, "_probe_ollama", _models_not_ready)
+    monkeypatch.setattr(system_mod, "_compute_model_warnings", _no_model_warnings)
+    resp = await pi_test_client.get("/api/system/setup-status/research")
 
     assert resp.status_code == 200, f"setup-status failed: {resp.text}"
     body = resp.json()
     assert body["topics_count"] >= 1, (
-        f"topics_count must be >= 1 after inserting a topic in the same txn; "
-        f"got {body['topics_count']} — SharedConnPool may not be sharing the txn connection"
-    )
-
-
-# §A-SYS-06 — GET /api/system/setup-status: setup_completed=True when user_config set
-# Verified: system.py:196 (coerce_bool(config.get("setup.completed"), default=False))
-
-
-async def test_setup_status_setup_completed_when_config_set(
-    pi_test_client, contract_conn, monkeypatch
-):
-    """GET /api/system/setup-status returns setup_completed=True when user_config row exists.
-
-    Inserts 'setup.completed' = 'true' (global, user_id IS NULL) in the same
-    transaction as the ASGI request. Proves the real user_config read path.
-    """
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    import paper_ingestion.routers.system as system_mod
-
-    await contract_conn.execute(
-        """INSERT INTO user_config (key, value, user_id)
-           VALUES ('setup.completed', 'true'::jsonb, NULL)
-           ON CONFLICT (key, user_id) DO UPDATE SET value = 'true'::jsonb
-           WHERE user_config.user_id IS NULL"""
-    )
-
-    orig_probe = system_mod._probe_ollama
-
-    async def _fake_probe():
-        return False, []
-
-    system_mod._probe_ollama = _fake_probe
-    try:
-        resp = await pi_test_client.get("/api/system/setup-status")
-    finally:
-        system_mod._probe_ollama = orig_probe
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["setup_completed"] is True, (
-        f"setup_completed must be True when user_config 'setup.completed'='true'; "
-        f"got {body['setup_completed']}"
+        "topics_count must include the topic inserted in the same transaction; "
+        f"got {body['topics_count']}"
     )

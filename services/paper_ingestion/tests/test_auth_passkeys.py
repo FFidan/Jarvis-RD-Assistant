@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from jarvis_common.testing_contract_apps import make_contract_client as _client
 
-from paper_ingestion.routers import auth_passkeys as pk
+from platform_api.routers import auth_passkeys as pk
 
 # ---------------------------------------------------------------------------
 # base64url helpers (unpadded, WebAuthn style)
@@ -52,9 +52,7 @@ def _req(origin: str | None) -> SimpleNamespace:
 
 
 def _no_app_base_url(monkeypatch) -> None:
-    monkeypatch.setattr(
-        pk, "get_paper_ingestion_settings", lambda: SimpleNamespace(app_base_url=None)
-    )
+    monkeypatch.setattr(pk, "get_platform_settings", lambda: SimpleNamespace(app_base_url=None))
 
 
 @pytest.mark.parametrize(
@@ -106,7 +104,7 @@ def test_match_origin_public_is_exact_match_only(monkeypatch):
     """
     monkeypatch.setattr(
         pk,
-        "get_paper_ingestion_settings",
+        "get_platform_settings",
         lambda: SimpleNamespace(app_base_url="https://jarvis.example.com:8443/app"),
     )
     match = pk._match_origin(_req("https://jarvis.example.com:8443"))
@@ -128,7 +126,7 @@ def test_match_origin_public_is_exact_match_only(monkeypatch):
 def test_match_origin_public_default_port_normalized(monkeypatch, app_base_url):
     """An explicit :443 (or none) in APP_BASE_URL matches the browser's port-less Origin."""
     monkeypatch.setattr(
-        pk, "get_paper_ingestion_settings", lambda: SimpleNamespace(app_base_url=app_base_url)
+        pk, "get_platform_settings", lambda: SimpleNamespace(app_base_url=app_base_url)
     )
     match = pk._match_origin(_req("https://jarvis.example.com"))
     assert match.rp_id == "jarvis.example.com"
@@ -147,7 +145,7 @@ def test_match_origin_public_default_port_normalized(monkeypatch, app_base_url):
 def test_app_base_origin_unusable_values(monkeypatch, app_base_url):
     """A malformed, non-https, or IP-literal APP_BASE_URL yields no public origin (fail-closed)."""
     monkeypatch.setattr(
-        pk, "get_paper_ingestion_settings", lambda: SimpleNamespace(app_base_url=app_base_url)
+        pk, "get_platform_settings", lambda: SimpleNamespace(app_base_url=app_base_url)
     )
     assert pk._app_base_origin() is None
 
@@ -276,11 +274,11 @@ _ORIGIN = "https://localhost"
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _passkey_app(contract_conn):
-    """PI app wired to the contract connection with the rate limiter disabled."""
+    """Platform app wired to the contract connection with rate limiting disabled."""
     from jarvis_common.testing import SharedConnPool
     from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app, limiter
+    from platform_api.deps import get_db_pool, limiter
+    from platform_api.main import app
 
     with patch_pi_test_app(
         SharedConnPool(contract_conn),
@@ -658,7 +656,7 @@ class TestPasskeyCeremonies:
 
         monkeypatch.setattr(
             pk,
-            "get_paper_ingestion_settings",
+            "get_platform_settings",
             lambda: SimpleNamespace(app_base_url=app_base_url or None),
         )
         uid, cookie = await _seed_user(contract_conn, f"pk-mode-{label}@contract.example.com")

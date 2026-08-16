@@ -44,6 +44,9 @@ SAFE_NAMES = frozenset(
         "get_current_user_id_or_bot",
         "require_admin",
         "require_admin_or_api_key",
+        "require_telegram_principal",
+        "require_unconfigured_or_admin",
+        "TelegramPrincipal",
     }
 )
 
@@ -55,10 +58,7 @@ _ROUTE_DECORATORS = frozenset({"get", "post", "put", "patch", "delete"})
 ALLOWLIST = frozenset(
     {
         "services/paper_ingestion/paper_ingestion/routers/system.py",
-        "services/paper_ingestion/paper_ingestion/routers/logs.py",
-        "services/paper_ingestion/paper_ingestion/routers/telegram.py",
         "services/paper_ingestion/paper_ingestion/routers/infra_events.py",
-        "services/paper_ingestion/paper_ingestion/routers/setup.py",
     }
 )
 
@@ -68,17 +68,22 @@ ALLOWLIST = frozenset(
 # justification. Per-user endpoints belong in caller-identity checks, not here.
 ROUTE_ALLOWLIST: dict[str, str] = {
     # Public auth flow — establishes identity, cannot require one first.
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /request-link": "public: starts magic-link auth",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /verify": "public: completes magic-link auth",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /logout": "session teardown, no user data read",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /api-key-session": "public: validates an API key and creates a session",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /request-link": "public: starts magic-link auth",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /verify": "public: completes magic-link auth",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /logout": "session teardown, no user data read",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /api-key-session": "public: validates an API key and creates a session",  # noqa: E501
     # Passkey sign-in — the same class as the magic-link flow above: a login
     # ceremony cannot require the session it exists to create. /login/begin is
     # discoverable (username-less), so it takes no identifier and cannot enumerate
     # users; both ceremonies require user verification and are origin-matched.
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/begin": "public: starts passkey auth (username-less, no user enumeration)",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/finish": "public: completes passkey auth",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data (POST so the browser attaches Origin on the same-origin probe)",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth_passkeys.py::POST /login/begin": "public: starts passkey auth (username-less, no user enumeration)",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth_passkeys.py::POST /login/finish": "public: completes passkey auth",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth_passkeys.py::POST /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data (POST so the browser attaches Origin on the same-origin probe)",  # noqa: E501
+    # Platform-owned bootstrap and gateway-auth routes use purpose-built guards
+    # rather than caller-ID dependencies.
+    "services/platform_api/platform_api/routers/internal_auth.py::GET /authorize": "internal: trusted gateway peer plus session or operations-key authorization",  # noqa: E501
+    "services/platform_api/platform_api/routers/setup.py::GET /status": "public: fail-closed setup-state probe required before authentication",  # noqa: E501
+    "services/platform_api/platform_api/routers/setup.py::POST /admin": "bootstrap: setup-token-gated first-admin creation under a database lock",  # noqa: E501
     # Restore status requires an admin session, operations key, or restore token.
     # It resolves no user ID, so the caller-identity scan cannot recognize that
     # authentication. The database-independent poll remains available during a

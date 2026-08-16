@@ -14,9 +14,9 @@ from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import (
     auth_check,
     get_config,
-    get_db,
     get_http,
     get_jarvis_user_id,
+    get_platform_http,
 )
 from telegram_bot.handlers.rate_limit import rate_limit
 
@@ -41,8 +41,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         Bot context.
     """
     config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    platform_client = get_platform_http(context)
+    authorized, jarvis_user_id = await auth_check(update, config, platform_client)
     if not authorized:
         chat_id = update.effective_chat.id if update.effective_chat else "unknown"
         logger.warning("Unauthorised /start attempt from chat_id=%s", chat_id)

@@ -1939,13 +1939,14 @@ preflight_disk_lib() {
 # tests/test_docker_compose_invariants.py asserts this list still matches the
 # published set declared in docker-compose.yml, and that every entry point uses it.
 # shellcheck disable=SC2034  # consumed by the scripts that source this library
-PUBLISHED_SERVICES_BASE=(paper_ingestion learning_engine dashboard restore-uploader)
+PUBLISHED_SERVICES_BASE=(platform_api paper_ingestion learning_engine dashboard restore-uploader)
 # shellcheck disable=SC2034  # consumed by the scripts that source this library
 PUBLISHED_SERVICE_TELEGRAM=telegram_bot
 # The image repositories behind that set, used to recognise a warm re-run on disk.
 # shellcheck disable=SC2034  # consumed by the scripts that source this library
 PUBLISHED_IMAGE_REPOS=(
   ghcr.io/limitcycle-oss/jarvis-paper-ingestion
+  ghcr.io/limitcycle-oss/jarvis-platform-api
   ghcr.io/limitcycle-oss/jarvis-learning-engine
   ghcr.io/limitcycle-oss/jarvis-dashboard
 )
@@ -1984,7 +1985,7 @@ PROFILE_REGISTRY=(
 # MANDATORY_HEALTH_BASE — the always-on services every setup path must wait on.
 # Shared here so fresh and existing-install paths cannot drift.
 # shellcheck disable=SC2034  # consumed by the scripts that source this library
-MANDATORY_HEALTH_BASE="postgres ollama litellm paper_ingestion learning_engine dashboard restore-uploader"
+MANDATORY_HEALTH_BASE="postgres ollama litellm platform_api paper_ingestion learning_engine dashboard restore-uploader"
 
 # registry_profiles_to_persist -> space-separated profile flags whose rows are
 # persist=yes. setup.sh intersects this with the run's active profiles to build

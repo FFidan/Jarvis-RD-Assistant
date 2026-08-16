@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
-import paper_ingestion.routers.admin as admin_router
+import platform_api.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException, Response
 from jarvis_common.email import MagicLinkDelivery
@@ -583,7 +583,7 @@ async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
         )
     )
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.admin"):
+    with caplog.at_level(logging.WARNING, logger="platform_api.routers.admin"):
         link = admin_router._build_invite_link(request, "tok123")
 
     assert link == "https://origin/auth/verify#token=tok123"
@@ -591,7 +591,7 @@ async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
     warnings = [
         r
         for r in caplog.records
-        if r.name == "paper_ingestion.routers.admin" and r.levelno == logging.WARNING
+        if r.name == "platform_api.routers.admin" and r.levelno == logging.WARNING
     ]
     assert len(warnings) == 1, (
         "Expected exactly one warning on the admin logger; got "
@@ -643,7 +643,7 @@ async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) 
 
     expected_hash = hashlib.sha256(b"bob@example.com").hexdigest()
 
-    with caplog.at_level(logging.ERROR, logger="paper_ingestion.routers.admin"):
+    with caplog.at_level(logging.ERROR, logger="platform_api.routers.admin"):
         await admin_router.invite_user(body, request)
 
     assert any(expected_hash in r.message for r in caplog.records), (

@@ -82,8 +82,8 @@ async def setup_client(contract_conn, monkeypatch):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
     get_secrets_settings.cache_clear()
@@ -112,8 +112,8 @@ async def setup_app(contract_conn, monkeypatch):
     from jarvis_common import verify_api_key
     from jarvis_common.settings import get_secrets_settings
     from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
     get_secrets_settings.cache_clear()
@@ -777,7 +777,7 @@ async def test_first_admin_rolls_back_when_mandatory_owner_audit_fails(
     """Bootstrap ownership and its security audit are one atomic mutation."""
     import contextlib
 
-    from paper_ingestion.routers import setup as setup_router
+    from platform_api.routers import setup as setup_router
 
     async def _fail_audit(*_args, **_kwargs):
         raise RuntimeError("audit unavailable")

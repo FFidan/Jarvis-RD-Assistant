@@ -127,6 +127,7 @@ async def test_populate_state_accepts_valid_session(mock_pool):
     assert request.state.user_id == 42
     assert request.state.user_email == "test@example.com"
     assert request.state.user_role == "user"
+    assert request.state.session_id == "session-id"
 
 
 @pytest.mark.asyncio

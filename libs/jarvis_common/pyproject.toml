@@ -11,6 +11,7 @@ maintainers = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
+    "apscheduler>=3.10.0",
     "asyncpg>=0.30.0",
     "asyncpg-listen>=0.0.9",
     "cryptography>=50.0.0",

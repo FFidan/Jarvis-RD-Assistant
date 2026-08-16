@@ -24,7 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from paper_ingestion.routers.setup import (
+from platform_api.routers.setup import (
     SmtpBody,
     _reject_non_public_host,
     _send_test_email,
@@ -84,7 +84,7 @@ async def test_public_host_send_succeeds(monkeypatch: pytest.MonkeyPatch) -> Non
     mock_send = AsyncMock(name="aiosmtplib.send")
     monkeypatch.setattr(aiosmtplib, "send", mock_send)
     monkeypatch.setattr(
-        "paper_ingestion.routers.setup.connect_pinned_socket",
+        "platform_api.routers.setup.connect_pinned_socket",
         AsyncMock(return_value=socket.socket()),
     )
 
@@ -127,7 +127,7 @@ async def test_send_test_email_tls_flags_by_port(
     mock_send = AsyncMock(name="aiosmtplib.send")
     monkeypatch.setattr(aiosmtplib, "send", mock_send)
     monkeypatch.setattr(
-        "paper_ingestion.routers.setup.connect_pinned_socket",
+        "platform_api.routers.setup.connect_pinned_socket",
         AsyncMock(return_value=socket.socket()),
     )
 

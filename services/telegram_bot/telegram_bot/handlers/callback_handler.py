@@ -22,7 +22,7 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot import services_client
 from telegram_bot.formatters import format_paper_detail, format_project_status
-from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.helpers import auth_check, get_config, get_http, get_platform_http
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,8 @@ async def _callback_auth(
     so that callers can provide a custom message if needed.
     """
     config = get_config(context)
-    db_pool = get_db(context)
-    return await auth_check(update, config, db_pool)
+    platform_client = get_platform_http(context)
+    return await auth_check(update, config, platform_client)
 
 
 # ---------------------------------------------------------------------------

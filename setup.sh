@@ -2051,7 +2051,7 @@ if [ -f .env ]; then
     for svc in "${KEEP_MANDATORY_SVCS[@]}"; do
       case "$svc" in
         ollama)                          _keep_budget=180 ;;
-        paper_ingestion|learning_engine) _keep_budget=3600 ;;
+        platform_api|paper_ingestion|learning_engine) _keep_budget=3600 ;;
         langfuse)                        _keep_budget=240 ;;
         *)                               _keep_budget=60 ;;
       esac
@@ -3218,7 +3218,7 @@ SETUP_FAILED=()
 for svc in "${MANDATORY_SVCS[@]}"; do
   case "$svc" in
     ollama)                          _budget=180 ;;  # model pull can be slow
-    paper_ingestion|learning_engine) [ "$_FIRST_RUN_PULL" -eq 1 ] && _budget=3600 || _budget=60 ;;
+    platform_api|paper_ingestion|learning_engine) [ "$_FIRST_RUN_PULL" -eq 1 ] && _budget=3600 || _budget=60 ;;
     langfuse)                        _budget=240 ;;  # heavy Node app + its own postgres
     *)                               _budget=60  ;;
   esac

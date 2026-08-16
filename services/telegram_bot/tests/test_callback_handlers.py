@@ -85,7 +85,7 @@ _TEST_CHAT_ID = 12345
 
 
 def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_CHAT_ID):
-    """Build (Update, Context, mock_db, mock_http) tuple for callback tests."""
+    """Build callback state with paired Platform and downstream HTTP clients."""
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
@@ -103,17 +103,25 @@ def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_C
 
     context = MagicMock()
     config = make_bot_config(BotConfig)
-    mock_db = AsyncMock()
+    mock_platform = AsyncMock()
+    mock_platform.get.return_value = make_http_response(
+        {
+            "user_id": 1,
+            "chat_id": chat_id,
+            "telegram_username": None,
+            "paired_at": None,
+        }
+    )
     mock_http = AsyncMock()
 
     context.application = MagicMock()
     context.application.bot_data = {
         "config": config,
-        "db_pool": mock_db,
+        "platform_client": mock_platform,
         "http_client": mock_http,
     }
 
-    return update, context, mock_db, mock_http
+    return update, context, mock_platform, mock_http
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +169,8 @@ async def test_paper_detail_api_failure():
 
 
 @pytest.mark.asyncio
-async def test_paper_detail_callback_includes_api_key_header():
-    """H7: paper_detail_callback passes X-API-Key header to the GET request."""
+async def test_paper_detail_callback_uses_only_paired_user_marker():
+    """The downstream request carries no general API key."""
     update, context, _, mock_http = _make_callback_update_and_context("paper_detail_99")
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -177,7 +185,8 @@ async def test_paper_detail_callback_includes_api_key_header():
     mock_http.get.assert_awaited_once()
     call_kwargs = mock_http.get.await_args[1]
     headers = call_kwargs["headers"]
-    assert headers.get("X-API-Key") == "test-key"
+    assert headers.get("X-Owner-User-Id") == "1"
+    assert "X-API-Key" not in headers
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +444,7 @@ async def test_paper_action_auth_fail_answers_query():
     # auth_check's DB fallback queries user_config; return None to take the
     # explicit "no owner paired" reject path.  Also return None for the
     # telegram_user_pairings lookup (migration 071) so the denial is complete.
-    mock_db.fetchval.return_value = None
-    mock_db.fetchrow.return_value = None
+    mock_db.get.return_value = make_http_response(None, status=404)
 
     await paper_action_callback(update, context)
 
@@ -451,8 +459,7 @@ async def test_paper_feedback_auth_fail_answers_query():
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         "paper:feedback_pos:42:pulse_thumbs", chat_id=99999
     )
-    mock_db.fetchval.return_value = None
-    mock_db.fetchrow.return_value = None
+    mock_db.get.return_value = make_http_response(None, status=404)
 
     await paper_feedback_callback(update, context)
 
@@ -787,7 +794,7 @@ async def test_task_done_forwards_owner_user_id_for_paired_user():
     assert put_call.args[0].endswith("/api/tasks/5")
     assert put_call.kwargs["json"] == {"status": "done"}
     assert put_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert put_call.kwargs["headers"].get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in put_call.kwargs["headers"]
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "done" in text.lower() or "5" in text
 
@@ -892,11 +899,7 @@ def test_start_review_not_registered_in_callback_handler():
 def _make_unauthed_callback(callback_data: str) -> tuple:
     """Build (update, context, mock_db) for an unauthorised caller (chat_id != 12345)."""
     update, context, mock_db, _ = _make_callback_update_and_context(callback_data, chat_id=99999)
-    # auth_check DB path returns None → no paired owner → denied.
-    # Also return None for telegram_user_pairings (migration 071) so denial
-    # propagates through all three lookup stages.
-    mock_db.fetchval.return_value = None
-    mock_db.fetchrow.return_value = None
+    mock_db.get.return_value = make_http_response(None, status=404)
     return update, context, mock_db
 
 
@@ -961,18 +964,19 @@ _PAIRED_USER_ID = 42
 def _make_paired_callback(callback_data: str) -> tuple:
     """Build (update, context, mock_db, mock_http) for a paired multi-tenant chat.
 
-    The chat_id does not match the env-var config, so auth_check will query
-    telegram_user_pairings.  We set mock_db.fetchrow to return a row with
-    user_id=_PAIRED_USER_ID so auth_check grants access as a paired user.
+    Platform resolves the chat to ``_PAIRED_USER_ID`` for downstream scoping.
     """
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         callback_data, chat_id=_PAIRED_CHAT_ID
     )
-    # auth_check path 1 (env var): no match — chat_id != _TEST_CHAT_ID
-    # auth_check path 2 (user_config owner): fetchval returns None
-    mock_db.fetchval.return_value = None
-    # auth_check path 3 (telegram_user_pairings): return paired row
-    mock_db.fetchrow.return_value = {"user_id": _PAIRED_USER_ID}
+    mock_db.get.return_value = make_http_response(
+        {
+            "user_id": _PAIRED_USER_ID,
+            "chat_id": _PAIRED_CHAT_ID,
+            "telegram_username": None,
+            "paired_at": None,
+        }
+    )
     return update, context, mock_db, mock_http
 
 
@@ -993,7 +997,7 @@ async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert headers.get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
@@ -1008,7 +1012,7 @@ async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
     mock_http.request.assert_awaited_once()
     headers = mock_http.request.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert headers.get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
@@ -1026,7 +1030,7 @@ async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert headers.get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
@@ -1150,9 +1154,18 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
 
     context = MagicMock()
     context.application = MagicMock()
+    platform_client = AsyncMock()
+    platform_client.get.return_value = make_http_response(
+        {
+            "user_id": 1,
+            "chat_id": _TEST_CHAT_ID,
+            "telegram_username": None,
+            "paired_at": None,
+        }
+    )
     context.application.bot_data = {
         "config": make_bot_config(BotConfig),
-        "db_pool": AsyncMock(),
+        "platform_client": platform_client,
         "http_client": AsyncMock(),
     }
 

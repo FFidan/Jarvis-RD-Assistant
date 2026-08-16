@@ -6,6 +6,7 @@ Each handler function is tested directly with mocked Update + Context objects.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -776,8 +777,8 @@ async def test_post_init_calls_set_my_commands():
     bot_mock = MagicMock()
     bot_mock.set_my_commands = AsyncMock()
 
-    db_pool_mock = AsyncMock()
-    db_pool_mock.close = AsyncMock()
+    platform_client = AsyncMock()
+    backend_client = AsyncMock()
 
     application = MagicMock()
     application.bot = bot_mock
@@ -785,21 +786,28 @@ async def test_post_init_calls_set_my_commands():
         "config": make_bot_config(BotConfig),
     }
 
-    # Stub create_db_pool and JarvisScheduler so post_init doesn't blow up.
     with (
-        patch("telegram_bot.main.create_db_pool", return_value=db_pool_mock),
+        patch(
+            "telegram_bot.main.pinned_async_client",
+            side_effect=[platform_client, backend_client],
+        ),
         patch("telegram_bot.main.JarvisScheduler") as mock_sched_cls,
+        patch("telegram_bot.main.start_internal_server", new_callable=AsyncMock),
+        patch("telegram_bot.main._secrets_rotation_watcher", new_callable=AsyncMock),
     ):
         sched_instance = AsyncMock()
         sched_instance.load_and_start = AsyncMock()
         mock_sched_cls.return_value = sched_instance
 
         await post_init(application)
+        await asyncio.sleep(0)
 
     bot_mock.set_my_commands.assert_awaited_once()
     commands = bot_mock.set_my_commands.call_args[0][0]
     names = {c.command for c in commands}
     assert names == {spec.name for spec in menu_command_specs()}
+    assert application.bot_data["platform_client"] is platform_client
+    assert application.bot_data["http_client"] is backend_client
 
 
 # ---------------------------------------------------------------------------
@@ -1104,7 +1112,7 @@ async def test_papers_command_sends_owner_user_id_for_paired_user():
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == "7"
-    assert headers.get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
@@ -1129,7 +1137,7 @@ async def test_stats_command_sends_owner_user_id_for_paired_user():
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == "7"
-    assert headers.get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
@@ -1231,7 +1239,7 @@ async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
-    """/briefing sends X-Owner-User-Id + X-API-Key on the /api/stats (due cards) call."""
+    """/briefing sends only the paired-user marker to the stats client."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.side_effect = [
@@ -1244,12 +1252,12 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
     with _paired_auth_patch(7):
         await briefing_command(update, context)
 
-    # Locate the /api/stats (due-card) GET and verify it carries both headers.
+    # Locate the /api/stats GET and verify the local assertion marker.
     stats_calls = [c for c in mock_http.get.await_args_list if c.args[0].endswith("/api/stats")]
     assert stats_calls, "briefing must call /api/stats for due-card count"
     headers = stats_calls[0].kwargs["headers"]
     assert headers.get("X-Owner-User-Id") == "7"
-    assert headers.get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in headers
 
 
 # ---------------------------------------------------------------------------
@@ -1287,7 +1295,7 @@ async def test_focus_start_sends_owner_user_id_for_paired_user():
     assert headers.get("X-Owner-User-Id") == "42", (
         f"focus start must send X-Owner-User-Id=42, headers={headers}"
     )
-    assert headers.get("X-API-Key") == "test-key"
+    assert "X-API-Key" not in headers
     assert mock_http.post.await_args.kwargs["json"] == {
         "duration_seconds": 1500,
         "source": "telegram",

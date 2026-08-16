@@ -4,11 +4,9 @@ import html
 import logging
 import re
 
-import asyncpg
 import httpx
 from telegram import Bot
 
-from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import (
@@ -18,6 +16,7 @@ from telegram_bot.formatters import (
     truncate,
 )
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
+from telegram_bot.platform_client import list_user_pairings
 
 # HTML tags supported by Telegram's HTML parse mode that can span text.
 _OPEN_TAG_RE = re.compile(r"<(b|i|u|s|a|code|pre|tg-spoiler)(?:\s[^>]*)?>", re.IGNORECASE)
@@ -226,7 +225,7 @@ async def _send_chunked(bot: Bot, chat_id: int, lines: list[str]) -> None:
 
 async def run_paper_digest(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
     *,
@@ -241,14 +240,14 @@ async def run_paper_digest(
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool.
+    platform_client : httpx.AsyncClient
+        Scoped Platform client used to list active pairings.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
         Bot configuration.
     """
-    pairings = await _owner.list_user_pairings(db_pool)
+    pairings = await list_user_pairings(platform_client, config)
     if not pairings:
         logger.warning(
             "paper_digest skipped: no Telegram pairings exist — use /pair in Telegram to set up"

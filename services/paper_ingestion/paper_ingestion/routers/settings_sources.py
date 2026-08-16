@@ -14,6 +14,13 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
 from jarvis_common.auth import require_admin
+from jarvis_common.config_metadata import (
+    _NUDGE_ALLOWED_COLUMNS,
+    _NUDGE_JSONB_COLUMNS,
+    _SOURCE_ALLOWED_COLUMNS,
+    _SOURCE_JSONB_COLUMNS,
+)
+from jarvis_common.config_validators import _validate_zotero_cron
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -22,16 +29,6 @@ from paper_ingestion.models import (
     NudgeUpdate,
     SourceResponse,
     SourceUpdate,
-)
-from paper_ingestion.services.config_metadata import (
-    _NUDGE_ALLOWED_COLUMNS,
-    _NUDGE_JSONB_COLUMNS,
-    _SOURCE_ALLOWED_COLUMNS,
-    _SOURCE_JSONB_COLUMNS,
-)
-from paper_ingestion.services.config_validators import _validate_zotero_cron
-from paper_ingestion.services.model_assignment import (
-    reload_telegram_nudges,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,9 +94,6 @@ async def update_nudge(
             _NUDGE_ALLOWED_COLUMNS,
             jsonb_columns=_NUDGE_JSONB_COLUMNS,
         )
-
-    # Best-effort: notify telegram_bot to reload its nudge jobs
-    await reload_telegram_nudges()
 
     return NudgeResponse(**dict(row))
 

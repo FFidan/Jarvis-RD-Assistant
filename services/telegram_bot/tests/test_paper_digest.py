@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import paper_digest
 from telegram_bot.orchestration.paper_digest import _balance_chunk
+from telegram_bot.platform_client import UserPairing
 
 
 @pytest.mark.asyncio
@@ -30,7 +31,7 @@ async def test_fetch_digest_from_api_returns_payload_and_auth_header():
 
     assert result == {"topics": [{"name": "LLMs"}]}
     _, kwargs = http_client.get.await_args
-    assert kwargs["headers"]["X-API-Key"] == "secret"
+    assert "X-API-Key" not in kwargs["headers"]
 
 
 @pytest.mark.asyncio
@@ -299,8 +300,6 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
     db_pool = AsyncMock()
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
-    from telegram_bot.owner import UserPairing
-
     deliveries: list[tuple[int, list[str]]] = []
 
     async def _capturing_send(bot_arg, chat_id: int, lines: list[str]) -> None:
@@ -308,7 +307,7 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
 
     with (
         patch(
-            "telegram_bot.owner.list_user_pairings",
+            "telegram_bot.orchestration.paper_digest.list_user_pairings",
             AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
         ),
         patch.object(
@@ -348,8 +347,6 @@ async def test_run_paper_digest_emits_absolute_inbox_link_when_base_url_set():
         jarvis_base_url="https://jarvis.example.com",
     )
 
-    from telegram_bot.owner import UserPairing
-
     deliveries: list[list[str]] = []
 
     async def _capturing_send(_bot, _chat_id: int, lines: list[str]) -> None:
@@ -357,7 +354,7 @@ async def test_run_paper_digest_emits_absolute_inbox_link_when_base_url_set():
 
     with (
         patch(
-            "telegram_bot.owner.list_user_pairings",
+            "telegram_bot.orchestration.paper_digest.list_user_pairings",
             AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
         ),
         patch.object(
@@ -395,8 +392,6 @@ async def test_run_paper_digest_escapes_quote_in_base_url_href():
         jarvis_base_url='https://jarvis.example.com/"><script>',
     )
 
-    from telegram_bot.owner import UserPairing
-
     deliveries: list[list[str]] = []
 
     async def _capturing_send(_bot, _chat_id: int, lines: list[str]) -> None:
@@ -404,7 +399,7 @@ async def test_run_paper_digest_escapes_quote_in_base_url_href():
 
     with (
         patch(
-            "telegram_bot.owner.list_user_pairings",
+            "telegram_bot.orchestration.paper_digest.list_user_pairings",
             AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
         ),
         patch.object(
@@ -434,8 +429,6 @@ async def test_run_paper_digest_omits_inbox_link_without_base_url():
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     assert config.jarvis_base_url is None  # guard: default
 
-    from telegram_bot.owner import UserPairing
-
     deliveries: list[list[str]] = []
 
     async def _capturing_send(_bot, _chat_id: int, lines: list[str]) -> None:
@@ -443,7 +436,7 @@ async def test_run_paper_digest_omits_inbox_link_without_base_url():
 
     with (
         patch(
-            "telegram_bot.owner.list_user_pairings",
+            "telegram_bot.orchestration.paper_digest.list_user_pairings",
             AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
         ),
         patch.object(
@@ -471,11 +464,9 @@ async def test_run_paper_digest_warns_when_api_returns_no_data():
     db_pool = AsyncMock()
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
-    from telegram_bot.owner import UserPairing
-
     with (
         patch(
-            "telegram_bot.owner.list_user_pairings",
+            "telegram_bot.orchestration.paper_digest.list_user_pairings",
             AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
         ),
         patch.object(paper_digest, "_fetch_digest_from_api", AsyncMock(return_value=None)),
@@ -499,8 +490,6 @@ async def test_paper_digest_per_pairing_user_scope():
     db_pool = AsyncMock()
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
-    from telegram_bot.owner import UserPairing
-
     fetch_calls: list[tuple[int | None]] = []
 
     async def _capturing_fetch(_http_client, _config, user_id: int | None = None) -> dict:
@@ -509,7 +498,7 @@ async def test_paper_digest_per_pairing_user_scope():
 
     with (
         patch(
-            "telegram_bot.owner.list_user_pairings",
+            "telegram_bot.orchestration.paper_digest.list_user_pairings",
             AsyncMock(
                 return_value=[
                     UserPairing(user_id=10, chat_id=1000),
@@ -539,8 +528,6 @@ async def test_digest_continues_after_blocked_user():
     db_pool = AsyncMock()
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
 
-    from telegram_bot.owner import UserPairing
-
     block_chat_id = 111
     good_chat_id = 222
     delivered_chats: list[int] = []
@@ -552,7 +539,7 @@ async def test_digest_continues_after_blocked_user():
 
     with (
         patch(
-            "telegram_bot.owner.list_user_pairings",
+            "telegram_bot.orchestration.paper_digest.list_user_pairings",
             AsyncMock(
                 return_value=[
                     UserPairing(user_id=1, chat_id=block_chat_id),

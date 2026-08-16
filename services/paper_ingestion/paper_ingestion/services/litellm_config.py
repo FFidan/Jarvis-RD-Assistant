@@ -29,8 +29,16 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from jarvis_common.config_metadata import ROLE_TO_ALIAS
 from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
+from jarvis_common.llm_provider_registry import (
+    ProviderDefinition,
+    provider_for_id,
+    provider_for_prefix,
+    provider_model_for_delivery,
+    validate_custom_openai_base_url_for_outbound,
+)
 
 from paper_ingestion.services.litellm_api import (
     LiteLLMDeployment,
@@ -38,13 +46,6 @@ from paper_ingestion.services.litellm_api import (
     _post_model_delete,
     _post_model_new,
     get_litellm_deployments,
-)
-from paper_ingestion.services.llm_provider_registry import (
-    ProviderDefinition,
-    provider_for_id,
-    provider_for_prefix,
-    provider_model_for_delivery,
-    validate_custom_openai_base_url_for_outbound,
 )
 from paper_ingestion.services.model_identifiers import (
     NAMESPACED_PROVIDER_KINDS,
@@ -70,12 +71,6 @@ class ThinkingPreferenceState(Enum):
     EXPLICIT_ENABLED = "explicit_enabled"
     READ_FAILED = "read_failed"
 
-
-ROLE_TO_ALIAS: dict[str, str] = {
-    "llm.smart_model": "smart",
-    "llm.fast_model": "fast",
-    "llm.embed_model": "embed",
-}
 
 # Tuned defaults for deployments the app creates when an alias has no existing
 # deployment to inherit from (first bootstrap after the YAML de-seed). These
@@ -770,7 +765,7 @@ async def _mirror_num_ctx_budget(
         and is_local_ollama(new_model)
     ):
         return
-    from paper_ingestion.services.config_db import _upsert_system_num_ctx  # noqa: PLC0415
+    from jarvis_common.config_store import _upsert_system_num_ctx  # noqa: PLC0415
 
     async with db_pool.acquire() as conn:
         await _upsert_system_num_ctx(conn, alias, effective_num_ctx)

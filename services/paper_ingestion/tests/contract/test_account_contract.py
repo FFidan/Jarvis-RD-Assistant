@@ -27,11 +27,11 @@ pytestmark = [
 
 
 async def test_a1_get_account_without_browser_identity_returns_401(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        transport=httpx.ASGITransport(app=_platform_app_with_pool),
         base_url="http://localhost",
     ) as client:
         response = await client.get("/api/account")
@@ -42,7 +42,7 @@ async def test_a1_get_account_without_browser_identity_returns_401(
 async def test_a1_anonymous_patch_stays_globally_blocked_without_mutation(
     contract_two_users,
     contract_conn,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     before = await contract_conn.fetchval(
@@ -50,7 +50,7 @@ async def test_a1_anonymous_patch_stays_globally_blocked_without_mutation(
         contract_two_users.user_a_id,
     )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        transport=httpx.ASGITransport(app=_platform_app_with_pool),
         base_url="http://localhost",
     ) as client:
         response = await client.patch(
@@ -68,7 +68,7 @@ async def test_a1_anonymous_patch_stays_globally_blocked_without_mutation(
 
 async def test_a1_get_account_returns_own_profile(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """Covers map row A1: GET /api/account returns caller's own AccountResponse.
@@ -76,7 +76,7 @@ async def test_a1_get_account_returns_own_profile(
     Verified: account.py:89-102 get_account at HEAD d21aaea8.
     Survivor-of: test_account.py mock-unit tests for get_account.
     """
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with _make_client(_platform_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/account")
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
@@ -91,14 +91,14 @@ async def test_a1_get_account_returns_own_profile(
 
 async def test_a1_get_account_user_b_sees_own_profile(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """Covers map row A1: user B gets their own profile, not user A's data.
 
     Verified: account.py:95 current_user_id_strict(request) — strictly scoped.
     """
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+    async with _make_client(_platform_app_with_pool, contract_two_users.cookie_b) as c:
         resp = await c.get("/api/account")
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
@@ -118,7 +118,7 @@ async def test_a1_get_account_user_b_sees_own_profile(
 
 async def test_a2_patch_account_display_name_persists(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -128,7 +128,7 @@ async def test_a2_patch_account_display_name_persists(
     Survivor-of: test_account.py mock-unit tests for update_account.
     """
     new_name = "Contract Test Name"
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with _make_client(_platform_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.patch("/api/account", json={"display_name": new_name})
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
@@ -151,7 +151,7 @@ async def test_a2_patch_account_display_name_persists(
 
 async def test_a2_patch_account_email_clash_returns_409(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -165,7 +165,7 @@ async def test_a2_patch_account_email_clash_returns_409(
         contract_two_users.user_b_id,
     )
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with _make_client(_platform_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.patch("/api/account", json={"email": user_b_email})
 
     assert resp.status_code == 409, (
@@ -176,7 +176,7 @@ async def test_a2_patch_account_email_clash_returns_409(
 # ---------------------------------------------------------------------------
 # E1.PI extensions — magic-link token race conditions
 #
-# The verify endpoint lives in routers/auth.py; we reuse _pi_app_with_pool
+# The verify endpoint lives in routers/auth.py; we reuse _platform_app_with_pool
 # (it wires db_pool + removes the autouse auth stub) and hit /api/auth/verify,
 # which verify_api_key exempts by path prefix before any key comparison.
 #
@@ -186,7 +186,7 @@ async def test_a2_patch_account_email_clash_returns_409(
 
 async def test_e1_magic_link_token_consumed_twice_second_fails(
     contract_conn,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """POST /api/auth/verify: consuming the same valid token twice — second attempt returns 400.
@@ -216,7 +216,7 @@ async def test_e1_magic_link_token_consumed_twice_second_fails(
 
     # First consume — must succeed
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        transport=httpx.ASGITransport(app=_platform_app_with_pool),
         base_url="http://localhost",
     ) as c:
         resp1 = await c.post("/api/auth/verify", json={"token": raw_token})
@@ -227,7 +227,7 @@ async def test_e1_magic_link_token_consumed_twice_second_fails(
 
     # Second consume — same token, now used_at is set → must return 400
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        transport=httpx.ASGITransport(app=_platform_app_with_pool),
         base_url="http://localhost",
     ) as c:
         resp2 = await c.post("/api/auth/verify", json={"token": raw_token})
@@ -239,7 +239,7 @@ async def test_e1_magic_link_token_consumed_twice_second_fails(
 
 async def test_e1_magic_link_expired_token_returns_400(
     contract_conn,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """POST /api/auth/verify: expired token (expires_at in the past) returns 400.
@@ -266,7 +266,7 @@ async def test_e1_magic_link_expired_token_returns_400(
     )
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        transport=httpx.ASGITransport(app=_platform_app_with_pool),
         base_url="http://localhost",
     ) as c:
         resp = await c.post("/api/auth/verify", json={"token": raw_token})
@@ -277,7 +277,7 @@ async def test_e1_magic_link_expired_token_returns_400(
 
 
 async def test_e1_magic_link_invalid_token_returns_400(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """POST /api/auth/verify: completely unknown token returns 400 (no row found).
@@ -286,7 +286,7 @@ async def test_e1_magic_link_invalid_token_returns_400(
     Survivor-of: test_auth_magic_link.py invalid-token mock tests.
     """
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        transport=httpx.ASGITransport(app=_platform_app_with_pool),
         base_url="http://localhost",
     ) as c:
         resp = await c.post(
@@ -306,7 +306,7 @@ async def test_e1_magic_link_invalid_token_returns_400(
 async def test_a2_patch_account_email_verification_sent_true_when_smtp_succeeds(
     contract_two_users,
     contract_conn,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     monkeypatch,
 ):
@@ -323,10 +323,10 @@ async def test_a2_patch_account_email_verification_sent_true_when_smtp_succeeds(
     new_email = "smtp-success-contract@contract.example.com"
 
     with patch(
-        "paper_ingestion.routers.account.send_magic_link",
+        "platform_api.routers.account.send_magic_link",
         new=AsyncMock(return_value=MagicLinkDelivery.DELIVERED),
     ):
-        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        async with _make_client(_platform_app_with_pool, contract_two_users.cookie_a) as c:
             resp = await c.patch("/api/account", json={"email": new_email})
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
@@ -339,7 +339,7 @@ async def test_a2_patch_account_email_verification_sent_true_when_smtp_succeeds(
 async def test_confirm_email_change_soft_deleted_clash_returns_409(
     contract_two_users,
     contract_conn,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """POST /api/account/confirm-email: target email belongs to a soft-deleted user → 409, not 500.
@@ -376,7 +376,7 @@ async def test_confirm_email_change_soft_deleted_clash_returns_409(
 
     from jarvis_common.testing_contract_apps import make_contract_client as _make_client
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with _make_client(_platform_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.post("/api/account/confirm-email", json={"token": raw_token})
 
     assert resp.status_code == 409, (

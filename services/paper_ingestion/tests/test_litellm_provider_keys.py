@@ -368,7 +368,7 @@ async def test_update_litellm_model_redelivers_custom_endpoint_base_url_change(m
 @pytest.mark.asyncio
 async def test_update_litellm_model_rejects_blocked_custom_endpoint(monkeypatch):
     """Blocked custom endpoints fail before LiteLLM receives a deployment."""
-    import paper_ingestion.services.llm_provider_registry as registry
+    import jarvis_common.llm_provider_registry as registry
 
     monkeypatch.setenv("LITELLM_BASE_URL", LITELLM)
     pool, conn = _make_pool_and_conn()

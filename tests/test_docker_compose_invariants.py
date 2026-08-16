@@ -11,6 +11,7 @@ import re
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -19,6 +20,7 @@ REPO_ROOT = Path(__file__).parent.parent
 
 # Every service that pairs an `image:` tag with a `build:` context (drift guard).
 BUILT_SERVICES = {
+    "platform_api",
     "paper_ingestion",
     "learning_engine",
     "telegram_bot",
@@ -29,6 +31,7 @@ BUILT_SERVICES = {
 # Published to GHCR and pulled by default; the `build:` block is kept only for the
 # contributor / `--build-local` path.
 PUBLISHED_SERVICES = {
+    "platform_api",
     "paper_ingestion",
     "learning_engine",
     "telegram_bot",
@@ -123,28 +126,6 @@ def test_ollama_bootstrap_fails_after_bounded_retries(compose, tmp_path: Path) -
     assert result.returncode != 0
     assert "research-model" in result.stdout + result.stderr
     assert (tmp_path / "count").read_text(encoding="utf-8") == "3"
-
-
-def test_telegram_bot_has_langfuse_init_secrets(compose):
-    """
-    Verify that telegram_bot service has langfuse_init_pk and langfuse_init_sk
-    mounted as Docker secrets.
-
-    Without these, the langfuse client silently fails to initialize tracing
-    (LANGFUSE_PUBLIC_KEY_FILE and LANGFUSE_SECRET_KEY_FILE point to missing files).
-    """
-    secrets = compose["services"]["telegram_bot"]["secrets"]
-    # Handle both string entries and dict entries (e.g., {source: ..., target: ...})
-    secret_names = [s if isinstance(s, str) else s.get("source") for s in secrets]
-
-    assert "langfuse_init_pk" in secret_names, (
-        "telegram_bot service missing langfuse_init_pk secret mount; "
-        "langfuse tracing will be silently disabled"
-    )
-    assert "langfuse_init_sk" in secret_names, (
-        "telegram_bot service missing langfuse_init_sk secret mount; "
-        "langfuse tracing will be silently disabled"
-    )
 
 
 def test_setup_mode_reaches_every_application_service(compose):
@@ -288,13 +269,71 @@ def test_litellm_uses_the_restore_aware_entrypoint(compose):
     ]
 
 
-def test_telegram_can_decrypt_the_token_saved_by_the_setup_ui(compose):
+def test_telegram_uses_only_scoped_platform_and_bot_credentials(compose):
     telegram = compose["services"]["telegram_bot"]
-    assert telegram["environment"]["JARVIS_CONFIG_KEY_FILE"] == "/run/secrets/jarvis_config_key"
+    environment = telegram["environment"]
     secret_names = {
         entry if isinstance(entry, str) else entry.get("source") for entry in telegram["secrets"]
     }
-    assert "jarvis_config_key" in secret_names
+    assert environment["JARVIS_TELEGRAM_SERVICE_TOKEN_FILE"] == (
+        "/run/secrets/telegram_service_token"
+    )
+    assert environment["PLATFORM_API_URL"] == "http://platform_api:8003"
+    assert environment["PAPER_INGESTION_URL"] == "http://paper_ingestion:8000"
+    assert environment["LEARNING_ENGINE_URL"] == "http://learning_engine:8001"
+    assert secret_names == {"telegram_bot_token", "telegram_service_token"}
+    assert "postgres" not in telegram["depends_on"]
+    for forbidden in (
+        "JARVIS_API_KEY_FILE",
+        "JARVIS_CONFIG_KEY_FILE",
+        "JARVIS_MODEL_HMAC_KEY_FILE",
+        "LITELLM_MASTER_KEY_FILE",
+    ):
+        assert forbidden not in environment
+
+
+def test_research_does_not_mount_platform_owned_telegram_credentials(
+    compose: dict[str, Any],
+) -> None:
+    """Research must not receive the Platform-owned Telegram bot credential."""
+    research = compose["services"]["paper_ingestion"]
+    environment = research.get("environment", {}) or {}
+    secret_names = {
+        entry if isinstance(entry, str) else entry.get("source")
+        for entry in research.get("secrets", [])
+    }
+
+    assert "TELEGRAM_BOT_TOKEN_FILE" not in environment
+    assert "telegram_bot_token" not in secret_names
+
+
+def test_every_secret_file_environment_path_is_mounted(compose: dict[str, Any]) -> None:
+    """Every ``*_FILE`` path must resolve to a secret mounted by that service.
+
+    Parameters
+    ----------
+    compose : dict[str, Any]
+        Parsed Compose document.
+    """
+    for service_name, service in compose["services"].items():
+        mounted_paths = {
+            f"/run/secrets/{entry}"
+            if isinstance(entry, str)
+            else f"/run/secrets/{entry.get('target') or entry.get('source')}"
+            for entry in service.get("secrets", [])
+        }
+        environment = service.get("environment", {}) or {}
+        environment_items = (
+            ((entry.partition("=")[0], entry.partition("=")[2]) for entry in environment)
+            if isinstance(environment, list)
+            else environment.items()
+        )
+        for variable, path in environment_items:
+            if variable.endswith("_FILE") and isinstance(path, str):
+                assert path in mounted_paths, (
+                    f"{service_name}.{variable} points to {path!r}, but the service "
+                    f"mounts only {sorted(mounted_paths)}"
+                )
 
 
 def test_langfuse_service_secrets_mounted_and_not_in_env(compose):
@@ -431,8 +470,8 @@ def test_app_version_sources_agree():
         (REPO_ROOT / "docker-compose.yml").read_text(),
     )
 
-    assert len(compose_defaults) == 8, (
-        "docker-compose.yml must carry exactly eight application-version defaults; "
+    assert len(compose_defaults) == 9, (
+        "docker-compose.yml must carry exactly nine application-version defaults; "
         f"found {len(compose_defaults)}"
     )
     root_packages = [
@@ -611,6 +650,71 @@ def _brace_block(text: str, opener: str) -> str:
     return text[match.end() : pos - 1]
 
 
+def test_setup_status_ingress_routes_only_to_platform() -> None:
+    """The public setup-status URL must terminate at the owning Platform API."""
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    block = _brace_block(nginx, r"location = /api/system/setup-status")
+
+    assert "proxy_pass http://platform_api:8003;" in block
+    assert "paper_ingestion" not in block
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in block
+
+
+def test_operator_ingress_routes_only_to_platform() -> None:
+    """Stable configuration and provider URLs terminate at their Platform owner."""
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    opener = re.escape(
+        "location ~ ^/api/(auth|setup|admin|telegram|account|config|logs|providers)(/|$)"
+    )
+    block = _brace_block(nginx, opener)
+
+    assert "proxy_pass http://platform_api:8003;" in block
+    assert "paper_ingestion" not in block
+    assert "nginx-backend-auth.conf" not in block
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in block
+
+
+def test_gateway_strips_forged_identity_and_uses_only_platform_assertion() -> None:
+    """Backend proxying must replace every browser-controlled identity field."""
+    stripped = (REPO_ROOT / "frontend" / "nginx-identity-strip.conf").read_text(encoding="utf-8")
+    expected_headers = {
+        "X-Jarvis-Identity",
+        "X-Jarvis-Principal",
+        "X-Jarvis-Scopes",
+        "X-Jarvis-Session-Id",
+        "X-Jarvis-User-Id",
+        "X-Jarvis-User-Role",
+        "X-Owner-User-Id",
+    }
+    assert {
+        match.group(1) for match in re.finditer(r"proxy_set_header ([A-Za-z0-9-]+) \"\";", stripped)
+    } == expected_headers
+
+    backend_auth = (REPO_ROOT / "frontend" / "nginx-backend-auth.conf").read_text(encoding="utf-8")
+    assert "auth_request /internal/platform-authorize;" in backend_auth
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in backend_auth
+    assert "proxy_set_header X-Jarvis-Identity $jarvis_identity;" in backend_auth
+
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    authorize = _brace_block(nginx, r"location = /internal/platform-authorize")
+    assert "internal;" in authorize
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in authorize
+
+
+def test_gateway_relays_all_bounded_platform_renewal_cookies() -> None:
+    """The auth subrequest's numbered cookies must survive the backend boundary."""
+    backend_auth = (REPO_ROOT / "frontend" / "nginx-backend-auth.conf").read_text(encoding="utf-8")
+
+    for index in range(1, 5):
+        assert (
+            "auth_request_set $jarvis_auth_cookie_"
+            f"{index} $upstream_http_x_jarvis_set_cookie_{index};"
+        ) in backend_auth
+        assert f"add_header Set-Cookie $jarvis_auth_cookie_{index} always;" in backend_auth
+    assert "proxy_hide_header Set-Cookie;" in backend_auth
+    assert 'proxy_set_header Cookie "";' in backend_auth
+
+
 def test_restore_upload_ingress_exists_in_every_same_origin_mode():
     """Invariant: every same-origin ingress routes /restore-upload/ to the uploader.
 
@@ -666,6 +770,11 @@ SECRET_PROVISIONING = {
     "postgres_password": "update",
     "jarvis_api_key": "update",
     "jarvis_setup_token": "update",
+    "platform_identity_private_key": "update",
+    "platform_identity_public_key": "update",
+    "telegram_service_token": "update",
+    "research_service_token": "update",
+    "learning_service_token": "update",
     "jarvis_model_hmac_key": "update",
     "telegram_bot_token": "update",
     "qdrant_api_key": "update",

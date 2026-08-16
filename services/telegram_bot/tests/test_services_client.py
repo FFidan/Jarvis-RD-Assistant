@@ -2,7 +2,7 @@
 
 Verifies:
 - Correct URL on the right base service (learning_engine vs paper_ingestion)
-- X-Owner-User-Id == str(user_id) and X-API-Key present in headers
+- X-Owner-User-Id == str(user_id) and no general API key in headers
 - Correct query params / request body
 - Parsed return values
 - 404 → None for fetch_project and complete_task
@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from jarvis_common.testing_telegram import make_bot_config, make_http_response
-from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.services_client import (
     PulsePayloadError,
@@ -63,7 +62,6 @@ from telegram_bot.services_client import (
 # ---------------------------------------------------------------------------
 
 USER_ID = 42
-API_KEY = "test-api-key"
 
 
 def _focus_payload(*, state: str = "active", source: str = "telegram") -> dict:
@@ -117,7 +115,6 @@ def config() -> BotConfig:
         BotConfig,
         learning_engine_url="http://learn:8001",
         paper_ingestion_url="http://paper:8000",
-        jarvis_api_key=SecretStr(API_KEY),
     )
 
 
@@ -132,14 +129,12 @@ def _make_http(response: MagicMock) -> AsyncMock:
 
 
 def _assert_owner_headers(call_kwargs: dict, user_id: int = USER_ID) -> None:
-    """Assert the standard auth headers appear in *call_kwargs*."""
+    """Assert only the local assertion-exchange marker is present."""
     headers = call_kwargs.get("headers", {})
     assert headers.get("X-Owner-User-Id") == str(user_id), (
         f"X-Owner-User-Id expected {user_id!r}, got {headers.get('X-Owner-User-Id')!r}"
     )
-    assert headers.get("X-API-Key") == API_KEY, (
-        f"X-API-Key expected {API_KEY!r}, got {headers.get('X-API-Key')!r}"
-    )
+    assert "X-API-Key" not in headers
 
 
 # ---------------------------------------------------------------------------
@@ -1184,7 +1179,12 @@ def test_backend_transport_confined_to_client_boundary() -> None:
     """
     package_root = Path(__file__).resolve().parents[1] / "telegram_bot"
     services_client_path = package_root / "services_client.py"
-    allowed = {package_root / "config.py", services_client_path}
+    allowed = {
+        package_root / "config.py",
+        package_root / "platform_client.py",
+        package_root / "service_auth.py",
+        services_client_path,
+    }
     forbidden_markers = ("_owner_headers", ".learning_engine_url", ".paper_ingestion_url")
     offenders: dict[str, list[str]] = {}
     for path in sorted(package_root.rglob("*.py")):
@@ -1192,7 +1192,7 @@ def test_backend_transport_confined_to_client_boundary() -> None:
         violations: list[str] = []
         if path not in allowed:
             violations.extend(marker for marker in forbidden_markers if marker in source)
-        if path != services_client_path:
+        if path not in allowed:
             violations.extend(
                 f"outbound .{method}() at line {line}"
                 for line, method in _outbound_transport_calls(source)

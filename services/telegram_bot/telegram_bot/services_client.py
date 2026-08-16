@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from telegram_bot.config import BotConfig, _owner_headers
 from telegram_bot.focus_contract import FocusSession, FocusTransition
@@ -56,11 +56,80 @@ __all__ = [
     "fetch_pulse_today",
     "trigger_pulse_generation",
     "fetch_weekly_digest",
+    "ScheduledNudgePayload",
+    "acknowledge_scheduled_nudge",
+    "fetch_scheduled_nudges",
 ]
 
 
 class PulsePayloadError(ValueError):
     """Sanitized boundary error for a malformed Pulse response."""
+
+
+class ScheduledNudgePayload(BaseModel):
+    """Learning-owned enabled nudge schedule returned to Telegram."""
+
+    id: int
+    nudge_type: str
+    cron_expression: str
+
+
+async def fetch_scheduled_nudges(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> list[ScheduledNudgePayload]:
+    """Return enabled nudge schedules from Learning.
+
+    Parameters
+    ----------
+    http : httpx.AsyncClient
+        Scoped backend client.
+    config : BotConfig
+        Runtime service origins.
+    user_id : int
+        Platform-verified paired owner used for the service assertion.
+
+    Returns
+    -------
+    list[ScheduledNudgePayload]
+        Validated enabled schedules.
+    """
+    response = await http.get(
+        f"{config.learning_engine_url}/internal/telegram/nudges",
+        headers=_owner_headers(config, user_id),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise RuntimeError("Learning returned an invalid nudge list")
+    return [ScheduledNudgePayload.model_validate(item) for item in payload]
+
+
+async def acknowledge_scheduled_nudge(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    nudge_id: int,
+) -> None:
+    """Record one successful nudge execution in Learning.
+
+    Parameters
+    ----------
+    http : httpx.AsyncClient
+        Scoped backend client.
+    config : BotConfig
+        Runtime service origins.
+    user_id : int
+        Platform-verified paired owner used for the service assertion.
+    nudge_id : int
+        Learning-owned schedule identifier.
+    """
+    response = await http.post(
+        f"{config.learning_engine_url}/internal/telegram/nudges/{nudge_id}/ack",
+        headers=_owner_headers(config, user_id),
+    )
+    response.raise_for_status()
 
 
 # ---------------------------------------------------------------------------

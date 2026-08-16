@@ -2,7 +2,7 @@
 
 Parses the ``jarvis_session`` cookie, validates the row in
 ``sessions``, and populates ``request.state.user_id`` (INTEGER), ``user_email``,
-``user_role`` for downstream code (``current_user_id_or_none``, route handlers).
+``user_role``, and ``session_id`` for downstream authorization.
 
 Non-rejecting by design: missing/invalid cookies leave ``request.state``
 unset. Authorization is the responsibility of ``verify_api_key`` (for non-
@@ -191,6 +191,7 @@ async def _populate_state_from_cookie(request: Request, session_id: str) -> None
     request.state.user_id = int(row["user_id"])
     request.state.user_email = row["email"]
     request.state.user_role = row["role"]
+    request.state.session_id = session_id
     await _renew_session(request, pool, session_id)
 
 

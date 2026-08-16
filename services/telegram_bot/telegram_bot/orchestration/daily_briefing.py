@@ -2,15 +2,14 @@
 
 import logging
 
-import asyncpg
 import httpx
 from telegram import Bot
 
-from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_morning_briefing
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
+from telegram_bot.platform_client import list_user_pairings
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +23,8 @@ async def _run_briefing_for_chat(
 ) -> None:
     """Send the daily briefing to a single chat.
 
-    All product data is gathered via ``services_client`` (REST), the same
-    gather the ``/briefing`` command uses.  ``db_pool`` is unused here (the
-    scheduler dispatches every orchestrator with the canonical
-    ``(http_client, db_pool, bot, config)`` contract).
+    All product data is gathered through the same scoped REST clients used by
+    the ``/briefing`` command.
 
     Parameters
     ----------
@@ -80,7 +77,7 @@ async def _run_briefing_for_chat(
 
 async def run_daily_briefing(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
     *,
@@ -96,14 +93,14 @@ async def run_daily_briefing(
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool (used only to list pairings).
+    platform_client : httpx.AsyncClient
+        Scoped Platform client used to list active pairings.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
         Bot configuration.
     """
-    pairings = await _owner.list_user_pairings(db_pool)
+    pairings = await list_user_pairings(platform_client, config)
     if not pairings:
         logger.warning(
             "daily_briefing skipped: no Telegram pairings exist — use /pair in Telegram to set up"

@@ -11,13 +11,23 @@ amortisation); this fixture neutralises it under pytest.
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# Production requires a Platform-signed assertion on every protected Research
+# and Learning route. Most unit and contract tests exercise those applications
+# directly, without the nginx/Platform gateway, so they opt out explicitly.
+os.environ.setdefault("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", "false")
 
 
 @pytest.fixture(autouse=True)
 def _clear_secrets_cache():
     from jarvis_common.settings import get_secrets_settings
+    from platform_api.config import get_platform_settings
 
     get_secrets_settings.cache_clear()
+    get_platform_settings.cache_clear()
     yield
     get_secrets_settings.cache_clear()
+    get_platform_settings.cache_clear()

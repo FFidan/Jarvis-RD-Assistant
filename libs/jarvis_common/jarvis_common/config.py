@@ -39,9 +39,17 @@ LANGFUSE_HOST                   langfuse_host               shared
 TRUSTED_PROXY_CIDRS             trusted_proxy_cidrs         shared
 JARVIS_TRUST_CF_CONNECTING_IP   trust_cf_connecting_ip      shared
 JARVIS_MIGRATION_LOCK_CONTENDED_OK  migration_lock_contended_ok  shared
+JARVIS_IDENTITY_ASSERTIONS_REQUIRED identity_assertions_required  shared
+JARVIS_IDENTITY_ISSUER          identity_issuer             shared
+JARVIS_IDENTITY_CURRENT_PUBLIC_KEY_FILE identity_current_public_key_file shared
+JARVIS_IDENTITY_PREVIOUS_PUBLIC_KEY_FILE identity_previous_public_key_file shared
+JARVIS_IDENTITY_PREVIOUS_KEY_ACCEPT_UNTIL identity_previous_key_accept_until shared
 """
 
 from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -204,6 +212,54 @@ class JarvisCommonSettings(BaseSettings):
     def migration_lock_contended_ok(self) -> bool:
         """Alias for ``jarvis_migration_lock_contended_ok`` for cleaner reads."""
         return self.jarvis_migration_lock_contended_ok
+
+    # --- Internal identity assertions -----------------------------------
+    identity_assertions_required: bool = Field(
+        default=True,
+        alias="JARVIS_IDENTITY_ASSERTIONS_REQUIRED",
+        description=(
+            "Require Platform-signed identity assertions on protected Research "
+            "and Learning routes. Disable only in isolated test harnesses."
+        ),
+    )
+    identity_issuer: str = Field(
+        default="jarvis-platform",
+        alias="JARVIS_IDENTITY_ISSUER",
+        min_length=1,
+        description="Exact issuer accepted for internal identity assertions.",
+    )
+    identity_current_public_key_file: Path = Field(
+        default=Path("/run/secrets/platform_identity_public_key"),
+        alias="JARVIS_IDENTITY_CURRENT_PUBLIC_KEY_FILE",
+        description="Mounted current Ed25519 public-key file.",
+    )
+    identity_previous_public_key_file: Path | None = Field(
+        default=None,
+        alias="JARVIS_IDENTITY_PREVIOUS_PUBLIC_KEY_FILE",
+        description="Optional mounted previous Ed25519 public-key file during rotation.",
+    )
+    identity_previous_key_accept_until: datetime | None = Field(
+        default=None,
+        alias="JARVIS_IDENTITY_PREVIOUS_KEY_ACCEPT_UNTIL",
+        description="Timezone-aware overlap deadline for the optional previous key.",
+    )
+
+    @property
+    def identity_public_key_files(self) -> tuple[Path, ...]:
+        """Return the current and optional previous identity public-key paths.
+
+        Returns
+        -------
+        tuple[Path, ...]
+            The current key path first, followed by the previous key path when
+            one is configured.
+        """
+        if self.identity_previous_public_key_file is None:
+            return (self.identity_current_public_key_file,)
+        return (
+            self.identity_current_public_key_file,
+            self.identity_previous_public_key_file,
+        )
 
 
 def get_jarvis_common_settings() -> JarvisCommonSettings:

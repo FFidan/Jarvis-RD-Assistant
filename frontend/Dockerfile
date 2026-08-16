@@ -15,6 +15,8 @@ RUN npm run build
 FROM ${NGINX_RUNTIME_IMAGE}
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx-security-headers.conf /etc/nginx/nginx-security-headers.conf
+COPY nginx-identity-strip.conf /etc/nginx/nginx-identity-strip.conf
+COPY nginx-backend-auth.conf /etc/nginx/nginx-backend-auth.conf
 # Prefix with 00- so this file sorts before default.conf in conf.d include
 # order — the log_format "real_ip" defined here must be parsed before the
 # access_log directive in default.conf references it (nginx processes includes

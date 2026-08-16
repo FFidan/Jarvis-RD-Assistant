@@ -3,15 +3,14 @@
 import logging
 from datetime import UTC, datetime
 
-import asyncpg
 import httpx
 from telegram import Bot
 
-from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import escape, truncate
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
+from telegram_bot.platform_client import list_user_pairings
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,7 @@ async def _send_deadline_warning(
 
 async def run_deadline_warning(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
     *,
@@ -74,22 +73,22 @@ async def run_deadline_warning(
 
     Iterates ``telegram_user_pairings`` and delivers per-user warnings scoped
     to each user's own milestones (fetched via ``services_client``).  Skips
-    with a warning when no pairings exist.  ``db_pool`` is used only to list
-    pairings; each pairing's REST fetch is wrapped so one user's backend error
+    with a warning when no pairings exist. Each pairing's REST fetch is wrapped
+    so one user's backend error
     does not abort the whole run.
 
     Parameters
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool (used only to list pairings).
+    platform_client : httpx.AsyncClient
+        Scoped Platform client used to list active pairings.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
         Bot configuration.
     """
-    pairings = await _owner.list_user_pairings(db_pool)
+    pairings = await list_user_pairings(platform_client, config)
     if not pairings:
         logger.warning(
             "deadline_warning skipped: no Telegram pairings exist — use /pair in Telegram to set up"

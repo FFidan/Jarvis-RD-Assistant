@@ -13,6 +13,7 @@ import socket
 from typing import Any
 
 from fastapi import FastAPI
+from jarvis_common.config_metadata import ROLE_TO_ALIAS
 from jarvis_common.db_helpers import _ALIAS_MODELS
 from jarvis_common.maintenance import skip_for_maintenance
 
@@ -147,7 +148,6 @@ async def _reconcile_litellm_models_once(pool: Any) -> bool:
     survives LiteLLM still warming up or running DB-less.
     """
     from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
-        ROLE_TO_ALIAS,
         _config_lock,
         ensure_smart_fallback,
         update_litellm_model,

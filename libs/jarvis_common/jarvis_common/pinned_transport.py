@@ -105,6 +105,7 @@ JARVIS_SERVICE_POLICY = OutboundAddressPolicy(
             "postgres",
             "host.docker.internal",
             "paper_ingestion",
+            "platform_api",
             "learning_engine",
             "telegram_bot",
             "vector",
@@ -306,13 +307,35 @@ def pinned_async_client(
     timeout: httpx.Timeout | float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     headers: dict[str, str] | None = None,
+    auth: httpx.Auth | None = None,
 ) -> httpx.AsyncClient:
-    """Create a guarded client that cannot inherit environment proxy settings."""
+    """Create a guarded asynchronous HTTP client.
+
+    Parameters
+    ----------
+    policy : OutboundAddressPolicy
+        Address policy applied after pinned DNS resolution.
+    timeout : httpx.Timeout or float or None, optional
+        Client request timeout.
+    transport : httpx.AsyncBaseTransport or None, optional
+        Explicit test or production transport. A pinned transport is created
+        when omitted.
+    headers : dict[str, str] or None, optional
+        Default request headers.
+    auth : httpx.Auth or None, optional
+        HTTPX authentication flow used to mutate or exchange request identity.
+
+    Returns
+    -------
+    httpx.AsyncClient
+        Client with environment proxy inheritance disabled.
+    """
     return httpx.AsyncClient(
         transport=transport or PinnedAsyncTransport(policy),
         timeout=timeout,
         trust_env=False,
         headers=headers,
+        auth=auth,
     )
 
 

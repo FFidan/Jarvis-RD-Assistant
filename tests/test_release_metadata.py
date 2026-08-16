@@ -203,8 +203,8 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
     }
 
     assert documented == expected
-    assert retained_origins[0] == "v1.2.0"
-    assert retained_origins[-1] == "v1.2.4"
+    assert retained_origins[0] == "v1.2.1"
+    assert retained_origins[-1] == "v1.2.5"
     assert "v1.1.3" not in documented
 
     # The runbook and the matrix are prose; this input is what a dispatched run
@@ -422,7 +422,7 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
 
 
 def test_release_version_pins_are_complete_and_consistent() -> None:
-    version = "1.2.5"
+    version = "1.2.6"
     package = json.loads(_read("frontend/package.json"))
     package_lock = json.loads(_read("frontend/package-lock.json"))
     citation = _read("CITATION.cff")
@@ -434,9 +434,9 @@ def test_release_version_pins_are_complete_and_consistent() -> None:
     assert package_lock["version"] == version
     assert package_lock["packages"][""]["version"] == version
     assert re.search(rf"^version: {re.escape(version)}$", citation, re.MULTILINE)
-    assert "date-released: 2026-08-13" in citation
+    assert "date-released: 2026-08-16" in citation
     assert f'name = "jarvis-rd-assistant"\nversion = "{version}"' in lock
-    assert compose.count(f"JARVIS_VERSION:-{version}") == 8
+    assert compose.count(f"JARVIS_VERSION:-{version}") == 9
     assert "JARVIS_VERSION:-1.2.4" not in compose
 
 
@@ -858,7 +858,7 @@ def test_every_python_image_declares_an_import_smoke_target() -> None:
     workflow = _read(".github/workflows/ghcr-publish.yml")
     entries = _build_matrix_entries(workflow)
 
-    assert len(entries) == 11, [entry["slug"] for entry in entries]
+    assert len(entries) == 13, [entry["slug"] for entry in entries]
     for entry in entries:
         dockerfile = ROOT / entry["file"].removeprefix("./")
         base = _final_base_image(dockerfile)
@@ -1024,6 +1024,7 @@ def test_a_partial_promotion_cannot_finish_as_a_successful_release() -> None:
     promote_job = workflow.split("\n  promote:", 1)[1].split("\n  promotion-gate:", 1)[0]
     assert "fail-fast: false" in promote_job
     assert re.findall(r"- slug: ([a-z-]+)", promote_job) == [
+        "platform-api",
         "paper-ingestion-cpu",
         "paper-ingestion-cuda",
         "learning-engine",

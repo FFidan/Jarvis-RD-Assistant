@@ -23,6 +23,7 @@ from jarvis_common.testing_telegram import make_http_response
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import author_alerts as author_alerts_mod
+from telegram_bot.platform_client import UserPairing
 
 
 @pytest.mark.asyncio
@@ -37,10 +38,8 @@ async def test_run_author_alerts_calls_check_authors_per_pairing() -> None:
         {"matches": [], "new_papers": 0, "authors_checked": 0}
     )
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.author_alerts.list_user_pairings",
         AsyncMock(
             return_value=[
                 UserPairing(user_id=1, chat_id=100),
@@ -55,7 +54,7 @@ async def test_run_author_alerts_calls_check_authors_per_pairing() -> None:
     for call in http_client.post.await_args_list:
         url = call.args[0]
         assert url.endswith("/api/authors/check")
-        assert call.kwargs["headers"]["X-API-Key"] == "secret"
+        assert "X-API-Key" not in call.kwargs["headers"]
         seen_owner_ids.add(call.kwargs["headers"]["X-Owner-User-Id"])
     assert seen_owner_ids == {"1", "2"}
     # No matches → nothing sent.
@@ -87,10 +86,8 @@ async def test_run_author_alerts_renders_one_message_per_match() -> None:
         }
     )
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.author_alerts.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=7, chat_id=555)]),
     ):
         await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
@@ -131,10 +128,8 @@ async def test_run_author_alerts_one_pairing_error_does_not_abort_others() -> No
     # First pairing errors, second succeeds.
     http_client.post.side_effect = [err_resp, ok_resp]
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.author_alerts.list_user_pairings",
         AsyncMock(
             return_value=[
                 UserPairing(user_id=1, chat_id=100),

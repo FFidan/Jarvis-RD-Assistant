@@ -42,7 +42,7 @@ for recovery_fn in _rollback_pin_lines _schema_not_safe_notice _failure_epilogue
   eval "$recovery_src"
 done
 REPO=/srv/jarvis-family
-PUBLISHED_SERVICES_BASE=(paper_ingestion learning_engine dashboard restore-uploader)
+PUBLISHED_SERVICES_BASE=(platform_api paper_ingestion learning_engine dashboard restore-uploader)
 PUBLISHED_SERVICE_TELEGRAM=telegram_bot
 TXN_FROM_VERSION=1.1.2
 MIGRATIONS_RAN=1
@@ -56,7 +56,7 @@ out="$(_failure_epilogue v1.1.3 2>&1)"
 data_line="$(printf '%s\n' "$out" | grep -nF 'Admin > Backups' | cut -d: -f1)"
 image_line="$(printf '%s\n' "$out" | grep -nF 'Application-image recovery (not a full release rollback)' | cut -d: -f1)"
 if has "$out" 'JARVIS_IMAGE_TAG=1.1.2 docker compose --profile tunnel --profile telegram pull' \
-   && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
+   && has "$out" 'platform_api paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
    && has "$out" 'Repository: /srv/jarvis-family' \
    && has "$out" 'do not move the Git checkout or restore stored data' \
    && has "$out" 'A data-changing migration may have run' \
@@ -406,7 +406,7 @@ health_sample() {
 running_svc() {
   case "$1" in
     postgres|ollama|qdrant|litellm|cloudflared|postgres-backup) return 0 ;;
-    paper_ingestion|learning_engine|dashboard|restore-uploader|telegram_bot) return 0 ;;
+    platform_api|paper_ingestion|learning_engine|dashboard|restore-uploader|telegram_bot) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -2470,7 +2470,7 @@ if [ "$rc" -ne 0 ] \
    && grep -q '"from_version":"1.1.2"' "$PENDING_FILE" \
    && has "$out" 'Repository:' && has "$out" "$REPO" \
    && has "$out" 'JARVIS_IMAGE_TAG=1.1.2 docker compose --profile tunnel --profile telegram pull' \
-   && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
+   && has "$out" 'platform_api paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
    && has "$out" 'do not move the Git checkout or restore stored data' \
    && has "$out" 'A data-changing migration may have run' \
    && [ -n "$data_line" ] && [ -n "$image_line" ] && [ "$data_line" -lt "$image_line" ] \

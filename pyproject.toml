@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "1.2.5"
+version = "1.2.6"
 description = "Self-hosted research workspace for evidence-grounded literature discovery and synthesis"
 readme = "README.md"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
@@ -23,6 +23,7 @@ Authors = "https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/AUTHO
 
 [dependency-groups]
 jarvis-common = [
+    "apscheduler>=3.10.0",
     "aiosmtplib>=3.0,<6.0",  # SMTP delivery for magic-link auth
     "asyncpg-listen>=0.0.9",
     "asyncpg>=0.30.0,<0.32.0",
@@ -129,6 +130,12 @@ learning-engine = [
     "slowapi>=0.1.9",
     "uvicorn[standard]>=0.30.0",
 ]
+platform-api = [
+    { include-group = "jarvis-common" },
+    "fastapi>=0.137.0,<0.142.0",
+    "uvicorn[standard]>=0.30.0",
+    "webauthn>=3.0.0,<4.0.0",
+]
 telegram-bot = [
     { include-group = "jarvis-common" },
     "apscheduler>=3.10.0",
@@ -141,6 +148,7 @@ telegram-bot = [
 dev = [
     { include-group = "paper-ingestion" },
     { include-group = "learning-engine" },
+    { include-group = "platform-api" },
     { include-group = "telegram-bot" },
     "asyncpg-listen>=0.0.9",
     "bibtexparser>=2.0.0b9,<3.0",  # dev/test only: round-trip oracle for the hand-written BibTeX exporter (kept out of the runtime image)
@@ -240,7 +248,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # that legitimately gained a branch or a parameter rather than one that grew
 # unattended: the reader-facing selection now threaded through the feed count
 # path, the identification step on the upload path, and citation resolution.
-max = { C901 = 57, PLR0911 = 9, PLR0912 = 28, PLR0913 = 87, PLR0915 = 20 }
+max = { C901 = 56, PLR0911 = 9, PLR0912 = 28, PLR0913 = 87, PLR0915 = 20 }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -258,6 +266,7 @@ markers = [
 # After the R12 rename, these no longer collide — each service's top-level
 # package name matches its service directory.
 pythonpath = [
+    "services/platform_api",
     "services/paper_ingestion",
     "services/learning_engine",
     "services/telegram_bot",
@@ -276,6 +285,7 @@ pythonpath = [
 # leakage; ``--randomly-seed=<n>`` then reproduces a specific failure.
 addopts = "--import-mode=importlib -p no:randomly -m 'not live_pg and not live_qdrant and not integration and not slow' --ignore=tests/integration"
 testpaths = [
+    "services/platform_api/tests",
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",
     "services/telegram_bot/tests",

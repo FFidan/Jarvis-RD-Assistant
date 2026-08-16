@@ -6,10 +6,21 @@ Authentication-focused helpers extracted from ``jarvis_common.testing``.
 
 from __future__ import annotations
 
-__all__ = ["RoleMiddleware", "_apply_default_authenticated_user"]
+__all__ = ["RoleMiddleware", "SignedIdentityMiddleware", "_apply_default_authenticated_user"]
 
+import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+from jarvis_common.identity_assertions import (
+    IdentityAssertionSigner,
+    IdentityAssertionVerifier,
+    VerificationKey,
+)
+from jarvis_common.identity_capabilities import IdentityAudience, required_identity_scopes
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -35,6 +46,108 @@ class RoleMiddleware:
             request = Request(scope)
             request.state.user_role = self._role
         await self._app(scope, receive, send)
+
+
+class SignedIdentityMiddleware:
+    """Issue exact Platform-style assertions around a backend test app.
+
+    Parameters
+    ----------
+    app : ASGIApp
+        Backend application that enforces :class:`IdentityAssertionMiddleware`.
+    audience : {"learning", "research"}
+        Destination audience used for capability classification and signing.
+    verifier_app : Any
+        FastAPI application whose state the backend middleware reads.
+    user_id : int or None, default=1
+        Authenticated test user. ``None`` models an API-key principal without a
+        browser identity.
+    role : str or None, optional
+        Browser role embedded in the assertion.
+
+    Notes
+    -----
+    This helper is explicit rather than automatic. Tests of missing, malformed,
+    or replayed assertions continue to call the backend app directly. It also
+    mirrors the verified state fields so route tests remain valid when the
+    repository test harness intentionally disables destination middleware.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        audience: IdentityAudience,
+        verifier_app: Any,
+        user_id: int | None = 1,
+        role: str | None = None,
+    ) -> None:
+        """Create and install one ephemeral signer-verifier pair."""
+        private_key = Ed25519PrivateKey.generate()
+        self._app = app
+        self._audience: IdentityAudience = audience
+        self._user_id = user_id
+        self._role = role
+        self._signer = IdentityAssertionSigner(
+            issuer="jarvis-platform-test",
+            key_id="ephemeral-test-key",
+            signing_key=private_key,
+        )
+        verifier_app.state.identity_verifier = IdentityAssertionVerifier(
+            issuer="jarvis-platform-test",
+            audience=audience,
+            keys={"ephemeral-test-key": VerificationKey(private_key.public_key())},
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Sign each protected HTTP request for its exact method and path."""
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        method = str(scope.get("method", "GET")).upper()
+        path = str(scope.get("path", ""))
+        scopes = required_identity_scopes(self._audience, method, path)
+        if scopes is None:
+            await self._app(scope, receive, send)
+            return
+
+        request_id = str(uuid.uuid4())
+        principal = "browser" if self._user_id is not None else "api-key"
+        subject = f"user:{self._user_id}" if self._user_id is not None else "api-key"
+        assertion = self._signer.issue(
+            audience=self._audience,
+            subject=subject,
+            principal=principal,
+            user_id=self._user_id,
+            user_role=self._role,
+            request_id=request_id,
+            request_method=method,
+            request_path=path,
+            scopes=scopes,
+        )
+        forwarded = dict(scope)
+        state = dict(scope.get("state", {}))
+        if self._user_id is not None:
+            state["user_id"] = self._user_id
+        if self._role is not None:
+            state["user_role"] = self._role
+        state["identity_principal"] = principal
+        state["identity_scopes"] = scopes
+        forwarded["state"] = state
+        headers = [
+            (name, value)
+            for name, value in scope.get("headers", [])
+            if name.lower() not in {b"x-jarvis-identity", b"x-request-id"}
+        ]
+        headers.extend(
+            [
+                (b"x-jarvis-identity", assertion.encode("ascii")),
+                (b"x-request-id", request_id.encode("ascii")),
+            ]
+        )
+        forwarded["headers"] = headers
+        await self._app(forwarded, receive, send)
 
 
 @contextmanager

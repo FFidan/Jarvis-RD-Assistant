@@ -17,6 +17,7 @@ from typing import Any, Literal, TypedDict
 
 import httpx
 from jarvis_common.hw_detect import Vendor, vendor_from_env
+from jarvis_common.llm_provider_registry import provider_for_id
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.model_catalog import (
     ModelCatalogEntry,
@@ -24,7 +25,6 @@ from jarvis_common.model_catalog import (
     load_model_catalog,
 )
 
-from paper_ingestion.services.llm_provider_registry import provider_for_id
 from paper_ingestion.services.model_prefixes import strip_latest_tag, strip_ollama_prefix
 
 logger = logging.getLogger(__name__)

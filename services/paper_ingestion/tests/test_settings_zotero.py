@@ -7,14 +7,27 @@ Covers:
 - zotero.poll_enabled / zotero.auto_push_on_star accept True/False, reject strings
 """
 
+from collections.abc import AsyncIterator
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import httpx
 import pytest
-from httpx import ASGITransport
-from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+import pytest_asyncio
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import FastAPI
+from httpx import ASGITransport, Response
+from jarvis_common import current_user_id_strict, verify_api_key
+from jarvis_common.identity_assertions import IdentityAssertionSigner
+from jarvis_common.testing import RoleMiddleware, make_pool_and_conn
 
-from tests.conftest import _make_pool_and_conn
+from paper_ingestion.deps import get_db_pool as get_research_db_pool
+from paper_ingestion.deps import get_scheduler
+from paper_ingestion.routers import internal_config
+from platform_api.deps import get_db_pool as get_platform_db_pool
+from platform_api.deps import get_identity_signer, limiter
+from platform_api.routers import configuration
 
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_settings.py style)
@@ -26,36 +39,53 @@ from tests.conftest import _make_pool_and_conn
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def _app():
-    from jarvis_common import verify_api_key
-    from jarvis_common.auth import current_user_id_strict
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
-
-    mock_pool, conn = _make_pool_and_conn()
-    mock_http = AsyncMock()
-    with patch_pi_test_app(
-        mock_pool,
-        app=app,
-        get_db_pool=get_db_pool,
-        limiter=limiter,
-        options=PITestAppOptions(
-            remove_owner_override=False,
-            override_db_dependency=True,
-            disable_limiter=True,
-            state_overrides={"http_client": mock_http},
-            dependency_overrides={
-                verify_api_key: lambda: None,
-                # Settings routes hard-401 sessionless callers.
-                # current_user_id_strict is resolved via Depends, so steer it
-                # through the override map (a module-symbol swap no longer
-                # reaches the route).
-                current_user_id_strict: lambda: 1,
-            },
-        ),
-    ):
+@pytest_asyncio.fixture()
+async def _app() -> AsyncIterator[tuple[FastAPI, AsyncMock]]:
+    """Connect Platform's public contract to Research's real write command."""
+    mock_pool, conn = make_pool_and_conn(direct_methods=True)
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform-test",
+        key_id="zotero-settings",
+        signing_key=Ed25519PrivateKey.generate(),
+    )
+    app = FastAPI()
+    app.include_router(configuration.router)
+    research_app = FastAPI()
+    # Paper Ingestion's autouse test fixture replaces module resolver symbols
+    # for direct handler tests. Restore the real dependency while FastAPI
+    # resolves this handler's deferred annotations.
+    with patch.object(internal_config, "current_user_id_strict", current_user_id_strict):
+        research_app.add_api_route(
+            "/internal/platform/config/{key}",
+            internal_config.write_platform_config,
+            methods=["PUT"],
+            response_model=internal_config.ConfigWriteResponse,
+        )
+    app.state.db_pool = mock_pool
+    app.state.scheduler = MagicMock()
+    app.state.research_app = research_app
+    research_app.state.db_pool = mock_pool
+    research_app.state.scheduler = app.state.scheduler
+    research_app.state.http_client = AsyncMock(spec=httpx.AsyncClient)
+    research_client = httpx.AsyncClient(
+        transport=ASGITransport(app=RoleMiddleware(research_app, "admin")),
+        base_url="http://paper_ingestion:8000",
+    )
+    app.state.http_client = research_client
+    app.dependency_overrides[get_platform_db_pool] = lambda: cast(asyncpg.Pool, mock_pool)
+    app.dependency_overrides[get_identity_signer] = lambda: signer
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
+    app.dependency_overrides[verify_api_key] = lambda: None
+    research_app.dependency_overrides[get_research_db_pool] = lambda: cast(asyncpg.Pool, mock_pool)
+    research_app.dependency_overrides[get_scheduler] = lambda: research_app.state.scheduler
+    research_app.dependency_overrides[current_user_id_strict] = lambda: 1
+    limiter_was_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
         yield app, conn
+    finally:
+        limiter.enabled = limiter_was_enabled
+        await research_client.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +93,7 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
-async def _put_config(app, key: str, value):
+async def _put_config(app: FastAPI, key: str, value: Any) -> Response:
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -136,14 +166,16 @@ async def test_zotero_bool_key_accepts_bool(_app, key: str, value: bool):
 async def test_zotero_poll_enabled_write_reconciles_caller_job(_app):
     """Personal Zotero readiness writes should reconcile only the caller's poll job."""
     app, _conn = _app
-    app.state.scheduler = MagicMock()
+    research_app = app.state.research_app
+    research_app.state.scheduler = MagicMock()
 
     with patch("paper_ingestion.scheduler.reconcile_zotero_poll_job", new=AsyncMock()) as reconcile:
         resp = await _put_config(app, "zotero.poll_enabled", True)
 
     assert resp.status_code == 200
     reconcile.assert_awaited_once()
-    assert reconcile.await_args.kwargs["app"] is app
+    assert reconcile.await_args.kwargs["app"] is research_app
+    assert reconcile.await_args.kwargs["scheduler"] is research_app.state.scheduler
     assert reconcile.await_args.kwargs["user_id"] == 1
 
 
@@ -214,7 +246,7 @@ async def test_zotero_user_id_rejects_empty_string(_app):
     assert "non-empty" in resp.json()["detail"]
 
 
-async def _get_config(app, key: str):
+async def _get_config(app: FastAPI, key: str) -> Response:
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -304,7 +336,7 @@ async def test_zotero_key_not_blocked_by_allowlist(_app, fernet_key):
 _ALLOWED_PRIVATE_HOSTS_KEY = "zotero.allowed_private_hosts"
 
 
-async def _put_admin_config(app, key: str, value):
+async def _put_admin_config(app: FastAPI, key: str, value: Any) -> Response:
     """PUT as an admin browser session — the key is deployment-wide."""
     from jarvis_common.testing import RoleMiddleware
 

@@ -25,9 +25,9 @@ from telegram_bot.formatters import format_card_back, format_card_front
 from telegram_bot.handlers.helpers import (
     auth_check,
     get_config,
-    get_db,
     get_http,
     get_jarvis_user_id,
+    get_platform_http,
 )
 from telegram_bot.handlers.rate_limit import rate_limit
 
@@ -140,8 +140,8 @@ async def review_start(
         return ConversationHandler.END
 
     config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    platform_client = get_platform_http(context)
+    authorized, jarvis_user_id = await auth_check(update, config, platform_client)
     if not authorized:
         return ConversationHandler.END
 
@@ -181,8 +181,8 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
 
     config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    platform_client = get_platform_http(context)
+    authorized, jarvis_user_id = await auth_check(update, config, platform_client)
     if not authorized:
         await query.answer()
         return ConversationHandler.END
@@ -217,8 +217,8 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    platform_client = get_platform_http(context)
+    authorized, jarvis_user_id = await auth_check(update, config, platform_client)
     if not authorized:
         await query.answer()
         return ConversationHandler.END
@@ -312,8 +312,8 @@ async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     config = get_config(context)
-    db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    platform_client = get_platform_http(context)
+    authorized, _ = await auth_check(update, config, platform_client)
     if not authorized:
         return ConversationHandler.END
 

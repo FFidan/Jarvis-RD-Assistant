@@ -89,8 +89,8 @@ async def test_update_account_display_name_does_not_deadlock_max1_pool(live_pg_d
     display_name path triggers the ``log_audit`` nested acquire with no SMTP
     dependency. On base the first call deadlocks the single slot -> TimeoutError.
     """
-    from paper_ingestion.models.account import AccountUpdate, AccountUpdateResponse
-    from paper_ingestion.routers.account import update_account
+    from platform_api.models.account import AccountUpdate, AccountUpdateResponse
+    from platform_api.routers.account import update_account
 
     pool = await _make_max1_pool(live_pg_dsn)
     try:
@@ -131,8 +131,8 @@ async def test_update_account_email_change_does_not_deadlock_max1_pool(live_pg_d
     test DB so send_magic_link takes its dev/undeliverable fallback (which itself
     re-acquires via log_event) — all after the outer connection is released.
     """
-    from paper_ingestion.models.account import AccountUpdate, AccountUpdateResponse
-    from paper_ingestion.routers.account import update_account
+    from platform_api.models.account import AccountUpdate, AccountUpdateResponse
+    from platform_api.routers.account import update_account
 
     pool = await _make_max1_pool(live_pg_dsn)
     try:
@@ -167,8 +167,8 @@ async def test_update_account_email_clash_still_audits_display_name(live_pg_dsn:
     """
     from fastapi import HTTPException
 
-    from paper_ingestion.models.account import AccountUpdate
-    from paper_ingestion.routers.account import update_account
+    from platform_api.models.account import AccountUpdate
+    from platform_api.routers.account import update_account
 
     pool = await _make_max1_pool(live_pg_dsn)
     try:

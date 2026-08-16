@@ -36,7 +36,6 @@ PUBMED_API_KEY              pubmed_api_key              sources/pubmed_source.py
 OPENALEX_API_KEY            openalex_api_key            sources/openalex_source.py
 INFRA_INGEST_KEY            infra_ingest_key            routers/infra_events.py
 INFRA_INGEST_KEY_FILE       infra_ingest_key_file       routers/infra_events.py
-TELEGRAM_BOT_TOKEN          telegram_bot_token          routers/system.py
 VECTOR_API_URL              vector_api_url              main.py health check
 """
 
@@ -273,15 +272,6 @@ class PaperIngestionSettings(JarvisCommonSettings):
         description=(
             "Path to a file containing the infra-ingest key "
             "(INFRA_INGEST_KEY_FILE).  Docker Secret mount path."
-        ),
-    )
-
-    # --- Telegram bot presence -----------------------------------------
-    telegram_bot_token: SecretStr | None = Field(
-        default=None,
-        description=(
-            "Telegram bot token (TELEGRAM_BOT_TOKEN).  When set, the system "
-            "health endpoint reports Telegram as configured."
         ),
     )
 

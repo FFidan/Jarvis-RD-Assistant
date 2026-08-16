@@ -1,0 +1,270 @@
+"""Versioned route capabilities for signed internal identity assertions."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Final, Literal
+
+IdentityAudience = Literal["learning", "research"]
+ServicePrincipal = Literal["learning", "research", "telegram"]
+
+IDENTITY_CAPABILITY_VERSION: Final = 1
+
+_AUDIENCES: Final = frozenset({"learning", "research"})
+_PRINCIPALS: Final = frozenset({"learning", "research", "telegram"})
+_READ_METHODS: Final = frozenset({"GET", "HEAD"})
+_UNAUTHENTICATED_PATHS: Final = frozenset({"/health", "/health/live"})
+_PATH_SEGMENT_PATTERN: Final = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_PLATFORM_CONFIG_WRITE_PATTERN: Final = re.compile(r"/internal/platform/config/[^/]+")
+_PLATFORM_PROVIDER_CACHE_PATTERN: Final = re.compile(
+    r"/internal/platform/providers/[^/]+/cache/invalidate"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceCapability:
+    """One exact service-principal route capability.
+
+    Parameters
+    ----------
+    principal : {"learning", "research", "telegram"}
+        Calling service identity.
+    audience : {"learning", "research"}
+        Destination service.
+    method : str
+        Exact uppercase HTTP method.
+    path_pattern : str
+        Anchored regular expression matched against the request path.
+    scope : str
+        Minimum capability embedded in the signed assertion.
+    """
+
+    principal: ServicePrincipal
+    audience: IdentityAudience
+    method: str
+    path_pattern: str
+    scope: str
+
+    def matches(self, method: str, path: str) -> bool:
+        """Return whether this capability authorizes an exact request binding.
+
+        Parameters
+        ----------
+        method : str
+            Validated uppercase HTTP method.
+        path : str
+            Validated absolute path without query or fragment text.
+
+        Returns
+        -------
+        bool
+            ``True`` only when both method and full path match.
+        """
+        return method == self.method and re.fullmatch(self.path_pattern, path) is not None
+
+
+def _telegram_capability(
+    audience: IdentityAudience,
+    method: str,
+    path_pattern: str,
+    scope: str,
+) -> ServiceCapability:
+    return ServiceCapability("telegram", audience, method, path_pattern, scope)
+
+
+# This product manifest intentionally enumerates Telegram's current command
+# surface. A new bot command cannot gain backend authority merely by composing a
+# URL: the route must be reviewed and added here with a negative contract test.
+SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
+    _telegram_capability("learning", "GET", r"/api/projects", "learning:projects:read"),
+    _telegram_capability("learning", "POST", r"/api/projects", "learning:projects:write"),
+    _telegram_capability("learning", "GET", r"/api/projects/[^/]+", "learning:projects:read"),
+    _telegram_capability("learning", "GET", r"/api/projects/[^/]+/tasks", "learning:tasks:read"),
+    _telegram_capability(
+        "learning", "GET", r"/api/projects/[^/]+/milestones", "learning:milestones:read"
+    ),
+    _telegram_capability("learning", "GET", r"/api/tasks", "learning:tasks:read"),
+    _telegram_capability("learning", "PUT", r"/api/tasks/[^/]+", "learning:tasks:write"),
+    _telegram_capability(
+        "learning", "GET", r"/api/milestones/upcoming", "learning:milestones:read"
+    ),
+    _telegram_capability("learning", "GET", r"/api/stats", "learning:review:read"),
+    _telegram_capability("learning", "GET", r"/api/review/next", "learning:review:read"),
+    _telegram_capability("learning", "POST", r"/api/review/[^/]+", "learning:review:write"),
+    _telegram_capability("learning", "POST", r"/api/executive/focus/log", "learning:focus:write"),
+    _telegram_capability("learning", "GET", r"/api/executive/focus/active", "learning:focus:read"),
+    _telegram_capability(
+        "learning",
+        "GET",
+        r"/api/executive/focus/telegram/pending",
+        "learning:focus:read",
+    ),
+    _telegram_capability("learning", "POST", r"/api/executive/focus/start", "learning:focus:write"),
+    _telegram_capability(
+        "learning",
+        "POST",
+        r"/api/executive/focus/[^/]+/(?:pause|resume|complete|telegram-notified)",
+        "learning:focus:write",
+    ),
+    _telegram_capability("learning", "GET", r"/internal/telegram/nudges", "learning:nudges:read"),
+    _telegram_capability(
+        "learning", "POST", r"/internal/telegram/nudges/[^/]+/ack", "learning:nudges:write"
+    ),
+    _telegram_capability("research", "GET", r"/api/papers/feed", "research:papers:read"),
+    _telegram_capability("research", "GET", r"/api/papers/[^/]+", "research:papers:read"),
+    _telegram_capability(
+        "research",
+        "POST",
+        r"/api/papers/[^/]+/(?:save|unsave|skip|reading|done|star|unstar|trash|restore)",
+        "research:papers:write",
+    ),
+    _telegram_capability(
+        "research", "POST", r"/api/papers/[^/]+/feedback", "research:papers:write"
+    ),
+    _telegram_capability("research", "POST", r"/api/authors/check", "research:authors:write"),
+    _telegram_capability("research", "POST", r"/api/search", "research:search:write"),
+    _telegram_capability("research", "GET", r"/api/pulse/today", "research:pulse:read"),
+    _telegram_capability("research", "POST", r"/api/pulse/generate", "research:pulse:write"),
+    _telegram_capability("research", "GET", r"/api/digest/weekly", "research:digest:read"),
+)
+
+
+def required_identity_scopes(
+    audience: IdentityAudience,
+    method: str,
+    path: str,
+) -> tuple[str, ...] | None:
+    """Return the minimum capability required for one backend request.
+
+    Service-only routes use the exact scope from
+    :data:`SERVICE_CAPABILITY_MANIFEST`. Public API routes use a stable
+    destination, first-path-segment, and read/write capability. Every assertion
+    additionally binds the exact method and path, so a token cannot be replayed
+    against another route sharing the same capability family.
+
+    Parameters
+    ----------
+    audience : {"learning", "research"}
+        Exact destination domain.
+    method : str
+        Uppercase HTTP method.
+    path : str
+        Absolute request path without a query string.
+
+    Returns
+    -------
+    tuple[str, ...] or None
+        One required capability, or ``None`` for a route outside the signed
+        identity boundary.
+
+    Raises
+    ------
+    ValueError
+        If the audience, method, or path is malformed.
+    """
+    _validate_binding(audience, method, path)
+    if method == "OPTIONS" or path in _UNAUTHENTICATED_PATHS:
+        return None
+
+    # Platform is the sole assertion signer. This exact non-public seam lets it
+    # preserve Research-owned model and scheduler side effects while the public
+    # configuration contract moves to Platform. Service principals cannot gain
+    # this capability because it is deliberately absent from their manifest.
+    if (
+        audience == "research"
+        and method == "PUT"
+        and _PLATFORM_CONFIG_WRITE_PATTERN.fullmatch(path) is not None
+    ):
+        return ("research:config:write",)
+    if (
+        audience == "research"
+        and method == "POST"
+        and _PLATFORM_PROVIDER_CACHE_PATTERN.fullmatch(path) is not None
+    ):
+        return ("research:providers:write",)
+
+    service_scopes = {
+        capability.scope
+        for capability in SERVICE_CAPABILITY_MANIFEST
+        if capability.audience == audience and capability.matches(method, path)
+    }
+    if len(service_scopes) > 1:
+        raise RuntimeError("service capability manifest assigns conflicting scopes")
+    if service_scopes:
+        return (service_scopes.pop(),)
+
+    if path != "/api" and not path.startswith("/api/"):
+        return None
+    segment = path.removeprefix("/api/").split("/", maxsplit=1)[0] or "api"
+    if _PATH_SEGMENT_PATTERN.fullmatch(segment) is None:
+        raise ValueError("request path has an invalid capability segment")
+    access = "read" if method in _READ_METHODS else "write"
+    return (f"{audience}:{segment}:{access}",)
+
+
+def service_principal_scopes(
+    principal: ServicePrincipal,
+    audience: IdentityAudience,
+    method: str,
+    path: str,
+) -> tuple[str, ...] | None:
+    """Return a service principal's exact allowlisted route capability.
+
+    Parameters
+    ----------
+    principal : {"learning", "research", "telegram"}
+        Calling service identity.
+    audience : {"learning", "research"}
+        Exact destination service.
+    method : str
+        Uppercase HTTP method.
+    path : str
+        Absolute request path without query or fragment text.
+
+    Returns
+    -------
+    tuple[str, ...] or None
+        The one minimum scope for an allowlisted operation, or ``None`` when
+        the operation is denied by default.
+
+    Raises
+    ------
+    ValueError
+        If the principal or request binding is malformed.
+    """
+    if principal not in _PRINCIPALS:
+        raise ValueError("service principal is unsupported")
+    _validate_binding(audience, method, path)
+    matches = tuple(
+        capability.scope
+        for capability in SERVICE_CAPABILITY_MANIFEST
+        if capability.principal == principal
+        and capability.audience == audience
+        and capability.matches(method, path)
+    )
+    if not matches:
+        return None
+    if len(set(matches)) != 1:
+        raise RuntimeError("service capability manifest assigns conflicting scopes")
+    return (matches[0],)
+
+
+def _validate_binding(audience: str, method: str, path: str) -> None:
+    if audience not in _AUDIENCES:
+        raise ValueError("identity audience is unsupported")
+    if not method or method != method.upper() or not method.isascii() or not method.isalpha():
+        raise ValueError("request method must contain uppercase ASCII letters")
+    if not path.startswith("/") or "?" in path or "#" in path or "\\" in path:
+        raise ValueError("request path must be absolute and exclude query or fragment text")
+
+
+__all__ = [
+    "IDENTITY_CAPABILITY_VERSION",
+    "SERVICE_CAPABILITY_MANIFEST",
+    "IdentityAudience",
+    "ServiceCapability",
+    "ServicePrincipal",
+    "required_identity_scopes",
+    "service_principal_scopes",
+]

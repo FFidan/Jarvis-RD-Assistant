@@ -9,7 +9,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
-import paper_ingestion.routers.admin as admin_router
+import platform_api.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException
 from jarvis_common.owner import OwnerIdentity

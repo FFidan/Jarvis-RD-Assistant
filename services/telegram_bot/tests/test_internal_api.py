@@ -3,16 +3,6 @@
 import httpx
 import pytest
 from httpx import ASGITransport
-from jarvis_common.testing import make_pool_and_conn
-
-
-def _clear_sweep_memo(app) -> None:
-    from jarvis_common.health import _SWEEP_MEMO_ATTR, _SWEEP_TASK_ATTR
-
-    if hasattr(app.state, _SWEEP_MEMO_ATTR):
-        delattr(app.state, _SWEEP_MEMO_ATTR)
-    if hasattr(app.state, _SWEEP_TASK_ATTR):
-        delattr(app.state, _SWEEP_TASK_ATTR)
 
 
 def test_internal_api_import_does_not_pull_paper_ingestion() -> None:
@@ -57,13 +47,10 @@ def test_internal_api_has_session_and_slowapi_middleware() -> None:
     )
 
 
-async def test_health_returns_200_when_postgres_ok() -> None:
-    """GET /health -> 200 {"status": "ok"} when the postgres probe succeeds."""
+async def test_health_returns_200_without_database_state() -> None:
+    """The database-free adapter is ready without a PostgreSQL dependency."""
     from telegram_bot.internal_api import _internal_app
 
-    pool, _conn = make_pool_and_conn(fetchval_return=1)
-    _internal_app.state.db_pool = pool
-    _clear_sweep_memo(_internal_app)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=_internal_app), base_url="http://test"
     ) as c:
@@ -72,31 +59,21 @@ async def test_health_returns_200_when_postgres_ok() -> None:
     assert resp.json() == {"status": "ok"}
 
 
-async def test_health_returns_503_when_postgres_probe_fails() -> None:
-    """GET /health -> 503 {"status": "degraded"} when the postgres probe fails.
-
-    The decisive proof that /health is wired to a real probe: a 200-only
-    happy-path test cannot distinguish a real check from a hardcoded "ok".
-    """
+async def test_reload_nudges_endpoint_is_absent() -> None:
+    """No general-key Research-to-Telegram mutation endpoint remains."""
     from telegram_bot.internal_api import _internal_app
 
-    pool, _conn = make_pool_and_conn(raise_on_acquire=RuntimeError("DB down"))
-    _internal_app.state.db_pool = pool
-    _clear_sweep_memo(_internal_app)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=_internal_app), base_url="http://test"
     ) as c:
-        resp = await c.get("/health")
-    assert resp.status_code == 503
-    assert resp.json() == {"status": "degraded"}
+        resp = await c.post("/internal/reload-nudges")
+    assert resp.status_code == 404
 
 
-async def test_health_live_always_200_even_when_postgres_is_down() -> None:
-    """GET /health/live never runs the postgres probe — always 200 regardless."""
+async def test_health_live_always_200() -> None:
+    """GET /health/live remains an unconditional process liveness probe."""
     from telegram_bot.internal_api import _internal_app
 
-    pool, _conn = make_pool_and_conn(raise_on_acquire=RuntimeError("DB down"))
-    _internal_app.state.db_pool = pool
     async with httpx.AsyncClient(
         transport=ASGITransport(app=_internal_app), base_url="http://test"
     ) as c:

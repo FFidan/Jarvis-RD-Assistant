@@ -1,4 +1,4 @@
-"""Model assignment validation and Telegram nudge reload side-effect."""
+"""Model assignment validation."""
 
 import logging
 from collections.abc import Sequence
@@ -6,12 +6,9 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.maintenance import outbound_quarantine_active
-from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
-from jarvis_common.settings import get_secrets_settings, get_telegram_settings
+from jarvis_common.config_metadata import ROLE_TO_ALIAS
+from jarvis_common.llm_provider_registry import ProviderDefinition, provider_for_id
 
-from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
-from paper_ingestion.services.llm_provider_registry import ProviderDefinition, provider_for_id
 from paper_ingestion.services.model_lifecycle import (
     catalog_entry_for_model,
     normalize_model_tag,
@@ -20,45 +17,12 @@ from paper_ingestion.services.model_lifecycle import (
 from paper_ingestion.services.provider_models import live_entry_for_model
 
 __all__ = [
-    "reload_telegram_nudges",
     "cloud_provider_key_present",
     "provider_access_configured",
     "validate_model_assignment",
 ]
 
 logger = logging.getLogger(__name__)
-
-
-async def reload_telegram_nudges() -> None:
-    """Ask the Telegram service to reload nudges when outbound use is allowed.
-
-    The best-effort hook returns without loading credentials while quarantine is
-    active, when no Telegram service URL is configured, or after an HTTP failure.
-    It never propagates a network error to the settings-write caller.
-    """
-    if outbound_quarantine_active():
-        logger.info("skip Telegram nudge reload: outbound quarantine awaiting review")
-        return
-
-    telegram_url = get_telegram_settings().url_or_none
-    if not telegram_url:
-        logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
-        return
-    api_key_secret = get_secrets_settings().jarvis_api_key
-    api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
-    try:
-        if outbound_quarantine_active():
-            logger.info("skip Telegram nudge reload: outbound quarantine awaiting review")
-            return
-        async with pinned_async_client(JARVIS_SERVICE_POLICY) as client:
-            resp = await client.post(
-                f"{telegram_url}/internal/reload-nudges",
-                headers={"X-API-Key": api_key},
-                timeout=2.0,
-            )
-            resp.raise_for_status()
-    except httpx.HTTPError:
-        logger.warning("Telegram nudge-reload failed (non-fatal)", exc_info=True)
 
 
 def _config_row_present(row: Any) -> bool:

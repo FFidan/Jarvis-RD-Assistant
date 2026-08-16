@@ -269,6 +269,7 @@ YML
 # pins JARVIS_VERSION=1.1.3, TORCH_VARIANT_SUFFIX=-cuda; no telegram token).
 NS="ghcr.io/limitcycle-oss/jarvis-"
 APP_REFS=(
+  "${NS}platform-api:1.1.3"
   "${NS}paper-ingestion:1.1.3-cuda"
   "${NS}learning-engine:1.1.3"
   "${NS}dashboard:1.1.3"
@@ -637,7 +638,7 @@ for r in "${APP_REFS[@]}"; do log_has "rmi -f $r" || ok_all=0; done
 n_rmi="$(printf '%s\n' "$rmi_lines" | grep -c 'rmi ')"
 if [ "$ok_all" -eq 1 ] && [ "$n_rmi" -eq "${#APP_REFS[@]}" ] \
    && ! printf '%s' "$rmi_lines" | grep -qE 'postgres|ollama|qdrant|caddy'; then
-  pass "tier2_removes_exactly_the_ghcr_images: the four app refs and nothing else"
+  pass "tier2_removes_exactly_the_ghcr_images: the five app refs and nothing else"
 else
   check_fail "tier2_removes_exactly_the_ghcr_images: n=$n_rmi lines=<<<$rmi_lines>>>"
 fi

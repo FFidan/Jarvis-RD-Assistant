@@ -120,9 +120,7 @@ def test_required_transition_seams_match_current_writes() -> None:
     """Named cross-domain behaviors remain characterized until they are replaced."""
     manifest = load_manifest(_MANIFEST_PATH)
     required_relations = {
-        "shared_platform_writes": {"audit_log", "sessions", "system_events"},
-        "telegram_pairing": {"telegram_pairing_tokens", "telegram_user_pairings"},
-        "telegram_nudges": {"scheduled_nudges"},
+        "shared_platform_writes": {"audit_log", "sessions", "system_events", "user_config"},
         "paper_read_activity": {"daily_log"},
         "paper_dependent_learning_rows": {"cards", "project_papers", "task_paper_links"},
         "zotero_project_metadata": {"projects"},

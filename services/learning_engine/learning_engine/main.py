@@ -11,6 +11,7 @@ AnkiExporter) lives in ``custom_init_tasks`` hooks below.
 """
 
 import logging
+from functools import partial
 from typing import Any
 
 from fastapi import Depends, FastAPI
@@ -32,7 +33,11 @@ from jarvis_common.app_factory import (
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
+from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
+from jarvis_common.identity_capabilities import required_identity_scopes
+from jarvis_common.identity_keys import load_identity_verifier_from_settings
+from jarvis_common.identity_middleware import IdentityAssertionMiddleware
 from jarvis_common.settings import get_core_settings
 from jarvis_common.version import app_version
 from jarvis_common.warmup import make_warmup_hook, warm_chat_model
@@ -46,6 +51,8 @@ configure_logging("learning_engine", log_level=get_core_settings().log_level)
 maybe_init_sentry("learning_engine")
 
 logger = logging.getLogger(__name__)
+
+_identity_settings = get_jarvis_common_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +112,22 @@ async def _log_le_started(app: FastAPI) -> None:
     logger.info("Learning Engine init complete")
 
 
+async def _load_identity_verifier_hook(app: FastAPI) -> None:
+    """Load the Learning verifier before domain-specific startup hooks run.
+
+    Parameters
+    ----------
+    app : FastAPI
+        Learning application whose state receives the audience-bound verifier.
+    """
+    if not _identity_settings.identity_assertions_required:
+        return
+    app.state.identity_verifier = load_identity_verifier_from_settings(
+        _identity_settings,
+        audience="learning",
+    )
+
+
 # ---------------------------------------------------------------------------
 # App creation + middleware + error handlers
 # ---------------------------------------------------------------------------
@@ -112,6 +135,7 @@ async def _log_le_started(app: FastAPI) -> None:
 _lifespan_config = ServiceLifespanConfig(
     service_name="Learning Engine Service",
     custom_init_tasks=[
+        _load_identity_verifier_hook,
         make_init_langfuse_hook(_set_openai_client),
         _init_fsrs_and_generators,
         _start_procrastinate_worker,
@@ -122,6 +146,7 @@ _lifespan_config = ServiceLifespanConfig(
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     # Langfuse SDK auto-flushes on process exit — no explicit teardown needed.
     custom_teardown_tasks=[
+        None,  # _load_identity_verifier_hook
         None,  # init_langfuse_hook
         None,  # _init_fsrs_and_generators
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
@@ -152,6 +177,11 @@ configure_middleware_and_errors(
 from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
 
 app.add_middleware(SessionMiddleware)
+if _identity_settings.identity_assertions_required:
+    app.add_middleware(
+        IdentityAssertionMiddleware,
+        scope_resolver=partial(required_identity_scopes, "learning"),
+    )
 
 # ---------------------------------------------------------------------------
 # Router registration
@@ -165,6 +195,7 @@ from learning_engine.routers import (  # noqa: E402
     executive_intent,
     export,
     generation,
+    internal_telegram,
     jobs,
     milestones,
     project_papers,
@@ -189,6 +220,7 @@ app.include_router(export.router)
 app.include_router(executive.router)
 app.include_router(executive_intent.router)
 app.include_router(jobs.router)
+app.include_router(internal_telegram.router)
 
 
 # ---------------------------------------------------------------------------

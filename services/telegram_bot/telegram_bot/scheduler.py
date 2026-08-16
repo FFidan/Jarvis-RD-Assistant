@@ -1,15 +1,14 @@
 """Job scheduler for JARVIS automated workflows.
 
-Uses APScheduler's AsyncIOScheduler to run cron-based jobs that are
-configured in the scheduled_nudges database table.
+Uses APScheduler's AsyncIOScheduler to run Learning-owned schedules obtained
+through the scoped service boundary.
 """
 
 import importlib
 import logging
-from datetime import UTC, datetime
+from datetime import UTC
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import asyncpg
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -17,14 +16,16 @@ from jarvis_common.maintenance import skip_for_maintenance
 from telegram import Bot
 
 from telegram_bot import formatters, services_client
-from telegram_bot import owner as _owner
 from telegram_bot.config import BotConfig
 from telegram_bot.notification_policy import (
     SCHEDULED_NOTIFICATION_KINDS,
     ScheduledNotificationPolicy,
 )
+from telegram_bot.platform_client import get_runtime_context, list_user_pairings
 
 logger = logging.getLogger(__name__)
+
+NUDGE_REFRESH_INTERVAL_SECONDS = 60
 
 JOB_REGISTRY: dict[str, str] = {
     "daily_summary": "telegram_bot.orchestration.daily_briefing:run_daily_briefing",
@@ -40,12 +41,12 @@ if frozenset(JOB_REGISTRY) != SCHEDULED_NOTIFICATION_KINDS:
 
 
 class JarvisScheduler:
-    """Manages cron-based scheduled jobs from the database.
+    """Manage Learning-owned schedules through scoped service APIs.
 
     Parameters
     ----------
-    db_pool : asyncpg.Pool
-        Database connection pool.
+    platform_client : httpx.AsyncClient
+        Scoped client for Platform pairing and runtime context.
     http_client : httpx.AsyncClient
         Shared HTTP client.
     bot : Bot
@@ -56,12 +57,12 @@ class JarvisScheduler:
 
     def __init__(
         self,
-        db_pool: asyncpg.Pool,
+        platform_client: httpx.AsyncClient,
         http_client: httpx.AsyncClient,
         bot: Bot,
         config: BotConfig,
     ) -> None:
-        self.db_pool = db_pool
+        self.platform_client = platform_client
         self.http_client = http_client
         self.bot = bot
         self.config = config
@@ -69,7 +70,7 @@ class JarvisScheduler:
         self.delivery_policy = ScheduledNotificationPolicy(http_client, config)
 
     async def load_and_start(self) -> None:
-        """Load enabled nudges from DB and start the scheduler."""
+        """Load enabled nudges through Learning and start the scheduler."""
         await self.reload_nudges()
         await self._reconcile_focus_sessions()
         self.scheduler.add_job(
@@ -81,16 +82,23 @@ class JarvisScheduler:
             max_instances=1,
             coalesce=True,
         )
+        self.scheduler.add_job(
+            self.reload_nudges,
+            "interval",
+            seconds=NUDGE_REFRESH_INTERVAL_SECONDS,
+            id="nudge_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         self.scheduler.start()
         logger.info("Scheduler started with %d jobs", len(self.scheduler.get_jobs()))
 
     async def reload_nudges(self) -> None:
-        """Re-read enabled nudges from DB and re-register all nudge_* jobs.
+        """Re-read enabled nudges and re-register all ``nudge_*`` jobs.
 
-        Reads ``user.timezone`` from the personal row of the Telegram-paired
-        owner user (resolved via ``telegram.owner_chat_id`` → ``telegram_user_pairings``),
-        falling back to the operator-level ``user_id IS NULL`` seed row, then
-        to ``"UTC"`` when neither is present.
+        Platform resolves the owner pairing and timezone; Learning returns the
+        enabled schedules. Telegram holds no database credential.
 
         The reload is atomic: all DB rows are parsed into trigger objects first.
         Rows that fail (bad timezone or invalid cron expression) are WARN-logged
@@ -98,8 +106,8 @@ class JarvisScheduler:
         removed and new ones registered — leaving the scheduler in a consistent
         state even if individual rows are malformed.
         """
-        # Resolve timezone: owner's personal row wins; operator-level seed is fallback.
-        tz_str: str = await self._resolve_owner_timezone()
+        runtime = await get_runtime_context(self.platform_client, self.config)
+        tz_str = runtime.timezone
         try:
             tz = ZoneInfo(tz_str)
         except ZoneInfoNotFoundError:
@@ -107,9 +115,14 @@ class JarvisScheduler:
             tz = UTC  # type: ignore[assignment]
             tz_str = "UTC"
 
-        # Re-read from DB
-        rows = await self.db_pool.fetch(
-            "SELECT id, nudge_type, cron_expression FROM scheduled_nudges WHERE enabled = TRUE"
+        rows = (
+            await services_client.fetch_scheduled_nudges(
+                self.http_client,
+                self.config,
+                runtime.owner_user_id,
+            )
+            if runtime.owner_user_id is not None
+            else []
         )
 
         # --- Prepare pass (no mutations yet) ---
@@ -117,9 +130,9 @@ class JarvisScheduler:
         # row that parses successfully.  Bad rows are WARN-logged and skipped.
         prepared: list[tuple[int, str, str, CronTrigger]] = []
         for row in rows:
-            nudge_type: str = row["nudge_type"]
-            cron_expr: str = row["cron_expression"]
-            nudge_id: int = row["id"]
+            nudge_type = row.nudge_type
+            cron_expr = row.cron_expression
+            nudge_id = row.id
 
             if nudge_type not in JOB_REGISTRY:
                 logger.warning("Unknown nudge_type: %s (id=%d)", nudge_type, nudge_id)
@@ -178,59 +191,10 @@ class JarvisScheduler:
 
         logger.info("reload_nudges: registered %d jobs (tz=%s)", registered, tz_str)
 
-    async def _resolve_owner_timezone(self) -> str:
-        """Return the timezone string for the Telegram-paired owner user.
-
-        Resolution order:
-        1. Personal ``user.timezone`` row for the user whose chat_id matches
-           ``telegram.owner_chat_id`` (the deployment's Telegram owner).
-        2. Operator-level ``user.timezone`` seed row (``user_id IS NULL``).
-        3. Hardcoded ``"UTC"`` when neither row exists.
-        """
-        owner_chat_id_row = await self.db_pool.fetchrow(
-            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
-        )
-        owner_chat_id = owner_chat_id_row["value"] if owner_chat_id_row else None
-        owner_chat_id_int: int | None = None
-        if owner_chat_id is not None:
-            try:
-                owner_chat_id_int = int(owner_chat_id)
-            except (TypeError, ValueError):
-                logger.warning(
-                    "Ignoring non-numeric telegram.owner_chat_id %r for timezone resolution",
-                    owner_chat_id,
-                )
-        if owner_chat_id_int is not None:
-            pairing_row = await self.db_pool.fetchrow(
-                "SELECT user_id FROM telegram_user_pairings WHERE chat_id = $1",
-                owner_chat_id_int,
-            )
-            if pairing_row is not None:
-                owner_user_id = pairing_row["user_id"]
-                tz_row = await self.db_pool.fetchrow(
-                    "SELECT value FROM user_config WHERE key = 'user.timezone' AND user_id = $1",
-                    owner_user_id,
-                )
-                if tz_row and tz_row["value"]:
-                    return str(tz_row["value"])
-        fallback_row = await self.db_pool.fetchrow(
-            "SELECT value FROM user_config WHERE key = 'user.timezone' AND user_id IS NULL"
-        )
-        return str(fallback_row["value"]) if fallback_row and fallback_row["value"] else "UTC"
-
     async def _resolve_owner_chat_id(self) -> int | None:
-        """Return the numeric telegram.owner_chat_id, or None when unset/invalid."""
-        row = await self.db_pool.fetchrow(
-            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
-        )
-        raw = row["value"] if row else None
-        if raw is None:
-            return None
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            logger.warning("Ignoring non-numeric telegram.owner_chat_id %r for failure alert", raw)
-            return None
+        """Return Platform's configured owner chat, or ``None`` when unset."""
+        runtime = await get_runtime_context(self.platform_client, self.config)
+        return runtime.owner_chat_id
 
     async def _run_job(self, nudge_type: str, nudge_id: int) -> None:
         """Execute a scheduled job and update last_fired_at.
@@ -252,16 +216,19 @@ class JarvisScheduler:
             func = getattr(module, func_name)
             await func(
                 self.http_client,
-                self.db_pool,
+                self.platform_client,
                 self.bot,
                 self.config,
                 delivery_policy=self.delivery_policy,
             )
 
-            # Update last_fired_at
-            await self.db_pool.execute(
-                "UPDATE scheduled_nudges SET last_fired_at = $1 WHERE id = $2",
-                datetime.now(UTC),
+            runtime = await get_runtime_context(self.platform_client, self.config)
+            if runtime.owner_user_id is None:
+                raise RuntimeError("Telegram owner pairing disappeared during nudge execution")
+            await services_client.acknowledge_scheduled_nudge(
+                self.http_client,
+                self.config,
+                runtime.owner_user_id,
                 nudge_id,
             )
             logger.info("Job completed: %s (id=%d)", nudge_type, nudge_id)
@@ -304,7 +271,7 @@ class JarvisScheduler:
 
     async def _reconcile_focus_sessions(self) -> None:
         """Deliver durable Telegram focus completions after timer or bot restarts."""
-        pairings = await _owner.list_user_pairings(self.db_pool)
+        pairings = await list_user_pairings(self.platform_client, self.config)
         for pairing in pairings:
             try:
                 session = await services_client.fetch_pending_telegram_focus_completion(

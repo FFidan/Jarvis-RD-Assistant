@@ -55,11 +55,13 @@ def _make_context(
     pool: object,
     config: object,
     user_data: dict[str, object] | None = None,
+    *,
+    paired_user_id: int | None = 1,
 ) -> MagicMock:
     return make_ptb_context(
         pool,
         config,
-        options=PTBContextOptions(user_data=user_data),
+        options=PTBContextOptions(user_data=user_data, paired_user_id=paired_user_id),
     )
 
 
@@ -91,7 +93,7 @@ async def test_dispatcher_sets_correlation_id_per_command():
     context.user_data = {"jarvis_user_id": _TEST_CHAT_ID}
 
     with (
-        patch("telegram_bot.handlers.commands._auth.log_event", new_callable=AsyncMock),
+        patch("telegram_bot.handlers.commands._auth.record_event", new_callable=AsyncMock),
         patch(
             "telegram_bot.handlers.commands._auth.auth_check",
             new_callable=AsyncMock,
@@ -134,7 +136,7 @@ async def test_dispatcher_emits_auth_event_on_first_message_per_chat():
         pass
 
     with (
-        patch("telegram_bot.handlers.commands._auth.log_event", mock_log_event),
+        patch("telegram_bot.handlers.commands._auth.record_event", mock_log_event),
         patch(
             "telegram_bot.handlers.commands._auth.auth_check",
             new_callable=AsyncMock,
@@ -177,7 +179,7 @@ async def test_dispatcher_auth_event_not_emitted_for_second_distinct_chat():
     context_b = _make_context(pool, config, user_data={})
 
     with (
-        patch("telegram_bot.handlers.commands._auth.log_event", mock_log_event),
+        patch("telegram_bot.handlers.commands._auth.record_event", mock_log_event),
         patch(
             "telegram_bot.handlers.commands._auth.auth_check",
             new_callable=AsyncMock,
@@ -198,8 +200,7 @@ async def test_dispatcher_auth_event_not_emitted_for_second_distinct_chat():
 
 @pytest.mark.asyncio
 async def test_start_paired_chat_sends_welcome_via_pairing_lookup():
-    """/start authenticates via the telegram_user_pairings lookup (no PAIR_
-    deep-link, no config event). A paired chat receives the welcome message."""
+    """A Platform-paired chat receives the welcome message."""
     from telegram_bot.handlers.commands.system_commands import start_command
 
     pool = MagicMock()
@@ -238,7 +239,7 @@ async def test_start_unpaired_chat_shows_pair_guidance():
     update.message.text = "/start"
     update.message.reply_text = AsyncMock()
 
-    context = _make_context(pool, make_bot_config(BotConfig))
+    context = _make_context(pool, make_bot_config(BotConfig), paired_user_id=None)
 
     await start_command(update, context)
 

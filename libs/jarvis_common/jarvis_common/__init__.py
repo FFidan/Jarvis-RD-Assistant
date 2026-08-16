@@ -38,7 +38,6 @@ from jarvis_common.db_helpers import (
     escape_like,
     get_fast_model,
     get_smart_model,
-    init_pg_connection,
     invalidate_effective_num_ctx_cache,
     validated_model,
 )
@@ -77,7 +76,6 @@ __all__ = [
     "effective_num_ctx",
     "delete_or_404",
     "escape_like",
-    "init_pg_connection",
     "invalidate_effective_num_ctx_cache",
     "validated_model",
     "get_smart_model",

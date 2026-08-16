@@ -12,6 +12,8 @@ uv lock --check
 OUTPUT_ROOT="$TMP_DIR" bash "$ROOT_DIR/scripts/export-service-requirements.sh"
 
 for file in \
+  services/platform_api/requirements.txt \
+  services/platform_api/constraints.txt \
   services/paper_ingestion/requirements.txt \
   services/paper_ingestion/requirements-optional.txt \
   services/paper_ingestion/constraints.txt \

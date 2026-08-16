@@ -40,7 +40,7 @@ _ENV_EXAMPLE = _REPO_ROOT / ".env.example"
 _JARVIS_SETUP_SCRIPT = _REPO_ROOT / "scripts" / "jarvis-setup.sh"
 _LOCAL_CADDY_CONFIG = _REPO_ROOT / "caddy" / "Caddyfile.local"
 _PASSKEY_ROUTER = (
-    _REPO_ROOT / "services" / "paper_ingestion" / "paper_ingestion" / "routers" / "auth_passkeys.py"
+    _REPO_ROOT / "services" / "platform_api" / "platform_api" / "routers" / "auth_passkeys.py"
 )
 _DOCKERIGNORE = _REPO_ROOT / ".dockerignore"
 _NGINX_CONFIG = _REPO_ROOT / "frontend" / "nginx.conf"

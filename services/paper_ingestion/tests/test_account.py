@@ -1,4 +1,4 @@
-"""Unit tests for paper_ingestion.routers.account — email-change cooldown."""
+"""Unit tests for platform_api.routers.account — email-change cooldown."""
 
 from __future__ import annotations
 
@@ -49,8 +49,8 @@ async def test_email_change_cooldown_suppresses_second_token() -> None:
     Second call (within 30 s): recent token found → INSERT skipped, email_verification_sent=False.
     Also asserts that no second pending_email IS NOT NULL token row was minted.
     """
-    from paper_ingestion.models.account import AccountUpdate
-    from paper_ingestion.routers.account import update_account
+    from platform_api.models.account import AccountUpdate
+    from platform_api.routers.account import update_account
 
     user_row = _make_user_row()
     now = datetime.now(UTC)
@@ -77,7 +77,7 @@ async def test_email_change_cooldown_suppresses_second_token() -> None:
     body = AccountUpdate(email="new@example.com")
 
     with patch(
-        "paper_ingestion.routers.account.send_magic_link",
+        "platform_api.routers.account.send_magic_link",
         AsyncMock(return_value=MagicLinkDelivery.DELIVERED),
     ):
         resp1 = await update_account(body=body, request=request, user_id=1)

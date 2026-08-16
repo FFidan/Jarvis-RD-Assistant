@@ -13,7 +13,6 @@ import sys
 import time
 from typing import Any
 
-from jarvis_common.crypto import reload_fernet_on_sighup
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.maintenance import (
     ensure_outbound_egress_allowed,
@@ -30,7 +29,7 @@ from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, Type
 from telegram.request import HTTPXRequest
 
 from telegram_bot.command_catalog import menu_command_specs
-from telegram_bot.config import BotConfig, create_db_pool
+from telegram_bot.config import BotConfig, service_headers
 from telegram_bot.handlers import (
     get_review_conversation_handler,
     register_callback_handlers,
@@ -38,6 +37,7 @@ from telegram_bot.handlers import (
 )
 from telegram_bot.internal_api import start_internal_server
 from telegram_bot.scheduler import JarvisScheduler
+from telegram_bot.service_auth import TelegramBackendAuth
 
 configure_logging("telegram_bot", log_level=get_core_settings().log_level)
 maybe_init_sentry("telegram_bot")
@@ -100,7 +100,7 @@ async def _secrets_rotation_watcher(started_at: float, poll_interval_s: float = 
 async def post_init(application: Application) -> None:
     """Initialize shared resources after the Application is built.
 
-    Creates database pool and HTTP client, stores them in bot_data.
+    Creates scoped Platform and backend HTTP clients and starts the scheduler.
 
     Parameters
     ----------
@@ -114,18 +114,21 @@ async def post_init(application: Application) -> None:
     """
     ensure_outbound_egress_allowed("Telegram bot startup")
     config: BotConfig = application.bot_data["config"]
-    application.bot_data["db_pool"] = await create_db_pool(config.database_url)
+    platform_client = pinned_async_client(
+        JARVIS_SERVICE_POLICY,
+        timeout=10.0,
+        headers=service_headers(config),
+    )
+    application.bot_data["platform_client"] = platform_client
     application.bot_data["http_client"] = pinned_async_client(
         JARVIS_SERVICE_POLICY,
         timeout=30.0,
-        headers=(
-            {"X-API-Key": config.jarvis_api_key.get_secret_value()} if config.jarvis_api_key else {}
-        ),
+        auth=TelegramBackendAuth(config, platform_client),
     )
 
     # Start scheduler
     scheduler = JarvisScheduler(
-        db_pool=application.bot_data["db_pool"],
+        platform_client=platform_client,
         http_client=application.bot_data["http_client"],
         bot=application.bot,
         config=config,
@@ -133,9 +136,9 @@ async def post_init(application: Application) -> None:
     await scheduler.load_and_start()
     application.bot_data["scheduler"] = scheduler
 
-    # Start internal HTTP API in the background (for reload-nudges endpoint)
+    # Start the private liveness API in the background.
     _internal_api_task = asyncio.get_running_loop().create_task(
-        start_internal_server(scheduler, application.bot_data["db_pool"]),
+        start_internal_server(),
         name="internal_api",
     )
     application.bot_data["internal_api_task"] = _internal_api_task
@@ -160,7 +163,7 @@ async def post_init(application: Application) -> None:
         [BotCommand(spec.name, spec.description) for spec in menu_command_specs()]
     )
 
-    logger.info("Bot initialized: db_pool, http_client, scheduler, and internal API ready")
+    logger.info("Bot initialized: scoped HTTP clients, scheduler, and liveness API ready")
 
 
 async def post_shutdown(application: Application) -> None:
@@ -198,9 +201,9 @@ async def post_shutdown(application: Application) -> None:
     if http_client:
         await http_client.aclose()
 
-    db_pool = application.bot_data.get("db_pool")
-    if db_pool:
-        await db_pool.close()
+    platform_client = application.bot_data.get("platform_client")
+    if platform_client:
+        await platform_client.aclose()
 
     logger.info("Bot shutdown: resources released")
 
@@ -243,8 +246,6 @@ def main() -> None:
     """
     if skip_for_maintenance("Telegram polling"):
         return
-
-    reload_fernet_on_sighup()
 
     try:
         config = BotConfig.from_env()

@@ -20,7 +20,10 @@ from jarvis_common.config import JarvisCommonSettings, get_jarvis_common_setting
 
 
 class TestJarvisCommonSettings:
-    def test_defaults(self) -> None:
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Root conftest disables the gateway boundary for direct-app tests.
+        # Remove that explicit test override to verify the production default.
+        monkeypatch.delenv("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", raising=False)
         s = JarvisCommonSettings()
         assert s.database_url == ""
         assert s.postgres_user == "jarvis"
@@ -34,6 +37,28 @@ class TestJarvisCommonSettings:
         assert s.trust_cf_connecting_ip is False
         assert s.migration_lock_contended_ok is False
         assert s.observability_enabled is False
+        assert s.identity_assertions_required is True
+        assert s.identity_issuer == "jarvis-platform"
+        assert s.identity_public_key_files == (s.identity_current_public_key_file,)
+
+    def test_identity_rotation_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", "true")
+        monkeypatch.setenv("JARVIS_IDENTITY_CURRENT_PUBLIC_KEY_FILE", "/keys/current.pem")
+        monkeypatch.setenv("JARVIS_IDENTITY_PREVIOUS_PUBLIC_KEY_FILE", "/keys/previous.pem")
+        monkeypatch.setenv(
+            "JARVIS_IDENTITY_PREVIOUS_KEY_ACCEPT_UNTIL",
+            "2026-08-17T12:00:00+00:00",
+        )
+
+        settings = JarvisCommonSettings()
+
+        assert settings.identity_assertions_required is True
+        assert tuple(str(path) for path in settings.identity_public_key_files) == (
+            "/keys/current.pem",
+            "/keys/previous.pem",
+        )
+        assert settings.identity_previous_key_accept_until is not None
+        assert settings.identity_previous_key_accept_until.utcoffset() is not None
 
     def test_database_url_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host/db")
@@ -154,7 +179,7 @@ class TestPaperIngestionSettings:
         assert s.openalex_api_key is None
         assert s.infra_ingest_key is None
         assert s.infra_ingest_key_file is None
-        assert s.telegram_bot_token is None
+        assert not hasattr(s, "telegram_bot_token")
 
     def test_inherits_common_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from paper_ingestion.config import PaperIngestionSettings

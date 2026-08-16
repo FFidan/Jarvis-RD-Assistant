@@ -1112,6 +1112,6 @@ def test_hash_email_is_case_insensitive() -> None:
 
 def test_email_hash_matches_auth_router_canonicalization() -> None:
     from jarvis_common.email import _hash_email as mail_hash_email
-    from paper_ingestion.routers.auth import _hash_email as auth_hash_email
+    from platform_api.routers.auth import _hash_email as auth_hash_email
 
     assert mail_hash_email("User@Example.COM") == auth_hash_email("user@example.com")

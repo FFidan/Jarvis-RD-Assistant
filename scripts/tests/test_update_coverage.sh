@@ -281,7 +281,7 @@ health_sample() {
 running_cid() {
   case "$1" in
     postgres|ollama|qdrant|litellm|postgres-backup) printf 'cid-%s\n' "$1" ;;
-    paper_ingestion|learning_engine|dashboard|restore-uploader|telegram_bot) printf 'cid-%s\n' "$1" ;;
+    platform_api|paper_ingestion|learning_engine|dashboard|restore-uploader|telegram_bot) printf 'cid-%s\n' "$1" ;;
     caddy|caddy_local|cloudflared)
       case " ${STUB_ACTIVE_INGRESS:-} " in *" $1 "*) printf 'cid-%s\n' "$1" ;; esac ;;
     *) : ;;

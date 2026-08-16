@@ -47,7 +47,7 @@ def _make_api_key_client(app):
 
 async def test_a51_list_events_returns_events_from_db(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -63,7 +63,7 @@ async def test_a51_list_events_returns_events_from_db(
            RETURNING id"""
     )
 
-    async with _make_api_key_client(_pi_app_with_pool) as c:
+    async with _make_api_key_client(_platform_app_with_pool) as c:
         resp = await c.get("/api/logs/events")
 
     assert resp.status_code == 200, resp.text[:300]
@@ -78,7 +78,7 @@ async def test_a51_list_events_returns_events_from_db(
 
 async def test_a51_list_events_non_admin_non_apikey_gets_401_or_403(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """Covers map row A51: admin gate blocks regular-session callers.
@@ -88,7 +88,7 @@ async def test_a51_list_events_non_admin_non_apikey_gets_401_or_403(
     """
     # A regular user session (not admin) should be blocked
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        transport=httpx.ASGITransport(app=_platform_app_with_pool),
         base_url="http://test",
         headers={"X-API-Key": DEFAULT_CONTRACT_API_KEY},
         cookies={"jarvis_session": contract_two_users.cookie_a},
@@ -108,7 +108,7 @@ async def test_a51_list_events_non_admin_non_apikey_gets_401_or_403(
 
 async def test_a52_get_event_returns_single_event_and_404_for_missing(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -122,7 +122,7 @@ async def test_a52_get_event_returns_single_event_and_404_for_missing(
            RETURNING id"""
     )
 
-    async with _make_api_key_client(_pi_app_with_pool) as c:
+    async with _make_api_key_client(_platform_app_with_pool) as c:
         resp = await c.get(f"/api/logs/events/{event_id}")
 
     assert resp.status_code == 200, resp.text[:300]
@@ -131,7 +131,7 @@ async def test_a52_get_event_returns_single_event_and_404_for_missing(
     assert body["message"] == "single event lookup"
 
     # Non-existent id
-    async with _make_api_key_client(_pi_app_with_pool) as c:
+    async with _make_api_key_client(_platform_app_with_pool) as c:
         resp404 = await c.get("/api/logs/events/999999999")
     assert resp404.status_code == 404, f"Expected 404, got {resp404.status_code}"
 
@@ -143,7 +143,7 @@ async def test_a52_get_event_returns_single_event_and_404_for_missing(
 
 async def test_a53_get_summary_returns_non_negative_counts(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -157,7 +157,7 @@ async def test_a53_get_summary_returns_non_negative_counts(
            VALUES ('warning', 'config', 'contract-summary-src', 'summary test')"""
     )
 
-    async with _make_api_key_client(_pi_app_with_pool) as c:
+    async with _make_api_key_client(_platform_app_with_pool) as c:
         resp = await c.get("/api/logs/summary")
 
     assert resp.status_code == 200, resp.text[:300]
@@ -183,7 +183,7 @@ async def test_a53_get_summary_returns_non_negative_counts(
 
 async def test_a54_get_correlation_returns_matching_events(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -211,7 +211,7 @@ async def test_a54_get_correlation_returns_matching_events(
         uuid.uuid4(),
     )
 
-    async with _make_api_key_client(_pi_app_with_pool) as c:
+    async with _make_api_key_client(_platform_app_with_pool) as c:
         resp = await c.get(f"/api/logs/correlation/{correlation_id}")
 
     assert resp.status_code == 200, resp.text[:300]
@@ -227,14 +227,14 @@ async def test_a54_get_correlation_returns_matching_events(
 
 async def test_a54_get_correlation_invalid_uuid_returns_422(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """Covers map row A54: GET /api/logs/correlation/{id} validates UUID format.
 
     Verified: logs.py:242-244 — HTTPException(422) on invalid UUID.
     """
-    async with _make_api_key_client(_pi_app_with_pool) as c:
+    async with _make_api_key_client(_platform_app_with_pool) as c:
         resp = await c.get("/api/logs/correlation/not-a-uuid")
     assert resp.status_code == 422, f"Expected 422 for invalid UUID, got {resp.status_code}"
 
@@ -246,7 +246,7 @@ async def test_a54_get_correlation_invalid_uuid_returns_422(
 
 async def test_a55_list_sources_returns_distinct_sources(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -257,7 +257,7 @@ async def test_a55_list_sources_returns_distinct_sources(
     reset contract_conn has no cache state (module-level _sources_cache persists
     across tests but that's acceptable — we only assert list semantics, not cache).
     """
-    import paper_ingestion.routers.logs as logs_module
+    import platform_api.routers.logs as logs_module
 
     # Reset the module-level cache so this test observes fresh DB state
     logs_module._sources_cache = None
@@ -271,7 +271,7 @@ async def test_a55_list_sources_returns_distinct_sources(
     # Reset cache again after insert to force re-query
     logs_module._sources_cache = None
 
-    async with _make_api_key_client(_pi_app_with_pool) as c:
+    async with _make_api_key_client(_platform_app_with_pool) as c:
         resp = await c.get("/api/logs/sources")
 
     assert resp.status_code == 200, resp.text[:300]

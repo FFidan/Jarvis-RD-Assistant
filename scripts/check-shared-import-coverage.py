@@ -51,6 +51,7 @@ OWNING_GROUP = "jarvis-common"
 # base (constraints-optional*.txt, constraints-profiling.txt) are not listed --
 # they cannot be the sole source of an import.
 BASE_CONSTRAINTS = (
+    Path("services/platform_api/constraints.txt"),
     Path("services/telegram_bot/constraints.txt"),
     Path("services/learning_engine/constraints.txt"),
     Path("services/paper_ingestion/constraints.txt"),

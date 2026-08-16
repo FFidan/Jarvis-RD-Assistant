@@ -11,7 +11,7 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import paper_ingestion.routers.setup as setup_router
+import platform_api.routers.setup as setup_router
 import pytest
 from fastapi import HTTPException, Response
 from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
@@ -117,7 +117,7 @@ async def test_bootstrap_write_open_when_token_unset_in_development(
     """Non-production keeps the backward-compat warn+allow window (no-op gate)."""
     monkeypatch.setenv("ENVIRONMENT", "development")
     request = _bootstrap_request(method="POST", token=None)
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.setup"):
+    with caplog.at_level(logging.WARNING, logger="platform_api.routers.setup"):
         assert await setup_router.require_unconfigured_or_admin(request) is None
     assert any("unprotected" in r.message for r in caplog.records), (
         "expected an unprotected-first-admin WARNING when no setup token is configured"
@@ -128,7 +128,7 @@ async def test_bootstrap_write_open_when_token_unset_in_development(
 async def test_bootstrap_write_with_token_does_not_warn(_token_set, caplog) -> None:
     """A configured token closes the window — the no-op warning must not fire."""
     request = _bootstrap_request(method="POST", token=_TOKEN)
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.setup"):
+    with caplog.at_level(logging.WARNING, logger="platform_api.routers.setup"):
         assert await setup_router.require_unconfigured_or_admin(request) is None
     assert not any("unprotected" in r.message for r in caplog.records)
 

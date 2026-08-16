@@ -1,3 +1,5 @@
-from . import admin, auth, setup, zotero
+"""Research API route modules."""
 
-__all__ = ["admin", "auth", "setup", "zotero"]
+from . import zotero
+
+__all__ = ["zotero"]

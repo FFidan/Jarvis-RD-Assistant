@@ -1,299 +1,29 @@
-"""Settings, nudges, and source management endpoints.
+"""Research analytics, source management, and data-export routes.
 
-HTTP transport layer only — business logic lives in concern-specific service modules.
-
-Route handlers are thin:  parse → auth check → delegate → return.
-
-Sub-routers:
-- ``settings_sources.router`` — /api/nudges/* and /api/sources/*
+HTTP handlers remain thin and delegate owner-local behavior to service modules.
+Provider configuration and operator controls are owned by the Platform API.
 """
 
-import logging
-from typing import Any, Literal
+from __future__ import annotations
+
+from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from jarvis_common import log_audit
-from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
-from jarvis_common.crypto import resolve_secret_row
-from jarvis_common.event_log import log_event as _log_event
-from pydantic import BaseModel
+from jarvis_common.auth import current_user_id_strict
 
-from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
-from paper_ingestion.models import (
-    ConfigEntry,
-    PapersBySourceItem,
-    PapersByStatusItem,
-)
+from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.models import PapersBySourceItem, PapersByStatusItem
 from paper_ingestion.routers.settings_sources import sources_router
 from paper_ingestion.services.analytics_queries import (
     fetch_papers_by_source,
     fetch_papers_by_status,
 )
-from paper_ingestion.services.config_db import (
-    _fetch_effective_config_row,
-    _resolve_config_value,
-)
-from paper_ingestion.services.config_metadata import (
-    _ENCRYPTED_KEYS,
-    BROWSER_READABLE_SYSTEM_KEYS,
-    PERSONAL_KEYS,
-    _classify_config_key,
-    _is_allowed_config_key,
-)
-from paper_ingestion.services.config_write import write_config
 from paper_ingestion.services.data_export import build_export_zip
-from paper_ingestion.services.litellm_config import (
-    get_provider_base_url,
-    update_litellm_model,
-)
-from paper_ingestion.services.llm_provider_registry import (
-    PROVIDER_REGISTRY,
-    ProviderDefinition,
-    provider_for_id,
-    provider_for_prefix,
-)
-from paper_ingestion.services.model_assignment import cloud_provider_key_present
-from paper_ingestion.services.provider_account import fetch_provider_account
-from paper_ingestion.services.provider_models import invalidate_provider_model_cache
-from paper_ingestion.services.provider_test import (
-    _SUPPORTED_PROVIDERS,
-    ProviderTestResult,
-    test_provider_connectivity,
-)
-from paper_ingestion.services.system_models_view import _load_current_model_assignments
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
-
-# Include sub-routers (no prefix — sub-files already define full paths under /api)
 router.include_router(sources_router)
-
-
-# ---------------------------------------------------------------------------
-# Response models (router-local; not part of the service contract)
-# ---------------------------------------------------------------------------
-
-
-class ProviderTestResponse(BaseModel):
-    ok: bool
-    error: str | None = None
-
-
-class ProviderMetadataResponse(BaseModel):
-    """Public, non-secret metadata for one supported cloud provider."""
-
-    id: str
-    display_name: str
-    kind: str
-    api_key_config_key: str
-    base_url_config_key: str | None = None
-    assignment_prefix: str
-    litellm_prefix: str
-    privacy_boundary: str
-    best_for: str
-    data_note: str
-    configured: bool
-    base_url_configured: bool = False
-    supports_assignment: bool
-    dashboard_url: str | None = None
-    account_capability: Literal["current_key", "balance", "unavailable", "no_provider_api"]
-
-
-class ProviderAccountResponse(BaseModel):
-    """Capability-gated, sanitized account data for one registered provider."""
-
-    provider: str
-    capability: Literal["current_key", "balance", "unavailable", "no_provider_api"]
-    data: dict[str, bool | int | float | str | None]
-    error_code: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Private router helpers
-# ---------------------------------------------------------------------------
-
-
-def _has_browser_session(request: Request) -> bool:
-    return getattr(request.state, "user_role", None) is not None
-
-
-# ---------------------------------------------------------------------------
-# Config endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.get("/config", response_model=list[ConfigEntry])
-@limiter.limit("60/minute")
-async def list_config(
-    request: Request,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    caller_user_id: int = Depends(current_user_id_strict),
-) -> list[ConfigEntry]:
-    """Return all config entries.
-
-    Browser users receive their personal settings plus the few system flags in
-    ``BROWSER_READABLE_SYSTEM_KEYS`` that the interface has to explain to them;
-    everything else stays admin-only. Being readable implies nothing about being
-    writable — ``set_config`` sends every system-scope key through
-    ``require_admin`` regardless. API-key-only callers preserve the legacy
-    single-tenant view.
-    """
-    browser_session = _has_browser_session(request)
-    role = getattr(request.state, "user_role", None)
-    readable_keys = sorted(PERSONAL_KEYS | BROWSER_READABLE_SYSTEM_KEYS)
-    async with db_pool.acquire() as conn:
-        if browser_session and role != "admin":
-            rows = await conn.fetch(
-                """SELECT DISTINCT ON (key) key, value, encrypted_value, user_id
-                   FROM user_config
-                   WHERE key = ANY($1::text[])
-                     AND (user_id = $2 OR user_id IS NULL)
-                   ORDER BY key, user_id IS NULL""",
-                readable_keys,
-                caller_user_id,
-            )
-        elif browser_session and caller_user_id is not None:
-            rows = await conn.fetch(
-                """SELECT DISTINCT ON (key) key, value, encrypted_value, user_id
-                   FROM user_config
-                   WHERE user_id IS NULL OR user_id = $1
-                   ORDER BY key, user_id IS NULL""",
-                caller_user_id,
-            )
-        else:
-            rows = await conn.fetch(
-                """SELECT key, value, encrypted_value, user_id
-                   FROM user_config
-                   WHERE user_id IS NULL
-                   ORDER BY key"""
-            )
-    return [ConfigEntry(key=r["key"], value=_resolve_config_value(r["key"], r)) for r in rows]
-
-
-@router.get("/config/{key}")
-@limiter.limit("60/minute")
-async def get_config(
-    request: Request,
-    key: str,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    caller_user_id: int = Depends(current_user_id_strict),
-) -> ConfigEntry:
-    if not _is_allowed_config_key(key):
-        raise HTTPException(404, f"Config key '{key}' not found")
-    if _classify_config_key(key) == "system" and _has_browser_session(request):
-        await require_admin(request)
-    is_admin = getattr(request.state, "user_role", None) == "admin"
-    async with db_pool.acquire() as conn:
-        row = await _fetch_effective_config_row(conn, key, caller_user_id, is_admin=is_admin)
-    if not row:
-        raise HTTPException(404, f"Config key '{key}' not found")
-    value = _resolve_config_value(key, row)
-    return ConfigEntry(key=row["key"], value=value)
-
-
-@router.put("/config/{key}")
-@limiter.limit("30/minute")
-async def set_config(
-    request: Request,
-    key: str,
-    body: ConfigEntry,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    scheduler=Depends(get_scheduler),
-    caller_user_id: int = Depends(current_user_id_strict),
-) -> ConfigEntry:
-    if not _is_allowed_config_key(key):
-        raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
-
-    # System-scope keys require an admin browser session. API-key-only callers
-    # (Telegram/cron/lifespan) never reach this endpoint for system keys — they
-    # write directly to user_config via SQL, bypassing this gate.
-    if _classify_config_key(key) == "system":
-        await require_admin(request)
-
-    # Delegate the full write + side-effects to the service layer.
-    # require_admin and audit logging stay here so patch paths on this module
-    # remain stable (tests patch paper_ingestion.routers.settings.require_admin
-    # and paper_ingestion.routers.settings._log_event).
-    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
-
-    ollama_url = get_paper_ingestion_settings().ollama_base_url
-    http_client = request.app.state.http_client
-
-    # Pass update_litellm_model from the router namespace so monkeypatching
-    # ``paper_ingestion.routers.settings.update_litellm_model`` in tests still works.
-    result = await write_config(
-        db_pool=db_pool,
-        scheduler=scheduler,
-        http_client=http_client,
-        ollama_url=ollama_url,
-        key=key,
-        value=body.value,
-        caller_user_id=caller_user_id,
-        update_litellm_model_fn=update_litellm_model,
-        app=request.app,
-    )
-    display_value = result.display_value
-
-    changed_provider = next(
-        (
-            provider
-            for provider in PROVIDER_REGISTRY
-            if key in {provider.api_key_config_key, provider.base_url_config_key}
-        ),
-        None,
-    )
-    if changed_provider is not None:
-        await invalidate_provider_model_cache(changed_provider.id)
-
-    route_role = {"llm.fast_model": "fast", "llm.smart_model": "smart"}.get(key)
-    if route_role is not None:
-        await log_audit(
-            db_pool,
-            action="llm.route.change",
-            resource=key,
-            user_id=str(caller_user_id) if caller_user_id is not None else None,
-        )
-    elif key in _ENCRYPTED_KEYS:
-        await log_audit(
-            db_pool,
-            action="secret.rotate",
-            resource=key,
-            user_id=str(caller_user_id) if caller_user_id is not None else None,
-        )
-
-    # Emit a config-change event for audit trail. Best-effort.
-    try:
-        await _log_event(
-            pool=db_pool,
-            level="info",
-            category="config",
-            source="settings",
-            message="llm/route_changed" if route_role is not None else "setting_changed",
-            context=(
-                {"key": key, "role": route_role}
-                if route_role is not None
-                else {
-                    "key": key,
-                    "new_value": str(display_value),
-                    **(
-                        {"schedule_apply_warnings": result.schedule_apply_warnings}
-                        if result.schedule_apply_warnings
-                        else {}
-                    ),
-                }
-            ),
-        )
-    except Exception:  # noqa: BLE001
-        logger.debug("config event log_event failed (non-fatal)", exc_info=True)
-
-    return ConfigEntry(key=key, value=display_value)
-
-
-# ---------------------------------------------------------------------------
-# Analytics
-# ---------------------------------------------------------------------------
 
 
 @router.get("/analytics/papers-by-source", response_model=list[PapersBySourceItem])
@@ -302,8 +32,23 @@ async def papers_by_source(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> list[dict]:
-    """Return paper counts grouped by source type."""
+) -> list[dict[str, Any]]:
+    """Return paper counts grouped by source type for the current user.
+
+    Parameters
+    ----------
+    request : Request
+        Authenticated Research request carrying the caller role.
+    db_pool : asyncpg.Pool
+        Research database pool.
+    user_id : int
+        Authenticated user identifier.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Source names and visible paper counts.
+    """
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         return await fetch_papers_by_source(conn, user_id, is_admin=is_admin)
@@ -315,268 +60,26 @@ async def papers_by_status(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> list[dict]:
-    """Return paper counts grouped by user-state status."""
+) -> list[dict[str, Any]]:
+    """Return paper counts grouped by workflow status for the current user.
+
+    Parameters
+    ----------
+    request : Request
+        Authenticated Research request carrying the caller role.
+    db_pool : asyncpg.Pool
+        Research database pool.
+    user_id : int
+        Authenticated user identifier.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Workflow statuses and visible paper counts.
+    """
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         return await fetch_papers_by_status(conn, user_id, is_admin=is_admin)
-
-
-# ---------------------------------------------------------------------------
-# Cloud LLM Providers
-# ---------------------------------------------------------------------------
-
-
-@router.get("/providers", response_model=list[ProviderMetadataResponse])
-@limiter.limit("30/minute")
-async def list_providers(
-    request: Request,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _: None = Depends(verify_api_key),
-    _admin: None = Depends(require_admin),
-    caller_user_id: int = Depends(current_user_id_strict),
-) -> list[ProviderMetadataResponse]:
-    """Return supported provider metadata without exposing stored secrets."""
-    rows: list[ProviderMetadataResponse] = []
-    for provider in PROVIDER_REGISTRY:
-        configured = await cloud_provider_key_present(provider.id, db_pool)
-        base_url_configured = False
-        if provider.base_url_config_key is not None:
-            base_url_configured = await get_provider_base_url(provider.id, db_pool) is not None
-        rows.append(
-            ProviderMetadataResponse(
-                id=provider.id,
-                display_name=provider.display_name,
-                kind=provider.kind,
-                api_key_config_key=provider.api_key_config_key,
-                base_url_config_key=provider.base_url_config_key,
-                assignment_prefix=provider.assignment_prefix,
-                litellm_prefix=provider.provider_model_prefix,
-                privacy_boundary=provider.privacy_boundary,
-                best_for=provider.best_for,
-                data_note=provider.data_note,
-                configured=configured,
-                base_url_configured=base_url_configured,
-                supports_assignment=provider.supports_assignment,
-                dashboard_url=provider.dashboard_url,
-                account_capability=provider.account_capability,
-            )
-        )
-    return rows
-
-
-@router.get("/providers/{provider}/account", response_model=ProviderAccountResponse)
-@limiter.limit("5/minute")
-async def get_provider_account(
-    request: Request,
-    provider: str,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _: None = Depends(verify_api_key),
-    _admin: None = Depends(require_admin),
-) -> ProviderAccountResponse:
-    """Return only the account fields that this provider's API key can safely expose."""
-    try:
-        snapshot = await fetch_provider_account(provider, db_pool=db_pool)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="unsupported provider") from exc
-    return ProviderAccountResponse(
-        provider=snapshot.provider,
-        capability=snapshot.capability,
-        data=snapshot.data,
-        error_code=snapshot.error_code,
-    )
-
-
-@router.post("/providers/{provider}/test", response_model=ProviderTestResponse)
-@limiter.limit("5/minute")
-async def test_provider(
-    request: Request,
-    provider: str,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _: None = Depends(verify_api_key),
-    _admin: None = Depends(require_admin),
-    caller_user_id: int = Depends(current_user_id_strict),
-) -> ProviderTestResponse:
-    """Probe a cloud LLM provider with its stored API key to verify connectivity."""
-    if provider not in _SUPPORTED_PROVIDERS:
-        raise HTTPException(status_code=400, detail="unsupported provider")
-
-    provider_definition = provider_for_id(provider)
-    config_key = provider_definition.api_key_config_key
-    is_admin = getattr(request.state, "user_role", None) == "admin"
-    async with db_pool.acquire() as conn:
-        row = await _fetch_effective_config_row(conn, config_key, caller_user_id, is_admin=is_admin)
-
-    api_key: str | None = None
-    if row is not None:
-        try:
-            api_key = resolve_secret_row(row)
-        except Exception:
-            api_key = None
-
-    if not api_key:
-        result = ProviderTestResult(ok=False, error="no api key configured")
-    else:
-        base_url = None
-        if provider_definition.base_url_config_key is not None:
-            base_url = await get_provider_base_url(provider, db_pool)
-        if provider_definition.base_url_config_key is not None and base_url is None:
-            result = ProviderTestResult(ok=False, error="no base URL configured")
-        else:
-            result = await test_provider_connectivity(provider, api_key, base_url=base_url)
-    try:
-        await _log_event(
-            pool=db_pool,
-            level="info" if result.ok else "warning",
-            category="config",
-            source="settings",
-            message="llm/provider_connection_checked",
-            context={
-                "provider": provider,
-                "success": result.ok,
-                "code": _provider_test_code(result.error, result.ok),
-            },
-        )
-    except Exception:  # noqa: BLE001
-        logger.debug("provider connection event log_event failed (non-fatal)", exc_info=True)
-    return ProviderTestResponse(ok=result.ok, error=result.error)
-
-
-def _provider_test_code(error: str | None, ok: bool) -> str:
-    """Map provider-test outcomes to stable event codes without logging provider text."""
-    if ok:
-        return "ok"
-    if error is None:
-        return "connection_failed"
-    return {
-        "no api key configured": "api_key_unavailable",
-        "no base URL configured": "base_url_unavailable",
-        "unsupported provider": "unsupported_provider",
-    }.get(error, "connection_failed")
-
-
-#: Stored model-route rows, under the names the settings UI gives them.
-_MODEL_ROUTE_LABELS: dict[str, str] = {
-    "smart_model": "Main",
-    "fast_model": "Quick",
-    "embed_model": "Embedding",
-}
-
-
-async def _model_route_using(provider: ProviderDefinition, db_pool: asyncpg.Pool) -> str | None:
-    """Return the label of a committed model route still pointing at *provider*.
-
-    Routes record the app-facing assignment prefix, which is not the prefix
-    delivered to LiteLLM: a custom endpoint is assigned as ``custom_openai/`` and
-    delivered as ``openai/``. Resolving identity from the delivery prefix would
-    read that route as OpenAI's and clear a credential still in use.
-    """
-    assignments, issue = await _load_current_model_assignments(db_pool)
-    if issue is not None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The stored model routes could not be read just now, so this setting "
-                "was left in place. Please try again in a moment."
-            ),
-        )
-    for row_key, label in _MODEL_ROUTE_LABELS.items():
-        model_id = assignments.get(row_key)
-        if (
-            isinstance(model_id, str)
-            and provider_for_prefix(model_id.partition("/")[0]) == provider
-        ):
-            return label
-    return None
-
-
-async def _remove_provider_setting(
-    provider: str,
-    field: Literal["api_key", "base_url"],
-    db_pool: asyncpg.Pool,
-    caller_user_id: int | None,
-) -> Response:
-    """Delete one stored provider row once no model route depends on that provider."""
-    try:
-        definition = provider_for_id(provider)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="unsupported provider") from exc
-    config_key = (
-        definition.api_key_config_key if field == "api_key" else definition.base_url_config_key
-    )
-    if config_key is None:
-        stored = "an API key" if field == "api_key" else "an endpoint URL"
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"{definition.display_name} does not store {stored}, so there is nothing to remove."
-            ),
-        )
-
-    # Refuse rather than reassign: no code path in this service rewrites a model
-    # route, and doing it here would skip the assignment validation the settings
-    # write path applies.
-    blocking_route = await _model_route_using(definition, db_pool)
-    if blocking_route is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"The {blocking_route} model route still uses {definition.display_name}. "
-                "Point that route at another model first."
-            ),
-        )
-
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM user_config WHERE key = $1 AND user_id IS NULL",
-            config_key,
-        )
-    await invalidate_provider_model_cache(definition.id)
-    await log_audit(
-        db_pool,
-        action="secret.remove",
-        resource=config_key,
-        user_id=str(caller_user_id) if caller_user_id is not None else None,
-    )
-    return Response(status_code=204)
-
-
-@router.delete("/providers/{provider}/key", status_code=204, response_class=Response)
-@limiter.limit("5/minute")
-async def remove_provider_key(
-    request: Request,
-    provider: str,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _: None = Depends(verify_api_key),
-    _admin: None = Depends(require_admin),
-    caller_user_id: int = Depends(current_user_id_strict),
-) -> Response:
-    """Delete a provider's stored API key.
-
-    The write path refuses a blank value, so without this route a key pasted
-    under the wrong provider, revoked upstream, or leaked could only ever be
-    overwritten — never taken out of service.
-    """
-    return await _remove_provider_setting(provider, "api_key", db_pool, caller_user_id)
-
-
-@router.delete("/providers/{provider}/base-url", status_code=204, response_class=Response)
-@limiter.limit("5/minute")
-async def remove_provider_base_url(
-    request: Request,
-    provider: str,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _: None = Depends(verify_api_key),
-    _admin: None = Depends(require_admin),
-    caller_user_id: int = Depends(current_user_id_strict),
-) -> Response:
-    """Delete a provider's stored endpoint URL, retiring a decommissioned endpoint."""
-    return await _remove_provider_setting(provider, "base_url", db_pool, caller_user_id)
-
-
-# ---------------------------------------------------------------------------
-# GDPR data export
-# ---------------------------------------------------------------------------
 
 
 @router.get("/me/export")
@@ -584,17 +87,27 @@ async def remove_provider_base_url(
 async def export_my_data(
     request: Request,
     caller_user_id: int = Depends(current_user_id_strict),
-) -> Any:
-    """Stream a ZIP of the calling user's structured data (GDPR export).
+) -> StreamingResponse:
+    """Stream a ZIP archive of the calling user's structured Research data.
 
-    JSON dumps only — no PDF binaries, no embeddings. Scoped to
-    ``current_user_id_strict`` so a caller can never read another user's data.
+    Parameters
+    ----------
+    request : Request
+        Authenticated Research request whose application owns the database pool.
+    caller_user_id : int
+        Authenticated user identifier.
+
+    Returns
+    -------
+    StreamingResponse
+        ZIP archive containing JSON exports without PDF or embedding binaries.
     """
-    pool = request.app.state.db_pool
-
-    data = await build_export_zip(pool, caller_user_id)
+    data = await build_export_zip(request.app.state.db_pool, caller_user_id)
     return StreamingResponse(
         iter([data]),
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="jarvis-data-export.zip"'},
     )
+
+
+__all__ = ["export_my_data", "papers_by_source", "papers_by_status", "router"]

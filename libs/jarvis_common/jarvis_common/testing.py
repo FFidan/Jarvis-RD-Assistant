@@ -63,6 +63,7 @@ __all__ = [
     "A_CARD_FRONT",
     # cluster 6 (testing_auth)
     "RoleMiddleware",
+    "SignedIdentityMiddleware",
     # clusters 7-8 (testing_telegram)
     "FakeAcquireCM",
     "FakeTxnCM",
@@ -79,7 +80,7 @@ __all__ = [
     "patch_pi_test_app",
 ]
 
-from jarvis_common.testing_auth import RoleMiddleware  # noqa: F401
+from jarvis_common.testing_auth import RoleMiddleware, SignedIdentityMiddleware  # noqa: F401
 from jarvis_common.testing_contract_apps import (  # noqa: F401
     PITestAppOptions,
     _make_le_contract_app_with_litellm_sidecar,

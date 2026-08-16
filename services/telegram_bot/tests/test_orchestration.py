@@ -22,6 +22,7 @@ from telegram_bot.orchestration import author_alerts as author_alerts_mod
 from telegram_bot.orchestration import daily_briefing as daily_briefing_mod
 from telegram_bot.orchestration import deadline_warning as deadline_warning_mod
 from telegram_bot.orchestration import review_reminder as review_reminder_mod
+from telegram_bot.platform_client import UserPairing
 
 # ---------------------------------------------------------------------------
 # test_author_alerts
@@ -63,10 +64,8 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.post.return_value = check_resp
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.author_alerts.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
@@ -76,7 +75,7 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     post_args, post_kwargs = http_client.post.await_args
     assert post_args[0].endswith("/api/authors/check")
     assert post_kwargs["headers"]["X-Owner-User-Id"] == "1"
-    assert post_kwargs["headers"]["X-API-Key"] == "secret"
+    assert "X-API-Key" not in post_kwargs["headers"]
 
     bot.send_message.assert_awaited_once()
     _, kwargs = bot.send_message.await_args
@@ -92,7 +91,7 @@ async def test_author_alerts_skips_when_no_owner():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
+    with patch.object(author_alerts_mod, "list_user_pairings", AsyncMock(return_value=[])):
         await author_alerts_mod.run_author_alerts(
             http_client,
             pool,
@@ -151,10 +150,8 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
         ],
     )
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.daily_briefing.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
@@ -179,10 +176,8 @@ async def test_daily_briefing_passes_owner_headers_on_every_call():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.get.side_effect = _briefing_get_router(due_now=1, total=0, tasks=[], milestones=[])
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.daily_briefing.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=42, chat_id=9999)]),
     ):
         await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
@@ -191,7 +186,7 @@ async def test_daily_briefing_passes_owner_headers_on_every_call():
     assert http_client.get.await_count == 4
     for call in http_client.get.await_args_list:
         headers = call.kwargs["headers"]
-        assert headers["X-API-Key"] == "secret"
+        assert "X-API-Key" not in headers
         assert headers["X-Owner-User-Id"] == "42"
 
 
@@ -202,7 +197,7 @@ async def test_daily_briefing_skips_when_no_owner():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
+    with patch.object(daily_briefing_mod, "list_user_pairings", AsyncMock(return_value=[])):
         await daily_briefing_mod.run_daily_briefing(
             http_client,
             pool,
@@ -242,10 +237,8 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
         ]
     )
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.deadline_warning.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await deadline_warning_mod.run_deadline_warning(http_client, pool, bot, config)
@@ -271,10 +264,8 @@ async def test_deadline_warning_silent_when_no_milestones():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.get.return_value = make_http_response([])
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.deadline_warning.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await deadline_warning_mod.run_deadline_warning(
@@ -305,10 +296,8 @@ async def test_review_reminder_sends_message_for_due_cards():
     resp.json.return_value = {"due_now": 3}
     http_client.get.return_value = resp
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.review_reminder.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await review_reminder_mod.run_review_reminder(http_client, pool, bot, config)
@@ -333,10 +322,8 @@ async def test_review_reminder_silent_when_no_cards_due():
     resp.json.return_value = {"due_now": 0}
     http_client.get.return_value = resp
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.review_reminder.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await review_reminder_mod.run_review_reminder(
@@ -356,7 +343,7 @@ async def test_review_reminder_skips_when_no_owner():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
+    with patch.object(review_reminder_mod, "list_user_pairings", AsyncMock(return_value=[])):
         await review_reminder_mod.run_review_reminder(
             http_client,
             pool,
@@ -402,9 +389,9 @@ def test_owner_headers_are_confined_to_the_canonical_client():
     # Smoke-test that the canonical helper produces correct output.
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     headers_with_user = _owner_headers(config, 42)
-    assert headers_with_user["X-API-Key"] == "secret"
+    assert "X-API-Key" not in headers_with_user
     assert headers_with_user["X-Owner-User-Id"] == "42"
 
     headers_no_user = _owner_headers(config, None)
-    assert headers_no_user["X-API-Key"] == "secret"
+    assert "X-API-Key" not in headers_no_user
     assert "X-Owner-User-Id" not in headers_no_user

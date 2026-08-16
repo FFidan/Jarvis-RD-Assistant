@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.testing import make_pool_and_conn
 from telegram_bot.scheduler import JarvisScheduler
 
 # ---------------------------------------------------------------------------
@@ -22,17 +21,30 @@ from telegram_bot.scheduler import JarvisScheduler
 def _make_scheduler(owner_chat_id: int | None = 99) -> JarvisScheduler:
     """Return a JarvisScheduler with all deps mocked out.
 
-    db_pool.fetchrow resolves telegram.owner_chat_id (the single chat the
-    failure alert is delivered to). Pass owner_chat_id=None to simulate an
-    unconfigured owner.
+    ``owner_chat_id`` is retained for call-site readability; tests patch the
+    Platform runtime lookup that owns this value.
     """
-    row = {"value": str(owner_chat_id)} if owner_chat_id is not None else None
-    db_pool, _conn = make_pool_and_conn(fetchrow_return=row, direct_methods=True)
+    del owner_chat_id
+    platform_client = MagicMock()
     http_client = MagicMock()
     bot = MagicMock()
     bot.send_message = AsyncMock()
     config = MagicMock()
-    return JarvisScheduler(db_pool=db_pool, http_client=http_client, bot=bot, config=config)
+    return JarvisScheduler(
+        platform_client=platform_client,
+        http_client=http_client,
+        bot=bot,
+        config=config,
+    )
+
+
+def _owner_chat_patch(owner_chat_id: int | None):
+    """Patch Platform's owner-chat resolution for one scheduler call."""
+    return patch.object(
+        JarvisScheduler,
+        "_resolve_owner_chat_id",
+        AsyncMock(return_value=owner_chat_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +59,10 @@ async def test_nudge_type_html_injection_is_escaped() -> None:
     malicious_nudge_type = "<script>alert(1)</script>"
     nudge_id = 7
 
-    with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
+    with (
+        patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True),
+        _owner_chat_patch(99),
+    ):
         await scheduler._run_job(malicious_nudge_type, nudge_id)
 
     scheduler.bot.send_message.assert_called_once()
@@ -68,7 +83,10 @@ async def test_nudge_type_ampersand_is_escaped() -> None:
     nudge_type_with_amp = "foo&bar"
     nudge_id = 3
 
-    with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
+    with (
+        patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True),
+        _owner_chat_patch(99),
+    ):
         await scheduler._run_job(nudge_type_with_amp, nudge_id)
 
     call_kwargs = scheduler.bot.send_message.call_args.kwargs
@@ -86,7 +104,10 @@ async def test_safe_nudge_type_passes_through() -> None:
     safe_nudge_type = "daily_summary"
     nudge_id = 1
 
-    with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
+    with (
+        patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True),
+        _owner_chat_patch(99),
+    ):
         await scheduler._run_job(safe_nudge_type, nudge_id)
 
     call_kwargs = scheduler.bot.send_message.call_args.kwargs
@@ -99,7 +120,10 @@ async def test_safe_nudge_type_passes_through() -> None:
 async def test_no_alert_sent_when_owner_chat_unconfigured() -> None:
     """With no telegram.owner_chat_id configured, no failure alert is sent."""
     scheduler = _make_scheduler(owner_chat_id=None)
-    with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
+    with (
+        patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True),
+        _owner_chat_patch(None),
+    ):
         await scheduler._run_job("daily_summary", 5)
     scheduler.bot.send_message.assert_not_called()
 
@@ -108,7 +132,10 @@ async def test_no_alert_sent_when_owner_chat_unconfigured() -> None:
 async def test_failure_alert_sent_only_to_owner_chat() -> None:
     """Failure alert goes to telegram.owner_chat_id only — never broadcast."""
     scheduler = _make_scheduler(owner_chat_id=4242)
-    with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
+    with (
+        patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True),
+        _owner_chat_patch(4242),
+    ):
         await scheduler._run_job("daily_summary", 5)
     scheduler.bot.send_message.assert_called_once()
     assert scheduler.bot.send_message.call_args.kwargs["chat_id"] == 4242
@@ -124,5 +151,4 @@ async def test_run_job_skips_under_maintenance_sentinel(tmp_path, monkeypatch) -
     scheduler = _make_scheduler()
     await scheduler._run_job("daily_summary", 5)
 
-    scheduler.db_pool.execute.assert_not_called()  # no UPDATE scheduled_nudges
     scheduler.bot.send_message.assert_not_called()  # not treated as a failure

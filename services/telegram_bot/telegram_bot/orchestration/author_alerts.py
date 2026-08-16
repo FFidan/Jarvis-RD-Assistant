@@ -2,22 +2,21 @@
 
 import logging
 
-import asyncpg
 import httpx
 from telegram import Bot
 
-from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_author_alert
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
+from telegram_bot.platform_client import list_user_pairings
 
 logger = logging.getLogger(__name__)
 
 
 async def run_author_alerts(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
     *,
@@ -27,22 +26,22 @@ async def run_author_alerts(
 
     Delegates all matching, per-user dedup, and ``last_checked_at`` bookkeeping
     to the Paper Ingestion service via ``services_client.check_authors`` (one
-    call per paired user).  ``db_pool`` is used only to list pairings; each
-    pairing's REST call is wrapped so one user's backend error does not abort
+    call per paired user). Each pairing's REST call is wrapped so one user's
+    backend error does not abort
     the whole run.
 
     Parameters
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool (used only to list pairings).
+    platform_client : httpx.AsyncClient
+        Scoped Platform client used to list active pairings.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
         Bot configuration.
     """
-    pairings = await _owner.list_user_pairings(db_pool)
+    pairings = await list_user_pairings(platform_client, config)
     if not pairings:
         logger.warning(
             "author_alerts skipped: no Telegram pairings exist — use /pair in Telegram to set up"

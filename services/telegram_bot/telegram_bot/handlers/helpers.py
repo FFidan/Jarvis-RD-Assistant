@@ -1,20 +1,19 @@
 """Shared helper functions for Telegram bot handlers.
 
-Provides common utilities for accessing bot configuration, database pool,
-HTTP client, and authorisation checks.
+Provides common utilities for scoped HTTP clients and authorisation checks.
 """
 
 from __future__ import annotations
 
 import logging
 
-import asyncpg
 import httpx
 from telegram import Update
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from telegram_bot.config import BotConfig
+from telegram_bot.platform_client import resolve_pairing
 
 logger = logging.getLogger(__name__)
 
@@ -29,20 +28,28 @@ def get_config(context: ContextTypes.DEFAULT_TYPE) -> BotConfig:
     return context.application.bot_data["config"]
 
 
-def get_db(context: ContextTypes.DEFAULT_TYPE) -> asyncpg.Pool:
-    """Return the shared asyncpg connection pool.
-
-    Thin accessor kept as a named function for mockability in tests.
-    """
-    return context.application.bot_data["db_pool"]
-
-
 def get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
     """Return the shared httpx async client.
 
     Thin accessor kept as a named function for mockability in tests.
     """
     return context.application.bot_data["http_client"]
+
+
+def get_platform_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
+    """Return the scoped Platform HTTP client.
+
+    Parameters
+    ----------
+    context : ContextTypes.DEFAULT_TYPE
+        Telegram handler context whose application owns shared clients.
+
+    Returns
+    -------
+    httpx.AsyncClient
+        Client carrying Telegram's dedicated service credential.
+    """
+    return context.application.bot_data["platform_client"]
 
 
 def get_jarvis_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
@@ -57,26 +64,29 @@ def get_jarvis_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
 async def auth_check(
     update: Update,
     config: BotConfig,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
 ) -> tuple[bool, int | None]:
     """Check whether the incoming chat is paired and return its user_id.
 
-    Pairing (``telegram_user_pairings``) is the sole bot-identity mechanism;
-    there is no legacy env-var / dashboard-owner path.
+    Platform pairing is the sole bot-identity mechanism.
+
+    Parameters
+    ----------
+    update : Update
+        Incoming Telegram update.
+    config : BotConfig
+        Runtime configuration containing the Platform origin.
+    platform_client : httpx.AsyncClient
+        Scoped Platform client.
 
     Returns
     -------
     tuple[bool, int | None]
-        ``(True, user_id)`` when the chat is paired — the user_id is the DB PK
-        from ``telegram_user_pairings`` and MUST be used to scope all per-user
-        queries downstream.
-        ``(False, None)`` when unauthorised (no chat, DB error, or no pairing
-        row for this chat_id).
+        ``(True, user_id)`` when Platform resolves the private chat, otherwise
+        ``(False, None)``.
 
     Invariant: ``authorized is True`` ⟺ ``user_id is not None``.
 
-    The *config* parameter is retained for call-site stability but is no longer
-    consulted by this function.
     """
     chat = update.effective_chat
     if chat is None:
@@ -86,15 +96,13 @@ async def auth_check(
     if chat.type != ChatType.PRIVATE:
         return False, None
     try:
-        pairing_row = await db_pool.fetchrow(
-            "SELECT user_id FROM telegram_user_pairings WHERE chat_id = $1",
-            chat.id,
-        )
-    except Exception:
+        pairing = await resolve_pairing(platform_client, config, chat.id)
+    except (httpx.HTTPError, RuntimeError):
         logger.warning(
-            "auth_check: DB error reading telegram_user_pairings; denying request", exc_info=True
+            "auth_check: Platform pairing lookup failed; denying request",
+            exc_info=True,
         )
         return False, None
-    if pairing_row is None:
+    if pairing is None:
         return False, None
-    return True, pairing_row["user_id"]
+    return True, pairing.user_id

@@ -327,15 +327,11 @@
     "services/paper_ingestion/paper_ingestion/pulse/deck.py": 5,
     "services/paper_ingestion/paper_ingestion/pulse/profile.py": 1,
     "services/paper_ingestion/paper_ingestion/rag/streaming.py": 2,
-    "services/paper_ingestion/paper_ingestion/routers/_auth_shared.py": 1,
-    "services/paper_ingestion/paper_ingestion/routers/audit_admin.py": 1,
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py": 2,
     "services/paper_ingestion/paper_ingestion/routers/authors.py": 1,
     "services/paper_ingestion/paper_ingestion/routers/dashboard_api.py": 2,
     "services/paper_ingestion/paper_ingestion/routers/discovery.py": 2,
     "services/paper_ingestion/paper_ingestion/routers/extractions.py": 1,
     "services/paper_ingestion/paper_ingestion/routers/knowledge_graph.py": 5,
-    "services/paper_ingestion/paper_ingestion/routers/logs.py": 2,
     "services/paper_ingestion/paper_ingestion/routers/notes.py": 7,
     "services/paper_ingestion/paper_ingestion/routers/papers_bulk.py": 1,
     "services/paper_ingestion/paper_ingestion/routers/papers_feed.py": 2,
@@ -351,7 +347,11 @@
     "services/paper_ingestion/paper_ingestion/services/paper_upsert.py": 1,
     "services/paper_ingestion/paper_ingestion/services/pdf_workflow.py": 1,
     "services/paper_ingestion/paper_ingestion/services/scheduler_effects.py": 1,
-    "services/paper_ingestion/paper_ingestion/services/summarization.py": 3
+    "services/paper_ingestion/paper_ingestion/services/summarization.py": 3,
+    "services/platform_api/platform_api/routers/_auth_shared.py": 1,
+    "services/platform_api/platform_api/routers/audit_admin.py": 1,
+    "services/platform_api/platform_api/routers/auth_passkeys.py": 2,
+    "services/platform_api/platform_api/routers/logs.py": 2
   },
   "reviewed_query_aliases": ["current_contradictions"],
   "supported_database_callers": [
@@ -389,7 +389,7 @@
     {
       "name": "shared_platform_writes",
       "current_writer": "jarvis_common",
-      "relations": ["audit_log", "sessions", "system_events"],
+      "relations": ["audit_log", "sessions", "system_events", "user_config"],
       "destination": "platform",
       "replacement": "Platform capabilities behind shared interfaces"
     },
@@ -425,20 +425,6 @@
       "relations": ["job_progress"],
       "destination": "operations",
       "replacement": "approved Operations retention capability"
-    },
-    {
-      "name": "telegram_pairing",
-      "current_writer": "telegram_bot",
-      "relations": ["telegram_pairing_tokens", "telegram_user_pairings"],
-      "destination": "platform",
-      "replacement": "scoped Platform pairing API"
-    },
-    {
-      "name": "telegram_nudges",
-      "current_writer": "telegram_bot",
-      "relations": ["scheduled_nudges"],
-      "destination": "learning",
-      "replacement": "Learning nudge commands"
     },
     {
       "name": "paper_read_activity",

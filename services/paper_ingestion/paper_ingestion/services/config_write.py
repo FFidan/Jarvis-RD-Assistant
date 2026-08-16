@@ -1,5 +1,6 @@
 """Top-level write_config orchestration and LiteLLM runtime update helper."""
 
+import asyncio
 import logging
 import re
 import socket
@@ -12,31 +13,34 @@ from jarvis_common.auth import (
     API_KEY_LOGIN_CONFIG_KEY,
     invalidate_api_key_login_cache,
 )
-from jarvis_common.crypto import encrypt_secret, mask_secret
-from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
-from pydantic import BaseModel, model_serializer
-
-from paper_ingestion.integrations.zotero_client import (
-    BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
-    refresh_configured_private_hosts,
-)
-from paper_ingestion.services.config_db import _write_config_row
-from paper_ingestion.services.config_metadata import (
+from jarvis_common.config_metadata import (
     _ENCRYPTED_KEYS,
     _ZOTERO_LIBRARY_SCOPE_KEYS,
+    ROLE_TO_ALIAS,
     _classify_config_key,
     _classify_litellm_runtime_key,
     _is_cloud_model_assignment,
 )
-from paper_ingestion.services.config_validators import (
+from jarvis_common.config_store import _write_config_row
+from jarvis_common.config_validators import (
     _CONFIG_VALIDATORS,
     _validate_bool,
-    _validate_num_ctx_bounds,
     _validate_positive_int,
 )
-from paper_ingestion.services.model_assignment import (
-    reload_telegram_nudges,
-    validate_model_assignment,
+from jarvis_common.crypto import encrypt_secret, mask_secret
+from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
+from pydantic import BaseModel, model_serializer
+
+from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL_NAME
+from paper_ingestion.integrations.zotero_client import (
+    BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+    refresh_configured_private_hosts,
+)
+from paper_ingestion.services.model_assignment import validate_model_assignment
+from paper_ingestion.services.model_lifecycle import (
+    catalog_entry_for_model,
+    detect_hardware,
+    safe_num_ctx,
 )
 from paper_ingestion.services.scheduler_effects import (
     apply_fetch_interval,
@@ -68,6 +72,43 @@ _ZOTERO_POLL_RECONCILE_KEYS = frozenset(
         "zotero.group_id",
     }
 )
+
+# Must stay at or above the largest caller's reserved response allowance.
+_NUM_CTX_MIN = 2048
+_NUM_CTX_HARD_CEILING = 262144
+
+
+async def _validate_num_ctx_bounds(value: int, *, model_id: str | None) -> None:
+    """Bound a context-window write to the assigned model and current hardware.
+
+    Parameters
+    ----------
+    value : int
+        Requested context-window size.
+    model_id : str or None
+        Assigned model identifier, when one is configured.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is below the usable floor or above the resolved safe bound.
+    """
+    if value < _NUM_CTX_MIN:
+        raise ValueError(f"num_ctx must be at least {_NUM_CTX_MIN}")
+
+    entry = catalog_entry_for_model(model_id) if model_id else None
+    if entry is None:
+        upper = _NUM_CTX_HARD_CEILING
+    else:
+        upper = entry.max_num_ctx if entry.max_num_ctx is not None else entry.context_tokens
+        if entry.provider == "ollama":
+            hardware = await asyncio.to_thread(detect_hardware)
+            if hardware.vram_gb > 0.0:
+                embed_entry = catalog_entry_for_model(EMBEDDING_MODEL_NAME)
+                embed_reserve_gb = embed_entry.vram_gb if embed_entry is not None else 0.0
+                upper = min(upper, safe_num_ctx(entry, hardware, embed_reserve_gb))
+    if value > upper:
+        raise ValueError(f"num_ctx must be at most {upper} for the assigned model on this hardware")
 
 
 @dataclass(frozen=True)
@@ -157,7 +198,6 @@ async def _apply_litellm_runtime_update(
     from fastapi import HTTPException  # noqa: PLC0415
 
     from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
-        ROLE_TO_ALIAS,
         _config_lock,
         update_litellm_model,
     )
@@ -236,8 +276,6 @@ async def _pending_roles_for_runtime_key(
     runtime_key: dict[str, str],
 ) -> set[str]:
     """Return the model roles (smart/fast/embed) whose LiteLLM routing *key* affects."""
-    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS  # noqa: PLC0415
-
     if runtime_key["kind"] in ("model_role", "num_ctx"):
         return {ROLE_TO_ALIAS[runtime_key["role_key"]]}
     # thinking_disabled: affects every role currently routed to this model.
@@ -429,8 +467,6 @@ async def write_config(
     """
     from fastapi import HTTPException  # noqa: PLC0415
 
-    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS  # noqa: PLC0415
-
     runtime_key = _classify_litellm_runtime_key(key)
 
     # Validate the value
@@ -607,10 +643,6 @@ async def write_config(
     # this the saved hosts would not take effect until the next restart.
     if key == BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY:
         await refresh_configured_private_hosts(db_pool)
-
-    # Telegram nudge reload on timezone change
-    if key == "user.timezone":
-        await reload_telegram_nudges()
 
     display_value = mask_secret(str(value)) if key in _ENCRYPTED_KEYS else value
     return ConfigWriteResult(display_value=display_value, schedule_apply_warnings=schedule_warnings)

@@ -42,13 +42,30 @@ function is reached via ``.__wrapped__`` (mirrors test_review_sync.py).
 from __future__ import annotations
 
 import inspect
+from collections.abc import Awaitable, Callable
+from typing import cast
+from unittest.mock import AsyncMock
 
+import asyncpg
+import pytest
+from fastapi import FastAPI, Request, Response
+from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 from jarvis_common.auth import (
     current_user_id_strict,
     current_user_id_strict_with_owner_override,
 )
-from learning_engine.routers import cards, executive, milestones, projects, review, tasks
+from jarvis_common.testing import make_pool_and_conn
+from learning_engine.deps import get_db_pool
+from learning_engine.routers import (
+    cards,
+    executive,
+    internal_telegram,
+    milestones,
+    projects,
+    review,
+    tasks,
+)
 
 
 def _user_id_dep(func):
@@ -59,6 +76,71 @@ def _user_id_dep(func):
     """
     target = getattr(func, "__wrapped__", func)
     return inspect.signature(target).parameters["user_id"].default
+
+
+def _nudge_client(
+    *,
+    principal: str | None = "telegram",
+    fetch_return: object | None = None,
+    fetchval_return: object | None = None,
+) -> tuple[TestClient, AsyncMock]:
+    """Build the Learning nudge router with deterministic identity and storage."""
+    pool, conn = make_pool_and_conn(
+        fetch_return=[] if fetch_return is None else fetch_return,
+        fetchval_return=fetchval_return,
+        direct_methods=True,
+    )
+    app = FastAPI()
+    app.include_router(internal_telegram.router)
+
+    @app.middleware("http")
+    async def attach_principal(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        if principal is not None:
+            request.state.identity_principal = principal
+        return await call_next(request)
+
+    def pool_override() -> asyncpg.Pool:
+        return cast(asyncpg.Pool, pool)
+
+    app.dependency_overrides[get_db_pool] = pool_override
+    return TestClient(app), conn
+
+
+def test_learning_lists_only_owner_local_enabled_nudges() -> None:
+    client, conn = _nudge_client(
+        fetch_return=[{"id": 4, "nudge_type": "review", "cron_expression": "0 9 * * *"}],
+    )
+
+    response = client.get("/internal/telegram/nudges")
+
+    assert response.status_code == 200
+    assert response.json() == [{"id": 4, "nudge_type": "review", "cron_expression": "0 9 * * *"}]
+    conn.fetch.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("updated", "expected_status"), [(4, 204), (None, 404)])
+def test_learning_nudge_acknowledgement_is_explicit(
+    updated: int | None,
+    expected_status: int,
+) -> None:
+    client, conn = _nudge_client(fetchval_return=updated)
+
+    response = client.post("/internal/telegram/nudges/4/ack")
+
+    assert response.status_code == expected_status
+    conn.fetchval.assert_awaited_once()
+
+
+def test_learning_nudges_reject_non_telegram_principal() -> None:
+    client, conn = _nudge_client(principal="research")
+
+    response = client.get("/internal/telegram/nudges")
+
+    assert response.status_code == 403
+    conn.fetch.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

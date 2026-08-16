@@ -33,7 +33,7 @@ import pytest_asyncio
 from unittest.mock import AsyncMock, patch
 from jarvis_common.testing import SharedConnPool
 
-from paper_ingestion.routers.audit_admin import _build_audit_query
+from platform_api.routers.audit_admin import _build_audit_query
 
 pytestmark = [
     pytest.mark.contract,
@@ -102,8 +102,8 @@ async def admin_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     admin_user_id, admin_cookie = await _seed_admin_user(contract_conn)
     shared = SharedConnPool(contract_conn)
@@ -116,7 +116,7 @@ async def admin_client(contract_conn):
                 set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
             ),
             patch(
-                "paper_ingestion.routers.admin.send_magic_link",
+                "platform_api.routers.admin.send_magic_link",
                 new=AsyncMock(return_value=None),
             ),
         ):
@@ -142,8 +142,8 @@ async def plain_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     # Seed admin so the users table is not empty (session middleware needs it).
     await _seed_admin_user(contract_conn)
@@ -179,8 +179,8 @@ async def audit_admin_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     async def _allow_all() -> None:
         return None
@@ -404,7 +404,7 @@ async def test_invite_user_token_insert_failure_rolls_back_user(admin_client, co
     must share one transaction so a token failure cannot leave an orphan user.
     """
     from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.main import app
+    from platform_api.main import app
 
     email = "atomicity-invite@example.com"
 
@@ -911,7 +911,7 @@ async def test_owner_transfer_rolls_back_when_strict_audit_fails(admin_client, c
 
     with (
         patch(
-            "paper_ingestion.routers.admin.log_audit_strict",
+            "platform_api.routers.admin.log_audit_strict",
             new=AsyncMock(side_effect=RuntimeError("audit unavailable")),
         ),
         pytest.raises(RuntimeError, match="audit unavailable"),
@@ -938,7 +938,7 @@ async def test_owner_sensitive_user_mutation_rolls_back_when_strict_audit_fails(
 
     with (
         patch(
-            "paper_ingestion.routers.admin.log_audit_strict",
+            "platform_api.routers.admin.log_audit_strict",
             new=AsyncMock(side_effect=RuntimeError("audit unavailable")),
         ),
         pytest.raises(RuntimeError, match="audit unavailable"),

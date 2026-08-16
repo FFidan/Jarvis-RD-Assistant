@@ -3,13 +3,13 @@
 import socket
 
 import pytest
-from paper_ingestion.services.config_metadata import (
+from jarvis_common.config_metadata import (
     _ALLOWED_CONFIG_KEYS,
     PERSONAL_KEYS,
     SYSTEM_KEYS,
     _classify_config_key,
 )
-from paper_ingestion.services.config_validators import _CONFIG_VALIDATORS
+from jarvis_common.config_validators import _CONFIG_VALIDATORS
 
 _LANGFUSE_KEY = "observability.langfuse_dashboard_url"
 _ONBOARDING_DISMISSED_KEY = "onboarding.dismissed"
@@ -211,7 +211,7 @@ def test_validate_langfuse_dashboard_url_rejects_ssrf_boundaries(unsafe_url):
     every other HTTP host is treated as a potential SSRF vector to internal
     services or cloud metadata endpoints.
     """
-    from paper_ingestion.services.config_validators import _validate_langfuse_dashboard_url
+    from jarvis_common.config_validators import _validate_langfuse_dashboard_url
 
     with pytest.raises(ValueError, match=r"localhost|127\.0\.0\.1|https"):
         _validate_langfuse_dashboard_url(unsafe_url)
@@ -252,7 +252,7 @@ def test_smtp_port_rejects_string():
 # --- fsrs.learning_steps boundary cases (CFG-RECVAL-1) ---
 
 
-from paper_ingestion.services.config_validators import _validate_fsrs_learning_steps  # noqa: E402
+from jarvis_common.config_validators import _validate_fsrs_learning_steps  # noqa: E402
 
 
 def test_fsrs_learning_steps_single_step_accepted():
@@ -342,8 +342,8 @@ def test_api_key_login_key_allowed_and_system_scoped():
 
 def test_provider_registry_keys_are_system_scoped_secret_and_encrypted():
     """Every provider registry config key must be admin/system scoped and protected."""
-    from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
-    from paper_ingestion.services.llm_provider_registry import PROVIDER_CONFIG_KEYS
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
+    from jarvis_common.llm_provider_registry import PROVIDER_CONFIG_KEYS
 
     assert PROVIDER_CONFIG_KEYS <= SYSTEM_KEYS
     assert PROVIDER_CONFIG_KEYS <= _SECRET_KEYS
@@ -353,7 +353,7 @@ def test_provider_registry_keys_are_system_scoped_secret_and_encrypted():
 
 def test_provider_registry_keys_have_validators():
     """Every provider registry config key must be writable only through a validator."""
-    from paper_ingestion.services.llm_provider_registry import PROVIDER_CONFIG_KEYS
+    from jarvis_common.llm_provider_registry import PROVIDER_CONFIG_KEYS
 
     missing = PROVIDER_CONFIG_KEYS - set(_CONFIG_VALIDATORS)
     assert not missing
@@ -368,7 +368,7 @@ def test_one_unreadable_secret_does_not_break_the_configuration_listing() -> Non
     would use to re-enter the value. The field must also stay distinguishable
     from an absent one, or a broken credential reads as a missing credential.
     """
-    from paper_ingestion.services.config_db import _resolve_config_value
+    from jarvis_common.config_store import _resolve_config_value
 
     key = "llm.providers.openrouter.api_key"
     row = {"key": key, "encrypted_value": b"not-decryptable", "value": None}
@@ -437,7 +437,7 @@ def test_blocked_custom_endpoint_ip_covers_private_ranges(address: str, blocked:
     """Resolved-address guard blocks private/reserved ranges but allows loopback and public."""
     import ipaddress
 
-    from paper_ingestion.services.llm_provider_registry import _blocked_custom_endpoint_ip
+    from jarvis_common.llm_provider_registry import _blocked_custom_endpoint_ip
 
     assert _blocked_custom_endpoint_ip(ipaddress.ip_address(address)) is blocked
 
@@ -445,7 +445,7 @@ def test_blocked_custom_endpoint_ip_covers_private_ranges(address: str, blocked:
 @pytest.mark.asyncio
 async def test_custom_openai_outbound_guard_rejects_link_local_resolution(monkeypatch):
     """Outbound custom endpoints must reject hostnames resolving to link-local IPs."""
-    from paper_ingestion.services import llm_provider_registry as registry
+    from jarvis_common import llm_provider_registry as registry
 
     def fake_getaddrinfo(*_args):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
@@ -459,7 +459,7 @@ async def test_custom_openai_outbound_guard_rejects_link_local_resolution(monkey
 @pytest.mark.asyncio
 async def test_custom_openai_outbound_guard_rejects_implicit_loopback(monkeypatch):
     """DNS names resolving to loopback are blocked unless the host is explicit loopback."""
-    from paper_ingestion.services import llm_provider_registry as registry
+    from jarvis_common import llm_provider_registry as registry
 
     def fake_getaddrinfo(*_args):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
@@ -473,7 +473,7 @@ async def test_custom_openai_outbound_guard_rejects_implicit_loopback(monkeypatc
 @pytest.mark.asyncio
 async def test_custom_openai_outbound_guard_allows_explicit_loopback():
     """Explicit loopback development endpoints remain valid for custom providers."""
-    from paper_ingestion.services.llm_provider_registry import (
+    from jarvis_common.llm_provider_registry import (
         validate_custom_openai_base_url_for_outbound,
     )
 

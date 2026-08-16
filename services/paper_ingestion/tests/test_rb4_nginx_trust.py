@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 NGINX_CONF = REPO_ROOT / "frontend" / "nginx.conf"
 NGINX_RATE_LIMIT_CONF = REPO_ROOT / "frontend" / "nginx-rate-limit.conf"
 NGINX_SECURITY_HEADERS_CONF = REPO_ROOT / "frontend" / "nginx-security-headers.conf"
+NGINX_IDENTITY_STRIP_CONF = REPO_ROOT / "frontend" / "nginx-identity-strip.conf"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 CADDY_LOCAL_FILE = REPO_ROOT / "caddy" / "Caddyfile.local"
 
@@ -67,6 +68,26 @@ def _location_blocks(text: str) -> list[str]:
             pos += 1
         blocks.append(text[match.end() : pos - 1])
     return blocks
+
+
+def _browser_proxy_blocks(text: str) -> list[str]:
+    """Return externally reachable proxy locations.
+
+    Parameters
+    ----------
+    text : str
+        Renderable nginx configuration.
+
+    Returns
+    -------
+    list[str]
+        Proxy location bodies excluding nginx-only internal subrequests.
+    """
+    return [
+        block
+        for block in _location_blocks(text)
+        if "proxy_pass" in block and "internal;" not in block
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +177,7 @@ def test_nginx_preserves_the_validated_external_port_for_generated_links():
     ``$http_host`` retains the browser-facing port after the server_name
     allowlist has already validated the hostname.
     """
-    proxied_blocks = [block for block in _location_blocks(_nginx_text()) if "proxy_pass" in block]
-    for block in proxied_blocks:
+    for block in _browser_proxy_blocks(_nginx_text()):
         assert "proxy_set_header Host $http_host;" in block
         assert "proxy_set_header X-Forwarded-Host $http_host;" in block
         assert "proxy_set_header Host $host;" not in block
@@ -195,8 +215,7 @@ def test_nginx_rebuilds_cloudflare_identity_from_pinned_ingress():
     text = _nginx_text()
     assert '"3002:${JARVIS_CLOUDFLARED_IP}" 1;' in text
     assert "$jarvis_cf_connecting_ip" in text
-    proxied_blocks = [block for block in _location_blocks(text) if "proxy_pass" in block]
-    for block in proxied_blocks:
+    for block in _browser_proxy_blocks(text):
         assert "proxy_set_header CF-Connecting-IP $jarvis_cf_connecting_ip;" in block
         assert "proxy_set_header X-Jarvis-CF-Ingress $jarvis_cf_ingress;" in block
 
@@ -274,10 +293,16 @@ def test_nginx_proxied_locations_strip_owner_header():
     only the container-bridge bot (which never traverses nginx) may set it.
     A future location added without this line — or a deleted strip line —
     would silently reopen an owner-impersonation hole with no other signal."""
-    proxied_blocks = [block for block in _location_blocks(_nginx_text()) if "proxy_pass" in block]
+    proxied_blocks = _browser_proxy_blocks(_nginx_text())
     assert len(proxied_blocks) >= 1, "no proxy_pass location blocks found in nginx.conf"
+    identity_strip = NGINX_IDENTITY_STRIP_CONF.read_text()
+    assert 'proxy_set_header X-Owner-User-Id "";' in identity_strip
     for block in proxied_blocks:
-        assert 'proxy_set_header X-Owner-User-Id "";' in block, (
+        strips_owner = (
+            'proxy_set_header X-Owner-User-Id "";' in block
+            or "include /etc/nginx/nginx-identity-strip.conf;" in block
+        )
+        assert strips_owner, (
             'a proxied location block is missing proxy_set_header X-Owner-User-Id "";:\n' + block
         )
 
