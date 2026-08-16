@@ -744,6 +744,11 @@ def _make_contract_pool_fixture():
         db_dir = Path(__file__).resolve().parents[3] / "db"
         init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
         migrations_dir = db_dir / "migrations"
+        contract_search_path = "platform, research, learning, ops, public, pg_catalog"
+
+        async def setup_contract_connection(conn: asyncpg.Connection) -> None:
+            """Restore the cross-domain path whenever the pool lends a connection."""
+            await conn.execute(f"SET search_path TO {contract_search_path}")
 
         pool = None
         for attempt in range(10):
@@ -753,6 +758,7 @@ def _make_contract_pool_fixture():
                     min_size=1,
                     max_size=5,
                     init=init_pg_connection,
+                    setup=setup_contract_connection,
                 )
                 break
             except (OSError, asyncpg.PostgresError):

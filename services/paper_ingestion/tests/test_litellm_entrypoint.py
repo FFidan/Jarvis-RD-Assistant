@@ -87,9 +87,10 @@ def test_litellm_entrypoint_builds_database_url_from_secret() -> None:
     assert 'export DATABASE_URL="postgresql://' in entrypoint, (
         "LiteLLM's entrypoint must export the Prisma database URL"
     )
-    assert 'postgres_password_file="${secret_dir}/postgres_password"' in entrypoint, (
-        "the database password must come from the mounted secret"
-    )
+    assert (
+        'postgres_password_file="${POSTGRES_PASSWORD_FILE:-${secret_dir}/litellm_runtime_password}"'
+        in entrypoint
+    ), "the database password must come from the mounted secret"
     assert "@postgres:5432/litellm" in entrypoint, (
         "DATABASE_URL must target the dedicated 'litellm' database"
     )
@@ -106,7 +107,7 @@ def test_litellm_entrypoint_builds_database_url_from_secret() -> None:
         "DATABASE_URL must not appear in LiteLLM's Compose environment map; "
         "docker inspect would leak the postgres password"
     )
-    assert "postgres_password" in _litellm_service()["secrets"]
+    assert "litellm_runtime_password" in _litellm_service()["secrets"]
 
 
 def test_litellm_entrypoint_exports_salt_key_from_secret() -> None:
@@ -135,3 +136,15 @@ def test_litellm_entrypoint_enforces_production_master_key_guards() -> None:
     assert 'litellm_launcher="/app/pinned_launcher.py"' in entrypoint
     assert 'python3 "$litellm_launcher" --config /app/config.yaml &' in entrypoint
     assert '"${ENVIRONMENT:-development}" != "test"' in entrypoint
+
+
+def test_litellm_migration_is_one_shot_and_runtime_updates_are_disabled() -> None:
+    """Only the dedicated job may apply the pinned image's Prisma migrations."""
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    migrator = compose["services"]["litellm-migrator"]
+    assert migrator["restart"] == "no"
+    assert migrator["command"] == ["--migrate"]
+    assert migrator["secrets"] == ["litellm_migrator_password"]
+    assert "--skip_server_startup --enforce_prisma_migration_check" in _litellm_entrypoint_source()
+    config = (REPO_ROOT / "litellm" / "config.yaml").read_text(encoding="utf-8")
+    assert "disable_prisma_schema_update: true" in config

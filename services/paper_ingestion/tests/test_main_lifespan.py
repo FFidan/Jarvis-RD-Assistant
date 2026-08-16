@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -61,6 +62,17 @@ def _patch_factory_io(fake_pool: AsyncMock, fake_http_client: AsyncMock) -> list
         patch(
             "jarvis_common.app_factory.validate_production_config",
             MagicMock(return_value=None),
+        ),
+        patch(
+            "jarvis_common.app_factory.check_migrations",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    current_user="jarvis_research_runtime",
+                    packaged_version=114,
+                    live_version=114,
+                    integrity="ok",
+                )
+            ),
         ),
         patch.object(
             _af.httpx,
@@ -326,6 +338,17 @@ class TestModelHmacKeyBootGate:
             patch(
                 "jarvis_common.app_factory.validate_encrypted_config_rows",
                 AsyncMock(return_value=None),
+            ),
+            patch(
+                "jarvis_common.app_factory.check_migrations",
+                AsyncMock(
+                    return_value=SimpleNamespace(
+                        current_user="jarvis_research_runtime",
+                        packaged_version=114,
+                        live_version=114,
+                        integrity="ok",
+                    )
+                ),
             ),
             patch.object(
                 _af.httpx,
@@ -1296,18 +1319,19 @@ def test_register_paper_ingestion_tasks_raises_when_kind_unregistered(monkeypatc
 
 
 def test_lifespan_config_includes_runtime_validator_hook() -> None:
-    """_validate_runtime_config_hook runs right after migrations, with a None teardown."""
+    """Runtime config validation remains before every service writer hook."""
     from paper_ingestion.main import (
         _lifespan_config,
-        _run_migrations_hook,
+        _run_hw_probe_hook,
         _validate_runtime_config_hook,
     )
 
     init = _lifespan_config.custom_init_tasks
     assert _validate_runtime_config_hook in init
     idx = init.index(_validate_runtime_config_hook)
-    # Must run immediately after migrations so users/user_config exist.
-    assert init[idx - 1] is _run_migrations_hook
+    # The shared factory performs its read-only migration check before this
+    # entire list. The service validator must still precede writer startup.
+    assert idx < init.index(_run_hw_probe_hook)
     # Paired None teardown at the same index; the two lists stay equal-length.
     assert _lifespan_config.custom_teardown_tasks[idx] is None
     assert len(init) == len(_lifespan_config.custom_teardown_tasks)

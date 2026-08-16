@@ -182,7 +182,7 @@ async def test_sweep_is_paused_resumed_and_cancelled_with_the_worker(
     soft = tmp_path / ".maintenance"
     monkeypatch.setenv("MAINTENANCE_SENTINEL", str(soft))
     monkeypatch.setenv("MAINTENANCE_DESTRUCTIVE_SENTINEL", str(tmp_path / ".destructive"))
-    monkeypatch.setattr(app_factory, "run_migrations", AsyncMock())
+    monkeypatch.setattr(app_factory, "check_migrations", AsyncMock())
 
     proc = _IdlingProcrastinateApp()
     app = SimpleNamespace(
@@ -221,3 +221,28 @@ async def test_sweep_is_paused_resumed_and_cancelled_with_the_worker(
     await app_factory.shutdown_procrastinate_worker(app)
     assert resumed.cancelled()
     assert app.state.reclaim_task is None
+
+
+async def test_restore_resume_keeps_writers_stopped_when_schema_check_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale restore cannot restart a worker after the read-only check fails."""
+
+    async def stale_schema(_pool: Any) -> None:
+        raise RuntimeError("database schema is at version 113")
+
+    monkeypatch.setattr(app_factory, "check_migrations", stale_schema)
+    proc = _IdlingProcrastinateApp()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            db_pool=MagicMock(),
+            procrastinate_app=proc,
+            procrastinate_worker_task=None,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="database schema"):
+        await app_factory._resume_after_maintenance(app, _QUEUES)
+
+    assert proc.run_worker_calls == []
+    assert app.state.procrastinate_worker_task is None

@@ -69,6 +69,7 @@ BREAK_GLASS_PHRASE="I-ACCEPT-UNVERIFIED-BACKUP"
 
 PGHOST="${PGHOST:-postgres}"
 PGUSER="${PGUSER:-jarvis}"
+POSTGRES_PASSWORD_FILE="${POSTGRES_PASSWORD_FILE:-/run/secrets/postgres_password}"
 JARVIS_DB="${PGDATABASE:-jarvis}"
 LITELLM_DB="${LITELLM_DATABASE:-litellm}"
 # The postgres data volume is mounted here read-only (compose: postgres_data:ro) so
@@ -1337,10 +1338,12 @@ db_exists() {
 verify_db_structural() {
   local db="$1" is_jarvis="$2" regs
   if [ "$is_jarvis" = "1" ]; then
-    psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -tAc \
-      "SELECT 1 FROM schema_migrations LIMIT 1;" >/dev/null 2>&1 || return 1
     regs="$(psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -tAc \
-      "SELECT (to_regclass('public.users') IS NOT NULL AND to_regclass('public.sessions') IS NOT NULL);" \
+      "SELECT (
+        COALESCE(to_regclass('ops.schema_migrations'), to_regclass('public.schema_migrations')) IS NOT NULL
+        AND COALESCE(to_regclass('platform.users'), to_regclass('public.users')) IS NOT NULL
+        AND COALESCE(to_regclass('platform.sessions'), to_regclass('public.sessions')) IS NOT NULL
+      );" \
       2>/dev/null || true)"
     [ "$regs" = "t" ] || return 1
   else
@@ -1902,13 +1905,13 @@ if [ "${1:-}" = "--recover" ]; then
     FINISHED_AT="$(date -Iseconds)"
     exit 0
   fi
-  if [ ! -r /run/secrets/postgres_password ]; then
+  if [ ! -r "$POSTGRES_PASSWORD_FILE" ]; then
     STATE="failed"
     ERROR="recovery: cannot read the postgres password secret"
     FINISHED_AT="$(date -Iseconds)"
     exit 0
   fi
-  PGPASSWORD="$(cat /run/secrets/postgres_password)"
+  PGPASSWORD="$(cat "$POSTGRES_PASSWORD_FILE")"
   export PGPASSWORD
   if reconcile_leftover "$RECOVER_DB"; then
     STATE="done"
@@ -2018,10 +2021,10 @@ fi
 
 # --- PGPASSWORD (read AFTER consuming the request so a missing secret records a
 #     terminal failure instead of crash-looping on the un-consumed sentinel). ----
-if [ ! -r /run/secrets/postgres_password ]; then
+if [ ! -r "$POSTGRES_PASSWORD_FILE" ]; then
   fail_before_destruction "cannot read the postgres password secret; restore aborted"
 fi
-PGPASSWORD="$(cat /run/secrets/postgres_password)"
+PGPASSWORD="$(cat "$POSTGRES_PASSWORD_FILE")"
 export PGPASSWORD
 
 # === STEP 2: compat gate (defense-in-depth, BEFORE any destruction) ==========
@@ -2112,7 +2115,7 @@ if [ -r "$MANIFEST" ]; then
     if [ -z "$CODE_MAX" ]; then
       CODE_MAX="$(tr -dc '0-9' < "${SCHEMA_VERSION_FILE:-${MIG_DIR%/migrations}/SCHEMA_VERSION}" 2>/dev/null || true)"
       [ -n "$CODE_MAX" ] || CODE_MAX="$(tr -dc '0-9' < /app/db/SCHEMA_VERSION 2>/dev/null || true)"
-      [ -n "$CODE_MAX" ] || CODE_MAX=113
+      [ -n "$CODE_MAX" ] || CODE_MAX=114
     fi
     if [ -n "$CODE_MAX" ] && [ "$MANIFEST_SCHEMA" -gt "$CODE_MAX" ]; then
       fail_before_destruction "backup is newer than this deployment (schema ${MANIFEST_SCHEMA} > code ${CODE_MAX}); upgrade JARVIS before restoring"

@@ -436,7 +436,7 @@ def test_release_version_pins_are_complete_and_consistent() -> None:
     assert re.search(rf"^version: {re.escape(version)}$", citation, re.MULTILINE)
     assert "date-released: 2026-08-16" in citation
     assert f'name = "jarvis-rd-assistant"\nversion = "{version}"' in lock
-    assert compose.count(f"JARVIS_VERSION:-{version}") == 9
+    assert compose.count(f"JARVIS_VERSION:-{version}") == 10
     assert "JARVIS_VERSION:-1.2.4" not in compose
 
 

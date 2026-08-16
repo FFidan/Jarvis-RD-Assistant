@@ -872,7 +872,7 @@ def test_litellm_entrypoint_holds_start_and_stops_a_faux_provider(tmp_path: Path
 
         (secrets / "litellm_master_key").write_text("development-master-key")
         (secrets / "litellm_salt_key").write_text("development-salt-key")
-        (secrets / "postgres_password").write_text("development-postgres-password")
+        (secrets / "litellm_runtime_password").write_text("development-postgres-password")
         (trigger / ".maintenance").unlink()
         assert _wait_for_tcp(port, accepting=True)
 

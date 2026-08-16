@@ -470,8 +470,8 @@ def test_app_version_sources_agree():
         (REPO_ROOT / "docker-compose.yml").read_text(),
     )
 
-    assert len(compose_defaults) == 9, (
-        "docker-compose.yml must carry exactly nine application-version defaults; "
+    assert len(compose_defaults) == 10, (
+        "docker-compose.yml must carry exactly ten application-version defaults; "
         f"found {len(compose_defaults)}"
     )
     root_packages = [
@@ -767,7 +767,17 @@ def test_public_caddy_hsts_is_host_only_and_not_preloaded():
 # the v1.1.3 upgrade failure shipped — declared for every service start,
 # created by nothing on the update path.
 SECRET_PROVISIONING = {
-    "postgres_password": "update",
+    "postgres_platform_runtime_password": "update",
+    "postgres_research_runtime_password": "update",
+    "postgres_learning_runtime_password": "update",
+    "postgres_migrator_password": "update",
+    "postgres_cluster_bootstrap_password": "update",
+    "postgres_legacy_rollback_password": "update",
+    "postgres_backup_reader_password": "update",
+    "postgres_restore_operator_password": "update",
+    "litellm_runtime_password": "update",
+    "litellm_migrator_password": "update",
+    "postgres_legacy_source_password": "update",
     "jarvis_api_key": "update",
     "jarvis_setup_token": "update",
     "platform_identity_private_key": "update",
@@ -792,6 +802,100 @@ SECRET_PROVISIONING = {
     "langfuse_init_sk": "setup",
 }
 
+
+def _secret_sources(service: dict[str, Any]) -> set[str]:
+    return {
+        entry if isinstance(entry, str) else entry["source"] for entry in service.get("secrets", [])
+    }
+
+
+def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(compose):
+    """Application services receive one database password after migrations complete."""
+    expected = {
+        "platform_api": "postgres_platform_runtime_password",
+        "paper_ingestion": "postgres_research_runtime_password",
+        "learning_engine": "postgres_learning_runtime_password",
+        "litellm": "litellm_runtime_password",
+    }
+    forbidden = {
+        "postgres_migrator_password",
+        "postgres_cluster_bootstrap_password",
+        "postgres_legacy_rollback_password",
+        "postgres_backup_reader_password",
+        "postgres_restore_operator_password",
+        "litellm_migrator_password",
+    }
+    for service_name, password_secret in expected.items():
+        service = compose["services"][service_name]
+        secrets = _secret_sources(service)
+        assert password_secret in secrets
+        assert not secrets & forbidden
+        dependency = (
+            "litellm-migrator" if service_name == "litellm" else "migration-authority-finalize"
+        )
+        assert service["depends_on"][dependency]["condition"] == "service_completed_successfully"
+        if service_name != "litellm":
+            assert "./db:/app/db:ro" in service["volumes"]
+
+    assert _secret_sources(compose["services"]["telegram_bot"]).isdisjoint(set(expected.values()))
+    assert (
+        compose["services"]["litellm"]["environment"]["POSTGRES_USER"] == "jarvis_litellm_runtime"
+    )
+    assert compose["services"]["jarvis-migrator"]["volumes"] == ["./db:/app/db:ro"]
+    finalizer = compose["services"]["migration-authority-finalize"]
+    assert finalizer["command"] == ["finalize"]
+    assert _secret_sources(finalizer) == {"postgres_cluster_bootstrap_password"}
+    assert finalizer["depends_on"]["jarvis-migrator"]["condition"] == (
+        "service_completed_successfully"
+    )
+
+
+def test_backup_and_restore_use_distinct_database_credentials(compose):
+    """The compatibility sidecar selects a role-scoped credential per operation."""
+    sidecar = compose["services"]["postgres-backup"]
+    assert _secret_sources(sidecar) == {
+        "postgres_backup_reader_password",
+        "postgres_restore_operator_password",
+        "backup_encrypt_key",
+        "qdrant_api_key",
+    }
+    assert sidecar["environment"]["PGUSER"] == "jarvis_backup_reader"
+    assert sidecar["environment"]["POSTGRES_PASSWORD_FILE"].endswith(
+        "postgres_backup_reader_password"
+    )
+    entrypoint = str(sidecar["entrypoint"])
+    assert "PGUSER=jarvis_restore_operator" in entrypoint
+    assert "postgres_restore_operator_password" in entrypoint
+
+
+def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
+    """Floor 113 may bridge owners only until migration 0114 revokes the bridge."""
+    source = (REPO_ROOT / "scripts" / "postgres-role-bootstrap.sh").read_text(encoding="utf-8")
+    owners = "jarvis_platform_owner jarvis_research_owner jarvis_learning_owner jarvis_ops_owner"
+    assert f'owner_roles="{owners}"' in source
+    assert "GRANT ${owner_role} TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE" in source
+    assert "GRANT ${owner_role} TO jarvis_legacy_rollback WITH INHERIT FALSE" in source
+    assert (
+        "GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE" in source
+    )
+    assert "REVOKE ${owner_role} FROM jarvis_legacy_rollback" in source
+    assert "REVOKE ${owner_role} FROM jarvis_migrator" in source
+    assert "CREATE ROLE %s LOGIN SUPERUSER NOINHERIT" in source
+    assert 'transfer_v125_objects "$database" jarvis_legacy_rollback' in source
+    assert "ALTER ROLE jarvis NOLOGIN" in source
+    assert "public.schema_migrations TO jarvis_migrator" in source
+    assert "GRANT CREATE ON DATABASE ${database} TO ${owner_role}" in source
+    assert "REVOKE CREATE ON DATABASE ${database} FROM ${owner_role}" in source
+    assert "postgres_legacy_source_password" in source
+    assert 'if [ "$mode" = "finalize" ]' in source
+    assert "REVOKE CONNECT, TEMPORARY ON DATABASE ${database} FROM PUBLIC" in source
+    assert "ALTER ROLE jarvis_restore_operator WITH CREATEDB INHERIT" in source
+    assert "GRANT pg_signal_backend TO jarvis_restore_operator" in source
+    assert "assert_recovery_roles" in source
+    assert source.count("assert_recovery_roles") == 3
+    assert "backup or restore role authority is invalid" in source
+
+
 PROVISIONING_SCRIPTS = {
     "update": "scripts/init-secrets.sh",
     "setup": "scripts/gen-langfuse-keys.sh",
@@ -811,7 +915,12 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
     assert not stale, f"SECRET_PROVISIONING lists secrets compose no longer declares: {stale}"
 
     for name, definition in declared.items():
-        assert definition.get("file") == f"./secrets/{name}.txt", (
+        expected_file = (
+            "./secrets/postgres_password.txt"
+            if name == "postgres_legacy_source_password"
+            else f"./secrets/{name}.txt"
+        )
+        assert definition.get("file") == expected_file, (
             f"{name}: compose secret file must be ./secrets/{name}.txt"
         )
 
@@ -820,7 +929,10 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
         lines = (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()
         scripts[mode] = "\n".join(line for line in lines if not line.lstrip().startswith("#"))
     for name, mode in SECRET_PROVISIONING.items():
-        assert f"{name}.txt" in scripts[mode], (
+        provisioned_filename = (
+            "postgres_password.txt" if name == "postgres_legacy_source_password" else f"{name}.txt"
+        )
+        assert provisioned_filename in scripts[mode], (
             f"{name}: declared '{mode}' but {PROVISIONING_SCRIPTS[mode]} never touches "
             f"{name}.txt outside comments"
         )

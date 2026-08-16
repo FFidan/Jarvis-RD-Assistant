@@ -46,8 +46,8 @@ def test_paper_chunks_have_no_user_ownership_in_fresh_or_upgraded_schema() -> No
     chunk_table = init_sql.split("CREATE TABLE public.paper_chunks (", 1)[1].split(");", 1)[0]
 
     assert "user_id" not in chunk_table
-    assert "idx_paper_chunks_user" not in init_sql
-    assert "paper_chunks_user_id_fkey" not in init_sql
+    assert "CREATE INDEX idx_paper_chunks_user" not in init_sql
+    assert "ADD CONSTRAINT paper_chunks_user_id_fkey" not in init_sql
 
     migration = (
         repo_root / "db" / "migrations" / "0104_drop_paper_chunks_user_ownership.sql"
@@ -57,14 +57,13 @@ def test_paper_chunks_have_no_user_ownership_in_fresh_or_upgraded_schema() -> No
 
 
 _BOOTSTRAP_SEED_LO = 1
-_BOOTSTRAP_SEED_HI = 102  # next runner-owned migration; init.sql owns 1..(HI-1)
+_BOOTSTRAP_SEED_HI = 115  # fresh init premarks the complete 1..114 baseline
 
 
 def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     """init.sql bootstrap must use an explicit version list, not generate_series.
 
-    init.sql embodies the complete schema baseline through version 101 (the
-    db/migrations/ directory is empty); the runner owns versions 102+.
+    Fresh init embodies and premarks the complete schema through version 114.
     The seeded set must be exactly set(range(_BOOTSTRAP_SEED_LO,
     _BOOTSTRAP_SEED_HI)) — contiguous, no gaps.
     """
@@ -90,12 +89,11 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
 def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     """The schema_migrations seed in init.sql must own the full consolidated baseline.
 
-    init.sql embodies the complete schema baseline through version 101 (the
-    db/migrations/ directory is empty); the runner owns versions 102+.
-    - init.sql owns _BOOTSTRAP_SEED_LO.._BOOTSTRAP_SEED_HI-1.
-    - Any on-disk migration file in db/migrations/ must have version
-      >= _BOOTSTRAP_SEED_HI (runner-applied, never pre-seeded).
-    - No gaps in the seeded range.
+    Fresh init embodies and premarks the complete schema through version 114.
+    - init.sql premarks _BOOTSTRAP_SEED_LO.._BOOTSTRAP_SEED_HI-1.
+    - Retained migration files may also be premarked: they are needed for
+      in-place upgrades, while fresh installs already embody their effects.
+    - No gaps exist in the seeded range.
     """
     repo_root = Path(__file__).resolve().parents[3]
     migrations_dir = repo_root / "db" / "migrations"
@@ -122,12 +120,7 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
         except (ValueError, IndexError):
             continue
 
-    pre_seeded = [v for v in file_versions if v < _BOOTSTRAP_SEED_HI]
-    assert not pre_seeded, (
-        f"db/migrations/ contains pre-seeded migration files "
-        f"(v < {_BOOTSTRAP_SEED_HI}): {sorted(pre_seeded)}. "
-        "These should have been deleted by the squash or fold-in."
-    )
+    assert set(file_versions) <= seeded_versions
 
 
 # test_schema_probes_cover_recent_migrations — DELETED (db/migrations squash 2026-05-19):
@@ -240,13 +233,14 @@ async def test_zotero_links_additive_structure_on_live_db(test_db_pool: asyncpg.
     """
     async with test_db_pool.acquire() as conn:
         assert (
-            await conn.fetchval("SELECT to_regclass('public.paper_user_zotero_links')") is not None
+            await conn.fetchval("SELECT to_regclass('research.paper_user_zotero_links')")
+            is not None
         ), "paper_user_zotero_links table must exist"
 
         indexes = {
             r["indexname"]
             for r in await conn.fetch(
-                "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' "
+                "SELECT indexname FROM pg_indexes WHERE schemaname = 'research' "
                 "AND tablename IN ('paper_user_zotero_links', 'paper_highlights')"
             )
         }
@@ -261,7 +255,7 @@ async def test_zotero_links_additive_structure_on_live_db(test_db_pool: asyncpg.
         # ADDITIVE: the global source column is KEPT (vestigial), never dropped.
         assert (
             await conn.fetchval(
-                "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = 'research' "
                 "AND table_name = 'papers' AND column_name = 'zotero_item_key'"
             )
             == 1

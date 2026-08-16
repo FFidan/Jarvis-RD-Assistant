@@ -47,6 +47,7 @@ pytestmark = [
 ]
 
 _TASK_NAME = "stalled_job_reclamation_probe"
+_OWNED_SEARCH_PATH = "ops,platform,research,learning,public,pg_catalog"
 
 
 async def _new_worker(pg: asyncpg.Connection) -> int:
@@ -90,9 +91,17 @@ async def test_reclamation_selects_stale_and_orphaned_jobs_only(
     from procrastinate import App  # noqa: PLC0415
     from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
 
-    procrastinate_app = App(connector=AiopgConnector(dsn=contract_pg_dsn))
+    procrastinate_app = App(
+        connector=AiopgConnector(
+            dsn=contract_pg_dsn,
+            options=f"-c search_path={_OWNED_SEARCH_PATH}",
+        )
+    )
     await procrastinate_app.open_async()
-    pg = await asyncpg.connect(contract_pg_dsn)
+    pg = await asyncpg.connect(
+        contract_pg_dsn,
+        server_settings={"search_path": _OWNED_SEARCH_PATH},
+    )
     app = SimpleNamespace(
         state=SimpleNamespace(
             procrastinate_app=procrastinate_app,

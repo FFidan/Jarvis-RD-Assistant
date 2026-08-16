@@ -472,12 +472,12 @@ async def test_watcher_step_pauses_worker_loop_on_activation(tmp_path, monkeypat
 
 
 async def test_watcher_step_reconciles_then_resumes_on_clear(tmp_path, monkeypatch):
-    """active→inactive runs migrations + invalidates caches THEN restarts the worker."""
+    """active→inactive checks migrations and caches before restarting the worker."""
     _point_sentinels(tmp_path, monkeypatch)  # both absent → inactive
-    run_migrations_spy = AsyncMock()
+    check_migrations_spy = AsyncMock()
     inval_login = MagicMock()
     inval_ctx = MagicMock()
-    monkeypatch.setattr(app_factory, "run_migrations", run_migrations_spy)
+    monkeypatch.setattr(app_factory, "check_migrations", check_migrations_spy)
     monkeypatch.setattr(app_factory, "invalidate_api_key_login_cache", inval_login)
     monkeypatch.setattr(app_factory, "invalidate_effective_num_ctx_cache", inval_ctx)
 
@@ -487,7 +487,7 @@ async def test_watcher_step_reconciles_then_resumes_on_clear(tmp_path, monkeypat
     result = await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True)
 
     assert result is False
-    run_migrations_spy.assert_awaited_once_with(app.state.db_pool)
+    check_migrations_spy.assert_awaited_once_with(app.state.db_pool)
     inval_login.assert_called_once_with()
     inval_ctx.assert_called_once_with()
     new_worker = app.state.procrastinate_worker_task
@@ -573,8 +573,8 @@ def test_secrets_rotated_since_marker_lifecycle(tmp_path, monkeypatch):
 async def test_watcher_step_self_restarts_once_on_newer_marker(tmp_path, monkeypatch):
     """active→inactive with a marker newer than started_at fires exactly one restart."""
     _point_sentinels(tmp_path, monkeypatch)  # both absent → inactive
-    migrate = AsyncMock()
-    monkeypatch.setattr(app_factory, "run_migrations", migrate)
+    migration_check = AsyncMock()
+    monkeypatch.setattr(app_factory, "check_migrations", migration_check)
     monkeypatch.setattr(app_factory, "invalidate_api_key_login_cache", MagicMock())
     monkeypatch.setattr(app_factory, "invalidate_effective_num_ctx_cache", MagicMock())
     restart = MagicMock()
@@ -587,7 +587,7 @@ async def test_watcher_step_self_restarts_once_on_newer_marker(tmp_path, monkeyp
     app, _ = _make_worker_app()
     await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True, started_at=started)
     restart.assert_called_once_with()
-    migrate.assert_not_awaited()  # rotation path self-restarts BEFORE the DB-touching resume
+    migration_check.assert_not_awaited()  # restart occurs before the DB-touching resume
     assert app.state.procrastinate_worker_task is None  # resume + worker-start were skipped
 
     restart.reset_mock()
@@ -601,11 +601,11 @@ async def test_watcher_step_self_restarts_once_on_newer_marker(tmp_path, monkeyp
 
 async def test_watcher_step_self_restarts_even_when_migrations_would_fail(tmp_path, monkeypatch):
     """Cross-host regression: the app pool still holds the pre-rotation password, so
-    ``run_migrations``' acquire auth-fails until we restart. The restart must fire
+    ``check_migrations`` auth-fails until we restart. The restart must fire
     regardless — it used to be sequenced AFTER the failing resume and so never ran."""
     _point_sentinels(tmp_path, monkeypatch)
-    migrate = AsyncMock(side_effect=RuntimeError("password authentication failed"))
-    monkeypatch.setattr(app_factory, "run_migrations", migrate)
+    migration_check = AsyncMock(side_effect=RuntimeError("password authentication failed"))
+    monkeypatch.setattr(app_factory, "check_migrations", migration_check)
     monkeypatch.setattr(app_factory, "invalidate_api_key_login_cache", MagicMock())
     monkeypatch.setattr(app_factory, "invalidate_effective_num_ctx_cache", MagicMock())
     restart = MagicMock()
@@ -618,14 +618,14 @@ async def test_watcher_step_self_restarts_even_when_migrations_would_fail(tmp_pa
     app, _ = _make_worker_app()
     await app_factory._maintenance_watcher_step(app, _QUEUES, was_active=True, started_at=started)
     restart.assert_called_once_with()
-    migrate.assert_not_awaited()  # never reached the DB op — restart short-circuits it
+    migration_check.assert_not_awaited()  # restart short-circuits the DB operation
     assert app.state.procrastinate_worker_task is None
 
 
 async def test_watcher_step_no_restart_when_started_at_absent(tmp_path, monkeypatch):
     """The legacy call shape (no started_at) never self-restarts, marker or not."""
     _point_sentinels(tmp_path, monkeypatch)
-    monkeypatch.setattr(app_factory, "run_migrations", AsyncMock())
+    monkeypatch.setattr(app_factory, "check_migrations", AsyncMock())
     monkeypatch.setattr(app_factory, "invalidate_api_key_login_cache", MagicMock())
     monkeypatch.setattr(app_factory, "invalidate_effective_num_ctx_cache", MagicMock())
     restart = MagicMock()

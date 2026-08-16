@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 import asyncpg
 import pytest
@@ -22,10 +23,10 @@ _MIGRATIONS = _ROOT / "db/migrations"
 _SEED = _ROOT / "db/testdata/schema-101-seed.sql"
 
 
-def _latest_migration_version() -> int:
+def _latest_migration_version(migrations_dir: Path = _MIGRATIONS) -> int:
     versions = [
         int(match.group(1))
-        for path in _MIGRATIONS.glob("*.sql")
+        for path in migrations_dir.glob("*.sql")
         if (match := re.match(r"^(\d+)_", path.name)) is not None
     ]
     assert versions, "migration directory contains no numbered SQL files"
@@ -50,9 +51,17 @@ async def _project_collection_column(
     return str(row["data_type"]), str(row["is_nullable"])
 
 
-async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn: str) -> None:
-    """The actual lifecycle origin must survive every current migration."""
+async def test_schema_101_fixture_migrates_through_legacy_chain(
+    live_pg_dsn: str, tmp_path: Path
+) -> None:
+    """The schema-101 origin survives the retained pre-ownership migrations."""
     # Verified: libs/jarvis_common/jarvis_common/migrations.py:247
+    legacy_migrations = tmp_path / "migrations"
+    legacy_migrations.mkdir()
+    for migration in _MIGRATIONS.glob("*.sql"):
+        if int(migration.name.split("_", maxsplit=1)[0]) <= 113:
+            (legacy_migrations / migration.name).symlink_to(migration)
+
     pool = await asyncpg.create_pool(
         live_pg_dsn,
         min_size=1,
@@ -63,7 +72,8 @@ async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn
         async with pool.acquire() as conn:
             await conn.execute(_SEED.read_text(encoding="utf-8"))
 
-        await run_migrations(pool, migrations_dir=_MIGRATIONS)
+        with patch("jarvis_common.migrations.required_code_schema", return_value=113):
+            await run_migrations(pool, migrations_dir=legacy_migrations)
 
         async with pool.acquire() as conn:
             version = await conn.fetchval("SELECT max(version) FROM schema_migrations")
@@ -90,7 +100,7 @@ async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn
             )
             project_collection_column = await _project_collection_column(conn)
 
-            assert version == _latest_migration_version()
+            assert version == _latest_migration_version(legacy_migrations)
             assert webauthn_table == "webauthn_credentials"
             assert visibility_scope == "private"
             assert content_generation == 0
@@ -108,13 +118,14 @@ async def test_schema_101_fixture_migrates_to_exact_current_contract(live_pg_dsn
             focus_table_before = await conn.fetchval("SELECT to_regclass('public.focus_sessions')")
             assert focus_table_before is None
 
-        await run_migrations(pool, migrations_dir=_MIGRATIONS)
+        with patch("jarvis_common.migrations.required_code_schema", return_value=113):
+            await run_migrations(pool, migrations_dir=legacy_migrations)
 
         async with pool.acquire() as conn:
             version = await conn.fetchval("SELECT max(version) FROM schema_migrations")
             focus_table_after = await conn.fetchval("SELECT to_regclass('public.focus_sessions')")
             project_collection_column = await _project_collection_column(conn)
-            assert version == _latest_migration_version()
+            assert version == _latest_migration_version(legacy_migrations)
             assert focus_table_after == "focus_sessions"
             assert project_collection_column == ("text", "YES")
     finally:

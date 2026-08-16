@@ -1,14 +1,8 @@
-"""Real-PostgreSQL contract for the declared database role matrix.
-
-The current schema still uses the compatibility login. This test projects the
-declared owner and runtime grants inside the fixture's rollback transaction, so
-the final access contract is executable before production grants are applied.
-"""
+"""Live PostgreSQL contract for installed schemas, ownership, and privileges."""
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -23,155 +17,186 @@ pytestmark = [
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _MANIFEST_PATH = _REPO_ROOT / "db" / "ownership-manifest.json"
-_IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
-_DML_PRIVILEGES = ("DELETE", "INSERT", "SELECT", "UPDATE")
+_DML = ("DELETE", "INSERT", "SELECT", "UPDATE")
 
 
-def _load_manifest() -> dict[str, Any]:
-    """Load the database ownership contract used by the live projection."""
+def _manifest() -> dict[str, Any]:
+    """Load the tracked ownership contract."""
     return json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def _quote_identifier(identifier: str) -> str:
-    """Quote a manifest identifier after enforcing its restricted grammar.
-
-    Parameters
-    ----------
-    identifier : str
-        Role, schema, or relation identifier from the tracked manifest.
-
-    Returns
-    -------
-    str
-        Double-quoted PostgreSQL identifier.
-
-    Raises
-    ------
-    ValueError
-        If the identifier is outside the manifest's restricted grammar.
-
-    """
-    if _IDENTIFIER_RE.fullmatch(identifier) is None:
-        raise ValueError(f"unsupported database identifier: {identifier!r}")
-    return f'"{identifier}"'
-
-
-async def _ensure_declared_roles(
+async def _object_owner(
     conn: asyncpg.Connection,
-    manifest: dict[str, Any],
-) -> tuple[str, ...]:
-    """Create absent declared roles inside the rollback transaction.
-
-    Parameters
-    ----------
-    conn : asyncpg.Connection
-        Superuser test connection wrapped by the rollback fixture.
-    manifest : dict[str, Any]
-        Parsed ownership manifest.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Sorted owner and runtime role names participating in table access.
-
-    """
-    roles = {
-        role
-        for domain in manifest["domains"].values()
-        for role in (domain["owner_role"], domain["runtime_role"])
-        if role is not None
-    }
-    for role in sorted(roles):
-        exists = await conn.fetchval(
-            "SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = $1)", role
-        )
-        if not exists:
-            await conn.execute(f"CREATE ROLE {_quote_identifier(role)} NOLOGIN")
-    return tuple(sorted(roles))
-
-
-async def _table_location(
-    conn: asyncpg.Connection,
-    table: str,
-    destination_schema: str,
-) -> tuple[str, str]:
-    """Resolve a manifest table to its current physical schema.
-
-    Parameters
-    ----------
-    conn : asyncpg.Connection
-        Live PostgreSQL connection containing the current schema.
-    table : str
-        Unqualified manifest table name.
-    destination_schema : str
-        Declared destination schema, preferred after schema cutover.
-
-    Returns
-    -------
-    tuple[str, str]
-        Physical schema and qualified relation text.
-
-    Raises
-    ------
-    AssertionError
-        If no physical table matches the manifest entry.
-
-    """
-    schema = await conn.fetchval(
-        """SELECT n.nspname
-             FROM pg_class AS c
-             JOIN pg_namespace AS n ON n.oid = c.relnamespace
-            WHERE c.relname = $1 AND c.relkind IN ('r', 'p')
-            ORDER BY CASE n.nspname WHEN $2 THEN 0 WHEN 'public' THEN 1 ELSE 2 END
-            LIMIT 1""",
-        table,
-        destination_schema,
+    object_name: str,
+    object_kind: str,
+) -> tuple[str, str] | None:
+    """Return the physical schema and owner for one catalog object."""
+    return await conn.fetchrow(
+        """
+        SELECT namespace.nspname, role.rolname
+        FROM pg_class AS relation
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        JOIN pg_roles AS role ON role.oid = relation.relowner
+        WHERE relation.relname = $1 AND relation.relkind::text = $2
+        """,
+        object_name,
+        object_kind,
     )
-    assert schema is not None, f"manifest table is absent from PostgreSQL: {table}"
-    qualified = f"{_quote_identifier(schema)}.{_quote_identifier(table)}"
-    return schema, qualified
 
 
-async def test_declared_table_roles_allow_owner_and_reject_foreign_domains(
+async def test_manifest_objects_have_installed_schema_and_owner(
     contract_conn: asyncpg.Connection,
 ) -> None:
-    """Project final table grants and verify every ownership row.
+    """Every manifest table and sequence is physically owned by its domain role.
 
-    Parameters
-    ----------
-    contract_conn : asyncpg.Connection
-        Real PostgreSQL connection whose outer transaction is rolled back.
-
+    Verified: db/ownership-manifest.json:72 — physical domain declarations.
     """
-    # Verified: db/ownership-manifest.json:27-237 — role and object declarations.
-    manifest = _load_manifest()
-    declared_roles = await _ensure_declared_roles(contract_conn, manifest)
-    role_list = ", ".join(_quote_identifier(role) for role in declared_roles)
+    manifest = _manifest()
+    for domain_name, domain in manifest["domains"].items():
+        schema = domain["schema"]
+        owner = domain["owner_role"]
+        for table in manifest["tables"][domain_name]:
+            installed = await _object_owner(contract_conn, table, "r")
+            assert installed == (schema, owner), f"table {table} is {installed!r}"
+        for sequence in manifest["sequences"][domain_name]:
+            installed = await _object_owner(contract_conn, sequence, "S")
+            assert installed == (schema, owner), f"sequence {sequence} is {installed!r}"
 
-    for domain_name, tables in manifest["tables"].items():
-        domain = manifest["domains"][domain_name]
-        allowed_roles = {domain["owner_role"]}
-        if domain["runtime_role"] is not None:
-            allowed_roles.add(domain["runtime_role"])
 
-        for table in tables:
-            _, qualified = await _table_location(contract_conn, table, domain["schema"])
-            await contract_conn.execute(f"REVOKE ALL ON TABLE {qualified} FROM PUBLIC, {role_list}")
-            for role in sorted(allowed_roles):
-                await contract_conn.execute(
-                    f"GRANT {', '.join(_DML_PRIVILEGES)} ON TABLE {qualified} "
-                    f"TO {_quote_identifier(role)}"
-                )
+async def test_declared_roles_cannot_bypass_or_assume_owners(
+    contract_conn: asyncpg.Connection,
+) -> None:
+    """Owners cannot log in and runtimes cannot bypass or assume owners.
 
-            for role in declared_roles:
-                for privilege in _DML_PRIVILEGES:
-                    permitted = await contract_conn.fetchval(
-                        "SELECT has_table_privilege($1, $2, $3)",
-                        role,
-                        qualified,
-                        privilege,
-                    )
-                    assert permitted is (role in allowed_roles), (
-                        f"{role} privilege {privilege} on {qualified} was {permitted}; "
-                        f"expected {role in allowed_roles}"
-                    )
+    Verified: db/ownership-manifest.json:72 — declared owner/runtime roles.
+    """
+    manifest = _manifest()
+    for domain in manifest["domains"].values():
+        owner = domain["owner_role"]
+        owner_attributes = await contract_conn.fetchrow(
+            "SELECT rolcanlogin, rolbypassrls FROM pg_roles WHERE rolname = $1", owner
+        )
+        assert owner_attributes == (False, False)
+
+        runtime = domain["runtime_role"]
+        if runtime is None:
+            continue
+        runtime_attributes = await contract_conn.fetchrow(
+            "SELECT rolbypassrls, rolinherit FROM pg_roles WHERE rolname = $1", runtime
+        )
+        assert runtime_attributes == (False, False)
+        assert not await contract_conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_auth_members AS membership
+                JOIN pg_roles AS member ON member.oid = membership.member
+                JOIN pg_roles AS granted ON granted.oid = membership.roleid
+                WHERE member.rolname = $1 AND granted.rolname = $2
+            )
+            """,
+            runtime,
+            owner,
+        )
+
+
+async def test_platform_runtime_can_write_its_domain_only(
+    contract_conn: asyncpg.Connection,
+) -> None:
+    """A runtime role can perform granted DML but not foreign-domain DML.
+
+    Verified: db/ownership-manifest.json:72 — Platform and Research domains.
+    """
+    await contract_conn.execute("SET LOCAL ROLE jarvis_platform_runtime")
+    await contract_conn.execute(
+        """
+        INSERT INTO platform.system_events (level, category, source, message)
+        VALUES ('info', 'infra', 'contract-test', 'allowed runtime insert')
+        """
+    )
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        async with contract_conn.transaction():
+            await contract_conn.execute("INSERT INTO research.topics (name) VALUES ('forbidden')")
+    await contract_conn.execute("RESET ROLE")
+
+
+async def test_backup_reader_can_dump_all_domains_but_cannot_mutate(
+    contract_conn: asyncpg.Connection,
+) -> None:
+    """Scheduled backup authority reads every domain without DML or DDL."""
+    await contract_conn.execute("SET LOCAL ROLE jarvis_backup_reader")
+    for relation in (
+        "platform.users",
+        "research.papers",
+        "learning.cards",
+        "ops.schema_migrations",
+    ):
+        await contract_conn.fetchval(f"SELECT COUNT(*) FROM {relation}")
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        async with contract_conn.transaction():
+            await contract_conn.execute(
+                "INSERT INTO ops.job_progress (jarvis_job_id) VALUES ('forbidden')"
+            )
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        async with contract_conn.transaction():
+            await contract_conn.execute("CREATE TABLE research.forbidden_backup_ddl (id int)")
+    await contract_conn.execute("RESET ROLE")
+
+
+async def test_runtime_login_cannot_assume_an_owner(live_pg_dsn: str) -> None:
+    """A runtime login receives no owner-role membership.
+
+    Verified: db/migrations/0114_owned_schemas_and_roles.sql — runtime role policy.
+    """
+    bootstrap = await asyncpg.connect(live_pg_dsn)
+    try:
+        await bootstrap.execute((_REPO_ROOT / "db" / "init.sql").read_text(encoding="utf-8"))
+        await bootstrap.execute(
+            "ALTER ROLE jarvis_platform_runtime LOGIN PASSWORD 'ownership-contract-password'"
+        )
+        runtime = await asyncpg.connect(
+            live_pg_dsn,
+            user="jarvis_platform_runtime",
+            password="ownership-contract-password",
+        )
+        try:
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await runtime.execute("SET ROLE jarvis_platform_owner")
+        finally:
+            await runtime.close()
+    finally:
+        await bootstrap.close()
+
+
+async def test_owner_default_privileges_apply_to_new_tables(
+    contract_conn: asyncpg.Connection,
+) -> None:
+    """Objects created by an owner inherit the declared runtime grant policy.
+
+    Verified: db/migrations/0114_owned_schemas_and_roles.sql — owner default privileges.
+    """
+    await contract_conn.execute("SET LOCAL ROLE jarvis_platform_owner")
+    await contract_conn.execute(
+        "CREATE TABLE platform.ownership_default_privilege_probe (id integer PRIMARY KEY)"
+    )
+    await contract_conn.execute("RESET ROLE")
+
+    for privilege in _DML:
+        assert await contract_conn.fetchval(
+            "SELECT has_table_privilege($1, $2, $3)",
+            "jarvis_platform_runtime",
+            "platform.ownership_default_privilege_probe",
+            privilege,
+        )
+    assert not await contract_conn.fetchval(
+        "SELECT has_table_privilege('public', $1, 'SELECT')",
+        "platform.ownership_default_privilege_probe",
+    )
+    assert await contract_conn.fetchval(
+        "SELECT has_table_privilege('jarvis_backup_reader', $1, 'SELECT')",
+        "platform.ownership_default_privilege_probe",
+    )
+    assert not await contract_conn.fetchval(
+        "SELECT has_table_privilege('jarvis_backup_reader', $1, 'INSERT')",
+        "platform.ownership_default_privilege_probe",
+    )

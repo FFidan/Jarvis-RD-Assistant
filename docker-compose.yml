@@ -13,7 +13,7 @@ x-shared-env: &shared-env
   # reads this env; defaults to the release tag (same var drives the image tags).
   JARVIS_VERSION: ${JARVIS_VERSION:-1.2.6}
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
-  # /run/secrets/postgres_password and constructs it at container start.
+  # its role-specific password file and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
   # Setup-chosen model defaults; the boot reconciler falls back to these when
   # no Settings choice is stored (empty when absent from .env).
@@ -81,17 +81,17 @@ services:
     mem_limit: 2g
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-jarvis}
-      POSTGRES_USER: ${POSTGRES_USER:-jarvis}
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_USER: jarvis_cluster_bootstrap
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_cluster_bootstrap_password
     secrets:
-      - postgres_password
+      - postgres_cluster_bootstrap_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis}"]
+      test: ["CMD-SHELL", "pg_isready -U jarvis_cluster_bootstrap"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -213,26 +213,27 @@ services:
   # JARVIS ADDITIONS
   # ==========================================================================
 
-  # Sole creator of the ``litellm`` database (fresh AND existing volumes) —
-  # init.sql cannot CREATE DATABASE (test harness applies it via asyncpg in one
-  # implicit transaction), prisma migrate does not create databases, and the
-  # litellm image ships no psql/createdb (hence the postgres image).
-  litellm-db-init:
+  cluster-bootstrap:
     image: ${POSTGRES_IMAGE:-postgres:16.8}
     security_opt: ["no-new-privileges:true"]
-    # No cap_drop: reading the 0600 host-owned secret file requires
-    # CAP_DAC_OVERRIDE (same posture as the litellm service's secret shim).
+    environment:
+      PGHOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-jarvis}
     secrets:
-      - postgres_password
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        set -e
-        export PGPASSWORD="$(cat /run/secrets/postgres_password)"
-        psql -h postgres -U "${POSTGRES_USER:-jarvis}" -d "${POSTGRES_DB:-jarvis}" -v ON_ERROR_STOP=1 \
-          -tc "SELECT 1 FROM pg_database WHERE datname = 'litellm'" | grep -q 1 \
-          || createdb -h postgres -U "${POSTGRES_USER:-jarvis}" litellm
-        echo "litellm database ready."
+      - postgres_platform_runtime_password
+      - postgres_research_runtime_password
+      - postgres_learning_runtime_password
+      - postgres_migrator_password
+      - postgres_cluster_bootstrap_password
+      - postgres_legacy_rollback_password
+      - postgres_backup_reader_password
+      - postgres_restore_operator_password
+      - litellm_runtime_password
+      - litellm_migrator_password
+      - postgres_legacy_source_password
+    volumes:
+      - ./scripts/postgres-role-bootstrap.sh:/usr/local/bin/postgres-role-bootstrap.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/postgres-role-bootstrap.sh"]
     restart: "no"
     depends_on:
       postgres:
@@ -242,6 +243,65 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - jarvis
+
+  jarvis-migrator:
+    image: ghcr.io/limitcycle-oss/jarvis-platform-api:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.6}}
+    pull_policy: missing
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      POSTGRES_USER: jarvis_migrator
+      POSTGRES_DB: ${POSTGRES_DB:-jarvis}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_migrator_password
+    secrets:
+      - postgres_migrator_password
+    volumes:
+      - ./db:/app/db:ro
+    command: ["python", "-m", "jarvis_common.migration_cli", "migrate"]
+    depends_on:
+      cluster-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - jarvis
+
+  migration-authority-finalize:
+    image: ${POSTGRES_IMAGE:-postgres:16.8}
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PGHOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-jarvis}
+    secrets:
+      - postgres_cluster_bootstrap_password
+    volumes:
+      - ./scripts/postgres-role-bootstrap.sh:/usr/local/bin/postgres-role-bootstrap.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/postgres-role-bootstrap.sh"]
+    command: ["finalize"]
+    depends_on:
+      jarvis-migrator:
+        condition: service_completed_successfully
+    networks:
+      - jarvis
+
+  litellm-migrator:
+    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm@sha256:29252f25ed1b538d44f6b76ec97412c5537a180b39ede744b9f3e86ffdd278f5}
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      POSTGRES_USER: jarvis_litellm_migrator
+      POSTGRES_PASSWORD_FILE: /run/secrets/litellm_migrator_password
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./scripts/litellm-entrypoint.sh:/usr/local/bin/litellm-entrypoint.sh:ro
+    secrets:
+      - litellm_migrator_password
+    entrypoint: ["sh", "/usr/local/bin/litellm-entrypoint.sh"]
+    command: ["--migrate"]
+    depends_on:
+      cluster-bootstrap:
+        condition: service_completed_successfully
     networks:
       - jarvis
 
@@ -264,10 +324,12 @@ services:
       # The entrypoint builds DATABASE_URL from the mounted password file so
       # the database password is not exposed by ``docker inspect``.
       STORE_MODEL_IN_DB: "true"
+      POSTGRES_USER: jarvis_litellm_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/litellm_runtime_password
     secrets:
       - litellm_master_key
       - litellm_salt_key
-      - postgres_password
+      - litellm_runtime_password
     # Secret files are loaded only when restore safety markers are absent.
     entrypoint: ["sh", "/usr/local/bin/litellm-entrypoint.sh"]
     command: []
@@ -284,9 +346,7 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
-      litellm-db-init:
+      litellm-migrator:
         condition: service_completed_successfully
     logging:
       driver: json-file
@@ -328,12 +388,14 @@ services:
       SMTP_PASS_FILE: /run/secrets/smtp_pass
       DEV_SMTP_LOG_ONLY: ${DEV_SMTP_LOG_ONLY:-false}
       ALLOW_PRIVATE_SMTP_HOST: ${ALLOW_PRIVATE_SMTP_HOST:-false}
+      POSTGRES_USER: jarvis_platform_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_platform_runtime_password
     secrets:
       - jarvis_api_key
       - jarvis_setup_token
       - jarvis_model_hmac_key
       - litellm_master_key
-      - postgres_password
+      - postgres_platform_runtime_password
       - jarvis_config_key
       - telegram_bot_token
       - smtp_pass
@@ -343,6 +405,8 @@ services:
       - telegram_service_token
       - research_service_token
       - learning_service_token
+    volumes:
+      - ./db:/app/db:ro
     mem_limit: 1g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8003/health').raise_for_status()\""]
@@ -351,8 +415,8 @@ services:
       retries: 5
       start_period: 15s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migration-authority-finalize:
+        condition: service_completed_successfully
     logging:
       driver: json-file
       options:
@@ -419,11 +483,13 @@ services:
       SMTP_PASS_FILE: /run/secrets/smtp_pass
       DEV_SMTP_LOG_ONLY: ${DEV_SMTP_LOG_ONLY:-false}
       ALLOW_PRIVATE_SMTP_HOST: ${ALLOW_PRIVATE_SMTP_HOST:-false}
+      POSTGRES_USER: jarvis_research_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_research_runtime_password
     secrets:
       - jarvis_api_key
       - jarvis_setup_token
       - jarvis_model_hmac_key
-      - postgres_password
+      - postgres_research_runtime_password
       - qdrant_api_key
       - litellm_master_key
       - jarvis_config_key
@@ -436,11 +502,11 @@ services:
       - ./shared/pdf_storage:/data/pdfs
       - ./shared/snapshots:/data/snapshots
       - ${LOCAL_PDF_PATH:-./shared/local_pdfs}:/data/local_pdfs:ro
-      - ./db/migrations:/app/db/migrations:ro
       - ./config:/app/config:ro  # llm-tier-candidates.yaml for /api/settings/ai
       - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache (Docling layout/table models) across recreation
       - postgres_backups:/backups:ro  # list/download DR archives in the admin Backup panel
       - backup_trigger:/backup-trigger  # RW sentinel dir the WebUI writes to request an on-demand backup
+      - ./db:/app/db:ro
     mem_limit: 6g
     # Base compose is CPU-safe — no GPU device reservation here so CPU-only hosts
     # can `docker compose up`. setup.sh layers docker-compose.gpu.yml when the
@@ -452,8 +518,8 @@ services:
       retries: 5
       start_period: 60s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migration-authority-finalize:
+        condition: service_completed_successfully
       qdrant:
         condition: service_healthy
       litellm:
@@ -492,20 +558,19 @@ services:
       JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
       JARVIS_IDENTITY_ASSERTIONS_REQUIRED: "true"
       JARVIS_IDENTITY_CURRENT_PUBLIC_KEY_FILE: /run/secrets/platform_identity_public_key
+      POSTGRES_USER: jarvis_learning_runtime
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_learning_runtime_password
     secrets:
       - jarvis_api_key
       - jarvis_model_hmac_key
-      - postgres_password
+      - postgres_learning_runtime_password
       - litellm_master_key
       - jarvis_config_key
       - platform_identity_public_key
       - langfuse_init_pk
       - langfuse_init_sk
     volumes:
-      # Read-only migrations so the maintenance watcher can forward-migrate a
-      # restored (possibly older) schema on resume — lock-42-serialized with
-      # paper_ingestion; this service gains no destructive privilege.
-      - ./db/migrations:/app/db/migrations:ro
+      - ./db:/app/db:ro
       # Read-only: this service only os.stat()s the maintenance sentinel (so the
       # maintenance middleware can return 503 there too during a restore). Read-only
       # prevents it from writing a restore-request/backup sentinel — only
@@ -519,8 +584,8 @@ services:
       retries: 5
       start_period: 15s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migration-authority-finalize:
+        condition: service_completed_successfully
       litellm:
         condition: service_healthy
       # ``smart``/``fast`` aliases are registered by paper_ingestion's model
@@ -655,8 +720,8 @@ services:
       # the sidecar must receive it explicitly (it does not use the shared env anchor).
       ENVIRONMENT: ${ENVIRONMENT:-development}
       PGHOST: postgres
-      PGUSER: ${POSTGRES_USER:-jarvis}
-      # PGPASSWORD is NOT set here; backup.sh reads /run/secrets/postgres_password
+      PGUSER: jarvis_backup_reader
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_backup_reader_password
       PGDATABASE: ${POSTGRES_DB:-jarvis}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
@@ -673,30 +738,30 @@ services:
       # the JARVIS version it was taken on, not a constant "unknown").
       JARVIS_VERSION: ${JARVIS_VERSION:-1.2.6}
     secrets:
-      - postgres_password
+      - source: postgres_backup_reader_password
+        target: postgres_backup_reader_password
+      - source: postgres_restore_operator_password
+        target: postgres_restore_operator_password
       - backup_encrypt_key
       - qdrant_api_key
     volumes:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
-      - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro  # one-click DR restore (runs in this already-privileged sidecar; the app gains zero new privilege)
+      - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro
       - ./scripts/prune.sh:/usr/local/bin/prune.sh:ro  # backup DELETE executor (same boundary: the app only writes .delete_request.json; every rm happens here)
       - ./secrets:/secrets:ro
       - ./secrets:/host-secrets:rw  # rw: restore installs only the three data-coupled keys; target-host credentials remain unchanged
       - ${JARVIS_STATE_DIR:-./secrets}:/backup-state:rw  # durable lifecycle state; ./secrets fallback keeps un-migrated installs on the old marker location
       - ./shared/pdf_storage:/pdf-storage:rw  # stable bind root used for PDF backup and crash-safe in-place restore
       - postgres_backups:/backups
-      - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears, restore.sh when .restore_request.json appears
-      - restore_staging:/qdrant/snapshots/restore  # rw: the sidecar writes decrypted Qdrant snapshots here for file:// recover
-      - restore_inbox:/restore-inbox  # rw: off-host DR — the operator drops the archive set + one-time backup key here for a cross-host (inbox) restore. The ONLY writable cross-host secrets-staging surface; it is NEVER under the RO /secrets mount above.
-      - ./db/migrations:/app/db/migrations:ro  # ro: restore.sh reads the code's max migration to refuse a newer-than-deployment restore (stable even when the live DB is gone mid-recovery)
-      - ./db/SCHEMA_VERSION:/app/db/SCHEMA_VERSION:ro  # ro: after a schema squash db/migrations/ is empty, so that same gate falls back to this baseline floor — unmounted, the fallback reads nothing and the gate drops to a hardcoded default
-      - postgres_data:/postgres-data:ro  # ro: restore.sh's disk preflight sizes the free space on the live DB volume to refuse a restore that would exhaust it (rename-swap keeps both live DBs while it reloads a transient tmp DB)
-    # Loop dispatch by sentinel: a restore request runs restore.sh (rename-swap both
-    # DBs + recover Qdrant behind the maintenance gate); a delete request runs
-    # prune.sh (delete named restore points); otherwise take the scheduled backup.
-    # On startup, a leftover private restore-swap state means a prior restore crashed
-    # mid-swap: run restore.sh --recover ONCE first to reconcile the stranded db to
-    # untouched-or-completed (it never consumes a request or runs the full flow).
+      - backup_trigger:/backup-trigger
+      - restore_staging:/qdrant/snapshots/restore
+      - restore_inbox:/restore-inbox
+      - ./db/migrations:/app/db/migrations:ro
+      - ./db/SCHEMA_VERSION:/app/db/SCHEMA_VERSION:ro
+      - postgres_data:/postgres-data:ro
+    # Credential identities are distinct during the compatibility window: normal
+    # iterations use the read-only backup login, while restore invocations select
+    # the exceptional operator explicitly. M5 moves restore into a one-shot job.
     # `sh -uc` deliberately drops -e so ONE failed run cannot kill the loop (a
     # non-zero exit would restart:unless-stopped into a fresh-archive-set-per-restart
     # loop); each branch logs its failure via `|| echo ... rc=$?` and continues. The
@@ -704,9 +769,9 @@ services:
     # restore, or delete fires within ~5s rather than after the full interval.
     entrypoint: >
       sh -uc "while true;
-      do { [ -d /backups/.lifecycle/data-key-restore ] || [ -f /backups/.lifecycle/restore-swap-state.json ]; } && /usr/local/bin/restore.sh --recover || true;
-      /usr/local/bin/restore.sh --inbox-manifest || true;
-      if [ -f /backup-trigger/.restore_request.json ]; then /usr/local/bin/restore.sh || echo \"[sidecar] restore failed rc=$$?\" >&2;
+      do PGUSER=jarvis_restore_operator POSTGRES_PASSWORD_FILE=/run/secrets/postgres_restore_operator_password /usr/local/bin/restore.sh --recover || true;
+      PGUSER=jarvis_restore_operator POSTGRES_PASSWORD_FILE=/run/secrets/postgres_restore_operator_password /usr/local/bin/restore.sh --inbox-manifest || true;
+      if [ -f /backup-trigger/.restore_request.json ]; then PGUSER=jarvis_restore_operator POSTGRES_PASSWORD_FILE=/run/secrets/postgres_restore_operator_password /usr/local/bin/restore.sh || echo \"[sidecar] restore failed rc=$$?\" >&2;
       elif [ -f /backup-trigger/.delete_request.json ]; then /usr/local/bin/prune.sh || echo \"[sidecar] prune failed rc=$$?\" >&2;
       else /usr/local/bin/backup.sh || echo \"[sidecar] backup failed rc=$$?\" >&2; fi;
       i=0; while [ \"$$i\" -lt \"$${BACKUP_INTERVAL_SECONDS:-86400}\" ]; do
@@ -718,7 +783,7 @@ services:
       # backup.sh does a fatal pg_dump of the litellm DB, which litellm-db-init
       # creates; wait for that one-shot so the first run on a fresh stack does not
       # crash-loop dumping a not-yet-created database (mirrors the litellm service).
-      litellm-db-init:
+      litellm-migrator:
         condition: service_completed_successfully
     logging:
       driver: json-file
@@ -1017,7 +1082,27 @@ networks:
           # low addresses allocated dynamically to application services.
 
 secrets:
-  postgres_password:
+  postgres_platform_runtime_password:
+    file: ./secrets/postgres_platform_runtime_password.txt
+  postgres_research_runtime_password:
+    file: ./secrets/postgres_research_runtime_password.txt
+  postgres_learning_runtime_password:
+    file: ./secrets/postgres_learning_runtime_password.txt
+  postgres_migrator_password:
+    file: ./secrets/postgres_migrator_password.txt
+  postgres_cluster_bootstrap_password:
+    file: ./secrets/postgres_cluster_bootstrap_password.txt
+  postgres_legacy_rollback_password:
+    file: ./secrets/postgres_legacy_rollback_password.txt
+  postgres_backup_reader_password:
+    file: ./secrets/postgres_backup_reader_password.txt
+  postgres_restore_operator_password:
+    file: ./secrets/postgres_restore_operator_password.txt
+  litellm_runtime_password:
+    file: ./secrets/litellm_runtime_password.txt
+  litellm_migrator_password:
+    file: ./secrets/litellm_migrator_password.txt
+  postgres_legacy_source_password:
     file: ./secrets/postgres_password.txt
   jarvis_api_key:
     file: ./secrets/jarvis_api_key.txt

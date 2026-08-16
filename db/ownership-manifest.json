@@ -60,6 +60,10 @@
       {
         "path": "0113_restore_zotero_project_collections.sql",
         "sha256": "46898962d09327d0c7ffd5ac13d272d8e092ea41a9ca1c664436b2f6a35431f6"
+      },
+      {
+        "path": "0114_owned_schemas_and_roles.sql",
+        "sha256": "2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24"
       }
     ]
   },
@@ -84,6 +88,15 @@
       "owner_role": "jarvis_ops_owner",
       "runtime_role": null
     }
+  },
+  "privileged_roles": {
+    "cluster_bootstrap_role": "jarvis_cluster_bootstrap",
+    "migrator_role": "jarvis_migrator",
+    "compatibility_role": "jarvis_legacy_rollback",
+    "backup_reader_role": "jarvis_backup_reader",
+    "restore_operator_role": "jarvis_restore_operator",
+    "litellm_runtime_role": "jarvis_litellm_runtime",
+    "litellm_migrator_role": "jarvis_litellm_migrator"
   },
   "tables": {
     "platform": [
@@ -360,6 +373,7 @@
     "scripts/jarvis-research.sh",
     "scripts/litellm-entrypoint.sh",
     "scripts/perf/import_fixed_pack_arxiv.py",
+    "scripts/postgres-role-bootstrap.sh",
     "scripts/profile.sh",
     "scripts/reembed.py",
     "scripts/restore.sh",

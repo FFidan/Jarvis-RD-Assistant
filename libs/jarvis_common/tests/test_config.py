@@ -26,7 +26,10 @@ class TestJarvisCommonSettings:
         monkeypatch.delenv("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", raising=False)
         s = JarvisCommonSettings()
         assert s.database_url == ""
-        assert s.postgres_user == "jarvis"
+        assert s.postgres_user == ""
+        assert s.postgres_password_file is None
+        assert s.postgres_host == "postgres"
+        assert s.postgres_port == 5432
         assert s.postgres_db == "jarvis"
         assert s.db_pool_min is None
         assert s.db_pool_max is None
@@ -69,6 +72,14 @@ class TestJarvisCommonSettings:
         monkeypatch.setenv("POSTGRES_USER", "testuser")
         s = JarvisCommonSettings()
         assert s.postgres_user == "testuser"
+
+    def test_postgres_password_file_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The service-specific password file is read from explicit configuration."""
+        monkeypatch.setenv("POSTGRES_PASSWORD_FILE", "/run/secrets/research_runtime_password")
+
+        settings = JarvisCommonSettings()
+
+        assert str(settings.postgres_password_file) == "/run/secrets/research_runtime_password"
 
     def test_db_pool_min_max(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DB_POOL_MIN", "3")

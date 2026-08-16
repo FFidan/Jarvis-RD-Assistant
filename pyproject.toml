@@ -248,7 +248,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # that legitimately gained a branch or a parameter rather than one that grew
 # unattended: the reader-facing selection now threaded through the feed count
 # path, the identification step on the upload path, and citation resolution.
-max = { C901 = 56, PLR0911 = 9, PLR0912 = 28, PLR0913 = 87, PLR0915 = 20 }
+max = { C901 = 55, PLR0911 = 9, PLR0912 = 28, PLR0913 = 87, PLR0915 = 20 }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -266,8 +266,8 @@ markers = [
 # After the R12 rename, these no longer collide — each service's top-level
 # package name matches its service directory.
 pythonpath = [
-    "services/platform_api",
     "services/paper_ingestion",
+    "services/platform_api",
     "services/learning_engine",
     "services/telegram_bot",
     "services/restore_uploader",
@@ -285,8 +285,8 @@ pythonpath = [
 # leakage; ``--randomly-seed=<n>`` then reproduces a specific failure.
 addopts = "--import-mode=importlib -p no:randomly -m 'not live_pg and not live_qdrant and not integration and not slow' --ignore=tests/integration"
 testpaths = [
-    "services/platform_api/tests",
     "services/paper_ingestion/tests",
+    "services/platform_api/tests",
     "services/learning_engine/tests",
     "services/telegram_bot/tests",
     "services/restore_uploader/tests",

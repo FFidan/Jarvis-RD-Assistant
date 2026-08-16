@@ -2060,10 +2060,546 @@ INSERT INTO schema_migrations (version) VALUES
     (73), (74), (75), (76), (77), (78), (79), (80),
     (81), (82), (83), (84), (85), (86), (87), (88),
     (89), (90), (91), (92), (93), (94), (95), (96),
-    (97), (98), (99), (100), (101)
+    (97), (98), (99), (100), (101), (102), (103), (104), (105), (106),
+    (107), (108), (109), (110), (111), (112), (113), (114)
 ON CONFLICT (version) DO NOTHING;
 
 -- The dedicated ``litellm`` admin database is created by the litellm-db-init
 -- one-shot in docker-compose.yml (fresh AND existing volumes), never here:
 -- CREATE DATABASE cannot run in this file — the test harness applies it via
 -- asyncpg in one implicit transaction, and psql meta-commands don't parse.
+
+-- =============================================================================
+-- FRESH-INSTALL OWNERSHIP BOUNDARY
+-- =============================================================================
+-- 0102: WebAuthn/passkey credential storage.
+--
+-- Stores registered passkeys (webauthn_credentials), short-lived single-use
+-- ceremony nonces (webauthn_challenges), and links a browser session to the
+-- passkey it was minted from (sessions.credential_id). The migration runner
+-- wraps this file in a transaction and strips any outer BEGIN/COMMIT, so none
+-- appear here. All statements are idempotent (IF NOT EXISTS) for safe re-apply.
+--
+-- FK column types match the baseline: users.id and sessions.user_id are bigint;
+-- sessions.id (and thus webauthn_credentials.id) is uuid.
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id bytea UNIQUE NOT NULL,
+    public_key bytea NOT NULL,
+    sign_count bigint NOT NULL DEFAULT 0,
+    transports text[],
+    aaguid uuid,
+    nickname text,
+    created_at timestamptz DEFAULT now(),
+    last_used_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+    challenge bytea PRIMARY KEY,
+    user_id bigint REFERENCES users(id) ON DELETE CASCADE,
+    purpose text NOT NULL,
+    expires_at timestamptz NOT NULL
+);
+
+ALTER TABLE sessions
+    ADD COLUMN IF NOT EXISTS credential_id uuid
+        REFERENCES webauthn_credentials(id) ON DELETE SET NULL;
+-- Purge stale group/supergroup telegram pairings (chat_id < 0) created before the
+-- private-chat-only pairing guard; they still receive outbound scheduled pushes.
+DELETE FROM telegram_user_pairings WHERE chat_id < 0;
+-- 0104: paper_chunks are canonical paper data, not user-owned records.
+-- A user deletion must never cascade into chunks retained by another library.
+ALTER TABLE IF EXISTS paper_chunks
+    DROP CONSTRAINT IF EXISTS paper_chunks_user_id_fkey;
+
+DROP INDEX IF EXISTS idx_paper_chunks_user;
+
+ALTER TABLE IF EXISTS paper_chunks
+    DROP COLUMN IF EXISTS user_id;
+-- 0105: Bridge upgraded deployments to the explicit instance-owner model.
+-- Only one unambiguous live administrator may be selected automatically.
+WITH live_admin AS MATERIALIZED (
+    SELECT id
+    FROM users
+    WHERE role = 'admin' AND deleted_at IS NULL
+), inserted_owner AS (
+    INSERT INTO user_config (user_id, key, value)
+    SELECT NULL, 'owner.user_id', to_jsonb(live_admin.id)
+    FROM live_admin
+    WHERE (SELECT COUNT(*) FROM live_admin) = 1
+      AND NOT EXISTS (
+          SELECT 1
+          FROM user_config
+          WHERE user_id IS NULL AND key = 'owner.user_id'
+      )
+    RETURNING value
+)
+INSERT INTO audit_log (user_id, action, resource, metadata)
+SELECT
+    value #>> '{}',
+    'owner.backfilled',
+    'owner.user_id',
+    jsonb_build_object('source', 'migration_0105', 'owner_user_id', value)
+FROM inserted_owner;
+-- 0106: Persist the source-aware paper visibility boundary.
+--
+-- Provenance labels are descriptive. Public visibility is backfilled only for
+-- known scholarly adapters whose row did not enter through the client-driven
+-- citation-batch path. Every other existing and future row defaults private.
+ALTER TABLE papers
+    ADD COLUMN IF NOT EXISTS visibility_scope text NOT NULL DEFAULT 'private';
+
+DO $$ BEGIN
+    ALTER TABLE papers
+        ADD CONSTRAINT papers_visibility_scope_check
+        CHECK (visibility_scope IN ('public', 'private'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+UPDATE papers
+SET visibility_scope = 'public'
+WHERE source_type IN ('arxiv', 'semantic_scholar', 'openalex', 'pubmed')
+  AND discovery_origin <> 'citation_batch';
+
+COMMENT ON COLUMN papers.visibility_scope IS
+    'Server-controlled authorization scope. Public rows are shared; private rows require user_library membership.';
+-- 0107: Scope the contradiction uniqueness key to the owning user.
+--
+-- The evidence-pair key spanned the whole deployment, so the second user to
+-- scan a shared paper pair collided with the first user's row and recorded none
+-- of their own. Adding the owner widens the key: every existing row keeps its
+-- identity because the key only grows, and each user can now hold their own row
+-- for the same pair of quotes.
+--
+-- COALESCE folds legacy owner-less rows into a single bucket. A bare NULL is
+-- distinct from every other NULL in a unique index, which would let unowned
+-- duplicates accumulate unchecked.
+DROP INDEX IF EXISTS idx_paper_contradictions_unique_quotes;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_contradictions_unique_quotes
+    ON paper_contradictions (
+        LEAST(paper_a_id, paper_b_id),
+        GREATEST(paper_a_id, paper_b_id),
+        md5(quote_a),
+        md5(quote_b),
+        COALESCE(user_id, 0)
+    );
+-- 0108: Record when a Zotero import's analysis scheduling was resolved, and
+-- how many attempts it has spent trying.
+--
+-- The enqueue happens after the ingest transaction commits, so a failure used
+-- to leave a committed paper whose analysis was never scheduled and never
+-- could be: the retry path re-runs the upsert, sees an existing row, and the
+-- brand-new-paper condition never fires again. Recording the successful enqueue
+-- lets a retry tell "already scheduled" from "never scheduled" without
+-- re-scheduling every previously imported item on each re-poll.
+ALTER TABLE paper_user_zotero_links
+    ADD COLUMN IF NOT EXISTS analysis_enqueued_at TIMESTAMPTZ;
+
+-- Treat every link row that predates this column as already resolved. Without
+-- this they all read as "decision outstanding", so the first poll after the
+-- upgrade re-evaluates the whole imported library. Marking them preserves the
+-- behaviour they already had: the previous condition fired only for a brand-new
+-- paper, so an existing link could never be re-scheduled regardless.
+UPDATE paper_user_zotero_links
+   SET analysis_enqueued_at = updated_at
+ WHERE analysis_enqueued_at IS NULL;
+
+COMMENT ON COLUMN paper_user_zotero_links.analysis_enqueued_at IS
+    'When this import''s analysis scheduling was resolved, by any of the three ways it can resolve: the paper.analyze job was deferred, the import carried no PDF to analyse, or the import spent every attempt allowed and was given up on. It records that a decision was reached, not which one; analysis_enqueue_attempts is what distinguishes an import that was given up on. NULL means the decision is still outstanding and the next poll must make it.';
+
+-- Bound that retrying per item. An unresolved decision pins the library
+-- version cursor so the next poll retries it, which is what an enqueue that
+-- failed transiently needs — but an enqueue that can never succeed would
+-- otherwise stop every other item in the library from syncing forever.
+-- Counting attempts on the link row keeps the bound on the item that earned
+-- it, so an item that failed once is never given up on because a different
+-- item is stuck. Zero is correct for every pre-existing row: the backfill
+-- above resolves them all, so they are never scheduled again and can spend
+-- no attempt.
+ALTER TABLE paper_user_zotero_links
+    ADD COLUMN IF NOT EXISTS analysis_enqueue_attempts INTEGER NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_user_zotero_links.analysis_enqueue_attempts IS
+    'How many times this import has tried to schedule its analysis. Incremented inside the ingest transaction, before the paper.analyze deferral runs, so an attempt whose deferral then fails is still counted. Once the limit is reached the poll resolves analysis_enqueued_at and stops retrying that item.';
+-- 0109: Track which version of a paper's PDF each derived artifact belongs to.
+--
+-- Existing papers and artifacts begin together at generation zero. Whenever a
+-- verified source replaces a paper's PDF URL, the application increments the
+-- paper counter in the same transaction that discards the old derived content.
+-- New artifacts copy the paper's current counter so readers can distinguish
+-- current evidence from retained work based on a superseded PDF.
+ALTER TABLE papers
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN papers.content_generation IS
+    'Monotonic version of the PDF-derived content. Incremented atomically when a verified source replacement discards that content.';
+
+ALTER TABLE paper_highlights
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_highlights.content_generation IS
+    'The paper content_generation current when this annotation was created. A mismatch means the annotation belongs to a superseded PDF.';
+
+ALTER TABLE paper_summaries
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_summaries.content_generation IS
+    'The paper content_generation summarized by this generated result.';
+
+ALTER TABLE paper_extractions
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_extractions.content_generation IS
+    'The paper content_generation used for this structured extraction.';
+
+ALTER TABLE paper_entities
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_entities.content_generation IS
+    'The paper content_generation from which this entity link was extracted.';
+
+ALTER TABLE entity_relationships
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN entity_relationships.content_generation IS
+    'The source paper content_generation supporting this relationship.';
+
+ALTER TABLE paper_notes
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_notes.content_generation IS
+    'The paper content_generation displayed when this note was created.';
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN cards.content_generation IS
+    'The source paper content_generation used to create this card.';
+
+ALTER TABLE paper_contradictions
+    ADD COLUMN IF NOT EXISTS paper_a_content_generation BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS paper_b_content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_contradictions.paper_a_content_generation IS
+    'The paper A content_generation supporting this evidence pair.';
+
+COMMENT ON COLUMN paper_contradictions.paper_b_content_generation IS
+    'The paper B content_generation supporting this evidence pair.';
+-- 0110: Require ownership for new contradiction evidence.
+--
+-- Historical ownerless rows carry no provenance from which an owner could be
+-- inferred. Keep those rows intact while rejecting new or changed ownerless
+-- evidence. NOT VALID deliberately avoids rewriting or rejecting legacy data.
+DO $$
+BEGIN
+    ALTER TABLE paper_contradictions
+        ADD CONSTRAINT chk_paper_contradictions_user_id_present
+        CHECK (user_id IS NOT NULL) NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END
+$$;
+
+DROP INDEX IF EXISTS idx_paper_contradictions_unique_quotes;
+
+-- New application writes normalize whitespace before insertion. Raw hashes
+-- keep historical whitespace variants distinct without mutating or merging
+-- their evidence.
+CREATE UNIQUE INDEX idx_paper_contradictions_unique_quotes
+    ON paper_contradictions (
+        LEAST(paper_a_id, paper_b_id),
+        GREATEST(paper_a_id, paper_b_id),
+        md5(quote_a),
+        md5(quote_b),
+        COALESCE(user_id, 0),
+        paper_a_content_generation,
+        paper_b_content_generation
+    );
+-- Local uploads are identified by the full content digest; the short 16-hex form
+-- predates this and is derivable from the stored source URL (`local://<digest>`).
+--
+-- The NOT EXISTS clause protects the papers_external_id_key unique constraint
+-- against a row that already carries the full-digest id for the same content.
+-- A row it skips keeps its short id and stays reachable; a later re-upload of
+-- those bytes then creates a second, full-id row. That is the accepted residual
+-- for the pathological case where both forms of one digest already coexist.
+UPDATE papers
+SET external_id = 'local:' || substring(url from 9)
+WHERE source_type = 'local'
+  AND external_id LIKE 'local:%'
+  AND length(external_id) = 22
+  AND url LIKE 'local://%'
+  AND length(url) = 72
+  AND NOT EXISTS (
+    SELECT 1 FROM papers p2 WHERE p2.external_id = 'local:' || substring(papers.url from 9)
+  );
+CREATE TABLE focus_sessions (
+    id bigserial PRIMARY KEY,
+    user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    state text NOT NULL CHECK (state IN ('active', 'paused', 'completed')),
+    source text NOT NULL CHECK (source IN ('web', 'telegram')),
+    duration_seconds integer NOT NULL CHECK (duration_seconds BETWEEN 60 AND 28800),
+    started_at timestamp with time zone NOT NULL DEFAULT now(),
+    paused_at timestamp with time zone,
+    paused_seconds double precision NOT NULL DEFAULT 0 CHECK (paused_seconds >= 0),
+    completed_at timestamp with time zone,
+    telegram_notified_at timestamp with time zone,
+    recorded_seconds double precision NOT NULL DEFAULT 0 CHECK (recorded_seconds >= 0),
+    task_id integer REFERENCES tasks(id) ON DELETE SET NULL,
+    paper_id integer REFERENCES papers(id) ON DELETE SET NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    CHECK ((state = 'paused') = (paused_at IS NOT NULL)),
+    CHECK ((state = 'completed') = (completed_at IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX focus_sessions_one_open_per_user
+    ON focus_sessions (user_id)
+    WHERE state IN ('active', 'paused');
+
+CREATE INDEX focus_sessions_user_recent
+    ON focus_sessions (user_id, created_at DESC);
+-- Restore the project-to-Zotero collection cache used by the push workflow.
+-- Older installations that applied migration 031 already have this column;
+-- the IF NOT EXISTS keeps those valid upgrade paths idempotent.
+ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS zotero_collection_key TEXT;
+
+COMMENT ON COLUMN projects.zotero_collection_key IS
+    'Collection key for this project in its owner''s active Zotero library. Cleared when that library identity changes and resolved again on the next project-linked push.';
+
+
+-- Install the v1.2.6 physical ownership boundary.  Existing objects move by
+-- catalog identity, preserving their data, constraints, indexes, triggers, and rules.
+
+DO $$
+DECLARE
+    domain record;
+    object_name text;
+    source_schema text;
+    function_record record;
+BEGIN
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner'),
+                ('research', 'jarvis_research_owner'),
+                ('learning', 'jarvis_learning_owner'),
+                ('ops', 'jarvis_ops_owner')
+        ) AS domains(schema_name, owner_role)
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = domain.owner_role) THEN
+            EXECUTE format(
+                'CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+                domain.owner_role
+            );
+        END IF;
+        EXECUTE format(
+            'ALTER ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+            domain.owner_role
+        );
+        -- Keep each new schema owned by the migration's current role until its
+        -- public objects have moved into it.  The legacy owner needs CREATE for
+        -- ALTER ... SET SCHEMA, but receives no durable schema privilege.
+        IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = domain.schema_name) THEN
+            EXECUTE format('CREATE SCHEMA %I', domain.schema_name);
+        END IF;
+        EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', domain.schema_name);
+    END LOOP;
+
+    -- Runtime shells allow a bootstrap job to assign LOGIN/password separately.
+    FOREACH object_name IN ARRAY ARRAY[
+        'jarvis_platform_runtime', 'jarvis_research_runtime', 'jarvis_learning_runtime',
+        'jarvis_migrator', 'jarvis_legacy_rollback', 'jarvis_backup_reader',
+        'jarvis_restore_operator'
+    ] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = object_name) THEN
+            EXECUTE format(
+                'CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+                object_name
+            );
+        END IF;
+        EXECUTE format(
+            'ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+            object_name
+        );
+    END LOOP;
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner', ARRAY['audit_log','llm_usage_log','magic_link_tokens','sessions','system_events','telegram_pairing','telegram_pairing_tokens','telegram_user_pairings','user_config','users','webauthn_challenges','webauthn_credentials'], ARRAY['audit_log_id_seq','llm_usage_log_id_seq','system_events_id_seq','user_config_id_seq','users_id_seq'], ARRAY['set_updated_at'], ARRAY[]::text[]),
+                ('research', 'jarvis_research_owner', ARRAY['author_alert_log','entities','entity_relationships','extraction_templates','paper_chunks','paper_citations','paper_contradictions','paper_entities','paper_extractions','paper_highlights','paper_notes','paper_recommendations','paper_sources','paper_summaries','paper_topics','paper_user_state','paper_user_zotero_links','papers','pulse_cards','pulse_decks','pulse_models','recommendation_feedback','source_health','source_run_history','thread','topics','tracked_authors','user_library','user_topic_subscriptions'], ARRAY['author_alert_log_id_seq','entities_id_seq','entity_relationships_id_seq','extraction_templates_id_seq','paper_chunks_id_seq','paper_citations_id_seq','paper_contradictions_id_seq','paper_extractions_id_seq','paper_notes_id_seq','paper_recommendations_id_seq','paper_sources_id_seq','paper_summaries_id_seq','paper_user_state_id_seq','papers_id_seq','pulse_cards_id_seq','pulse_decks_id_seq','pulse_models_id_seq','recommendation_feedback_id_seq','source_health_id_seq','source_run_history_id_seq','thread_id_seq','topics_id_seq','tracked_authors_id_seq'], ARRAY['papers_search_vector_update'], ARRAY[]::text[]),
+                ('learning', 'jarvis_learning_owner', ARRAY['cards','daily_intent','daily_log','decks','focus_sessions','journal_entries','milestones','project_papers','project_questions','projects','review_logs','scheduled_nudges','task_paper_links','tasks'], ARRAY['cards_id_seq','daily_log_id_seq','decks_id_seq','journal_entries_id_seq','milestones_id_seq','project_questions_id_seq','projects_id_seq','review_logs_id_seq','scheduled_nudges_id_seq','tasks_id_seq'], ARRAY[]::text[], ARRAY[]::text[]),
+                ('ops', 'jarvis_ops_owner', ARRAY['job_progress','procrastinate_events','procrastinate_jobs','procrastinate_periodic_defers','procrastinate_workers','schema_migrations'], ARRAY['procrastinate_events_id_seq','procrastinate_jobs_id_seq','procrastinate_periodic_defers_id_seq'], ARRAY['procrastinate_cancel_job_v1','procrastinate_defer_jobs_v1','procrastinate_defer_periodic_job_v2','procrastinate_fetch_job_v2','procrastinate_finish_job_v1','procrastinate_notify_queue_abort_job_v1','procrastinate_notify_queue_job_inserted_v1','procrastinate_prune_stalled_workers_v1','procrastinate_register_worker_v1','procrastinate_retry_job_v1','procrastinate_retry_job_v2','procrastinate_trigger_abort_requested_events_procedure_v1','procrastinate_trigger_function_scheduled_events_v1','procrastinate_trigger_function_status_events_insert_v1','procrastinate_trigger_function_status_events_update_v1','procrastinate_unlink_periodic_defers_v1','procrastinate_unregister_worker_v1','procrastinate_update_heartbeat_v1'], ARRAY['procrastinate_job_event_type','procrastinate_job_status','procrastinate_job_to_defer_v1'])
+        ) AS domains(schema_name, owner_role, tables, sequences, functions, types)
+    LOOP
+        FOREACH object_name IN ARRAY domain.tables LOOP
+            SELECT n.nspname INTO source_schema
+            FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace
+            WHERE c.relname = object_name AND c.relkind IN ('r', 'p')
+            ORDER BY CASE n.nspname WHEN domain.schema_name THEN 0 WHEN 'public' THEN 1 ELSE 2 END
+            LIMIT 1;
+            IF source_schema = 'public' THEN
+                EXECUTE format('ALTER TABLE public.%I SET SCHEMA %I', object_name, domain.schema_name);
+            END IF;
+            EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', domain.schema_name, object_name, domain.owner_role);
+        END LOOP;
+
+        FOREACH object_name IN ARRAY domain.types LOOP
+            SELECT n.nspname INTO source_schema
+            FROM pg_type AS t JOIN pg_namespace AS n ON n.oid = t.typnamespace
+            WHERE t.typname = object_name AND t.typtype IN ('c', 'e')
+            LIMIT 1;
+            IF source_schema = 'public' THEN
+                EXECUTE format('ALTER TYPE public.%I SET SCHEMA %I', object_name, domain.schema_name);
+            END IF;
+            EXECUTE format('ALTER TYPE %I.%I OWNER TO %I', domain.schema_name, object_name, domain.owner_role);
+        END LOOP;
+
+        FOR function_record IN
+            SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS arguments
+            FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+            WHERE p.proname = ANY(domain.functions)
+              AND n.nspname IN ('public', domain.schema_name)
+        LOOP
+            IF function_record.nspname = 'public' THEN
+                EXECUTE format('ALTER FUNCTION public.%I(%s) SET SCHEMA %I', function_record.proname, function_record.arguments, domain.schema_name);
+            END IF;
+            EXECUTE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I', domain.schema_name, function_record.proname, function_record.arguments, domain.owner_role);
+        END LOOP;
+    END LOOP;
+
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner'),
+                ('research', 'jarvis_research_owner'),
+                ('learning', 'jarvis_learning_owner'),
+                ('ops', 'jarvis_ops_owner')
+        ) AS domains(schema_name, owner_role)
+    LOOP
+        EXECUTE format('ALTER SCHEMA %I OWNER TO %I', domain.schema_name, domain.owner_role);
+    END LOOP;
+END $$;
+
+ALTER TABLE ops.schema_migrations ADD COLUMN IF NOT EXISTS sha256 text;
+UPDATE ops.schema_migrations
+SET sha256 = CASE version
+    WHEN 102 THEN 'f51c3cc62b967d409df7499ead7a94048c541ac268d8e7cb447d9b03abe7bdfa'
+    WHEN 103 THEN '226474caf5f3a430fc3f4d743d1281e7bc0bad2d8980aa40c1f2924a3774dbc0'
+    WHEN 104 THEN '769d1200264aa4c0beb3b6ad36f962a1a0dc520a86712e82b15f26eaa2c79739'
+    WHEN 105 THEN 'b4efa848f481af8f2fa90d245c6121f1dc90ecc484001882e547aaa1b4073aa3'
+    WHEN 106 THEN 'b57b13bbc0a5ca75d4dabf76f59933600729c5052a0c9588bd47e1c42c25a0c1'
+    WHEN 107 THEN '46172fdc5701b936ad2883a0bf1cff2c88acc3f828ab04502d23bb54a5978283'
+    WHEN 108 THEN '3258edd25894f27cf4ba3c30f743138229219ddd763838200c6e93d41a49f193'
+    WHEN 109 THEN '1c4396cba72df96c0cd86eeff08f073bc6868a7bed8ecc2633e6a722bfdaf53b'
+    WHEN 110 THEN '1b18c151f5d578167a4287fc6186539e91838825982ce5d362d205a7768e538c'
+    WHEN 111 THEN '2948ac6cef69a389a43cc86493b81bfab3ebf35084c5a95a2092d95e3e29db87'
+    WHEN 112 THEN 'f6fe06effb8f3c3df36baa07e0a065a25ff102c5bec192df2c826367d4c1a200'
+    WHEN 113 THEN '46898962d09327d0c7ffd5ac13d272d8e092ea41a9ca1c664436b2f6a35431f6'
+END
+WHERE version BETWEEN 102 AND 113;
+DO $$
+BEGIN
+    ALTER TABLE ops.schema_migrations
+        ADD CONSTRAINT schema_migrations_sha256_format
+        CHECK (sha256 IS NULL OR sha256 ~ '^[0-9a-f]{64}$') NOT VALID;
+EXCEPTION WHEN duplicate_object THEN
+    NULL;
+END $$;
+ALTER TABLE ops.schema_migrations VALIDATE CONSTRAINT schema_migrations_sha256_format;
+
+DO $$
+DECLARE
+    domain record;
+    object_name text;
+BEGIN
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner', 'jarvis_platform_runtime'),
+                ('research', 'jarvis_research_owner', 'jarvis_research_runtime'),
+                ('learning', 'jarvis_learning_owner', 'jarvis_learning_runtime'),
+                ('ops', 'jarvis_ops_owner', NULL::text)
+        ) AS domains(schema_name, owner_role, runtime_role)
+    LOOP
+        EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM PUBLIC', domain.schema_name);
+        EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC', domain.schema_name);
+        EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC', domain.schema_name);
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO jarvis_backup_reader, jarvis_restore_operator', domain.schema_name);
+        EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO jarvis_backup_reader, jarvis_restore_operator', domain.schema_name);
+        EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO jarvis_backup_reader, jarvis_restore_operator', domain.schema_name);
+        IF domain.runtime_role IS NOT NULL THEN
+            EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+            EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+            EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+            EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+        END IF;
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON TABLES FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON SEQUENCES FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE USAGE ON TYPES FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON TABLES TO jarvis_backup_reader, jarvis_restore_operator', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO jarvis_backup_reader, jarvis_restore_operator', domain.owner_role, domain.schema_name);
+        IF domain.runtime_role IS NOT NULL THEN
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE ON TYPES TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+        END IF;
+    END LOOP;
+
+    -- Transitional seams are intentionally relation-specific until their API replacements land.
+    FOREACH object_name IN ARRAY ARRAY['audit_log','magic_link_tokens','sessions','system_events','user_config','users','webauthn_challenges'] LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON platform.%I TO jarvis_research_runtime', object_name);
+    END LOOP;
+    FOREACH object_name IN ARRAY ARRAY['cards','daily_log','decks','journal_entries','milestones','project_papers','projects','review_logs','scheduled_nudges','task_paper_links','tasks'] LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON learning.%I TO jarvis_research_runtime', object_name);
+    END LOOP;
+    FOREACH object_name IN ARRAY ARRAY['job_progress','procrastinate_events','procrastinate_jobs','procrastinate_periodic_defers','procrastinate_workers'] LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ops.%I TO jarvis_research_runtime, jarvis_learning_runtime', object_name);
+    END LOOP;
+    FOREACH object_name IN ARRAY ARRAY['llm_usage_log','user_config','users'] LOOP
+        EXECUTE format('GRANT SELECT ON platform.%I TO jarvis_learning_runtime', object_name);
+    END LOOP;
+    GRANT INSERT, UPDATE ON platform.user_config TO jarvis_learning_runtime;
+    FOREACH object_name IN ARRAY ARRAY['paper_chunks','paper_recommendations','paper_summaries','paper_user_state','paper_user_zotero_links','papers','thread','user_library'] LOOP
+        EXECUTE format('GRANT SELECT ON research.%I TO jarvis_learning_runtime', object_name);
+    END LOOP;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform, learning, ops TO jarvis_research_runtime;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform, research, ops TO jarvis_learning_runtime;
+    GRANT USAGE ON SCHEMA ops TO jarvis_platform_runtime;
+    GRANT USAGE ON SCHEMA platform, learning, ops TO jarvis_research_runtime;
+    GRANT USAGE ON SCHEMA platform, research, ops TO jarvis_learning_runtime;
+    GRANT SELECT ON ops.schema_migrations TO jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ops TO jarvis_research_runtime, jarvis_learning_runtime;
+
+    GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, jarvis_ops_owner
+        TO jarvis_migrator;
+
+    ALTER ROLE jarvis_platform_owner SET search_path TO platform, pg_catalog;
+    ALTER ROLE jarvis_research_owner SET search_path TO research, pg_catalog;
+    ALTER ROLE jarvis_learning_owner SET search_path TO learning, pg_catalog;
+    ALTER ROLE jarvis_ops_owner SET search_path TO ops, pg_catalog;
+    ALTER ROLE jarvis_platform_runtime SET search_path TO platform, ops, public, pg_catalog;
+    ALTER ROLE jarvis_research_runtime SET search_path TO research, platform, learning, ops, public, pg_catalog;
+    ALTER ROLE jarvis_learning_runtime SET search_path TO learning, research, platform, ops, public, pg_catalog;
+    ALTER ROLE jarvis_migrator SET search_path TO ops, platform, research, learning, public, pg_catalog;
+    ALTER ROLE jarvis_legacy_rollback SET search_path TO platform, research, learning, ops, public, pg_catalog;
+END $$;
+
+-- The migration runner records this migration after this statement.  Keep its
+-- unqualified compatibility insert resolving to the moved metadata relation.
+SET search_path TO ops, public, pg_catalog;
+
+UPDATE ops.schema_migrations
+SET sha256 = '2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24'
+WHERE version = 114;

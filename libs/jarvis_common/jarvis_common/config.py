@@ -82,8 +82,8 @@ class JarvisCommonSettings(BaseSettings):
 
     Notes
     -----
-    * ``postgres_user`` / ``postgres_db`` default to ``"jarvis"`` matching
-      docker-compose.yml; ``database_url`` is the fallback for test/local dev.
+    * ``postgres_user`` and ``postgres_password_file`` are the explicit runtime
+      credential settings. ``database_url`` remains a direct test/local fallback.
     * ``db_pool_min`` / ``db_pool_max`` are ``int | None`` because
       ``app_factory._resolve_db_pool_kwargs`` applies them only when set.
     * ``cors_origins`` preserves the comma-separated string form; use
@@ -106,8 +106,21 @@ class JarvisCommonSettings(BaseSettings):
         ),
     )
     postgres_user: str = Field(
-        default="jarvis",
-        description="PostgreSQL username; matches docker-compose.yml default.",
+        default="",
+        description="PostgreSQL runtime login role (POSTGRES_USER).",
+    )
+    postgres_password_file: Path | None = Field(
+        default=None,
+        alias="POSTGRES_PASSWORD_FILE",
+        description="Mounted PostgreSQL runtime password file.",
+    )
+    postgres_host: str = Field(
+        default="postgres",
+        description="PostgreSQL host (POSTGRES_HOST).",
+    )
+    postgres_port: int = Field(
+        default=5432,
+        description="PostgreSQL TCP port (POSTGRES_PORT).",
     )
     postgres_db: str = Field(
         default="jarvis",

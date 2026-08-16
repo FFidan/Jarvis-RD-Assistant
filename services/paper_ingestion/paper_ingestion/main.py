@@ -6,7 +6,7 @@ and router registration.  Endpoint logic lives in
 
 Extracted modules
 -----------------
-* ``jarvis_common.migrations`` — ``run_migrations()``
+* ``jarvis_common.migrations`` — runtime schema checks in the shared lifespan
 * ``paper_ingestion.routers.system`` — ``GET /api/system/models``
 
 Lifespan + middleware + error handlers are wired via
@@ -55,7 +55,6 @@ from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.identity_capabilities import required_identity_scopes
 from jarvis_common.identity_keys import load_identity_verifier_from_settings
 from jarvis_common.identity_middleware import IdentityAssertionMiddleware
-from jarvis_common.migrations import run_migrations
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from jarvis_common.verify import QuoteVerifier
@@ -138,18 +137,13 @@ async def _validate_bbt_url_hook(app: FastAPI) -> None:
         )
 
 
-async def _run_migrations_hook(app: FastAPI) -> None:
-    """Apply DB migrations idempotently before any other init touches the schema."""
-    await run_migrations(app.state.db_pool)
-
-
 async def _validate_runtime_config_hook(app: FastAPI) -> None:
     """Post-migration boot gate keyed on live DB state — fail loudly on a
     multi-user box without a real Pulse HMAC key, a production box with no admin
     and no setup token, or a multi-user production box with no deliverable SMTP.
 
-    Runs immediately after migrations so ``users``/``user_config`` exist; a fresh
-    pre-migration DB is skipped defensively (mirrors validate_encrypted_config_rows).
+    Runs after the shared read-only schema check, so ``users`` and ``user_config``
+    must already exist when the one-shot migrator completed successfully.
     """
     secrets = get_secrets_settings()
     hmac_key = secrets.jarvis_model_hmac_key
@@ -506,7 +500,6 @@ _lifespan_config = ServiceLifespanConfig(
         _load_identity_verifier_hook,
         make_init_langfuse_hook(_set_openai_client),
         _validate_bbt_url_hook,
-        _run_migrations_hook,
         _validate_runtime_config_hook,
         _run_hw_probe_hook,
         _init_qdrant_and_pdf_pipeline,
@@ -529,7 +522,6 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # _load_identity_verifier_hook
         None,  # init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
         None,  # _validate_bbt_url_hook
-        None,  # _run_migrations_hook
         None,  # _validate_runtime_config_hook
         None,  # _run_hw_probe_hook
         _shutdown_qdrant,  # _init_qdrant_and_pdf_pipeline

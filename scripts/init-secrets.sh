@@ -193,6 +193,68 @@ sync_data_key() {
   sync_secret "$key" "$filename" "$generator"
 }
 
+# Database login passwords are Docker-secret files only.  Unlike application
+# data keys, they are deliberately not copied into .env: operators rotate or
+# recover these authorities through their isolated credential procedures.
+sync_database_password() {
+  local filename="secrets/$1" value=""
+
+  if [ -e "$filename" ]; then
+    if [ ! -f "$filename" ] || [ ! -r "$filename" ] || [ -L "$filename" ] || [ ! -s "$filename" ]; then
+      warn "$filename is not a readable non-empty regular password file."
+      FAILED=1
+      return
+    fi
+    chmod "$SECRET_FILE_MODE" "$filename"
+    info "$filename already exists — preserving."
+    return
+  fi
+
+  value="$(openssl rand -hex 24)"
+  printf '%s' "$value" > "$filename"
+  chmod "$SECRET_FILE_MODE" "$filename"
+  ok "$filename created."
+}
+
+# Preserve the v1.2.5 cluster-owner password solely for the one-time upgrade
+# bootstrap and existing recovery compatibility. It is never mounted at runtime.
+sync_legacy_postgres_password() {
+  local filename="secrets/postgres_password.txt" value="" clean_env=""
+
+  if [ -e "$filename" ]; then
+    if [ ! -f "$filename" ] || [ ! -r "$filename" ] || [ -L "$filename" ] || [ ! -s "$filename" ]; then
+      warn "$filename is not a readable non-empty regular password file."
+      FAILED=1
+      return
+    fi
+    chmod "$SECRET_FILE_MODE" "$filename"
+    info "$filename already exists — preserving for upgrade and recovery."
+    return
+  fi
+
+  if grep -qE '^POSTGRES_PASSWORD=.+' .env 2>/dev/null; then
+    value="$(grep -E '^POSTGRES_PASSWORD=.+' .env | head -n 1 | cut -d'=' -f2- | tr -d '\r\n')"
+    clean_env="$(mktemp .env.without-postgres.XXXXXX)" || {
+      warn "Could not create a temporary .env file."
+      FAILED=1
+      return
+    }
+    if ! awk 'index($0, "POSTGRES_PASSWORD=") != 1' .env > "$clean_env" \
+      || ! mv "$clean_env" .env; then
+      rm -f "$clean_env"
+      warn "Could not remove the migrated PostgreSQL password from .env."
+      FAILED=1
+      return
+    fi
+    info "Legacy PostgreSQL password moved out of .env."
+  else
+    value="$(openssl rand -hex 24)"
+  fi
+  printf '%s' "$value" > "$filename"
+  chmod "$SECRET_FILE_MODE" "$filename"
+  ok "$filename created for isolated upgrade and recovery use."
+}
+
 # ---------------------------------------------------------------------------
 # Auto-generated secrets
 # ---------------------------------------------------------------------------
@@ -304,7 +366,17 @@ sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 # rotation would brick every encrypted DB row — pin a dedicated salt instead;
 # never rotate this key manually.
 sync_data_key LITELLM_SALT_KEY litellm_salt_key.txt "openssl rand -hex 32"
-sync_secret POSTGRES_PASSWORD  postgres_password.txt  "openssl rand -hex 24"
+sync_legacy_postgres_password
+sync_database_password postgres_platform_runtime_password.txt
+sync_database_password postgres_research_runtime_password.txt
+sync_database_password postgres_learning_runtime_password.txt
+sync_database_password postgres_migrator_password.txt
+sync_database_password postgres_cluster_bootstrap_password.txt
+sync_database_password postgres_legacy_rollback_password.txt
+sync_database_password postgres_backup_reader_password.txt
+sync_database_password postgres_restore_operator_password.txt
+sync_database_password litellm_runtime_password.txt
+sync_database_password litellm_migrator_password.txt
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
 # INFRA_INGEST_KEY authenticates the Vector log-shipper sidecar to POST /infra-events.
 # Mounted by paper_ingestion and vector services via Docker Secret.

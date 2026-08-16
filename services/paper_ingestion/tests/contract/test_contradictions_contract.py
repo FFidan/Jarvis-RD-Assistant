@@ -1164,7 +1164,7 @@ async def test_0110_preserves_legacy_rows_and_requires_owner_for_new_evidence(
 
     index_sql = await contract_conn.fetchval(
         """SELECT indexdef FROM pg_indexes
-            WHERE schemaname = 'public'
+            WHERE schemaname = 'research'
               AND indexname = 'idx_paper_contradictions_unique_quotes'"""
     )
     assert index_sql is not None

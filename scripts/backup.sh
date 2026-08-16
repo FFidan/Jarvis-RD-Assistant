@@ -653,7 +653,7 @@ dump_db() {
 # a restart to wait out.
 capture_schema_version() {
   SCHEMA_VERSION="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
-    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
+    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM ops.schema_migrations' \
     2>/dev/null || true)"
   case "$SCHEMA_VERSION" in
     ''|*[!0-9]*)

@@ -46,7 +46,7 @@ def test_litellm_db_backed_model_management_wiring() -> None:
     """litellm must enable DB-backed /model/* endpoints without leaking secrets.
 
     STORE_MODEL_IN_DB is a plain toggle and may live in compose env;
-    DATABASE_URL must NOT (the shim builds it from the postgres_password
+    DATABASE_URL must NOT (the shim builds it from the runtime password
     secret). The :ro config mount stays — the YAML remains the bootstrap seed
     for the embed model and router defaults.
     """
@@ -59,8 +59,7 @@ def test_litellm_db_backed_model_management_wiring() -> None:
 
     depends_on = litellm["depends_on"]
     assert depends_on["ollama"]["condition"] == "service_healthy"
-    assert depends_on["postgres"]["condition"] == "service_healthy"
-    assert depends_on["litellm-db-init"]["condition"] == "service_completed_successfully"
+    assert depends_on["litellm-migrator"]["condition"] == "service_completed_successfully"
 
     assert compose["secrets"]["litellm_salt_key"]["file"] == "./secrets/litellm_salt_key.txt"
 
@@ -89,25 +88,26 @@ def test_litellm_healthcheck_preserves_recovery_startup_and_liveliness() -> None
     assert "/health/readiness" not in healthcheck_body
 
 
-def test_litellm_db_init_creates_database_idempotently() -> None:
-    """One-shot litellm-db-init covers EXISTING installs (initdb never re-runs).
+def test_litellm_migrator_uses_dedicated_database_authority() -> None:
+    """The one-shot LiteLLM migrator uses its own database credential.
 
-    It must use the postgres image (the litellm image ships no psql/createdb),
-    read the password from the Docker Secret, and exit successfully when the
-    database already exists.
+    Cluster bootstrap creates the database and login before this job runs. The
+    runtime service waits for this job and never receives its password.
     """
     compose = _load_compose()
-    db_init = compose["services"]["litellm-db-init"]
+    migrator = compose["services"]["litellm-migrator"]
 
-    assert db_init["image"] == "${POSTGRES_IMAGE:-postgres:16.8}"
-    assert db_init["restart"] == "no"
-    assert db_init["depends_on"]["postgres"]["condition"] == "service_healthy"
-    assert "postgres_password" in db_init["secrets"]
-
-    command = db_init["command"][0]
-    assert "$(cat /run/secrets/postgres_password)" in command
-    assert "pg_database WHERE datname = 'litellm'" in command
-    assert "createdb" in command
+    assert migrator["restart"] == "no"
+    assert migrator["depends_on"]["cluster-bootstrap"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert migrator["environment"] == {
+        "POSTGRES_USER": "jarvis_litellm_migrator",
+        "POSTGRES_PASSWORD_FILE": "/run/secrets/litellm_migrator_password",
+    }
+    assert migrator["secrets"] == ["litellm_migrator_password"]
+    assert migrator["command"] == ["--migrate"]
+    assert "litellm_migrator_password" not in compose["services"]["litellm"]["secrets"]
 
 
 def test_llm_alias_consumers_wait_for_paper_ingestion() -> None:

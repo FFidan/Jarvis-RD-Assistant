@@ -414,7 +414,8 @@ done
 # S3. The SOLE post-swap gate is the SQL structural verify (schema_migrations
 #     readable + jarvis auth tables), NEVER the app /health (which 503s under
 #     maintenance and would revert a successful restore).
-check "structural verify reads the migrations bookkeeping table" 'FROM schema_migrations'
+check "structural verify reads the current and legacy migrations bookkeeping tables" \
+  "to_regclass\\('ops\.schema_migrations'\\).*to_regclass\\('public\.schema_migrations'\\)"
 check "structural verify asserts the jarvis auth tables exist" \
   "to_regclass\\('public.users'\\)"
 if grep -vE '^[[:space:]]*#' "$RESTORE_SCRIPT" | grep -qE '/health|/livez|/readyz'; then
@@ -1582,7 +1583,7 @@ cmp_check "sidecar mounts the migrations dir (ro) for the compat code-max read" 
 cmp_check "sidecar mounts postgres_data (ro) so the disk preflight can size free space" \
   'postgres_data:/postgres-data:ro'
 cmp_check "entrypoint reconciles private stranded swap state on startup" \
-  '/backups/\.lifecycle/restore-swap-state\.json.*restore\.sh --recover'
+  'PGUSER=jarvis_restore_operator.*restore\.sh --recover'
 cmp_check "entrypoint refreshes the inbox manifest each loop (restore.sh --inbox-manifest)" \
   'restore\.sh --inbox-manifest'
 

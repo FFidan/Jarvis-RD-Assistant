@@ -42,8 +42,13 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from jarvis_common.auth import verify_api_key
+from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.maintenance import maintenance_active
-from jarvis_common.models import HealthCheckResponse
+from jarvis_common.models import (
+    DatabaseRuntimeDiagnostics,
+    HealthCheckResponse,
+    HealthDiagnostics,
+)
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.version import app_version
 
@@ -87,6 +92,50 @@ _logger = logging.getLogger(__name__)
 def _app_version() -> str:
     """Installed distribution version, surfaced by ``/health/internal``."""
     return app_version()
+
+
+def _runtime_diagnostics(request: Request) -> HealthDiagnostics:
+    """Return safe diagnostics from app state without optional telemetry.
+
+    asyncpg exposes these pool counters as public API.  A saturated pool with
+    no idle connections is reported as wait pressure; no private queue state is
+    inspected.
+    """
+
+    def pool_metric(name: str) -> int | None:
+        getter = getattr(pool, name, None)
+        value = getter() if callable(getter) else None
+        return value if isinstance(value, int) else None
+
+    check = getattr(request.app.state, "migration_check", None)
+    pool = getattr(request.app.state, "db_pool", None)
+    database: DatabaseRuntimeDiagnostics | None = None
+    if check is not None:
+        pool_size = pool_metric("get_size")
+        pool_idle = pool_metric("get_idle_size")
+        pool_max = pool_metric("get_max_size")
+        pool_wait_pressure: bool | None = None
+        if pool_size is not None and pool_idle is not None and pool_max is not None:
+            pool_wait_pressure = pool_size >= pool_max and pool_idle == 0
+        database = DatabaseRuntimeDiagnostics(
+            current_user=check.current_user,
+            packaged_schema_version=check.packaged_version,
+            live_schema_version=check.live_version,
+            integrity=check.integrity,
+            migration_check_outcome="success",
+            migration_check_duration_ms=getattr(
+                request.app.state, "migration_check_duration_ms", None
+            ),
+            pool_size=pool_size,
+            pool_idle=pool_idle,
+            pool_max=pool_max,
+            pool_wait_pressure=pool_wait_pressure,
+        )
+    correlation_id = correlation_id_var.get()
+    return HealthDiagnostics(
+        correlation_id=str(correlation_id) if correlation_id is not None else None,
+        database=database,
+    )
 
 
 @dataclass(slots=True)
@@ -241,6 +290,7 @@ def register_health_routes(
             checks=results,
             maintenance=maintenance_active(),
             version=_app_version(),
+            diagnostics=_runtime_diagnostics(request),
         )
         if status == "degraded":
             return JSONResponse(status_code=503, content=body.model_dump())  # type: ignore[return-value]

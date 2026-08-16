@@ -10,9 +10,12 @@ without depending on the paper-ingestion package.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import asyncpg
@@ -30,7 +33,30 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
 
 # Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
 # sync with that file, which is the single source of the baseline floor.
-_REQUIRED_CODE_SCHEMA_FALLBACK = 113
+_REQUIRED_CODE_SCHEMA_FALLBACK = 114
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationCheck:
+    """Read-only schema compatibility result for a runtime database role.
+
+    Attributes
+    ----------
+    current_user:
+        PostgreSQL role used by the checked connection.
+    packaged_version:
+        Minimum migration revision required by the running build.
+    live_version:
+        Highest migration revision recorded by PostgreSQL.
+    integrity:
+        ``"ok"`` when the manifest, applied revisions, and stored hashes all
+        match the packaged migration set.
+    """
+
+    current_user: str
+    packaged_version: int
+    live_version: int
+    integrity: str
 
 
 def _log_migration_notice(_connection: object, message: object) -> None:
@@ -42,6 +68,7 @@ async def _apply_migration_sql(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     cleaned_sql: str,
     version: int,
+    sha256: str,
 ) -> None:
     """Execute one migration and record it, forwarding server notices."""
     forwards_notices = isinstance(
@@ -53,7 +80,23 @@ async def _apply_migration_sql(
     try:
         async with conn.transaction():
             await conn.execute(cleaned_sql)
-            await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
+            has_hash_column = bool(
+                await conn.fetchval(
+                    "SELECT EXISTS("
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = 'schema_migrations' AND column_name = 'sha256'"
+                    ")"
+                )
+            )
+            if has_hash_column:
+                await conn.execute(
+                    "INSERT INTO schema_migrations (version, sha256) VALUES ($1, $2)",
+                    version,
+                    sha256,
+                )
+            else:
+                await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
     finally:
         if forwards_notices:
             conn.remove_log_listener(_log_migration_notice)
@@ -70,6 +113,88 @@ def _schema_version_path() -> Path:
     if container.exists():
         return container
     return Path(__file__).resolve().parents[3] / "db" / "SCHEMA_VERSION"
+
+
+def _migrations_dir() -> Path:
+    """Resolve the packaged migration directory for containers and local development."""
+    container = Path("/app/db/migrations")
+    if container.exists():
+        return container
+    return Path(__file__).resolve().parents[3] / "db" / "migrations"
+
+
+def _migration_manifest_path() -> Path:
+    """Resolve the packaged migration-integrity manifest."""
+    container = Path("/app/db/ownership-manifest.json")
+    if container.exists():
+        return container
+    return Path(__file__).resolve().parents[3] / "db" / "ownership-manifest.json"
+
+
+def _migration_files(directory: Path) -> list[tuple[int, Path]]:
+    """Return migration files ordered by revision, rejecting duplicate revisions."""
+    files: list[tuple[int, Path]] = []
+    seen_versions: dict[int, str] = {}
+    for sql_file in sorted(directory.glob("*.sql")):
+        try:
+            version = int(sql_file.name.split("_", maxsplit=1)[0])
+        except ValueError:
+            logger.warning("Skipping non-migration file: %s", sql_file.name)
+            continue
+        if version in seen_versions:
+            raise RuntimeError(
+                f"duplicate migration version: {version} "
+                f"({sql_file.name} vs {seen_versions[version]})"
+            )
+        seen_versions[version] = sql_file.name
+        files.append((version, sql_file))
+    return files
+
+
+def _verified_migration_hashes() -> dict[int, str]:
+    """Validate every packaged migration file against the committed manifest.
+
+    This check happens before any migration DDL.  It detects a changed applied
+    file as well as an untracked new file, so neither can be silently accepted.
+    """
+    try:
+        manifest = json.loads(_migration_manifest_path().read_text(encoding="utf-8"))
+        baseline = manifest["compatibility_baseline"]
+        unhashed = baseline["unhashed_revisions"]
+        entries = baseline["retained_migrations"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError("migration integrity manifest is unavailable or invalid") from exc
+
+    if unhashed != {"first": 1, "last": 101, "marker": "squashed_baseline_source_unavailable"}:
+        raise RuntimeError("migration integrity manifest has an invalid squashed baseline marker")
+    if not isinstance(entries, list):
+        raise RuntimeError("migration integrity manifest has invalid retained migrations")
+
+    expected: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("migration integrity manifest has an invalid migration entry")
+        path = entry.get("path")
+        sha256 = entry.get("sha256")
+        if not isinstance(path, str) or not isinstance(sha256, str):
+            raise RuntimeError("migration integrity manifest has an incomplete migration entry")
+        expected[path] = sha256
+
+    files = _migration_files(_migrations_dir())
+    # The manifest deliberately stores portable filenames rather than local
+    # checkout-relative paths.
+    actual_paths = {path.name for _version, path in files}
+    if actual_paths != set(expected):
+        raise RuntimeError("packaged migration files do not match the integrity manifest")
+
+    hashes: dict[int, str] = {}
+    for version, path in files:
+        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        expected_hash = expected[path.name]
+        if actual_hash != expected_hash:
+            raise RuntimeError(f"migration integrity mismatch for revision {version}")
+        hashes[version] = actual_hash
+    return hashes
 
 
 def required_code_schema() -> int:
@@ -147,6 +272,61 @@ async def _wait_for_schema_floor_after_contention(
             if delay <= 0:
                 raise
             await asyncio.sleep(delay)
+
+
+async def check_migrations(pool: asyncpg.Pool) -> MigrationCheck:
+    """Verify packaged migration integrity and the live schema without writing.
+
+    Runtime services call this before hooks that can write or start workers.
+    The query path is deliberately limited to ``SELECT`` statements: migration
+    metadata is created and repaired only by :func:`run_migrations`.
+
+    Parameters
+    ----------
+    pool:
+        Runtime-role asyncpg pool connected to the JARVIS database.
+
+    Returns
+    -------
+    MigrationCheck
+        Current role and matching packaged/live revision details.
+
+    Raises
+    ------
+    RuntimeError
+        If a revision is missing, below the packaged floor, or has a mismatched
+        recorded hash.
+    """
+    expected_hashes = _verified_migration_hashes()
+    expected_versions = set(range(1, 102)) | set(expected_hashes)
+    floor = required_code_schema()
+
+    async with pool.acquire() as conn:
+        current_user = str(await conn.fetchval("SELECT current_user"))
+        rows = await conn.fetch("SELECT version, sha256 FROM ops.schema_migrations")
+
+    applied = {int(row["version"]): row["sha256"] for row in rows}
+    missing = expected_versions - set(applied)
+    if missing:
+        raise RuntimeError(f"database schema is missing migration revisions: {sorted(missing)}")
+
+    for version, expected_hash in expected_hashes.items():
+        if applied[version] != expected_hash:
+            raise RuntimeError(f"database migration hash mismatch for revision {version}")
+
+    live_version = max(applied, default=0)
+    if live_version < floor:
+        raise RuntimeError(
+            f"refusing to start: database schema is at version {live_version}, but this "
+            f"build requires at least {floor}. Apply the missing migrations or restore "
+            "from a compatible backup."
+        )
+    return MigrationCheck(
+        current_user=current_user,
+        packaged_version=floor,
+        live_version=live_version,
+        integrity="ok",
+    )
 
 
 def _strip_outer_transaction_control(sql: str) -> str:
@@ -248,7 +428,7 @@ async def run_migrations(
     pool: asyncpg.Pool,
     migrations_dir: Path | None = None,
 ) -> None:
-    """Apply unapplied SQL migrations from a migrations directory on startup.
+    """Apply unapplied SQL migrations as the dedicated migration authority.
 
     Holds a Postgres advisory transaction lock (key 42) so concurrent service
     replicas do not race.  Each migration file is applied inside a savepoint;
@@ -260,11 +440,9 @@ async def run_migrations(
     pool:
         asyncpg connection pool to run migrations against.
     migrations_dir:
-        Directory containing ``NNN_*.sql`` migration files.  When ``None``,
-        defaults to ``/app/db/migrations`` (in-container), falling back to
-        ``parents[3] / "db" / "migrations"`` for local dev.  Pass an
-        explicit path when calling from services other than ``paper_ingestion``
-        so the resolution is unambiguous.
+        Directory containing ``NNN_*.sql`` migration files. When ``None``,
+        uses the packaged directory after validating it against the integrity
+        manifest. Explicit directories are reserved for isolated test fixtures.
 
     Raises
     ------
@@ -274,8 +452,17 @@ async def run_migrations(
         migration version number is detected in the directory.
 
     """
+    packaged_hashes = _verified_migration_hashes()
+    migration_dir = migrations_dir or _migrations_dir()
+    if not migration_dir.exists():
+        raise RuntimeError(f"migrations directory not found: {migration_dir}")
+    migration_files = _migration_files(migration_dir)
+
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Fresh installs place metadata in ops, while pre-0114 upgrades
+            # still find the legacy public table through this fallback.
+            await conn.execute("SET LOCAL search_path = ops, public")
             # Bound the advisory-lock wait so a crashed holder never stalls startup.
             await conn.execute("SET LOCAL lock_timeout = '60s'")
             try:
@@ -296,54 +483,11 @@ async def run_migrations(
                     await _wait_for_schema_floor_after_contention(conn)
                     return
                 raise RuntimeError(f"{message}; refusing to start with unverified schema") from None
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
             await _repair_false_applied_migrations(conn)
             applied = {
                 r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")
             }
-
-            if migrations_dir is None:
-                migrations_dir = Path("/app/db/migrations")
-                if not migrations_dir.exists():
-                    # Fallback for local dev. ``parents[3]`` resolves the repo
-                    # root from ``libs/jarvis_common/jarvis_common/migrations.py``;
-                    # the same arithmetic also worked from the old paper_ingestion
-                    # location, so existing dev workflows keep functioning.
-                    migrations_dir = Path(__file__).resolve().parents[3] / "db" / "migrations"
-            if not migrations_dir.exists():
-                logger.warning("Migrations directory not found, skipping migrations")
-                # Still inside the advisory-locked transaction: with nothing to
-                # apply from, the live schema is final for this boot, so the
-                # floor must be checked here rather than skipped.
-                await _assert_schema_floor(conn)
-                return
-
-            # Detect version collisions before applying anything — fail loudly so
-            # CI catches duplicates rather than silently dropping migrations.
-            seen_versions: dict[int, str] = {}
-            for sql_file in sorted(migrations_dir.glob("*.sql")):
-                try:
-                    ver = int(sql_file.name.split("_")[0])
-                except (ValueError, IndexError):
-                    continue  # non-migration file — skipped below
-                if ver in seen_versions:
-                    raise RuntimeError(
-                        f"duplicate migration version: {ver} "
-                        f"({sql_file.name} vs {seen_versions[ver]})"
-                    )
-                seen_versions[ver] = sql_file.name
-
-            for sql_file in sorted(migrations_dir.glob("*.sql")):
-                try:
-                    version = int(sql_file.name.split("_")[0])
-                except (ValueError, IndexError):
-                    logger.warning("Skipping non-migration file: %s", sql_file.name)
-                    continue
+            for version, sql_file in migration_files:
                 if version in applied:
                     continue
                 logger.info("Applying migration %s: %s", version, sql_file.name)
@@ -355,7 +499,8 @@ async def run_migrations(
                 # Skip stripping inside $$-quoted blocks (PL/pgSQL function bodies
                 # and DO blocks legitimately use `BEGIN`/`END` on their own lines).
                 cleaned_sql = _strip_outer_transaction_control(sql)
-                await _apply_migration_sql(conn, cleaned_sql, version)
+                sha256 = packaged_hashes.get(version, hashlib.sha256(sql.encode()).hexdigest())
+                await _apply_migration_sql(conn, cleaned_sql, version, sha256)
                 logger.info("Migration %s applied successfully", version)
 
             # Still inside the advisory-locked transaction: refuse to serve on a

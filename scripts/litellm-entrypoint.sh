@@ -75,11 +75,29 @@ forward_signal() {
   exit "$status"
 }
 
+load_litellm_database_url() {
+  secret_dir="${LITELLM_SECRET_DIR:-/run/secrets}"
+  postgres_password_file="${POSTGRES_PASSWORD_FILE:-${secret_dir}/litellm_runtime_password}"
+
+  if [ ! -s "$postgres_password_file" ]; then
+    echo "FATAL: ${postgres_password_file} is empty or missing." >&2
+    return 1
+  fi
+  postgres_user_encoded="$(
+    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
+      "${POSTGRES_USER:-jarvis_litellm_runtime}"
+  )"
+  postgres_password_encoded="$(
+    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
+      "$(cat "$postgres_password_file")"
+  )"
+  export DATABASE_URL="postgresql://${postgres_user_encoded}:${postgres_password_encoded}@postgres:5432/litellm"
+}
+
 load_litellm_configuration() {
   secret_dir="${LITELLM_SECRET_DIR:-/run/secrets}"
   master_key_file="${secret_dir}/litellm_master_key"
   salt_key_file="${secret_dir}/litellm_salt_key"
-  postgres_password_file="${secret_dir}/postgres_password"
 
   if [ ! -s "$master_key_file" ]; then
     echo "FATAL: ${master_key_file} is empty or missing." >&2
@@ -109,19 +127,16 @@ load_litellm_configuration() {
   LITELLM_SALT_KEY="$(cat "$salt_key_file")"
   export LITELLM_SALT_KEY
 
-  if [ ! -s "$postgres_password_file" ]; then
-    echo "FATAL: ${postgres_password_file} is empty or missing." >&2
-    return 1
-  fi
-  postgres_user_encoded="$(
-    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
-      "${POSTGRES_USER:-jarvis}"
-  )"
-  postgres_password_encoded="$(
-    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
-      "$(cat "$postgres_password_file")"
-  )"
-  export DATABASE_URL="postgresql://${postgres_user_encoded}:${postgres_password_encoded}@postgres:5432/litellm"
+  load_litellm_database_url
+}
+
+run_litellm_migration() {
+  load_litellm_database_url || exit 1
+  migration_config="$(mktemp)" || exit 1
+  sed 's/disable_prisma_schema_update: true/disable_prisma_schema_update: false/' \
+    /app/config.yaml > "$migration_config"
+  echo "[litellm-migrator] applying LiteLLM schema migrations." >&2
+  exec litellm --config "$migration_config" --skip_server_startup --enforce_prisma_migration_check
 }
 
 run_litellm() {
@@ -190,6 +205,7 @@ main() {
 case "${1:-}" in
   --functions-only) return 0 2>/dev/null || exit 0 ;;
   --healthcheck) litellm_healthcheck; exit $? ;;
+  --migrate) run_litellm_migration ;;
 esac
 
 main "$@"

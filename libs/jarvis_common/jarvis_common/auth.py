@@ -984,7 +984,7 @@ def validate_production_config() -> None:
       fallback from the API key).
     * ``JARVIS_CONFIG_KEY`` must be set in production (Fernet row-level encrypt).
     * ``LITELLM_MASTER_KEY`` must be strong (rejects known placeholders).
-    * ``POSTGRES_PASSWORD`` must be strong (mirrored from readiness-check).
+    * The PostgreSQL password env value or configured role-scoped file must be strong.
     * ``APP_BASE_URL`` must be set (prevents magic-link host-header poisoning).
 
     Raises
@@ -1098,8 +1098,9 @@ def validate_production_config() -> None:
         # placeholder, and short passwords.
         postgres_password = os.environ.get("POSTGRES_PASSWORD", "")
         if not postgres_password:
+            password_file = os.environ.get("POSTGRES_PASSWORD_FILE", POSTGRES_PASSWORD_SECRET_PATH)
             try:
-                postgres_password = Path(POSTGRES_PASSWORD_SECRET_PATH).read_text().strip()
+                postgres_password = Path(password_file).read_text().strip()
             except OSError:
                 postgres_password = ""
         if not postgres_password:

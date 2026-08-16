@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
+from jarvis_common.testing import (  # noqa: E402
+    FakeRecord,
+    SignedIdentityMiddleware,
+    make_pool_and_conn,
+)
 from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
-from tests.conftest import FakeRecord, _make_pool_and_conn
+_make_pool_and_conn = make_pool_and_conn
 
 
 def test_smtp_log_only_remediation_does_not_claim_bearer_links_are_logged() -> None:
@@ -42,6 +48,7 @@ def _app(monkeypatch):
     from jarvis_common.settings import get_secrets_settings
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
+    from paper_ingestion.routers.system_readiness import ReadinessCheck
 
     get_secrets_settings.cache_clear()
 
@@ -62,6 +69,28 @@ def _app(monkeypatch):
             }
         ),
     )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness._job_queue_readiness",
+        AsyncMock(
+            return_value=ReadinessCheck(
+                name="job_queue",
+                status="green",
+                detail="active=0; failures=0; oldest_active_seconds=0",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness._outbox_readiness",
+        AsyncMock(
+            return_value=ReadinessCheck(
+                name="outbox", status="green", detail="lag=0; retries=0; dead_letters=0"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness._backup_readiness",
+        lambda: ReadinessCheck(name="backup", status="green", detail="result=success"),
+    )
     try:
         with patch_pi_test_app(
             mock_pool,
@@ -75,7 +104,21 @@ def _app(monkeypatch):
                 dependency_overrides={verify_api_key: lambda: None},
             ),
         ):
-            yield app, conn
+            app.state.migration_check = SimpleNamespace(
+                current_user="jarvis_research_runtime",
+                packaged_version=114,
+                live_version=114,
+                integrity="ok",
+            )
+            app.state.migration_check_duration_ms = 3
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                verifier_app=app,
+                user_id=1,
+                role="admin",
+            )
+            yield signed_app, conn
     finally:
         get_secrets_settings.cache_clear()
 
@@ -89,7 +132,7 @@ async def test_readiness_shape_and_baseline(_app):
     ) as client:
         resp = await client.get("/api/system/readiness")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert set(body.keys()) == {"status", "checks"}
     assert isinstance(body["checks"], list)
@@ -109,6 +152,9 @@ async def test_readiness_shape_and_baseline(_app):
         "smtp",
         "https",
         "audit_log",
+        "job_queue",
+        "outbox",
+        "backup",
         "owner_identity",
         "vector_visibility_metadata",
     } <= names
@@ -125,6 +171,48 @@ async def test_readiness_shape_and_baseline(_app):
     assert by_name["vector_visibility_metadata"]["status"] == "green"
     assert by_name["vector_visibility_metadata"]["detail"] == "complete"
     assert body["status"] == "red"
+
+
+@pytest.mark.asyncio
+async def test_job_queue_diagnostic_reports_pressure_and_failures() -> None:
+    """Queue diagnostics expose counts and age rather than an empty-state claim."""
+    from paper_ingestion.routers.system_readiness import _job_queue_readiness
+
+    pool, _conn = _make_pool_and_conn(
+        fetchrow_return=FakeRecord(failures=2, active=3, oldest_active_seconds=0)
+    )
+
+    check = await _job_queue_readiness(pool)
+
+    assert check.status == "amber"
+    assert check.detail == "active=3; failures=2; oldest_active_seconds=0"
+
+
+@pytest.mark.asyncio
+async def test_outbox_diagnostic_reports_missing_schema_as_unavailable() -> None:
+    """A pre-install outbox is explicit and never reported as an empty healthy queue."""
+    from paper_ingestion.routers.system_readiness import _outbox_readiness
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchval.return_value = None
+
+    check = await _outbox_readiness(pool)
+
+    assert check.status == "amber"
+    assert "not installed" in check.detail
+
+
+def test_backup_diagnostic_reports_failed_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The durable last-run record distinguishes failure from no recent archive."""
+    from paper_ingestion.routers import system_readiness
+
+    monkeypatch.setattr(system_readiness, "_list_entries", lambda: [])
+    monkeypatch.setattr(system_readiness, "_read_last_run", lambda: {"succeeded": False})
+
+    check = system_readiness._backup_readiness()
+
+    assert check.status == "red"
+    assert "result=failure" in check.detail
 
 
 @pytest.mark.asyncio

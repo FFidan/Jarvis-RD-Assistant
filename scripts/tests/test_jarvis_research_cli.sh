@@ -25,8 +25,8 @@ fail=0
 pass_n=0
 pass() { pass_n=$((pass_n + 1)); printf 'PASS: %s\n' "$1"; }
 check_fail() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
-has()  { printf '%s' "$1" | grep -q -- "$2"; }
-hasF() { printf '%s' "$1" | grep -qF -- "$2"; }
+has()  { grep -q -- "$2" <<<"$1"; }
+hasF() { grep -qF -- "$2" <<<"$1"; }
 want() { if has "$1" "$2"; then pass "$3"; else check_fail "$3 :: missing /$2/ in <<<$1>>>"; fi; }
 lack() { if has "$1" "$2"; then check_fail "$3 :: unexpected /$2/ in <<<$1>>>"; else pass "$3"; fi; }
 
