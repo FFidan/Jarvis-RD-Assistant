@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Annotated, Any
 
 import asyncpg
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jarvis_common import log_audit, require_admin
 from jarvis_common.auth import current_user_id_strict
 from jarvis_common.config_metadata import (
@@ -19,6 +20,7 @@ from jarvis_common.config_metadata import (
     _is_allowed_config_key,
 )
 from jarvis_common.config_store import _fetch_effective_config_row, _resolve_config_value
+from jarvis_common.crypto import encrypt_secret, mask_secret
 from jarvis_common.event_log import log_event
 from jarvis_common.identity_assertions import IdentityAssertionSigner
 from jarvis_common.logging_config import request_id_ctx
@@ -26,6 +28,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from platform_api.config import get_platform_settings
 from platform_api.deps import get_db_pool, get_identity_signer, limiter
+from platform_api.repos import config_delivery
+from platform_api.services import config_delivery as delivery_service
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,7 @@ router = APIRouter(prefix="/api/config", tags=["configuration"])
 
 _RESEARCH_CONFIG_SCOPE = ("research:config:write",)
 _RESEARCH_CONFIG_PATH_PREFIX = "/internal/platform/config"
+_MASK_SENTINEL_RE = re.compile(r"^\*{4}(.{4})?$")
 
 
 class ConfigEntry(BaseModel):
@@ -48,6 +53,7 @@ class ConfigEntry(BaseModel):
 
     key: str
     value: Any
+    delivery_state: config_delivery.DeliveryState = config_delivery.DeliveryState.APPLIED
 
 
 class ResearchConfigWriteResponse(BaseModel):
@@ -66,6 +72,10 @@ class ResearchConfigWriteResponse(BaseModel):
     key: str
     value: Any
     schedule_apply_warnings: list[str] = Field(default_factory=list)
+    litellm_delivery_roles: list[str] = Field(default_factory=list)
+    litellm_delivery_pending: bool | None = None
+    effective_num_ctx_role: str | None = None
+    effective_num_ctx_value: int | None = None
 
 
 def _has_browser_session(request: Request) -> bool:
@@ -139,8 +149,27 @@ async def list_config(
                    WHERE user_id IS NULL
                    ORDER BY key"""
             )
+    states = await pool.fetch(
+        """SELECT scope_user_id, key, state FROM config_deliveries
+           WHERE scope_user_id IN (0, $1)""",
+        caller_user_id,
+    )
+    state_by_scope = {
+        (int(row["scope_user_id"]), str(row["key"])): config_delivery.DeliveryState(
+            str(row["state"])
+        )
+        for row in states
+    }
     return [
-        ConfigEntry(key=row["key"], value=_resolve_config_value(row["key"], row)) for row in rows
+        ConfigEntry(
+            key=row["key"],
+            value=_resolve_config_value(row["key"], row),
+            delivery_state=state_by_scope.get(
+                (int(row.get("user_id")) if row.get("user_id") is not None else 0, str(row["key"])),
+                config_delivery.DeliveryState.APPLIED,
+            ),
+        )
+        for row in rows
     ]
 
 
@@ -190,13 +219,19 @@ async def get_config(
         )
     if row is None:
         raise HTTPException(status_code=404, detail=f"Config key '{key}' not found")
-    return ConfigEntry(key=row["key"], value=_resolve_config_value(key, row))
+    state = await config_delivery.delivery_state(pool, user_id=row.get("user_id"), key=key)
+    return ConfigEntry(
+        key=row["key"],
+        value=_resolve_config_value(key, row),
+        delivery_state=state,
+    )
 
 
 @router.put("/{key}", response_model=ConfigEntry)
 @limiter.limit("30/minute")
 async def set_config(
     request: Request,
+    response: Response,
     key: str,
     body: ConfigEntry,
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
@@ -240,12 +275,77 @@ async def set_config(
     if _classify_config_key(key) == "system":
         await require_admin(request)
 
-    result = await _write_research_config(
-        request=request,
+    row_user_id = caller_user_id if _classify_config_key(key) == "personal" else None
+    if key in _ENCRYPTED_KEYS and _MASK_SENTINEL_RE.fullmatch(str(body.value)):
+        async with pool.acquire() as conn:
+            row = await _fetch_effective_config_row(conn, key, caller_user_id, is_admin=True)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Config key '{key}' not found")
+        current_state = await config_delivery.delivery_state(
+            pool, user_id=row.get("user_id"), key=key
+        )
+        return ConfigEntry(
+            key=key,
+            value=_resolve_config_value(key, row),
+            delivery_state=current_state,
+        )
+
+    request_id = request_id_ctx.get() or str(uuid.uuid4())
+    try:
+        await delivery_service.validate_value(
+            client=request.app.state.http_client,
+            signer=signer,
+            command=delivery_service.ConfigCommand(
+                key=key,
+                value=body.value,
+                user_id=caller_user_id,
+                user_role=getattr(request.state, "user_role", None),
+                session_id=getattr(request.state, "session_id", None),
+                request_id=request_id,
+            ),
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in {400, 409}:
+            raise HTTPException(
+                status_code=exc.response.status_code,
+                detail=_safe_downstream_detail(exc.response),
+            ) from exc
+        raise HTTPException(
+            status_code=503, detail="Configuration update is temporarily unavailable"
+        ) from exc
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(
+            status_code=503, detail="Configuration update is temporarily unavailable"
+        ) from None
+
+    encrypted_value = (
+        encrypt_secret(str(body.value)).encode("ascii") if key in _ENCRYPTED_KEYS else None
+    )
+    delivery_id = await config_delivery.persist_value(
+        pool,
+        config_delivery.ConfigWrite(
+            user_id=row_user_id,
+            actor_user_id=caller_user_id,
+            user_role=getattr(request.state, "user_role", None),
+            session_id=getattr(request.state, "session_id", None),
+            key=key,
+            value=None if encrypted_value is not None else body.value,
+            encrypted_value=encrypted_value,
+        ),
+    )
+    applied, payload = await delivery_service.deliver(
+        pool=pool,
+        client=request.app.state.http_client,
         signer=signer,
-        key=key,
-        value=body.value,
-        caller_user_id=caller_user_id,
+        delivery_id=delivery_id,
+    )
+    result = ResearchConfigWriteResponse.model_validate(
+        payload
+        or {
+            "key": key,
+            "value": mask_secret(str(body.value)) if key in _ENCRYPTED_KEYS else body.value,
+            "schedule_apply_warnings": ["research_delivery_pending"],
+        }
     )
     await _record_config_change(
         pool=pool,
@@ -253,7 +353,17 @@ async def set_config(
         caller_user_id=caller_user_id,
         result=result,
     )
-    return ConfigEntry(key=key, value=result.value)
+    if not applied:
+        response.status_code = status.HTTP_202_ACCEPTED
+    return ConfigEntry(
+        key=key,
+        value=result.value,
+        delivery_state=(
+            config_delivery.DeliveryState.APPLIED
+            if applied
+            else config_delivery.DeliveryState.PENDING
+        ),
+    )
 
 
 async def _write_research_config(

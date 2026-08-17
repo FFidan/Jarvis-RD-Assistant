@@ -94,7 +94,6 @@ async def test_update_nudge_makes_no_telegram_request(_app):
     signed_app = SignedIdentityMiddleware(
         app,
         audience="research",
-        verifier_app=app,
         user_id=1,
         role="admin",
     )

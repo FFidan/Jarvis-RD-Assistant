@@ -14,7 +14,7 @@ import asyncpg
 import httpx
 import openai
 from jarvis_common import effective_num_ctx, get_smart_model
-from jarvis_common.db_helpers import assert_paper_ownership
+from jarvis_common.db_helpers import assert_paper_ownership, lock_paper_content_generation
 from jarvis_common.jobs import JobError, ProgressContext, batch_terminal_status
 
 from learning_engine.card_generator import CardGenerator, _empty_result
@@ -98,8 +98,8 @@ async def generate_cards_core(
             await assert_paper_ownership(conn, paper_id, user_id)  # type: ignore[arg-type]
 
             # Capture one source generation with the chunks and admit only a
-            # summary derived from that source. The row lock prevents a
-            # replacement from splitting this input snapshot.
+            # summary derived from that source. The post-inference generation
+            # check rejects a replacement that splits this input snapshot.
             paper = await conn.fetchrow(
                 """
                 SELECT p.*, ps.summary_detailed, ps.methodology, ps.limitations
@@ -109,7 +109,6 @@ async def generate_cards_core(
                  AND ps.user_id IS NOT DISTINCT FROM $2
                  AND ps.content_generation = p.content_generation
                 WHERE p.id = $1
-                FOR SHARE OF p
                 """,
                 paper_id,
                 user_id,
@@ -192,8 +191,9 @@ async def generate_cards_core(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await lock_paper_content_generation(conn, paper_id)
             current_generation = await conn.fetchval(
-                "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
+                "SELECT content_generation FROM papers WHERE id = $1",
                 paper_id,
             )
             if current_generation is None:

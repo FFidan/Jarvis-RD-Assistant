@@ -168,7 +168,7 @@ async def test_subscriber_gets_library_row_via_fan_out():
     conn = AsyncMock()
     # list_users_with_topic reads user_topic_subscriptions — return user 5.
     conn.fetch = AsyncMock(return_value=[{"user_id": 5}])
-    conn.execute = AsyncMock(return_value="INSERT 0 1")
+    conn.fetchval = AsyncMock(return_value=1)
 
     users = await list_users_with_topic(conn, topic_id=10)
     assert users == [5]
@@ -176,11 +176,11 @@ async def test_subscriber_gets_library_row_via_fan_out():
     count = await fan_out_to_topic_users(conn, paper_id=99, topic_ids=[10])
     assert count == 1
 
-    conn.execute.assert_awaited_once()
-    sql = conn.execute.await_args.args[0]
-    assert "INSERT INTO user_library" in sql
-    assert "auto_fetch_topic_match" in sql
-    assert "ON CONFLICT (user_id, paper_id) DO NOTHING" in sql
+    conn.fetchval.assert_awaited_once_with(
+        "SELECT research.fan_out_library_v1($1::integer[], $2)",
+        [5],
+        99,
+    )
 
 
 @pytest.mark.asyncio

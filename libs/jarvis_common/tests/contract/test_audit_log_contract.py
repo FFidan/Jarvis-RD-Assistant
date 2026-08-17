@@ -1,7 +1,7 @@
 """Audit log shared contract suite.
 
-Exercises ``jarvis_common.audit.log_audit`` against a real DB (contract_conn)
-so the DB write path is proven rather than mocked.
+Exercises ``jarvis_common.audit.log_audit`` through the real Platform runtime
+login so both the database write path and caller validation are proven.
 
 Tables used:
   audit_log — id, user_id, action, resource, timestamp, metadata
@@ -23,7 +23,10 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
+import asyncpg
 import pytest
+import pytest_asyncio
+from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.testing import SharedConnPool
 
 pytestmark = [
@@ -43,36 +46,64 @@ def _pool(conn):
     return SharedConnPool(conn)
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def audit_runtime_conn(contract_pg_dsn, _contract_pool):
+    """Yield a real Platform runtime login against the initialized contract DB."""
+    password = "audit-runtime-contract-password"
+    bootstrap = await asyncpg.connect(contract_pg_dsn)
+    try:
+        await bootstrap.execute(
+            "ALTER ROLE jarvis_platform_runtime LOGIN PASSWORD 'audit-runtime-contract-password'"
+        )
+    finally:
+        await bootstrap.close()
+
+    runtime = await asyncpg.connect(
+        contract_pg_dsn,
+        user="jarvis_platform_runtime",
+        password=password,
+    )
+    try:
+        await init_pg_connection(runtime)
+        await runtime.execute("SET search_path TO platform, ops, public, pg_catalog")
+        yield runtime
+    finally:
+        await runtime.close()
+
+
 # ---------------------------------------------------------------------------
 # Contract tests
 # ---------------------------------------------------------------------------
 
 
-async def test_log_audit_writes_row_with_correct_fields(contract_conn):
-    """log_audit inserts a row in audit_log with the supplied user_id, action, resource.
+async def test_log_audit_writes_subject_linked_immutable_fact(audit_runtime_conn):
+    """log_audit separates mutable identity from the immutable audit fact.
 
     Verified: audit.py:56-68 — INSERT INTO audit_log (user_id, action, resource, metadata).
     Supersedes: mock-unit test_audit.py::test_log_audit_inserts_row.
     """
     from jarvis_common.audit import log_audit
 
-    uid = f"u-{uuid.uuid4().hex[:8]}"
+    uid = str(uuid.uuid4().int % 1_000_000_000 + 1)
     action = f"test.action.{uuid.uuid4().hex[:6]}"
     resource = "/api/test-resource"
 
-    await log_audit(_pool(contract_conn), action=action, resource=resource, user_id=uid)
+    await log_audit(_pool(audit_runtime_conn), action=action, resource=resource, user_id=uid)
 
-    row = await contract_conn.fetchrow(
-        "SELECT user_id, action, resource FROM audit_log WHERE action = $1",
+    row = await audit_runtime_conn.fetchrow(
+        "SELECT user_id, subject_id, caller_role, action, resource "
+        "FROM audit_log WHERE action = $1",
         action,
     )
     assert row is not None, "log_audit did not write a row to audit_log"
-    assert row["user_id"] == uid
+    assert row["user_id"] is None
+    assert row["subject_id"] is not None
+    assert row["caller_role"] == "jarvis_platform_runtime"
     assert row["action"] == action
     assert row["resource"] == resource
 
 
-async def test_log_audit_stores_metadata_as_jsonb(contract_conn):
+async def test_log_audit_stores_metadata_as_jsonb(audit_runtime_conn):
     """log_audit stores metadata as JSONB; values round-trip correctly.
 
     Verified: audit.py:56-68 — metadata inserted as $4 (asyncpg handles JSONB).
@@ -84,25 +115,25 @@ async def test_log_audit_stores_metadata_as_jsonb(contract_conn):
     meta = {"ip": "192.0.2.1", "attempt": 3}
 
     await log_audit(
-        _pool(contract_conn),
+        _pool(audit_runtime_conn),
         action=action,
         resource="/api/test",
         user_id=None,
         metadata=meta,
     )
 
-    row = await contract_conn.fetchrow(
+    row = await audit_runtime_conn.fetchrow(
         "SELECT metadata FROM audit_log WHERE action = $1",
         action,
     )
     assert row is not None
     stored = row["metadata"]
     # asyncpg auto-decodes JSONB → dict; no json.loads needed
-    assert stored["ip"] == "192.0.2.1"
     assert stored["attempt"] == 3
+    assert "ip" not in stored
 
 
-async def test_log_audit_truncates_oversized_metadata(contract_conn):
+async def test_log_audit_truncates_oversized_metadata(audit_runtime_conn):
     """Metadata exceeding 4 KB is replaced with a truncation marker.
 
     Verified: audit.py:18-39 — _cap_metadata: size > _METADATA_MAX_BYTES → truncation marker.
@@ -115,13 +146,13 @@ async def test_log_audit_truncates_oversized_metadata(contract_conn):
     big_meta = {"data": "x" * 5000}  # clearly > 4 KB
 
     await log_audit(
-        _pool(contract_conn),
+        _pool(audit_runtime_conn),
         action=action,
         resource="/api/test",
         metadata=big_meta,
     )
 
-    row = await contract_conn.fetchrow(
+    row = await audit_runtime_conn.fetchrow(
         "SELECT metadata FROM audit_log WHERE action = $1",
         action,
     )
@@ -131,18 +162,8 @@ async def test_log_audit_truncates_oversized_metadata(contract_conn):
     assert "_size" in stored
 
 
-async def test_log_audit_stores_row_for_non_json_native_metadata_under_cap(contract_conn):
-    """Metadata under the size cap containing a datetime and a UUID still writes a row.
-
-    The size-cap guard measures bytes with ``json.dumps(default=str)``, but the
-    asyncpg JSONB codec that performs the actual INSERT is registered with plain
-    ``json.dumps`` (no ``default``), which raises on a raw ``datetime``/``UUID``.
-    A guard that approves the payload but hands the codec a still-unencodable
-    dict causes the INSERT to fail and the row to be silently dropped.
-
-    Verified: audit.py:18-39 — _cap_metadata; db_helpers.py:68-71 — init_pg_connection
-    registers the jsonb/json codecs with encoder=json.dumps (no default=str).
-    """
+async def test_log_audit_omits_non_immutable_metadata(audit_runtime_conn):
+    """Non-scalar metadata cannot place free-form data in immutable audit facts."""
     from jarvis_common.audit import log_audit
 
     action = f"test.nonjson.{uuid.uuid4().hex[:6]}"
@@ -150,23 +171,22 @@ async def test_log_audit_stores_row_for_non_json_native_metadata_under_cap(contr
     the_id = uuid.uuid4()
 
     await log_audit(
-        _pool(contract_conn),
+        _pool(audit_runtime_conn),
         action=action,
         resource="/api/test",
         metadata={"at": at, "id": the_id},
     )
 
-    row = await contract_conn.fetchrow(
+    row = await audit_runtime_conn.fetchrow(
         "SELECT metadata FROM audit_log WHERE action = $1",
         action,
     )
     assert row is not None, "log_audit silently dropped the row (codec mismatch)"
     stored = row["metadata"]
-    assert stored["at"] == str(at)
-    assert stored["id"] == str(the_id)
+    assert stored == {}
 
 
-async def test_log_audit_no_user_id_stores_null(contract_conn):
+async def test_log_audit_no_user_id_stores_null(audit_runtime_conn):
     """log_audit with user_id=None stores NULL in the user_id column.
 
     Verified: audit.py:47 — user_id param is str | None; asyncpg stores NULL.
@@ -176,9 +196,9 @@ async def test_log_audit_no_user_id_stores_null(contract_conn):
 
     action = f"test.null_user.{uuid.uuid4().hex[:6]}"
 
-    await log_audit(_pool(contract_conn), action=action, resource="/api/test", user_id=None)
+    await log_audit(_pool(audit_runtime_conn), action=action, resource="/api/test", user_id=None)
 
-    row = await contract_conn.fetchrow(
+    row = await audit_runtime_conn.fetchrow(
         "SELECT user_id FROM audit_log WHERE action = $1",
         action,
     )
@@ -186,27 +206,47 @@ async def test_log_audit_no_user_id_stores_null(contract_conn):
     assert row["user_id"] is None
 
 
-async def test_log_audit_strict_uses_the_supplied_connection(contract_conn):
+async def test_log_audit_hashes_an_unsafe_resource(audit_runtime_conn):
+    """Identifiers outside the immutable resource grammar are stored only as a digest."""
+    from jarvis_common.audit import log_audit
+
+    action = f"test.resource.{uuid.uuid4().hex[:6]}"
+    unsafe_resource = f"9{uuid.uuid4().hex}"
+    await log_audit(
+        _pool(audit_runtime_conn),
+        action=action,
+        resource=unsafe_resource,
+    )
+
+    stored = await audit_runtime_conn.fetchval(
+        "SELECT resource FROM audit_log WHERE action = $1",
+        action,
+    )
+    assert stored.startswith("resource_hash:")
+    assert unsafe_resource not in stored
+
+
+async def test_log_audit_strict_uses_the_supplied_connection(audit_runtime_conn):
     """Security-critical callers can join the audit insert to their transaction."""
     from jarvis_common.audit import log_audit_strict
 
     action = f"test.strict.{uuid.uuid4().hex[:8]}"
     await log_audit_strict(
-        contract_conn,
+        audit_runtime_conn,
         action=action,
         resource="owner.user_id",
         user_id="17",
         metadata={"reason": "owner_transfer"},
     )
 
-    row = await contract_conn.fetchrow(
+    row = await audit_runtime_conn.fetchrow(
         "SELECT user_id, resource, metadata FROM audit_log WHERE action = $1",
         action,
     )
     assert row is not None
-    assert row["user_id"] == "17"
+    assert row["user_id"] is None
     assert row["resource"] == "owner.user_id"
-    assert row["metadata"] == {"reason": "owner_transfer"}
+    assert row["metadata"] == {}
 
 
 async def test_log_audit_strict_propagates_insert_failure():
@@ -219,20 +259,44 @@ async def test_log_audit_strict_propagates_insert_failure():
         await log_audit_strict(conn, action="owner.transfer", resource="owner.user_id")
 
 
-async def test_log_audit_strict_rolls_back_with_caller_transaction(contract_conn):
+async def test_log_audit_strict_rolls_back_with_caller_transaction(audit_runtime_conn):
     from jarvis_common.audit import log_audit_strict
 
     action = f"test.strict.rollback.{uuid.uuid4().hex[:8]}"
     with pytest.raises(RuntimeError, match="force rollback"):
-        async with contract_conn.transaction():
+        async with audit_runtime_conn.transaction():
             await log_audit_strict(
-                contract_conn,
+                audit_runtime_conn,
                 action=action,
                 resource="owner.user_id",
             )
             raise RuntimeError("force rollback")
 
     assert (
-        await contract_conn.fetchval("SELECT COUNT(*) FROM audit_log WHERE action = $1", action)
+        await audit_runtime_conn.fetchval(
+            "SELECT COUNT(*) FROM audit_log WHERE action = $1", action
+        )
         == 0
     )
+
+
+async def test_audit_function_rejects_unsafe_free_form_metadata(audit_runtime_conn):
+    """Database validation rejects nested/free-form immutable audit metadata."""
+    with pytest.raises(Exception, match="unsafe shape"):
+        await audit_runtime_conn.execute(
+            "SELECT platform.append_audit_event($1, $2, $3, $4::jsonb)",
+            None,
+            "test.audit.validation",
+            "/api/test",
+            {"unbounded_text": "not an immutable fact"},
+        )
+
+
+async def test_runtime_cannot_bypass_the_audit_capability(audit_runtime_conn):
+    """Platform runtime cannot omit caller validation with a direct insert."""
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await audit_runtime_conn.execute(
+            """INSERT INTO platform.audit_log
+               (caller_role, action, resource, metadata)
+               VALUES ('jarvis_platform_runtime', 'test.audit.bypass', '/api/test', '{}'::jsonb)"""
+        )

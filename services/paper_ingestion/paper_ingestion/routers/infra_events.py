@@ -206,9 +206,7 @@ async def ingest_infra_events(
     try:
         async with pool.acquire() as conn:
             await conn.executemany(
-                "INSERT INTO system_events "
-                "(level, category, source, message, context, correlation_id) "
-                "VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
+                "SELECT platform.append_system_event_v1($1, $2, $3, $4, $5::jsonb, $6)",
                 rows,
             )
     except Exception:

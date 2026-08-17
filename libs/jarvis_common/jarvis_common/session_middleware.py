@@ -56,22 +56,6 @@ WHERE s.id = $1::uuid
     AND s.expires_at IS NOT NULL
 """
 
-# Atomic rolling renewal. The WHERE clause is the security boundary:
-#   revoked_at IS NULL           — never renew a revoked session
-#   expires_at > now()           — a grace-resolved (already-expired) session is NON-renewable
-#   expires_at < now()+$2-$3     — throttle to at most one write per session per SESSION_RENEW_AFTER
-# $2/$3 are cast to ::interval: asyncpg sends timedeltas as untyped params, and
-# Postgres otherwise resolves $3 in "now() + $2 - $3" as timestamptz, making the
-# right side an interval so "expires_at < interval" fails to prepare (verified on pg16.8).
-_SESSION_RENEW_SQL = """
-UPDATE sessions SET expires_at = now() + $2::interval
-WHERE id = $1::uuid
-    AND revoked_at IS NULL
-    AND expires_at > now()
-    AND expires_at < now() + $2::interval - $3::interval
-RETURNING id
-"""
-
 
 def session_cookie_kwargs(max_age: int, *, now: datetime) -> dict[str, Any]:
     """Return the ``jarvis_session`` cookie attributes shared by every mint/refresh site.
@@ -111,8 +95,7 @@ async def mint_session(
     byte-identical Set-Cookie (both ``max_age`` and the absolute ``expires``).
     """
     session_id = await conn.fetchval(
-        "INSERT INTO sessions (user_id, expires_at, credential_id) "
-        "VALUES ($1, $2, $3) RETURNING id",
+        "SELECT platform.mint_session_v1($1, $2, $3)",
         user_id,
         now + SESSION_TTL,
         credential_id,
@@ -168,7 +151,8 @@ async def _populate_state_from_cookie(request: Request, session_id: str) -> None
         return
     try:
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(_SESSION_LOOKUP_SQL, session_id)
+            async with conn.transaction():
+                row = await conn.fetchrow(_SESSION_LOOKUP_SQL, session_id)
     except Exception:  # noqa: BLE001 — middleware must never raise
         logger.debug("session lookup failed (non-fatal)", exc_info=True)
         return
@@ -198,16 +182,20 @@ async def _populate_state_from_cookie(request: Request, session_id: str) -> None
 async def _renew_session(request: Request, pool: Any, session_id: str) -> None:
     """Roll an in-use session's expiry forward, at most once per SESSION_RENEW_AFTER.
 
-    ``_SESSION_RENEW_SQL``'s predicate is the security boundary: a grace-resolved
+    The owner capability's predicate is the security boundary: a grace-resolved
     (already-expired) or revoked session returns no row and is never renewed. This
     runs only after identity is resolved, so — like the lookup — it is best-effort:
     a renewal failure must never surface and break the request.
     """
     try:
         async with pool.acquire() as conn:
-            renewed = await conn.fetchval(
-                _SESSION_RENEW_SQL, session_id, SESSION_TTL, SESSION_RENEW_AFTER
-            )
+            async with conn.transaction():
+                renewed = await conn.fetchval(
+                    "SELECT platform.renew_session_v1($1, $2, $3)",
+                    session_id,
+                    SESSION_TTL,
+                    SESSION_RENEW_AFTER,
+                )
     except Exception:  # noqa: BLE001 — renewal is best-effort; request identity already set
         logger.debug("session renewal failed (non-fatal)", exc_info=True)
         return

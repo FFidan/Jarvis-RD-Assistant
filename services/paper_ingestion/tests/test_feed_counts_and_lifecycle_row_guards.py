@@ -8,13 +8,14 @@ Each test exercises the real code path with a mocked DB so the relevant
 fetchrow returns None and verifies that RuntimeError (not
 AssertionError/AttributeError) is raised.
 
-Also covers F10 best-effort behaviour: a daily_log write failure must not fail
-the PUT /reading response.
+Also covers the durable projection boundary: a Learning delivery failure must
+not fail the PUT /reading response after its outbox transaction commits.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -247,21 +248,13 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# F10: best-effort — daily_log write failure must not fail PUT /reading
+# F10: best-effort — Learning delivery failure must not fail PUT /reading
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_f10_daily_log_failure_does_not_fail_reading_mark():
-    """PUT /reading returns 200 even when the daily_log upsert raises.
-
-    Patches: ownership check → granted; assert_paper_in_states → allowed;
-    conn.fetchval → 'to_read' (state_before); _upsert_state_and_starred → no-op;
-    conn.execute → raises asyncpg.PostgresError (simulates daily_log failure).
-
-    Verified: papers_lifecycle.py — the daily_log execute is wrapped in try/except.
-    """
-    import asyncpg
+async def test_f10_projection_failure_does_not_fail_reading_mark():
+    """PUT /reading succeeds when delivery is pending after durable outbox insertion."""
 
     from jarvis_common.auth import (
         get_current_user_id,
@@ -273,9 +266,9 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
 
     app = FastAPI()
     app.include_router(lifecycle_router)
+    app.state.http_client = object()
 
     pool, conn = make_pool_and_conn(fetchval_return="to_read")
-    conn.execute = AsyncMock(side_effect=asyncpg.PostgresError("simulated daily_log failure"))
 
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
@@ -295,6 +288,14 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
             "paper_ingestion.routers.papers_lifecycle._upsert_state_and_starred",
             AsyncMock(return_value=None),
         ),
+        patch(
+            "paper_ingestion.routers.papers_lifecycle.record_event",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "paper_ingestion.routers.papers_lifecycle.deliver_pending_events",
+            AsyncMock(side_effect=RuntimeError("Learning unavailable")),
+        ),
     ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -302,5 +303,45 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
             resp = await client.put("/api/papers/42/reading")
 
     assert resp.status_code == 200, (
-        f"PUT /reading must succeed even when daily_log write fails; got {resp.status_code}: {resp.text[:200]}"
+        "PUT /reading must succeed when the durable projection is pending; "
+        f"got {resp.status_code}: {resp.text[:200]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_projection_retries_a_non_mapping_acknowledgement() -> None:
+    """A malformed Learning response remains pending for bounded retry."""
+    from paper_ingestion.repos import domain_events
+
+    event_id = uuid.uuid4()
+    pool, conn = make_pool_and_conn()
+    conn.fetch.return_value = [
+        {
+            "id": event_id,
+            "event_type": "paper.read",
+            "user_id": 7,
+            "paper_id": 42,
+        }
+    ]
+    response = MagicMock()
+    response.json.return_value = []
+    client = AsyncMock()
+    client.post.return_value = response
+
+    with patch(
+        "paper_ingestion.repos.domain_events.authorize_service_command",
+        AsyncMock(return_value={"X-Request-Id": str(event_id)}),
+    ):
+        delivered = await domain_events.deliver_pending_events(
+            pool,
+            client,
+            settings=domain_events.DomainDeliverySettings(
+                platform_url="http://platform",
+                learning_url="http://learning",
+                service_token="test-token",
+            ),
+        )
+
+    assert delivered == 0
+    assert conn.execute.await_args is not None
+    assert conn.execute.await_args.args[1] == event_id

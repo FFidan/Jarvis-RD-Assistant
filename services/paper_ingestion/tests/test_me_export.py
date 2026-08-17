@@ -85,7 +85,6 @@ async def _get_export(app) -> httpx.Response:
     signed_app = SignedIdentityMiddleware(
         app,
         audience="research",
-        verifier_app=app,
         user_id=1,
         role="member",
     )

@@ -6,7 +6,11 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, log_audit
 from jarvis_common.auth import current_user_id_strict
-from jarvis_common.db_helpers import assert_paper_ownership, dynamic_update
+from jarvis_common.db_helpers import (
+    assert_paper_ownership,
+    dynamic_update,
+    lock_paper_content_generation,
+)
 
 from learning_engine.card_store import CARD_STALE_SQL, CURRENT_CARD_SQL, insert_card
 from learning_engine.converters import row_to_card_response
@@ -43,8 +47,9 @@ async def create_card(
             content_generation = 0
             if body.paper_id is not None:
                 await assert_paper_ownership(conn, body.paper_id, user_id)
+                await lock_paper_content_generation(conn, body.paper_id)
                 content_generation = await conn.fetchval(
-                    "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
+                    "SELECT content_generation FROM papers WHERE id = $1",
                     body.paper_id,
                 )
                 if content_generation is None:

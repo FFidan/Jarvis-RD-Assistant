@@ -192,12 +192,17 @@ def _ids() -> list[str]:
 async def _pi_app_with_pool(contract_conn):
     """paper_ingestion app with its state.db_pool wired to the contract conn."""
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     original = getattr(app.state, "db_pool", None)
     app.state.db_pool = shared
-    yield app
+    yield SignedIdentityMiddleware(
+        app,
+        audience="research",
+        session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+    )
     if original is None:
         if hasattr(app.state, "db_pool"):
             del app.state.db_pool
@@ -276,10 +281,11 @@ async def _le_app_with_pool(contract_conn):
     from unittest.mock import AsyncMock, MagicMock
 
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
     from learning_engine.deps import get_anki_exporter, get_db_pool, get_fsrs_manager, limiter
     from learning_engine.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_learning_runtime")
 
     mock_fsrs = MagicMock()
     _now = datetime.now(UTC)
@@ -303,7 +309,11 @@ async def _le_app_with_pool(contract_conn):
     limiter.enabled = False
 
     try:
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="learning",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
     finally:
         limiter.enabled = limiter_was_enabled
         for attr, val in originals.items():

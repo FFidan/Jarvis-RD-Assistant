@@ -9,6 +9,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse
 from jarvis_common.auth import current_user_id_strict_with_owner_override
+from jarvis_common.db_helpers import lock_paper_content_generation
 from jarvis_common.streak import compute_streak
 
 from learning_engine.card_store import CURRENT_CARD_SQL
@@ -110,12 +111,13 @@ async def _card_source_is_current(
     conn: asyncpg.pool.PoolConnectionProxy,
     card: asyncpg.Record | dict,
 ) -> bool:
-    """Lock a card's source paper and report whether the card is current."""
+    """Serialize against source replacement and report whether a card is current."""
     paper_id = card["paper_id"]
     if paper_id is None:
         return True
+    await lock_paper_content_generation(conn, int(paper_id))
     content_generation = await conn.fetchval(
-        "SELECT content_generation FROM papers WHERE id = $1 FOR SHARE",
+        "SELECT content_generation FROM papers WHERE id = $1",
         paper_id,
     )
     return content_generation is not None and int(card["content_generation"]) == int(
@@ -162,14 +164,11 @@ async def get_next_review(
     return [row_to_card_response(row) for row in rows]
 
 
-@router.post("/review/{card_id:int}", response_model=ReviewResponse)
-@limiter.limit("60/minute")
-async def submit_review(
-    request: Request,
+async def _submit_review(
     card_id: int,
     body: ReviewRequest,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    db_pool: asyncpg.Pool,
+    user_id: int,
 ) -> ReviewResponse:
     """Submit a review for a card. Atomic: updates FSRS state and logs review.
 
@@ -240,13 +239,23 @@ async def submit_review(
     )
 
 
-@router.post("/review/sync", response_model=ReviewSyncResponse)
-@limiter.limit("30/minute")
-async def sync_reviews(
+@router.post("/review/{card_id:int}", response_model=ReviewResponse)
+@limiter.limit("60/minute")
+async def submit_review(
     request: Request,
-    body: ReviewSyncRequest,
+    card_id: int,
+    body: ReviewRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> ReviewResponse:
+    """Submit one authenticated review through the atomic review service."""
+    return await _submit_review(card_id, body, db_pool, user_id)
+
+
+async def _sync_reviews(
+    body: ReviewSyncRequest,
+    db_pool: asyncpg.Pool,
+    user_id: int,
 ) -> ReviewSyncResponse:
     """Idempotently replay an offline review batch (contract 2026-05-16)."""
     synced = 0
@@ -374,6 +383,18 @@ async def sync_reviews(
                 synced += 1
 
     return ReviewSyncResponse(synced=synced, skipped=skipped, already_synced=already_synced)
+
+
+@router.post("/review/sync", response_model=ReviewSyncResponse)
+@limiter.limit("30/minute")
+async def sync_reviews(
+    request: Request,
+    body: ReviewSyncRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> ReviewSyncResponse:
+    """Replay an authenticated offline review batch idempotently."""
+    return await _sync_reviews(body, db_pool, user_id)
 
 
 @router.get("/stats", response_model=RetentionStats)

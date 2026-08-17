@@ -28,6 +28,7 @@ from paper_ingestion.routers import internal_config
 from platform_api.deps import get_db_pool as get_platform_db_pool
 from platform_api.deps import get_identity_signer, limiter
 from platform_api.routers import configuration
+from platform_api.services import config_delivery as delivery_service
 
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_settings.py style)
@@ -43,6 +44,7 @@ from platform_api.routers import configuration
 async def _app() -> AsyncIterator[tuple[FastAPI, AsyncMock]]:
     """Connect Platform's public contract to Research's real write command."""
     mock_pool, conn = make_pool_and_conn(direct_methods=True)
+    conn.fetchval.return_value = None
     signer = IdentityAssertionSigner(
         issuer="jarvis-platform-test",
         key_id="zotero-settings",
@@ -81,11 +83,31 @@ async def _app() -> AsyncIterator[tuple[FastAPI, AsyncMock]]:
     research_app.dependency_overrides[current_user_id_strict] = lambda: 1
     limiter_was_enabled = limiter.enabled
     limiter.enabled = False
-    try:
-        yield app, conn
-    finally:
-        limiter.enabled = limiter_was_enabled
-        await research_client.aclose()
+    commands: list[delivery_service.ConfigCommand] = []
+    validate_value = delivery_service.validate_value
+
+    async def _validate(**kwargs: Any) -> None:
+        commands.append(kwargs["command"])
+        await validate_value(**kwargs)
+
+    async def _deliver(**kwargs: Any) -> tuple[bool, dict[str, Any]]:
+        payload = await delivery_service._send_value(
+            client=kwargs["client"],
+            signer=kwargs["signer"],
+            command=commands[-1],
+            phase="apply",
+        )
+        return True, payload
+
+    with (
+        patch.object(delivery_service, "validate_value", side_effect=_validate),
+        patch.object(delivery_service, "deliver", side_effect=_deliver),
+    ):
+        try:
+            yield app, conn
+        finally:
+            limiter.enabled = limiter_was_enabled
+            await research_client.aclose()
 
 
 # ---------------------------------------------------------------------------

@@ -386,6 +386,6 @@ async def test_confirm_email_change_soft_deleted_clash_returns_409(
     # The failure audit must still fire (the except branch logs it).
     audit = await contract_conn.fetchrow(
         "SELECT 1 FROM audit_log WHERE action = 'account.email.change.failure' AND resource = $1",
-        f"users/{contract_two_users.user_a_id}",
+        "users/subject",
     )
     assert audit is not None, "confirm-email failure must be audited even on the constraint path"

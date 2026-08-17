@@ -44,6 +44,7 @@ from paper_ingestion.queries.predicates import (
     paper_visible_sql,
     source_types_sql,
 )
+from paper_ingestion.repos.domain_events import record_event
 from paper_ingestion.services.feed_query import fetch_feed_facet_counts
 from paper_ingestion.services.paper_state_helpers import (
     _upsert_recommendation_feedback,
@@ -60,58 +61,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-_CALLER_PRIVATE_PAPER_DELETES = (
-    "DELETE FROM author_alert_log WHERE paper_id = $1 AND user_id = $2",
-    "DELETE FROM cards WHERE paper_id = $1 AND user_id = $2",
-    """DELETE FROM paper_contradictions
-       WHERE (paper_a_id = $1 OR paper_b_id = $1) AND user_id = $2""",
-    """WITH deleted AS (
-           DELETE FROM paper_entities
-           WHERE paper_id = $1 AND user_id = $2
-           RETURNING entity_id
-       )
-       UPDATE entities AS entity
-       SET paper_count = (
-           SELECT count(*)
-           FROM paper_entities AS remaining
-           WHERE remaining.entity_id = entity.id
-             AND NOT (remaining.paper_id = $1 AND remaining.user_id = $2)
-       )
-       WHERE entity.id IN (SELECT entity_id FROM deleted)""",
-    "DELETE FROM paper_extractions WHERE paper_id = $1 AND user_id = $2",
-    "DELETE FROM paper_highlights WHERE paper_id = $1 AND user_id = $2",
-    "DELETE FROM paper_notes WHERE paper_id = $1 AND user_id = $2",
-    "DELETE FROM paper_recommendations WHERE paper_id = $1 AND user_id = $2",
-    "DELETE FROM paper_summaries WHERE paper_id = $1 AND user_id = $2",
-    "DELETE FROM paper_user_zotero_links WHERE paper_id = $1 AND user_id = $2",
-    """WITH deleted AS (
-           DELETE FROM pulse_cards
-           WHERE paper_id = $1 AND user_id = $2
-           RETURNING deck_id
-       )
-       UPDATE pulse_decks AS deck
-       SET card_count = (
-           SELECT count(*)
-           FROM pulse_cards AS remaining
-           WHERE remaining.deck_id = deck.id
-             AND NOT (remaining.paper_id = $1 AND remaining.user_id = $2)
-       )
-       WHERE deck.id IN (SELECT deck_id FROM deleted)""",
-    "DELETE FROM recommendation_feedback WHERE paper_id = $1 AND user_id = $2",
-    """DELETE FROM task_paper_links AS link
-       USING tasks AS owner
-       WHERE link.task_id = owner.id
-         AND link.paper_id = $1
-         AND owner.user_id = $2""",
-    """DELETE FROM project_papers AS link
-       USING projects AS owner
-       WHERE link.project_id = owner.id
-         AND link.paper_id = $1
-         AND owner.user_id = $2""",
-    "DELETE FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
-    "DELETE FROM user_library WHERE paper_id = $1 AND user_id = $2",
-)
 
 
 async def find_papers_needing_analysis(
@@ -154,10 +103,10 @@ async def _hard_delete_scoped(
 
     Single-user mode (``user_id is None``) keeps the legacy full delete.
 
-    Multi-user mode removes the caller's private data and links while preserving
-    the canonical row and shared processing artifacts. The row may still be used
-    by another person even when no other ``user_library`` membership currently
-    exists, so a session-scoped deletion must never cascade through it.
+    Multi-user mode removes the caller's library membership immediately and
+    records a durable cleanup event while preserving private details until
+    Learning acknowledges deletion of its dependent projections. The canonical
+    row and shared processing artifacts remain available to other users.
 
     Returns ``True`` only for the legacy unscoped delete, so the caller runs shared
     Qdrant cleanup only when the canonical row was deliberately removed.
@@ -166,8 +115,26 @@ async def _hard_delete_scoped(
         await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
         return True
 
-    for statement in _CALLER_PRIVATE_PAPER_DELETES:
-        await conn.execute(statement, paper_id, user_id)
+    # Make the paper unavailable immediately, but retain owner-local detail
+    # until Learning has durably removed its dependent projection.  Otherwise a
+    # failed downstream command makes a retry impossible to reconcile.
+    await conn.execute(
+        "DELETE FROM user_library WHERE paper_id = $1 AND user_id = $2", paper_id, user_id
+    )
+    event_id = await record_event(
+        conn,
+        event_type="paper.deleted",
+        user_id=user_id,
+        paper_id=paper_id,
+    )
+    await conn.execute(
+        """INSERT INTO pending_paper_deletions (event_id, user_id, paper_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (event_id) DO NOTHING""",
+        event_id,
+        user_id,
+        paper_id,
+    )
 
     return False
 

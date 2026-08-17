@@ -36,7 +36,7 @@ async def test_purge_removes_only_progress_rows_whose_job_is_gone(
     orphan_id = "contract-orphan-job"
     await contract_conn.execute(
         "INSERT INTO procrastinate_jobs (queue_name, task_name, args)"
-        " VALUES ('paper_ingestion', 'contract.noop', jsonb_build_object('job_id', $1::text))",
+        " VALUES ('paper_ingestion', 'paper.process', jsonb_build_object('job_id', $1::text))",
         live_id,
     )
     await contract_conn.executemany(
@@ -44,6 +44,10 @@ async def test_purge_removes_only_progress_rows_whose_job_is_gone(
         [(live_id,), (orphan_id,)],
     )
 
-    await contract_conn.execute(ORPHANED_JOB_PROGRESS_PURGE)
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
+    try:
+        await contract_conn.execute(ORPHANED_JOB_PROGRESS_PURGE)
+    finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
 
     assert await _progress_ids(contract_conn, [live_id, orphan_id]) == {live_id}

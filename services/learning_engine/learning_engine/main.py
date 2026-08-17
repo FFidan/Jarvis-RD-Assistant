@@ -170,13 +170,6 @@ configure_middleware_and_errors(
     app, limiter=limiter, trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list
 )
 
-# SessionMiddleware populates request.state.user_id from the jarvis_session
-# cookie issued by paper_ingestion's /api/auth/verify.  Sessions are shared
-# across both services because both back onto the same Postgres `sessions`
-# table.
-from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
-
-app.add_middleware(SessionMiddleware)
 if _identity_settings.identity_assertions_required:
     app.add_middleware(
         IdentityAssertionMiddleware,
@@ -195,6 +188,7 @@ from learning_engine.routers import (  # noqa: E402
     executive_intent,
     export,
     generation,
+    internal_domains,
     internal_telegram,
     jobs,
     milestones,
@@ -221,6 +215,7 @@ app.include_router(executive.router)
 app.include_router(executive_intent.router)
 app.include_router(jobs.router)
 app.include_router(internal_telegram.router)
+app.include_router(internal_domains.router)
 
 
 # ---------------------------------------------------------------------------

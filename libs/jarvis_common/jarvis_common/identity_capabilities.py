@@ -77,6 +77,25 @@ def _telegram_capability(
 # surface. A new bot command cannot gain backend authority merely by composing a
 # URL: the route must be reviewed and added here with a negative contract test.
 SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
+    ServiceCapability(
+        "learning", "research", "POST", r"/internal/domains/library", "research:library:write"
+    ),
+    ServiceCapability(
+        "research", "learning", "POST", r"/internal/domains/paper-read", "learning:domain:write"
+    ),
+    ServiceCapability(
+        "research", "learning", "POST", r"/internal/domains/paper-deleted", "learning:domain:write"
+    ),
+    ServiceCapability(
+        "research",
+        "learning",
+        "PUT",
+        r"/internal/domains/projects/[^/]+/zotero-collection",
+        "learning:domain:write",
+    ),
+    ServiceCapability(
+        "research", "learning", "PUT", r"/internal/domains/journal", "learning:domain:write"
+    ),
     _telegram_capability("learning", "GET", r"/api/projects", "learning:projects:read"),
     _telegram_capability("learning", "POST", r"/api/projects", "learning:projects:write"),
     _telegram_capability("learning", "GET", r"/api/projects/[^/]+", "learning:projects:read"),
@@ -130,6 +149,34 @@ SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
 )
 
 
+def _internal_owner_scope(
+    audience: IdentityAudience,
+    method: str,
+    path: str,
+) -> tuple[str, ...] | None:
+    """Return Platform-only owner scopes outside the service manifest."""
+    bindings = (
+        ("research", "PUT", _PLATFORM_CONFIG_WRITE_PATTERN, "research:config:write"),
+        ("research", "POST", _PLATFORM_PROVIDER_CACHE_PATTERN, "research:providers:write"),
+        (
+            "research",
+            "POST",
+            re.compile(r"/internal/domains/erasure/[^/]+/(?:qdrant|research)"),
+            "research:erasure:write",
+        ),
+        (
+            "learning",
+            "POST",
+            re.compile(r"/internal/domains/erasure/[^/]+"),
+            "learning:erasure:write",
+        ),
+    )
+    for target, verb, pattern, scope in bindings:
+        if audience == target and method == verb and pattern.fullmatch(path) is not None:
+            return (scope,)
+    return None
+
+
 def required_identity_scopes(
     audience: IdentityAudience,
     method: str,
@@ -171,18 +218,9 @@ def required_identity_scopes(
     # preserve Research-owned model and scheduler side effects while the public
     # configuration contract moves to Platform. Service principals cannot gain
     # this capability because it is deliberately absent from their manifest.
-    if (
-        audience == "research"
-        and method == "PUT"
-        and _PLATFORM_CONFIG_WRITE_PATTERN.fullmatch(path) is not None
-    ):
-        return ("research:config:write",)
-    if (
-        audience == "research"
-        and method == "POST"
-        and _PLATFORM_PROVIDER_CACHE_PATTERN.fullmatch(path) is not None
-    ):
-        return ("research:providers:write",)
+    internal_scope = _internal_owner_scope(audience, method, path)
+    if internal_scope is not None:
+        return internal_scope
 
     service_scopes = {
         capability.scope

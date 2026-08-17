@@ -38,9 +38,18 @@ def test_database_inventory_matches_ownership_manifest() -> None:
     schema_objects = inventory_schema_objects(_REPO_ROOT)
 
     assert validate_inventory(manifest, queries, schema_objects, _REPO_ROOT) == []
-    assert len(schema_objects["tables"]) == 61
+    assert len(schema_objects["tables"]) == 70
     assert manifest["target_release"] == "v1.2.6"
     assert manifest["compatibility_baseline"]["source_release"] == "v1.2.5"
+
+
+def test_schema_qualified_owner_functions_remain_distinct() -> None:
+    """Same-named owner capabilities in separate schemas remain inventory-visible."""
+    functions = inventory_schema_objects(_REPO_ROOT)["functions"]
+
+    assert "research.erase_user_data" in functions
+    assert "learning.erase_user_data" in functions
+    assert "erase_user_data" not in functions
 
 
 def test_retained_migration_fingerprints_match_files() -> None:
@@ -86,60 +95,39 @@ def test_every_dynamic_query_is_counted_per_source_path() -> None:
     assert dict(sorted(dynamic_counts.items())) == manifest["reviewed_dynamic_sql"]
 
 
-def test_write_targets_exclude_locking_reads_and_joined_relations() -> None:
-    """Lock clauses and joined reads never become cross-domain write targets."""
+def test_write_targets_exclude_joined_reads_and_retired_foreign_locks() -> None:
+    """Joined reads stay read-only and retired foreign row locks stay absent."""
     records = inventory_queries(_REPO_ROOT)
     cards_with_paper_reads = [
         record
         for record in records
         if record.path.endswith("learning_engine/routers/cards.py") and "papers" in record.relations
     ]
-    locked_user_reads = [
+    executive_user_reads = [
         record
         for record in records
         if record.path.endswith("learning_engine/routers/executive.py")
         and "users" in record.relations
     ]
-    job_history_cleanup = [
-        record
-        for record in records
-        if record.path.endswith("paper_ingestion/scheduler.py")
-        and "job_progress" in record.relations
-        and "procrastinate_jobs" in record.relations
-    ]
-
     assert cards_with_paper_reads
     assert all(not record.write_relations for record in cards_with_paper_reads)
-    assert locked_user_reads
-    assert all(not record.write_relations for record in locked_user_reads)
-    assert job_history_cleanup
-    assert {record.write_relations for record in job_history_cleanup} == {("job_progress",)}
+    assert not executive_user_reads
 
 
 def test_required_transition_seams_match_current_writes() -> None:
-    """Named cross-domain behaviors remain characterized until they are replaced."""
+    """Declared transition seams exactly match current cross-domain writes."""
     manifest = load_manifest(_MANIFEST_PATH)
-    required_relations = {
-        "shared_platform_writes": {"audit_log", "sessions", "system_events", "user_config"},
-        "paper_read_activity": {"daily_log"},
-        "paper_dependent_learning_rows": {"cards", "project_papers", "task_paper_links"},
-        "zotero_project_metadata": {"projects"},
-        "journal_api": {"journal_entries"},
-        "user_erasure": {"audit_log", "users"},
-        "paper_job_history_cleanup": {"job_progress"},
-    }
-    seams = {seam["name"]: seam for seam in manifest["transition_seams"]}
     detected = {
         (write.writer, write.relation, write.destination)
         for write in cross_domain_writes(manifest, inventory_queries(_REPO_ROOT))
     }
+    declared = {
+        (seam["current_writer"], relation, seam["destination"])
+        for seam in manifest["transition_seams"]
+        for relation in seam["relations"]
+    }
 
-    for name, relations in required_relations.items():
-        seam = seams[name]
-        assert set(seam["relations"]) == relations
-        assert {
-            (seam["current_writer"], relation, seam["destination"]) for relation in relations
-        }.issubset(detected)
+    assert declared == detected
 
 
 def test_erasure_contract_is_closed_and_bounded() -> None:

@@ -85,14 +85,7 @@ class ProcrastinateJobContextShim:
             return
         try:
             await self._pool.execute(
-                """
-                INSERT INTO job_progress (jarvis_job_id, progress, message, updated_at)
-                VALUES ($1, $2, $3, NOW())
-                ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET progress   = EXCLUDED.progress,
-                      message    = EXCLUDED.message,
-                      updated_at = EXCLUDED.updated_at
-                """,
+                "SELECT ops.record_job_progress_v1($1, $2, $3)",
                 self.job_id,
                 float(progress),
                 message,
@@ -144,15 +137,7 @@ class ProcrastinateJobContextShim:
             return True
         try:
             await self._pool.execute(
-                """
-                INSERT INTO job_progress (jarvis_job_id, progress, result, error, updated_at)
-                VALUES ($1, CASE WHEN $4 THEN 0.0 ELSE 1.0 END, $2, $3, NOW())
-                ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET progress   = COALESCE(job_progress.progress, EXCLUDED.progress),
-                      result     = EXCLUDED.result,
-                      error      = EXCLUDED.error,
-                      updated_at = EXCLUDED.updated_at
-                """,
+                "SELECT ops.record_job_outcome_v1($1, $2::jsonb, $3::jsonb, $4)",
                 self.job_id,
                 result,
                 error,

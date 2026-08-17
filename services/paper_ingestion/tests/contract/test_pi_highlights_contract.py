@@ -21,6 +21,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 from jarvis_common.testing_contract_apps import (
     PITestAppOptions,
     make_contract_client as _make_client,
@@ -52,7 +53,10 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
 
     monkeypatch.setattr(_pdfs_mod, "PDF_STORAGE_PATH", str(tmp_path))
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=pi_app,
@@ -60,7 +64,11 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
         limiter=limiter,
         options=PITestAppOptions(remove_owner_override=True),
     ) as app:
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 async def _seed_local_paper(conn, user_id: int, external_id: str) -> int:

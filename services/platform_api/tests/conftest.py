@@ -39,7 +39,7 @@ async def _platform_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
     from platform_api.deps import get_db_pool, limiter
     from platform_api.main import app as platform_app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
     with patch_pi_test_app(
         shared,
         app=platform_app,

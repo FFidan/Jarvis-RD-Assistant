@@ -23,10 +23,7 @@ async def run_boot_probe(pool: asyncpg.Pool) -> None:
     logger.warning("hw_probe: tier changed %s -> %s", baseline, current)
     async with pool.acquire() as conn:
         await conn.execute(
-            """
-            INSERT INTO system_events (level, category, source, message, context)
-            VALUES ($1, $2, $3, $4, $5::jsonb)
-            """,
+            "SELECT platform.append_system_event_v1($1, $2, $3, $4, $5::jsonb, NULL)",
             "warning",
             "infra",
             "hw_probe",

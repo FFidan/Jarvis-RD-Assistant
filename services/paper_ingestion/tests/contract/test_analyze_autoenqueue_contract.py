@@ -25,6 +25,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
     patch_app_state,
@@ -57,7 +58,10 @@ async def _autoenqueue_app(contract_conn):
     )
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with (
         patch_app_state(app, {"db_pool": shared}),
         patch_dependency_overrides(
@@ -68,7 +72,11 @@ async def _autoenqueue_app(contract_conn):
             },
         ),
     ):
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 # ---------------------------------------------------------------------------

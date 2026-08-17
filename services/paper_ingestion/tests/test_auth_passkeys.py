@@ -280,8 +280,9 @@ async def _passkey_app(contract_conn):
     from platform_api.deps import get_db_pool, limiter
     from platform_api.main import app
 
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
     with patch_pi_test_app(
-        SharedConnPool(contract_conn),
+        shared,
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,

@@ -45,6 +45,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 from jarvis_common.testing_contract_apps import (
     DEFAULT_CONTRACT_API_KEY,
@@ -78,7 +79,10 @@ async def _pi_pulse_app(contract_conn):
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=app,
@@ -92,7 +96,11 @@ async def _pi_pulse_app(contract_conn):
             mock_embedder=True,
         ),
     ) as wired_app:
-        yield wired_app
+        yield SignedIdentityMiddleware(
+            wired_app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 async def _promote_user_to_admin(conn, user_id: int) -> None:
@@ -231,7 +239,7 @@ async def test_persist_deck_idempotent_replaces_cards(contract_conn, contract_tw
 
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 1, 1)  # far future — no collision with prod data
 
@@ -325,7 +333,7 @@ async def test_persist_deck_skips_unshared_paper_when_feedback_filter_applies(
 
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 2, 1)  # far future — no collision with prod data
 
@@ -500,7 +508,7 @@ async def test_load_profile_user_id_isolates_ratings(contract_conn, contract_two
     from paper_ingestion.pulse.profile import load_profile
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_a_id = contract_two_users.user_a_id
     user_b_id = contract_two_users.user_b_id
     paper_id_a = contract_two_users.paper_id_a
@@ -1116,7 +1124,7 @@ async def test_e1_persist_deck_degraded_reason_stored(contract_conn, contract_tw
     from paper_ingestion.pulse.deck import persist_deck
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 3, 1)
 
@@ -1154,7 +1162,7 @@ async def test_e1_persist_deck_second_call_updates_degraded_reason(
     from paper_ingestion.pulse.deck import persist_deck
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 3, 2)
 
@@ -1394,7 +1402,7 @@ async def test_pulse_run_degraded_path_persists_degraded_reason_to_db(
     from paper_ingestion._state import set_services, svc
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date_far = datetime(2099, 6, 1, 4, 0, tzinfo=UTC)
 
@@ -1475,7 +1483,7 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
     from jarvis_common.testing import SharedConnPool
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date_far = datetime(2099, 7, 1, 4, 0, tzinfo=UTC)
 
@@ -1591,7 +1599,7 @@ async def test_pulse_run_omits_card_for_paper_whose_promotion_did_not_complete(
     from paper_ingestion.pulse.deck import load_today
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     unpromoted_id = "promotion-blocked-01"
     promoted_id = "promotion-ok-01"
@@ -2261,7 +2269,7 @@ async def test_pulse_scoring_w2_stage3_reasoning_verification_persists(
     stage3_out = await stage3_combine(
         [sc], {"embedding": 0.5, "llm_relevance": 0.3, "llm_novelty": 0.2}
     )
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
 
     await persist_deck(
         pool,
@@ -2685,7 +2693,7 @@ async def test_pulse_run_schema_object_echo_persists_degraded_reason(
     from paper_ingestion.pulse.models import PulseScoringOutput
     import paper_ingestion.pulse.scoring as _scoring
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date_far = datetime(2099, 10, 1, 4, 0, tzinfo=UTC)
     candidates = [_pulse_candidate(f"schema-echo-{i}") for i in range(3)]

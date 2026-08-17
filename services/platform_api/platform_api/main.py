@@ -30,8 +30,11 @@ from platform_api.routers import (
     auth,
     auth_passkeys,
     configuration,
+    erasure,
     internal_auth,
+    internal_services,
     internal_telegram,
+    jobs,
     logs,
     providers,
     setup,
@@ -39,6 +42,8 @@ from platform_api.routers import (
     telegram,
 )
 from platform_api.service_principals import load_service_principal_tokens
+from platform_api.services.config_delivery import start_reconciler, stop_reconciler
+from platform_api.services.erasure import start_coordinator, stop_coordinator
 
 configure_logging("platform_api", log_level=get_core_settings().log_level)
 maybe_init_sentry("platform_api")
@@ -94,8 +99,10 @@ _lifespan_config = ServiceLifespanConfig(
         _load_identity_signer,
         _load_service_principals,
         _migrate_plaintext_secrets,
+        start_coordinator,
+        start_reconciler,
     ],
-    custom_teardown_tasks=[None, None, None],
+    custom_teardown_tasks=[None, None, None, stop_coordinator, stop_reconciler],
 )
 
 app = FastAPI(
@@ -115,7 +122,10 @@ app.add_middleware(SessionMiddleware)
 app.add_middleware(AuthCookieRelayMiddleware)
 
 app.include_router(internal_auth.router)
+app.include_router(internal_services.router)
+app.include_router(erasure.router)
 app.include_router(internal_telegram.router)
+app.include_router(jobs.router)
 app.include_router(configuration.router)
 app.include_router(logs.router)
 app.include_router(providers.router)

@@ -142,9 +142,7 @@ class SystemEventHandler(logging.Handler):
                 try:
                     async with self._pool.acquire() as conn:
                         await conn.executemany(
-                            "INSERT INTO system_events "
-                            "(level, category, source, message, context, correlation_id) "
-                            "VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
+                            "SELECT platform.append_system_event_v1($1, $2, $3, $4, $5::jsonb, $6)",
                             [
                                 (
                                     e["level"],
@@ -166,8 +164,8 @@ class SystemEventHandler(logging.Handler):
                             self._dropped = 0
                             self._was_in_outage = False
                             await conn.execute(
-                                "INSERT INTO system_events (level, category, source, message) "
-                                "VALUES ($1, $2, $3, $4)",
+                                "SELECT platform.append_system_event_v1("
+                                "$1, $2, $3, $4, '{}'::jsonb, NULL)",
                                 "error",
                                 "error",
                                 "SystemEventHandler",

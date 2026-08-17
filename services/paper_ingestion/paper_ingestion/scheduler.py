@@ -26,6 +26,7 @@ _INTERVAL_EPOCH = datetime(2026, 1, 1, 3, 0, tzinfo=UTC)
 # (e.g. tests) continue to work without modification.
 __all__ = [
     "purge_system_events_task",
+    "run_domain_outbox_wrapper",
     "run_auto_pipeline",
     "run_pulse_classifier_training_wrapper",
     "run_pulse_wrapper",
@@ -41,6 +42,7 @@ _DEFAULT_WEEKLY_DIGEST_CRON = "0 9 * * 1"  # Monday 09:00
 _DEFAULT_ZOTERO_CRON = "0 * * * *"  # hourly
 _DEFAULT_SYSTEM_EVENTS_PURGE_CRON = "0 2 * * *"
 _DEFAULT_JOB_HISTORY_PURGE_CRON = "30 2 * * *"  # daily, after the system-events purge
+_DEFAULT_DOMAIN_OUTBOX_SECONDS = 60
 
 # procrastinate registers its own maintenance tasks under the "builtin" namespace;
 # this is the registry key of the one that deletes finished job rows.
@@ -481,24 +483,8 @@ async def purge_system_events_task(app: Any) -> None:
 
     pool = app.state.db_pool
     try:
-        app_result = await pool.execute(
-            "DELETE FROM system_events WHERE category != 'infra'"
-            " AND created_at < NOW() - INTERVAL '30 days'"
-        )
-        infra_result = await pool.execute(
-            "DELETE FROM system_events WHERE category = 'infra'"
-            " AND created_at < NOW() - INTERVAL '7 days'"
-        )
-
-        # asyncpg.execute returns "DELETE <n>"; parse counts
-        def _count(s: str) -> int:
-            try:
-                return int(s.split()[-1])
-            except Exception:
-                return -1
-
-        app_n = _count(app_result)
-        infra_n = _count(infra_result)
+        app_n = int(await pool.fetchval("SELECT platform.purge_system_events_v1('app')"))
+        infra_n = int(await pool.fetchval("SELECT platform.purge_system_events_v1('infra')"))
         await log_event(
             pool=pool,
             level="info",
@@ -512,11 +498,7 @@ async def purge_system_events_task(app: Any) -> None:
 
 # Named so the contract case can execute the statement the service runs rather
 # than a copy of it that could drift.
-ORPHANED_JOB_PROGRESS_PURGE = (
-    "DELETE FROM job_progress WHERE NOT EXISTS ("
-    "SELECT 1 FROM procrastinate_jobs pj"
-    " WHERE pj.args->>'job_id' = job_progress.jarvis_job_id)"
-)
+ORPHANED_JOB_PROGRESS_PURGE = "SELECT ops.purge_orphaned_job_progress_v1()"
 
 
 async def purge_job_history_task(app: Any) -> None:
@@ -548,6 +530,35 @@ async def purge_job_history_task(app: Any) -> None:
         logger.info("purge_job_history: prune deferred, orphaned progress rows %s", result)
     except Exception:
         logger.exception("purge_job_history: failed to prune job history")
+
+
+async def run_domain_outbox_wrapper(app: Any) -> None:
+    """Deliver a bounded batch of Research events through the signed owner seam."""
+    if skip_for_maintenance("domain outbox"):
+        return
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+    from paper_ingestion.repos.domain_events import (  # noqa: PLC0415
+        DomainDeliverySettings,
+        deliver_pending_events,
+    )
+
+    settings = get_paper_ingestion_settings()
+    try:
+        token = settings.research_service_token_file.read_text(encoding="utf-8").strip()
+        if not token:
+            raise RuntimeError("Research service token is unavailable")
+        delivered = await deliver_pending_events(
+            app.state.db_pool,
+            app.state.http_client,
+            settings=DomainDeliverySettings(
+                platform_url=settings.platform_api_url,
+                learning_url=settings.learning_engine_url,
+                service_token=token,
+            ),
+        )
+        logger.info("domain outbox delivered %d event(s)", delivered)
+    except Exception:
+        logger.exception("domain outbox delivery failed")
 
 
 async def reconcile_zotero_poll_job(
@@ -732,6 +743,16 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
         cron=_DEFAULT_JOB_HISTORY_PURGE_CRON,
         job_id="purge_job_history",
         name="Job history prune",
+    )
+    scheduler.add_job(
+        run_domain_outbox_wrapper,
+        trigger=IntervalTrigger(seconds=_DEFAULT_DOMAIN_OUTBOX_SECONDS, start_date=_INTERVAL_EPOCH),
+        args=[app],
+        id="domain_outbox",
+        name="Research domain outbox delivery",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
 
     # Daily hard-purge of soft-deleted users past grace period.

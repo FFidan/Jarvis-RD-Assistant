@@ -114,7 +114,6 @@ def _app(monkeypatch):
             signed_app = SignedIdentityMiddleware(
                 app,
                 audience="research",
-                verifier_app=app,
                 user_id=1,
                 role="admin",
             )
@@ -189,17 +188,31 @@ async def test_job_queue_diagnostic_reports_pressure_and_failures() -> None:
 
 
 @pytest.mark.asyncio
-async def test_outbox_diagnostic_reports_missing_schema_as_unavailable() -> None:
-    """A pre-install outbox is explicit and never reported as an empty healthy queue."""
+async def test_outbox_diagnostic_reports_unavailable_query_as_amber() -> None:
+    """A missing diagnostic row is never reported as an empty healthy queue."""
     from paper_ingestion.routers.system_readiness import _outbox_readiness
 
     pool, conn = _make_pool_and_conn()
-    conn.fetchval.return_value = None
+    conn.fetchrow.return_value = None
 
     check = await _outbox_readiness(pool)
 
     assert check.status == "amber"
-    assert "not installed" in check.detail
+    assert "unavailable" in check.detail
+
+
+@pytest.mark.asyncio
+async def test_outbox_diagnostic_reports_lag_retries_and_dead_letters() -> None:
+    """Readiness reads the durable Research delivery state rather than a placeholder."""
+    from paper_ingestion.routers.system_readiness import _outbox_readiness
+
+    pool, _conn = _make_pool_and_conn(
+        fetchrow_return=FakeRecord(pending=4, retries=2, dead_letters=1, lag_seconds=301)
+    )
+    check = await _outbox_readiness(pool)
+
+    assert check.status == "amber"
+    assert check.detail == "pending=4; retries=2; dead_letters=1; lag_seconds=301"
 
 
 def test_backup_diagnostic_reports_failed_attempt(monkeypatch: pytest.MonkeyPatch) -> None:

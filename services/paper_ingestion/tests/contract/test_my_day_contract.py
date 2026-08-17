@@ -21,11 +21,13 @@ idiomatic-mock territory; no DB predicate is stronger than a shape check.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
+import httpx
 import pytest
 
 from jarvis_common.testing_contract_apps import (
-    make_contract_client as _make_client,
+    make_contract_client,
 )
 
 pytestmark = [
@@ -33,6 +35,11 @@ pytestmark = [
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
+
+
+def _make_client(app: Any, session_cookie: str) -> httpx.AsyncClient:
+    """Return a gateway-faithful Research client for one browser session."""
+    return make_contract_client(app, session_cookie)
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +111,7 @@ async def test_a57_get_journal_empty_returns_200_null_for_missing_date(
 
 
 # ---------------------------------------------------------------------------
-# A58: POST /api/my-day/journal — upsert idempotent; persists to DB
+# A58: POST /api/my-day/journal — unavailable Learning owner fails closed
 # ---------------------------------------------------------------------------
 
 
@@ -114,36 +121,21 @@ async def test_a58_upsert_journal_creates_and_idempotent(
     _configure_api_key,
     contract_conn,
 ):
-    """Covers map row A58: POST /api/my-day/journal upserts correctly.
-
-    Verified: my_day.py:71-98 upsert_journal_entry — ON CONFLICT DO UPDATE.
-    """
+    """Journal writes return a stable 503 when the Learning owner is unavailable."""
     test_date = date.today() + timedelta(days=30)  # far future to avoid seed collision
     payload = {"date": test_date.isoformat(), "prompts": {"first_move": "contract test win"}}
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp1 = await c.post("/api/my-day/journal", json=payload)
 
-    assert resp1.status_code == 200, resp1.text[:300]
-    body1 = resp1.json()
-    assert body1["prompts"]["first_move"] == "contract test win"
-
-    # Upsert with updated content
-    payload2 = {"date": test_date.isoformat(), "prompts": {"first_move": "updated win"}}
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp2 = await c.post("/api/my-day/journal", json=payload2)
-
-    assert resp2.status_code == 200, resp2.text[:300]
-    body2 = resp2.json()
-    assert body2["prompts"]["first_move"] == "updated win", "Upsert did not update prompts"
-
-    # Exactly one row in DB for this user+date
+    assert resp1.status_code == 503, resp1.text[:300]
+    assert resp1.json()["detail"] == "Journal update is temporarily unavailable"
     count = await contract_conn.fetchval(
         "SELECT COUNT(*) FROM journal_entries WHERE user_id = $1 AND date = $2::date",
         contract_two_users.user_a_id,
         test_date,
     )
-    assert count == 1, f"Expected 1 journal row after upsert, got {count}"
+    assert count == 0, "Research must not retain a foreign-write fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +267,7 @@ async def test_a158_create_thread_inserts_row_with_correct_user_id(
 
 
 # ---------------------------------------------------------------------------
-# note round-trip: POST /api/my-day/journal with note → GET confirms persisted
+# journal free-form note is rejected cleanly when Learning is unavailable
 # ---------------------------------------------------------------------------
 
 
@@ -284,14 +276,7 @@ async def test_journal_note_round_trips(
     _pi_app_with_pool,
     _configure_api_key,
 ):
-    """note field in JournalPrompts round-trips through the real upsert route.
-
-    Strictly stronger than the deleted .__wrapped__ mock-binding assertion:
-    drives the actual HTTP handler end-to-end via live-PG and confirms both
-    the POST response and a subsequent GET return the same note value.
-
-    Covers: my_day.py upsert_journal_entry + get_journal_entry, JSONB note key.
-    """
+    """A free-form journal entry never falls back to Research-owned SQL."""
     # Use a far-future date to avoid colliding with _seed_resources data.
     test_date = (datetime.now(UTC).date() + timedelta(days=60)).isoformat()
     note_text = "contract: anything else here round-trip"
@@ -303,22 +288,8 @@ async def test_journal_note_round_trips(
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp_post = await c.post("/api/my-day/journal", json=payload)
 
-    assert resp_post.status_code == 200, resp_post.text[:300]
-    post_body = resp_post.json()
-    assert post_body["prompts"]["note"] == note_text, (
-        f"POST response prompts.note mismatch: {post_body['prompts']}"
-    )
-    assert post_body["prompts"]["worked"] == "shipped contract"
-
-    # GET must return the same note value (persisted in JSONB).
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp_get = await c.get(f"/api/my-day/journal?date={test_date}")
-
-    assert resp_get.status_code == 200, resp_get.text[:300]
-    get_body = resp_get.json()
-    assert get_body["prompts"]["note"] == note_text, (
-        f"GET response prompts.note mismatch after upsert: {get_body['prompts']}"
-    )
+    assert resp_post.status_code == 503, resp_post.text[:300]
+    assert resp_post.json()["detail"] == "Journal update is temporarily unavailable"
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,18 @@
       {
         "path": "0114_owned_schemas_and_roles.sql",
         "sha256": "2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24"
+      },
+      {
+        "path": "0115_cross_domain_boundaries.sql",
+        "sha256": "852dc3ab061d731179d1cd53714887eca328db436eb6e2a4891d98bb1a1e6bcc"
+      },
+      {
+        "path": "0116_unified_job_facade.sql",
+        "sha256": "9bbd93a0176f882062a66674cf9897d49473bfdc181c620a4d79131adb99fca6"
+      },
+      {
+        "path": "0117_owner_capabilities.sql",
+        "sha256": "d8ff5e67cb30eb0ac0efb6be7e25cc0101b3ee18cd1902e91b8a50cd4954117b"
       }
     ]
   },
@@ -95,12 +107,17 @@
     "compatibility_role": "jarvis_legacy_rollback",
     "backup_reader_role": "jarvis_backup_reader",
     "restore_operator_role": "jarvis_restore_operator",
+    "erasure_executor_role": "jarvis_erasure_executor",
     "litellm_runtime_role": "jarvis_litellm_runtime",
     "litellm_migrator_role": "jarvis_litellm_migrator"
   },
   "tables": {
     "platform": [
       "audit_log",
+      "audit_subjects",
+      "config_deliveries",
+      "erasure_acknowledgements",
+      "erasure_requests",
       "llm_usage_log",
       "magic_link_tokens",
       "sessions",
@@ -115,6 +132,9 @@
     ],
     "research": [
       "author_alert_log",
+      "domain_events",
+      "pending_paper_deletions",
+      "zotero_push_claims",
       "entities",
       "entity_relationships",
       "extraction_templates",
@@ -146,6 +166,7 @@
     ],
     "learning": [
       "cards",
+      "domain_commands",
       "daily_intent",
       "daily_log",
       "decks",
@@ -166,6 +187,7 @@
       "procrastinate_jobs",
       "procrastinate_periodic_defers",
       "procrastinate_workers",
+      "job_owner_registry",
       "schema_migrations"
     ]
   },
@@ -221,9 +243,38 @@
     ]
   },
   "functions": {
-    "platform": ["set_updated_at"],
-    "research": ["papers_search_vector_update"],
-    "learning": [],
+    "platform": [
+      "platform.advance_visibility_checkpoint_v1",
+      "platform.append_audit_event",
+      "platform.append_system_event_v1",
+      "platform.claim_visibility_lease_v1",
+      "platform.complete_visibility_checkpoint_v1",
+      "platform.finalize_erasure",
+      "platform.mint_session_v1",
+      "platform.purge_identity_retention_v1",
+      "platform.purge_system_events_v1",
+      "platform.reencrypt_config_v1",
+      "platform.renew_session_v1",
+      "platform.rotate_visibility_checkpoint_v1",
+      "platform.set_research_config_v1",
+      "platform.upsert_config_v1",
+      "set_updated_at"
+    ],
+    "research": [
+      "papers_search_vector_update",
+      "research.add_to_library_v1",
+      "research.claim_source_slot_v1",
+      "research.erase_user_data",
+      "research.fan_out_library_v1",
+      "research.record_author_alert_v1",
+      "research.restore_paper_v1",
+      "research.star_paper_v1",
+      "research.trash_paper_v1",
+      "research.update_paper_feedback_v1",
+      "research.update_source_health_v1",
+      "research.upsert_paper_state_v1"
+    ],
+    "learning": ["learning.clear_zotero_collection_keys_v1", "learning.erase_user_data"],
     "operations": [
       "procrastinate_cancel_job_v1",
       "procrastinate_defer_jobs_v1",
@@ -242,7 +293,15 @@
       "procrastinate_trigger_function_status_events_update_v1",
       "procrastinate_unlink_periodic_defers_v1",
       "procrastinate_unregister_worker_v1",
-      "procrastinate_update_heartbeat_v1"
+      "procrastinate_update_heartbeat_v1",
+      "ops.enforce_job_owner_metadata_v1",
+      "ops.jarvis_job_read_v1",
+      "ops.jarvis_job_list_v1",
+      "ops.jarvis_job_cancel_v1",
+      "ops.purge_orphaned_job_progress_v1",
+      "ops.record_job_outcome_v1",
+      "ops.record_job_progress_v1",
+      "ops.redact_erased_user_jobs_v1"
     ]
   },
   "types": {
@@ -275,7 +334,8 @@
       "procrastinate_trigger_delete_jobs_v1",
       "procrastinate_trigger_scheduled_events_v1",
       "procrastinate_trigger_status_events_insert_v1",
-      "procrastinate_trigger_status_events_update_v1"
+      "procrastinate_trigger_status_events_update_v1",
+      "procrastinate_jobs_owner_guard_v1"
     ]
   },
   "rules": {
@@ -317,10 +377,8 @@
   },
   "reviewed_dynamic_sql": {
     "libs/jarvis_common/jarvis_common/db_helpers.py": 3,
-    "libs/jarvis_common/jarvis_common/jobs.py": 5,
-    "libs/jarvis_common/jarvis_common/library.py": 1,
+    "libs/jarvis_common/jarvis_common/jobs.py": 1,
     "libs/jarvis_common/jarvis_common/migrations.py": 2,
-    "libs/jarvis_common/jarvis_common/paper_state.py": 1,
     "services/learning_engine/learning_engine/routers/cards.py": 3,
     "services/learning_engine/learning_engine/routers/decks.py": 1,
     "services/learning_engine/learning_engine/routers/executive.py": 1,
@@ -334,9 +392,8 @@
     "services/paper_ingestion/paper_ingestion/ingestion/recommender.py": 2,
     "services/paper_ingestion/paper_ingestion/ingestion/search.py": 2,
     "services/paper_ingestion/paper_ingestion/integrations/_zotero_poll.py": 1,
-    "services/paper_ingestion/paper_ingestion/integrations/_zotero_push.py": 1,
-    "services/paper_ingestion/paper_ingestion/jobs/data_purge.py": 1,
-    "services/paper_ingestion/paper_ingestion/papers_service.py": 2,
+    "services/paper_ingestion/paper_ingestion/papers_service.py": 1,
+    "services/paper_ingestion/paper_ingestion/repos/domain_events.py": 1,
     "services/paper_ingestion/paper_ingestion/pulse/deck.py": 5,
     "services/paper_ingestion/paper_ingestion/pulse/profile.py": 1,
     "services/paper_ingestion/paper_ingestion/rag/streaming.py": 2,
@@ -359,7 +416,6 @@
     "services/paper_ingestion/paper_ingestion/services/paper_locks.py": 1,
     "services/paper_ingestion/paper_ingestion/services/paper_upsert.py": 1,
     "services/paper_ingestion/paper_ingestion/services/pdf_workflow.py": 1,
-    "services/paper_ingestion/paper_ingestion/services/scheduler_effects.py": 1,
     "services/paper_ingestion/paper_ingestion/services/summarization.py": 3,
     "services/platform_api/platform_api/routers/_auth_shared.py": 1,
     "services/platform_api/platform_api/routers/audit_admin.py": 1,
@@ -381,106 +437,19 @@
   ],
   "transition_seams": [
     {
-      "name": "platform_api_extraction",
-      "current_writer": "paper_ingestion",
-      "relations": [
-        "audit_log",
-        "llm_usage_log",
-        "magic_link_tokens",
-        "sessions",
-        "system_events",
-        "telegram_pairing",
-        "telegram_pairing_tokens",
-        "telegram_user_pairings",
-        "user_config",
-        "users",
-        "webauthn_challenges",
-        "webauthn_credentials"
-      ],
-      "destination": "platform",
-      "replacement": "Platform API ownership"
-    },
-    {
-      "name": "shared_platform_writes",
+      "name": "dedicated_migration_metadata",
       "current_writer": "jarvis_common",
-      "relations": ["audit_log", "sessions", "system_events", "user_config"],
-      "destination": "platform",
-      "replacement": "Platform capabilities behind shared interfaces"
-    },
-    {
-      "name": "shared_job_infrastructure",
-      "current_writer": "jarvis_common",
-      "relations": [
-        "job_progress",
-        "procrastinate_events",
-        "procrastinate_jobs",
-        "procrastinate_periodic_defers",
-        "procrastinate_workers",
-        "schema_migrations"
-      ],
+      "relations": ["schema_migrations"],
       "destination": "operations",
-      "replacement": "approved Operations capabilities"
-    },
-    {
-      "name": "shared_research_helpers",
-      "current_writer": "jarvis_common",
-      "relations": [
-        "author_alert_log",
-        "paper_user_state",
-        "source_health",
-        "user_library"
-      ],
-      "destination": "research",
-      "replacement": "Research-owned capability interfaces"
-    },
-    {
-      "name": "paper_job_history_cleanup",
-      "current_writer": "paper_ingestion",
-      "relations": ["job_progress"],
-      "destination": "operations",
-      "replacement": "approved Operations retention capability"
-    },
-    {
-      "name": "paper_read_activity",
-      "current_writer": "paper_ingestion",
-      "relations": ["daily_log"],
-      "destination": "learning",
-      "replacement": "idempotent paper.read outbox consumer"
-    },
-    {
-      "name": "paper_dependent_learning_rows",
-      "current_writer": "paper_ingestion",
-      "relations": ["cards", "project_papers", "task_paper_links"],
-      "destination": "learning",
-      "replacement": "paper deletion event and Learning acknowledgement"
-    },
-    {
-      "name": "zotero_project_metadata",
-      "current_writer": "paper_ingestion",
-      "relations": ["projects"],
-      "destination": "learning",
-      "replacement": "Learning project metadata command"
-    },
-    {
-      "name": "journal_api",
-      "current_writer": "paper_ingestion",
-      "relations": ["journal_entries"],
-      "destination": "learning",
-      "replacement": "Learning journal API"
-    },
-    {
-      "name": "user_erasure",
-      "current_writer": "paper_ingestion",
-      "relations": ["audit_log", "users"],
-      "destination": "platform",
-      "replacement": "durable erasure coordinator and execute-only owner procedures"
+      "replacement": "dedicated migrator CLI metadata write"
     }
   ],
   "erasure": {
     "states": [
       "requested",
       "qdrant_pending",
-      "domain_cleanup_pending",
+      "research_pending",
+      "learning_pending",
       "ready",
       "executing",
       "complete",
@@ -492,23 +461,24 @@
     "transitions": {
       "requested": ["qdrant_pending"],
       "qdrant_pending": [
-        "domain_cleanup_pending",
+        "research_pending",
         "retry_wait",
         "attention_required"
       ],
-      "domain_cleanup_pending": ["ready", "retry_wait", "attention_required"],
+      "research_pending": ["learning_pending", "retry_wait", "attention_required"],
+      "learning_pending": ["ready", "retry_wait", "attention_required"],
       "ready": ["executing"],
       "executing": ["complete", "retry_wait", "attention_required"],
       "retry_wait": [
         "qdrant_pending",
-        "domain_cleanup_pending",
-        "executing",
+        "research_pending",
+        "learning_pending",
         "attention_required"
       ],
       "attention_required": [
         "qdrant_pending",
-        "domain_cleanup_pending",
-        "executing"
+        "research_pending",
+        "learning_pending"
       ],
       "complete": []
     },

@@ -195,7 +195,6 @@ def test_signed_identity_middleware_issues_exact_backend_assertion() -> None:
     wrapped = SignedIdentityMiddleware(
         app,
         audience="research",
-        verifier_app=app,
         user_id=7,
         role="admin",
     )

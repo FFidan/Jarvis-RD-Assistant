@@ -407,7 +407,7 @@ async def test_every_registered_job_carries_a_misfire_grace() -> None:
     scheduler = await _start(_make_scheduler_app(), 5)
     try:
         jobs = scheduler.get_jobs()
-        assert {"data_purge", "purge_magic_link_tokens", "purge_sessions"} <= {
+        assert {"domain_outbox", "purge_magic_link_tokens", "purge_sessions"} <= {
             j.id for j in jobs
         }, "the jobs/ helper modules must have registered, or this check is vacuous"
         offenders = [(j.id, j.misfire_grace_time) for j in jobs if j.misfire_grace_time != 3600]
@@ -505,6 +505,18 @@ async def test_a_periodic_job_history_prune_is_registered() -> None:
     try:
         job = scheduler.get_job("purge_job_history")
         assert job is not None, "job history must be pruned on a schedule, not only at boot"
+        assert job.misfire_grace_time == 3600
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_domain_outbox_dispatcher_is_registered_with_bounded_overlap() -> None:
+    """Outbox retries are scheduled independently of a user request path."""
+    scheduler = await _start(_make_scheduler_app(), 5)
+    try:
+        job = scheduler.get_job("domain_outbox")
+        assert job is not None
+        assert job.max_instances == 1
         assert job.misfire_grace_time == 3600
     finally:
         scheduler.shutdown(wait=False)

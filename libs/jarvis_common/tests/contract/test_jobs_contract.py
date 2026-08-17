@@ -48,13 +48,12 @@ def _card_paper_extractor(payload: dict) -> int | None:
     return v if isinstance(v, int) else None
 
 
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _jobs_app(contract_conn):
-    """Minimal FastAPI app wired to build_jobs_router with ownership extractor."""
+def _build_jobs_app(contract_conn, runtime_role: str):
+    """Build the legacy router under one exact runtime identity."""
     from jarvis_common.jobs_router import build_jobs_router
-    from jarvis_common.session_middleware import SessionMiddleware
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization=runtime_role)
 
     limiter_stub = MagicMock()
     limiter_stub.enabled = False
@@ -70,11 +69,26 @@ async def _jobs_app(contract_conn):
     )
 
     app = FastAPI()
-    app.add_middleware(SessionMiddleware)
     app.include_router(router, dependencies=[])
     app.state.db_pool = shared
 
-    yield app
+    return SignedIdentityMiddleware(
+        app,
+        audience="learning",
+        session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+    )
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _jobs_app(contract_conn):
+    """Legacy read router with the Platform facade's capability identity."""
+    yield _build_jobs_app(contract_conn, "jarvis_platform_runtime")
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _owner_jobs_app(contract_conn):
+    """Legacy create router with the Learning owner's runtime identity."""
+    yield _build_jobs_app(contract_conn, "jarvis_learning_runtime")
 
 
 def _authed_client(app, cookie: str):
@@ -91,7 +105,7 @@ def _api_key_client(app):
 
 
 async def test_create_job_card_generate_rejects_non_owner_paper(
-    contract_two_users, _jobs_app, _configure_api_key
+    contract_two_users, _owner_jobs_app, _configure_api_key
 ):
     """RD-DA-001: user B cannot enqueue card.generate for user A's paper → 403.
 
@@ -106,7 +120,7 @@ async def test_create_job_card_generate_rejects_non_owner_paper(
     mock_task.defer_async = AsyncMock()
 
     with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_task}):
-        async with _authed_client(_jobs_app, contract_two_users.cookie_b) as c:
+        async with _authed_client(_owner_jobs_app, contract_two_users.cookie_b) as c:
             resp = await c.post(
                 "/api/jobs",
                 json={
@@ -132,7 +146,7 @@ async def test_create_job_card_generate_rejects_non_owner_paper(
 
 
 async def test_create_job_requires_session_identity(
-    contract_two_users, _jobs_app, _configure_api_key
+    contract_two_users, _owner_jobs_app, _configure_api_key
 ):
     """RD-DA-002: API-key-only caller (no session cookie) → 401 for create_job.
 
@@ -148,7 +162,7 @@ async def test_create_job_requires_session_identity(
 
     with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_task}):
         # No cookie — API-key only
-        async with _api_key_client(_jobs_app) as c:
+        async with _api_key_client(_owner_jobs_app) as c:
             resp = await c.post(
                 "/api/jobs",
                 json={
@@ -190,7 +204,7 @@ async def _seed_pj(conn, *, user_id: int, job_id: str, status: str = "todo") -> 
     await conn.execute(
         """
         INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
-        VALUES ('contract_test', 'card.generate', $1::jsonb, $2::procrastinate_job_status)
+        VALUES ('learning_engine', 'card.generate', $1::jsonb, $2::procrastinate_job_status)
         """,
         {"job_id": job_id, "user_id": user_id},
         status,

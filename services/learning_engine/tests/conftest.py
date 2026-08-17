@@ -46,6 +46,7 @@ from jarvis_common.testing_contract_apps import (  # noqa: E402
     patch_app_state,
     patch_dependency_overrides,
 )
+from jarvis_common.testing_auth import SignedIdentityMiddleware  # noqa: E402
 
 contract_pg_dsn = _make_contract_pg_dsn("jarvis-le-contract")
 _contract_pool = _make_contract_pool_fixture()
@@ -60,6 +61,17 @@ def _configure_api_key(monkeypatch):
         yield key
 
 
+@pytest.fixture(scope="function")
+def _research_library_command(monkeypatch):
+    """Replace the Research HTTP owner command in Learning route contracts."""
+    command = AsyncMock()
+    monkeypatch.setattr(
+        "learning_engine.routers.project_papers._add_to_research_library",
+        command,
+    )
+    return command
+
+
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _le_app(contract_conn):
     """Wire the LE app to the per-test contract connection."""
@@ -68,7 +80,7 @@ async def _le_app(contract_conn):
     from learning_engine.deps import limiter
     from learning_engine.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_learning_runtime")
     now = datetime.now(UTC)
     mock_fsrs = MagicMock()
     mock_fsrs.create_new_card.return_value = ({}, now)
@@ -99,7 +111,11 @@ async def _le_app(contract_conn):
                 },
             ),
         ):
-            yield app
+            yield SignedIdentityMiddleware(
+                app,
+                audience="learning",
+                session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+            )
     finally:
         limiter.enabled = limiter_was_enabled
 

@@ -106,6 +106,7 @@ async def admin_client(contract_conn):
     from platform_api.main import app
 
     admin_user_id, admin_cookie = await _seed_admin_user(contract_conn)
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
     shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
     try:
@@ -124,6 +125,7 @@ async def admin_client(contract_conn):
                 client.admin_user_id = admin_user_id  # type: ignore[attr-defined]
                 yield client
     finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
         app.state.limiter.enabled = True
 
 
@@ -148,6 +150,7 @@ async def plain_client(contract_conn):
     # Seed admin so the users table is not empty (session middleware needs it).
     await _seed_admin_user(contract_conn)
     _user_id, user_cookie = await _seed_plain_user(contract_conn, "plain-user-contract@example.com")
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
     shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
     try:
@@ -161,6 +164,7 @@ async def plain_client(contract_conn):
             async with make_contract_client(app, user_cookie) as client:
                 yield client
     finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
         app.state.limiter.enabled = True
 
 
@@ -185,6 +189,7 @@ async def audit_admin_client(contract_conn):
     async def _allow_all() -> None:
         return None
 
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
     shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
     try:
@@ -202,6 +207,7 @@ async def audit_admin_client(contract_conn):
             async with make_contract_client(app, None) as client:
                 yield client
     finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
         app.state.limiter.enabled = True
 
 
@@ -708,13 +714,20 @@ async def test_a8_restore_user_clears_deleted_at(admin_client, contract_conn):
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         "restore-target@example.com",
     )
-    # Soft-delete the user in DB (within 30-day window).
     await contract_conn.execute(
         "UPDATE users SET deleted_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
         target_id,
     )
+    request_id = await contract_conn.fetchval(
+        """INSERT INTO erasure_requests (request_id, user_id, state, resume_state)
+           VALUES (gen_random_uuid(), $1, 'requested', 'qdrant_pending')
+           RETURNING request_id""",
+        target_id,
+    )
+    assert request_id is not None
 
-    resp = await admin_client.post(f"/api/admin/users/{target_id}/restore")
+    with patch("platform_api.routers.admin.log_audit", new_callable=AsyncMock):
+        resp = await admin_client.post(f"/api/admin/users/{target_id}/restore")
 
     assert resp.status_code == 200, (
         f"Expected 200 from restore; got {resp.status_code}: {resp.text[:300]}"
@@ -728,6 +741,13 @@ async def test_a8_restore_user_clears_deleted_at(admin_client, contract_conn):
         target_id,
     )
     assert deleted_at is None, "restore must clear deleted_at in DB"
+    assert (
+        await contract_conn.fetchval(
+            "SELECT COUNT(*) FROM erasure_requests WHERE user_id = $1",
+            target_id,
+        )
+        == 0
+    ), "restore must cancel the durable erasure request"
 
 
 async def test_a8_restore_outside_grace_returns_404(admin_client, contract_conn):
@@ -803,11 +823,17 @@ async def test_owner_transfer_is_atomic_audited_and_not_replayable(admin_client,
     )
     assert stored_owner == str(target_id)
     audit = await contract_conn.fetchrow(
-        "SELECT user_id, action, resource, metadata FROM audit_log "
-        "WHERE action = 'admin.owner.transfer' ORDER BY id DESC LIMIT 1"
+        "SELECT event.user_id, event.subject_id, event.caller_role, event.action, "
+        "event.resource, event.metadata, subject.user_id AS subject_user_id "
+        "FROM audit_log AS event "
+        "LEFT JOIN audit_subjects AS subject ON subject.id = event.subject_id "
+        "WHERE event.action = 'admin.owner.transfer' ORDER BY event.id DESC LIMIT 1"
     )
     assert audit is not None
-    assert audit["user_id"] == str(current_owner_id)
+    assert audit["user_id"] is None
+    assert audit["subject_id"] is not None
+    assert audit["subject_user_id"] == current_owner_id
+    assert audit["caller_role"] == "jarvis_platform_runtime"
     assert audit["resource"] == "owner.user_id"
     assert audit["metadata"]["previous_owner_user_id"] == current_owner_id
     assert audit["metadata"]["new_owner_user_id"] == target_id
@@ -969,9 +995,9 @@ async def test_a14_audit_log_returns_entries_from_db(audit_admin_client, contrac
     Verified: audit_admin.py:37-84 list_audit_log at HEAD.
     Survivor-of: logs/audit mock-unit assertions.
     """
-    # Insert a known audit_log row in the same transaction.
+    # Append a known fact through the same runtime capability used by Platform.
     await contract_conn.execute(
-        "INSERT INTO audit_log (action, resource) VALUES ($1, $2)",
+        "SELECT platform.append_audit_event(NULL, $1, $2, '{}'::jsonb)",
         "contract.test.action",
         "users/1",
     )

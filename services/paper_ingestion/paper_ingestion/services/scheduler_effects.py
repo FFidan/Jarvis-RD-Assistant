@@ -22,6 +22,7 @@ async def apply_pulse_cron(
     scheduler: Any,
     new_cron: str,
     old_cron: str | None,
+    rollback_persisted: bool = True,
 ) -> None:
     """Reschedule the pulse_overnight job and validate next_run_time.
 
@@ -33,6 +34,8 @@ async def apply_pulse_cron(
 
     if scheduler is None:
         return
+    previous_job = scheduler.get_job("pulse_overnight")
+    previous_trigger = getattr(previous_job, "trigger", None)
     scheduler.reschedule_job(
         "pulse_overnight",
         trigger=CronTrigger.from_crontab(new_cron),
@@ -48,21 +51,22 @@ async def apply_pulse_cron(
             next_run,
             new_cron,
         )
-        _rollback_sql = (
-            "INSERT INTO user_config (user_id, key, value)"
-            " VALUES (NULL, 'pulse.cron', $1::jsonb)"
-            " ON CONFLICT (user_id, key) DO UPDATE"
-            " SET value = $1::jsonb, updated_at = NOW()"
-        )
-        async with db_pool.acquire() as conn:
-            if old_cron is not None:
-                await conn.execute(_rollback_sql, old_cron)
-            else:
-                await conn.execute(
-                    "DELETE FROM user_config WHERE key = 'pulse.cron' AND user_id IS NULL"
-                )
+        if rollback_persisted:
+            async with db_pool.acquire() as conn:
+                if old_cron is not None:
+                    await conn.execute(
+                        "SELECT platform.set_research_config_v1("
+                        "NULL, 'pulse.cron', $1::jsonb, 'upsert')",
+                        old_cron,
+                    )
+                else:
+                    await conn.execute(
+                        "SELECT platform.set_research_config_v1(NULL, 'pulse.cron', NULL, 'delete')"
+                    )
         try:
-            if old_cron is not None:
+            if previous_trigger is not None:
+                scheduler.reschedule_job("pulse_overnight", trigger=previous_trigger)
+            elif old_cron is not None:
                 scheduler.reschedule_job(
                     "pulse_overnight",
                     trigger=CronTrigger.from_crontab(old_cron),

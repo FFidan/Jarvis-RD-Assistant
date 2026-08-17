@@ -1,10 +1,7 @@
 """Tests for jarvis_common.paper_state — all five on_conflict variants.
 
 Each test uses an AsyncMock asyncpg connection so there is no live DB
-dependency.  We verify:
-- the correct asyncpg method is called (execute vs fetchrow vs fetchval)
-- the SQL contains the expected ON CONFLICT clause keyword
-- the correct positional arguments are forwarded
+dependency. We verify the correct method and owner-capability arguments.
 """
 
 from __future__ import annotations
@@ -42,14 +39,7 @@ async def test_update_dynamic_state_only() -> None:
     conn = _mock_conn()
     await upsert_paper_user_state(conn, 1, 42, state="reading", on_conflict="update_dynamic")
     conn.execute.assert_awaited_once()
-    sql: str = conn.execute.await_args.args[0]
-    assert "ON CONFLICT" in sql
-    assert "DO UPDATE SET" in sql
-    assert "state" in sql
-    # starred should NOT be in UPDATE clause since it was not supplied
-    # (it should not appear in the dynamic build at all)
-    called_args = conn.execute.await_args.args
-    assert "reading" in called_args
+    assert conn.execute.await_args.args[1:] == (1, 42, "reading", None)
 
 
 @pytest.mark.asyncio
@@ -57,9 +47,7 @@ async def test_update_dynamic_starred_only() -> None:
     conn = _mock_conn()
     await upsert_paper_user_state(conn, 2, None, starred=False, on_conflict="update_dynamic")
     conn.execute.assert_awaited_once()
-    sql: str = conn.execute.await_args.args[0]
-    assert "starred" in sql
-    assert "DO UPDATE SET" in sql
+    assert conn.execute.await_args.args[1:] == (2, None, None, False)
 
 
 @pytest.mark.asyncio
@@ -69,9 +57,7 @@ async def test_update_dynamic_both_fields() -> None:
         conn, 3, 7, state="done", starred=True, on_conflict="update_dynamic"
     )
     conn.execute.assert_awaited_once()
-    sql: str = conn.execute.await_args.args[0]
-    assert "state" in sql
-    assert "starred" in sql
+    assert conn.execute.await_args.args[1:] == (3, 7, "done", True)
 
 
 @pytest.mark.asyncio
@@ -96,21 +82,15 @@ async def test_update_starred_only_returns_fetchrow_result() -> None:
     result = await upsert_paper_user_state(conn, 5, 10, on_conflict="update_starred_only")
 
     conn.fetchrow.assert_awaited_once()
-    sql: str = conn.fetchrow.await_args.args[0]
-    assert "ON CONFLICT" in sql
-    assert "starred = TRUE" in sql
-    assert "RETURNING" in sql
+    assert conn.fetchrow.await_args.args[1:] == (5, 10)
     assert result is fake_row
 
 
 @pytest.mark.asyncio
-async def test_update_starred_only_sql_has_cte() -> None:
+async def test_update_starred_only_binds_nullable_owner() -> None:
     conn = _mock_conn(fetchrow_return=None)
     await upsert_paper_user_state(conn, 5, None, on_conflict="update_starred_only")
-    sql: str = conn.fetchrow.await_args.args[0]
-    # CTE snapshot for TOCTOU-free transition detection
-    assert "WITH before AS" in sql
-    assert "prev_starred" in sql
+    assert conn.fetchrow.await_args.args[1:] == (5, None)
 
 
 # ---------------------------------------------------------------------------
@@ -134,12 +114,7 @@ async def test_update_partial_returns_full_row() -> None:
     )
 
     conn.fetchrow.assert_awaited_once()
-    sql: str = conn.fetchrow.await_args.args[0]
-    assert "COALESCE" in sql
-    assert "rating" in sql
-    assert "user_notes" in sql
-    assert "flagged" in sql
-    assert "RETURNING" in sql
+    assert conn.fetchrow.await_args.args[1:] == (7, 3, 4, "good", None)
     assert result is fake_row
 
 
@@ -169,8 +144,7 @@ async def test_do_nothing_uses_execute() -> None:
         conn, 9, None, state="to_read", starred=False, on_conflict="do_nothing"
     )
     conn.execute.assert_awaited_once()
-    sql: str = conn.execute.await_args.args[0]
-    assert "DO NOTHING" in sql
+    assert conn.execute.await_args.args[1:] == (9, None, "to_read", False)
 
 
 @pytest.mark.asyncio
@@ -190,19 +164,13 @@ async def test_do_nothing_defaults_state_and_starred() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_state_conditional_sql() -> None:
+async def test_update_state_conditional_binds_requested_state() -> None:
     conn = _mock_conn()
     await upsert_paper_user_state(
         conn, 11, 5, state="reading", on_conflict="update_state_when_inbox_or_to_read"
     )
     conn.execute.assert_awaited_once()
-    sql: str = conn.execute.await_args.args[0]
-    assert "WHERE paper_user_state.state IN" in sql
-    assert "'inbox'" in sql
-    assert "'to_read'" in sql
-    # The state value should be forwarded
-    called_args = conn.execute.await_args.args
-    assert "reading" in called_args
+    assert conn.execute.await_args.args[1:] == (11, 5, "reading")
 
 
 @pytest.mark.asyncio
@@ -218,14 +186,11 @@ async def test_update_state_conditional_raises_without_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_trash_paper_sql_has_case_expression() -> None:
+async def test_trash_paper_binds_owner_and_paper() -> None:
     conn = _mock_conn()
     await trash_paper(conn, 20, 1)
     conn.execute.assert_awaited_once()
-    sql: str = conn.execute.await_args.args[0]
-    assert "state_before_trash" in sql
-    assert "CASE" in sql
-    assert "state = 'trash'" in sql
+    assert conn.execute.await_args.args[1:] == (20, 1)
 
 
 @pytest.mark.asyncio

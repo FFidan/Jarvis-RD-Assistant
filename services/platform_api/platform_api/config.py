@@ -71,6 +71,10 @@ class PlatformSettings(BaseSettings):
         default="http://paper_ingestion:8000",
         validation_alias="PAPER_INGESTION_URL",
     )
+    learning_api_url: str = Field(
+        default="http://learning_engine:8001",
+        validation_alias="LEARNING_ENGINE_URL",
+    )
 
     @field_validator("identity_issuer")
     @classmethod
@@ -85,6 +89,7 @@ class PlatformSettings(BaseSettings):
         "ollama_base_url",
         "litellm_base_url",
         "research_api_url",
+        "learning_api_url",
     )
     @classmethod
     def _validate_service_origin(cls, value: str) -> str:

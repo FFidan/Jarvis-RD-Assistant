@@ -405,13 +405,9 @@ async def test_local_delivery_syncs_system_num_ctx_row_and_invalidates_cache(mon
     assert result is True
     # The system row was upserted with the DELIVERED value (4096), not the
     # carried 8192, keyed by role (smart).
-    upserts = [
-        c
-        for c in conn.execute.await_args_list
-        if "user_config" in c.args[0] and "llm.smart_num_ctx" in c.args
-    ]
+    upserts = [c for c in conn.execute.await_args_list if "llm.smart_num_ctx" in c.args]
     assert len(upserts) == 1
-    assert 4096 in upserts[0].args
+    assert upserts[0].args[1:] == (None, "llm.smart_num_ctx", 4096)
     assert invalidated == [True]
 
 

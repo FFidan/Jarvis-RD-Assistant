@@ -13,11 +13,17 @@ from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 
 from paper_ingestion import papers_service
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
     AnnotationsRequest,
     MarkReadResponse,
     UserStateResponse,
+)
+from paper_ingestion.repos.domain_events import (
+    DomainDeliverySettings,
+    deliver_pending_events,
+    record_event,
 )
 from paper_ingestion.services.paper_state_helpers import _upsert_state_and_starred
 
@@ -132,36 +138,46 @@ async def reading_paper(
     user_id: int = Depends(get_current_user_id_or_bot),
 ) -> dict[str, object]:
     """Mark a paper as currently being read (``state := 'reading'``)."""
+    event_recorded = False
     async with db_pool.acquire() as conn:
-        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
-        await _assert_paper_in_states(
-            conn, paper_id, user_id, allowed=("to_read", "reading", "done")
-        )
-        state_before = (
-            await conn.fetchval(
-                """SELECT COALESCE(state, 'inbox') FROM paper_user_state
-                   WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
-                paper_id,
-                user_id,
+        async with conn.transaction():
+            await papers_service.assert_paper_ownership(conn, paper_id, user_id)
+            await _assert_paper_in_states(
+                conn, paper_id, user_id, allowed=("to_read", "reading", "done")
             )
-            or "inbox"
-        )
-        await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
-        if state_before != "reading":
-            try:
-                await conn.execute(
-                    """INSERT INTO daily_log (user_id, log_date, papers_read)
-                       VALUES ($1, CURRENT_DATE, 1)
-                       ON CONFLICT (user_id, log_date)
-                       DO UPDATE SET papers_read = COALESCE(daily_log.papers_read, 0) + 1""",
-                    user_id,
-                )
-            except Exception:
-                logger.exception(
-                    "daily_log.papers_read increment failed (user=%s paper=%s); non-blocking",
-                    user_id,
+            state_before = (
+                await conn.fetchval(
+                    """SELECT COALESCE(state, 'inbox') FROM paper_user_state
+                       WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
                     paper_id,
+                    user_id,
                 )
+                or "inbox"
+            )
+            await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
+            if state_before != "reading":
+                await record_event(
+                    conn,
+                    event_type="paper.read",
+                    user_id=user_id,
+                    paper_id=paper_id,
+                )
+                event_recorded = True
+    if event_recorded:
+        settings = get_paper_ingestion_settings()
+        try:
+            token = settings.research_service_token_file.read_text(encoding="utf-8").strip()
+            await deliver_pending_events(
+                db_pool,
+                request.app.state.http_client,
+                settings=DomainDeliverySettings(
+                    platform_url=settings.platform_api_url,
+                    learning_url=settings.learning_engine_url,
+                    service_token=token,
+                ),
+            )
+        except (OSError, RuntimeError):
+            logger.warning("paper.read projection is pending", exc_info=True)
     return _ok(paper_id)
 
 

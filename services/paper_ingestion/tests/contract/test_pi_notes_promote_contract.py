@@ -33,6 +33,8 @@ from unittest.mock import MagicMock
 import pytest
 import pytest_asyncio
 
+from jarvis_common.testing_auth import SignedIdentityMiddleware
+
 from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
 )
@@ -56,7 +58,10 @@ async def _pi_app_with_pool_and_verifier(contract_conn):
     from jarvis_common.verify import QuoteVerifier
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with (
         patch_app_state(
             app,
@@ -70,7 +75,11 @@ async def _pi_app_with_pool_and_verifier(contract_conn):
             },
         ),
     ):
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 async def _seed_zotero_note_with_chunk(

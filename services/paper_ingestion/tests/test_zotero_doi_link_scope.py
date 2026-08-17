@@ -82,7 +82,10 @@ async def test_private_unowned_doi_match_is_not_linked(contract_two_users, contr
 
     with _patched_annotation_enqueue():
         result = await _link_existing_by_doi(
-            SharedConnPool(contract_conn), "10.1/x", "KEYB", polling_user_id=user_b
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+            "10.1/x",
+            "KEYB",
+            polling_user_id=user_b,
         )
 
     assert result is None, "a private un-owned DOI match must not be linked"
@@ -109,7 +112,10 @@ async def test_public_doi_match_still_links(contract_two_users, contract_conn):
 
     with _patched_annotation_enqueue():
         result = await _link_existing_by_doi(
-            SharedConnPool(contract_conn), "10.1/pub", "KEYPUB", polling_user_id=user_b
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+            "10.1/pub",
+            "KEYPUB",
+            polling_user_id=user_b,
         )
 
     assert result == "linked", "public dedup must still link"
@@ -135,7 +141,10 @@ async def test_own_private_doi_match_is_idempotent(contract_two_users, contract_
 
     with _patched_annotation_enqueue():
         result = await _link_existing_by_doi(
-            SharedConnPool(contract_conn), "10.1/own", "KEYOWN", polling_user_id=user_a
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+            "10.1/own",
+            "KEYOWN",
+            polling_user_id=user_a,
         )
 
     assert result == "linked", "own private re-link must still link"
@@ -170,10 +179,16 @@ async def test_ambiguous_polling_user_links_only_public_rows(contract_two_users,
 
     with _patched_annotation_enqueue():
         priv_result = await _link_existing_by_doi(
-            SharedConnPool(contract_conn), "10.1/amb-priv", "KAMB1", polling_user_id=None
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+            "10.1/amb-priv",
+            "KAMB1",
+            polling_user_id=None,
         )
         pub_result = await _link_existing_by_doi(
-            SharedConnPool(contract_conn), "10.1/amb-pub", "KAMB2", polling_user_id=None
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+            "10.1/amb-pub",
+            "KAMB2",
+            polling_user_id=None,
         )
 
     assert priv_result is None, "ambiguous poll must not link a foreign private row"

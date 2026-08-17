@@ -17,6 +17,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import pytest_asyncio
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.testing import SharedConnPool
 
@@ -25,6 +26,12 @@ pytestmark = [
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
+
+
+@pytest_asyncio.fixture(autouse=True, loop_scope="session")
+async def _research_runtime_identity(contract_conn):
+    """Run each limiter contract under the real Research runtime identity."""
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
 
 
 def _make_limiter(

@@ -574,7 +574,10 @@ async def start_focus_session(
     """Start one interval; any existing open interval is the sole conflict rule."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            await conn.fetchval("SELECT id FROM users WHERE id = $1 FOR UPDATE", user_id)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('learning.focus_session'), $1)",
+                user_id,
+            )
             existing = await conn.fetchrow(
                 "SELECT * FROM focus_sessions WHERE user_id = $1 AND state IN ('active', 'paused')",
                 user_id,

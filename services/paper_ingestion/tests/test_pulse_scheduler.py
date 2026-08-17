@@ -494,3 +494,29 @@ async def test_apply_pulse_cron_rollback_also_fails_still_raises_http_400(caplog
         "scheduler revert also failed" in record.message and record.levelno == logging.WARNING
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_platform_owned_cron_failure_never_mutates_platform_state():
+    """Research restores its scheduler only when Platform already owns persistence."""
+    from fastapi import HTTPException
+
+    from paper_ingestion.services.scheduler_effects import apply_pulse_cron
+
+    previous_trigger = object()
+    current_job = SimpleNamespace(next_run_time=None, trigger=previous_trigger)
+    scheduler = MagicMock()
+    scheduler.get_job.return_value = current_job
+    pool, conn = _make_pool_and_conn()
+
+    with pytest.raises(HTTPException):
+        await apply_pulse_cron(
+            db_pool=pool,
+            scheduler=scheduler,
+            new_cron="0 3 * * *",
+            old_cron=None,
+            rollback_persisted=False,
+        )
+
+    conn.execute.assert_not_awaited()
+    assert scheduler.reschedule_job.call_args_list[-1].kwargs["trigger"] is previous_trigger

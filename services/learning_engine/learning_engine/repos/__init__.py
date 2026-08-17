@@ -1,1 +1,1 @@
-"""Data-access repositories for the learning engine service."""
+"""Learning-owned persistence boundaries."""

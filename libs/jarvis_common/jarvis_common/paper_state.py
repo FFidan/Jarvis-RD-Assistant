@@ -152,26 +152,13 @@ async def _upsert_dynamic(
     """
     if state is None and starred is None:
         return
-    cols = ["paper_id", "user_id"]
-    placeholders = ["$1", "$2"]
-    values: list[object] = [paper_id, user_id]
-    updates: list[str] = []
-    if state is not None:
-        cols.append("state")
-        placeholders.append(f"${len(values) + 1}")
-        values.append(state)
-        updates.append(f"state = ${len(values)}")
-    if starred is not None:
-        cols.append("starred")
-        placeholders.append(f"${len(values) + 1}")
-        values.append(starred)
-        updates.append(f"starred = ${len(values)}")
-    sql = (
-        f"INSERT INTO paper_user_state ({', '.join(cols)}) "  # noqa: S608
-        f"VALUES ({', '.join(placeholders)}) "
-        f"ON CONFLICT (paper_id, user_id) DO UPDATE SET {', '.join(updates)}"
+    await conn.execute(
+        "SELECT research.upsert_paper_state_v1($1, $2, $3, $4, 'dynamic')",
+        paper_id,
+        user_id,
+        state,
+        starred,
     )
-    await conn.execute(sql, *values)
 
 
 async def _upsert_starred_only(
@@ -187,19 +174,7 @@ async def _upsert_starred_only(
     Returns an asyncpg Record with ``is_new_row`` and ``prev_starred``.
     """
     return await conn.fetchrow(
-        """
-        WITH before AS (
-            SELECT starred FROM paper_user_state
-            WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2
-        )
-        INSERT INTO paper_user_state (paper_id, user_id, starred)
-        VALUES ($1, $2, TRUE)
-        ON CONFLICT (paper_id, user_id) DO UPDATE
-            SET starred = TRUE
-        RETURNING
-            (xmax = 0) AS is_new_row,
-            (SELECT COALESCE(starred, FALSE) FROM before) AS prev_starred
-        """,
+        "SELECT * FROM research.star_paper_v1($1, $2)",
         paper_id,
         user_id,
     )
@@ -221,20 +196,7 @@ async def _upsert_partial(
     flagged, updated_at).
     """
     return await conn.fetchrow(
-        """INSERT INTO paper_user_state
-               (paper_id, user_id, rating, user_notes, flagged)
-           VALUES ($1, $2, $3, $4, COALESCE($5, FALSE))
-           ON CONFLICT (paper_id, user_id) DO UPDATE SET
-               rating     = COALESCE($3, paper_user_state.rating),
-               user_notes = COALESCE($4, paper_user_state.user_notes),
-               flagged    = COALESCE($5, paper_user_state.flagged)
-           RETURNING
-               COALESCE(state, 'inbox') AS state,
-               state_before_trash,
-               COALESCE(starred, FALSE) AS starred,
-               rating, user_notes,
-               COALESCE(flagged, FALSE) AS flagged,
-               updated_at""",
+        "SELECT * FROM research.update_paper_feedback_v1($1, $2, $3, $4, $5)",
         paper_id,
         user_id,
         rating,
@@ -259,9 +221,7 @@ async def _upsert_do_nothing(
     state_val = state if state is not None else "inbox"
     starred_val = starred if starred is not None else False
     await conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (paper_id, user_id) DO NOTHING""",
+        "SELECT research.upsert_paper_state_v1($1, $2, $3, $4, 'first_sync')",
         paper_id,
         user_id,
         state_val,
@@ -283,11 +243,7 @@ async def _upsert_state_conditional(
     is skipped (WHERE clause excludes those rows).
     """
     await conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (paper_id, user_id) DO UPDATE
-              SET state = $3
-            WHERE paper_user_state.state IN ('inbox', 'to_read')""",
+        "SELECT research.upsert_paper_state_v1($1, $2, $3, NULL, 'advance')",
         paper_id,
         user_id,
         state,
@@ -318,14 +274,7 @@ async def trash_paper(
     ``'trash'`` per the schema).
     """
     await conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)
-           VALUES ($1, $2, 'trash', 'inbox')
-           ON CONFLICT (paper_id, user_id) DO UPDATE
-             SET state_before_trash = CASE
-                     WHEN paper_user_state.state = 'trash' THEN paper_user_state.state_before_trash
-                     ELSE paper_user_state.state
-                 END,
-                 state = 'trash'""",
+        "SELECT research.trash_paper_v1($1, $2)",
         paper_id,
         user_id,
     )
@@ -352,17 +301,12 @@ async def restore_paper(
         If no row was updated — paper not found or not in trash for this caller.
 
     """
-    status = await conn.execute(
-        """UPDATE paper_user_state
-              SET state = COALESCE(state_before_trash, 'inbox'),
-                  state_before_trash = NULL
-            WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
+    updated = await conn.fetchval(
+        "SELECT research.restore_paper_v1($1, $2)",
         paper_id,
         user_id,
     )
-    # asyncpg returns e.g. "UPDATE 1" — extract the row count.
-    updated = int(status.split()[-1]) if status else 0
-    if updated == 0:
+    if updated is not True:
         raise HTTPException(status_code=404, detail="Paper not found or not in trash")
 
 

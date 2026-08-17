@@ -10,12 +10,20 @@ concrete types.
 """
 
 import logging
+import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
-from fastapi import APIRouter, Depends, Query, Request
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_strict
+from jarvis_common.service_auth import (
+    ServiceCommand,
+    ServiceCommandUnavailableError,
+    authorize_service_command,
+)
 
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models.journal import (
     JournalEntryCreate,
@@ -80,21 +88,45 @@ async def upsert_journal_entry(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> JournalEntryResponse:
-    """Create or update a journal entry for the given date."""
+    """Create or update a journal entry through the Learning owner command."""
     prompts_dict = body.prompts.model_dump(exclude_none=True)
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO journal_entries (user_id, date, prompts, updated_at)
-            VALUES ($1, $2, $3::jsonb, NOW())
-            ON CONFLICT ON CONSTRAINT journal_entries_user_id_date_key
-            DO UPDATE SET prompts = EXCLUDED.prompts, updated_at = NOW()
-            RETURNING id, date, prompts, created_at, updated_at
-            """,
-            user_id,
-            body.date,
-            prompts_dict,
+    _ = db_pool
+    settings = get_paper_ingestion_settings()
+    path = "/internal/domains/journal"
+    try:
+        token = settings.research_service_token_file.read_text(encoding="utf-8").strip()
+        headers = await authorize_service_command(
+            request.app.state.http_client,
+            platform_url=settings.platform_api_url,
+            principal="research",
+            token=token,
+            command=ServiceCommand(
+                audience="learning",
+                method="PUT",
+                path=path,
+                user_id=user_id,
+            ),
         )
+        response = await request.app.state.http_client.put(
+            f"{settings.learning_engine_url.rstrip('/')}{path}",
+            headers=headers,
+            json={
+                "request_id": str(uuid.UUID(headers["X-Request-Id"])),
+                "user_id": user_id,
+                "date": body.date.isoformat(),
+                "prompts": prompts_dict,
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        row = payload.get("entry") if payload.get("acknowledged") is True else None
+        if not isinstance(row, dict):
+            raise ServiceCommandUnavailableError("journal command is unavailable")
+    except (OSError, ValueError, httpx.HTTPError, ServiceCommandUnavailableError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Journal update is temporarily unavailable"
+        ) from exc
     return JournalEntryResponse(
         id=row["id"],
         date=row["date"],

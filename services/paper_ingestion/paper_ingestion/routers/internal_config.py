@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -33,6 +33,8 @@ class ConfigWriteRequest(BaseModel):
     """
 
     value: Any
+    phase: Literal["validate", "apply"] = "apply"
+    zotero_scope_changed: bool = False
 
 
 class ConfigWriteResponse(BaseModel):
@@ -51,6 +53,10 @@ class ConfigWriteResponse(BaseModel):
     key: str
     value: Any
     schedule_apply_warnings: list[str] = Field(default_factory=list)
+    litellm_delivery_roles: list[str] = Field(default_factory=list)
+    litellm_delivery_pending: bool | None = None
+    effective_num_ctx_role: str | None = None
+    effective_num_ctx_value: int | None = None
 
 
 @router.put("/config/{key}", response_model=ConfigWriteResponse)
@@ -110,6 +116,9 @@ async def write_platform_config(  # noqa: PLR0913 - FastAPI command boundary dep
         caller_user_id=caller_user_id,
         update_litellm_model_fn=update_litellm_model,
         app=request.app,
+        persist=False,
+        apply_effects=body.phase == "apply",
+        zotero_scope_changed=body.zotero_scope_changed,
     )
 
     changed_provider = next(
@@ -120,13 +129,17 @@ async def write_platform_config(  # noqa: PLR0913 - FastAPI command boundary dep
         ),
         None,
     )
-    if changed_provider is not None:
+    if changed_provider is not None and body.phase == "apply":
         await invalidate_provider_model_cache(changed_provider.id)
 
     return ConfigWriteResponse(
         key=key,
         value=result.display_value,
         schedule_apply_warnings=result.schedule_apply_warnings,
+        litellm_delivery_roles=result.litellm_delivery_roles,
+        litellm_delivery_pending=result.litellm_delivery_pending,
+        effective_num_ctx_role=result.effective_num_ctx_role,
+        effective_num_ctx_value=result.effective_num_ctx_value,
     )
 
 

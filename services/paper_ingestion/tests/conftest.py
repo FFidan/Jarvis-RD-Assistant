@@ -72,6 +72,7 @@ from jarvis_common.testing_contract_apps import (  # noqa: E402
     make_contract_client,
     patch_pi_test_app,
 )
+from jarvis_common.testing_auth import SignedIdentityMiddleware  # noqa: E402
 
 contract_pg_dsn = _make_contract_pg_dsn("jarvis-rd-contract")
 _contract_pool = _make_contract_pool_fixture()
@@ -176,7 +177,7 @@ async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app as pi_app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     with patch_pi_test_app(
         shared,
         app=pi_app,
@@ -184,7 +185,11 @@ async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
         limiter=limiter,
         options=PITestAppOptions(remove_owner_override=True),
     ) as app:
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -193,7 +198,7 @@ async def _platform_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
     from platform_api.deps import get_db_pool, limiter
     from platform_api.main import app as platform_app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
     with patch_pi_test_app(
         shared,
         app=platform_app,
@@ -210,7 +215,7 @@ async def _pi_app(contract_conn: Any) -> AsyncIterator[Any]:
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app as pi_app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     with patch_pi_test_app(
         shared,
         app=pi_app,
@@ -224,7 +229,11 @@ async def _pi_app(contract_conn: Any) -> AsyncIterator[Any]:
             mock_embedder=True,
         ),
     ) as app:
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 # Composable contract-app fixture wiring the PI app to a FauxLiteLLMServer

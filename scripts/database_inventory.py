@@ -67,19 +67,22 @@ _CTE_RE = re.compile(
 )
 _SCHEMA_OBJECT_PATTERNS = {
     "tables": re.compile(
-        r"^CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+((?:public\.)?[a-zA-Z_][\w$]*)",
+        r"^CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+"
+        r"((?:[a-zA-Z_][\w$]*\.)?[a-zA-Z_][\w$]*)\b",
         re.IGNORECASE | re.MULTILINE,
     ),
     "sequences": re.compile(
-        r"^CREATE\s+SEQUENCE(?:\s+IF\s+NOT\s+EXISTS)?\s+((?:public\.)?[a-zA-Z_][\w$]*)",
+        r"^CREATE\s+SEQUENCE(?:\s+IF\s+NOT\s+EXISTS)?\s+"
+        r"((?:[a-zA-Z_][\w$]*\.)?[a-zA-Z_][\w$]*)\b",
         re.IGNORECASE | re.MULTILINE,
     ),
     "functions": re.compile(
-        r"^CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+((?:public\.)?[a-zA-Z_][\w$]*)",
+        r"^CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+"
+        r"((?:[a-zA-Z_][\w$]*\.)?[a-zA-Z_][\w$]*)\b",
         re.IGNORECASE | re.MULTILINE,
     ),
     "types": re.compile(
-        r"^CREATE\s+TYPE\s+((?:public\.)?[a-zA-Z_][\w$]*)",
+        r"^CREATE\s+TYPE\s+((?:[a-zA-Z_][\w$]*\.)?[a-zA-Z_][\w$]*)\b",
         re.IGNORECASE | re.MULTILINE,
     ),
     "triggers": re.compile(
@@ -478,7 +481,14 @@ def inventory_schema_objects(root: Path = REPO_ROOT) -> dict[str, list[str]]:
     sql = "\n".join(path.read_text(encoding="utf-8") for path in sql_paths)
     objects: dict[str, list[str]] = {}
     for kind, pattern in _SCHEMA_OBJECT_PATTERNS.items():
-        names = {match.removeprefix("public.").lower() for match in pattern.findall(sql)}
+        matches = {match.lower() for match in pattern.findall(sql)}
+        if kind == "functions":
+            # Same-named owner-local functions are distinct catalog objects.
+            names = {match.removeprefix("public.") for match in matches}
+        else:
+            # Relation ownership remains keyed by the stable object basename;
+            # the manifest's domain supplies its physical schema.
+            names = {match.rsplit(".", maxsplit=1)[-1] for match in matches}
         objects[kind] = sorted(names)
     return objects
 

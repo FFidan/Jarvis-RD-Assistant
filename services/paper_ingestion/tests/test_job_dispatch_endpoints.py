@@ -60,6 +60,33 @@ def app_with_pool():
         yield app, pool
 
 
+@pytest.fixture()
+def platform_jobs_app():
+    """Create the Platform-owned public jobs facade with test auth seams."""
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from platform_api.deps import get_db_pool, limiter
+    from platform_api.main import app
+
+    pool, _conn = make_pool_and_conn()
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_owner_override=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                current_user_id_strict: lambda: 42,
+            },
+        ),
+    ):
+        yield app, pool
+
+
 async def test_summarize_endpoint_enqueues_job(app_with_pool):
     """POST /api/summarize/{paper_id} returns a durable job id."""
     from unittest.mock import MagicMock
@@ -187,9 +214,9 @@ async def test_scan_local_pdfs_non_admin_gets_403(app_with_pool):
 # ---------------------------------------------------------------------------
 
 
-async def test_create_job_rejects_unknown_kind(app_with_pool):
-    """POST /api/jobs with an unknown kind returns 422."""
-    app, _pool = app_with_pool
+async def test_create_job_rejects_unknown_kind(platform_jobs_app):
+    """Platform POST /api/jobs rejects an unknown kind with 422."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -211,9 +238,9 @@ async def test_create_job_rejects_unknown_kind(app_with_pool):
     )
 
 
-async def test_create_job_rejects_missing_paper_id_for_paper_process(app_with_pool):
-    """POST /api/jobs kind=paper.process with empty payload returns 422."""
-    app, _pool = app_with_pool
+async def test_create_job_rejects_missing_paper_id_for_paper_process(platform_jobs_app):
+    """Platform POST /api/jobs rejects a paper job lacking its paper id."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -228,9 +255,9 @@ async def test_create_job_rejects_missing_paper_id_for_paper_process(app_with_po
     assert "paper_id" in errors_str
 
 
-async def test_create_job_rejects_string_paper_id(app_with_pool):
-    """POST /api/jobs kind=paper.process with paper_id as string returns 422."""
-    app, _pool = app_with_pool
+async def test_create_job_rejects_string_paper_id(platform_jobs_app):
+    """Platform POST /api/jobs rejects a non-integer paper id."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -254,9 +281,9 @@ _BATCH_KINDS = ("papers.batch_process", "papers.batch_summarize", "extraction.ba
 
 
 @pytest.mark.parametrize("kind", _BATCH_KINDS)
-async def test_batch_payload_rejects_more_than_fifty_paper_ids(app_with_pool, kind):
-    """One request may not enqueue an unbounded amount of per-paper work."""
-    app, _pool = app_with_pool
+async def test_batch_payload_rejects_more_than_fifty_paper_ids(platform_jobs_app, kind):
+    """Platform refuses an unbounded batch before owner dispatch."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -271,29 +298,22 @@ async def test_batch_payload_rejects_more_than_fifty_paper_ids(app_with_pool, ki
 
 
 @pytest.mark.parametrize("kind", _BATCH_KINDS)
-async def test_batch_payload_accepts_fifty_paper_ids(app_with_pool, kind):
-    """The bound is 50, not 49 — the largest legitimate batch still enqueues."""
-    import jarvis_common.task_registry as task_registry
-    from paper_ingestion.deps import get_db_pool
-
-    app, _pool = app_with_pool
+async def test_batch_payload_accepts_fifty_paper_ids(platform_jobs_app, kind, monkeypatch):
+    """Platform forwards the largest valid batch to its exact owner command."""
+    app, _pool = platform_jobs_app
     paper_ids = list(range(1, 51))
-    pool, conn = make_pool_and_conn()
-    conn.fetch = AsyncMock(return_value=[{"id": pid, "is_visible": True} for pid in paper_ids])
-    app.dependency_overrides[get_db_pool] = lambda: pool
-
-    mock_task = MagicMock(defer_async=AsyncMock())
-    with patch.dict(task_registry._TASK_MAP, {kind: mock_task}):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post(
-                "/api/jobs",
-                json={"kind": kind, "payload": {"paper_ids": paper_ids}},
-            )
+    dispatch = AsyncMock(return_value="owner-job-id")
+    monkeypatch.setattr("platform_api.routers.jobs._dispatch_to_owner", dispatch)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/jobs",
+            json={"kind": kind, "payload": {"paper_ids": paper_ids}},
+        )
 
     assert resp.status_code == 202, resp.text
-    mock_task.defer_async.assert_awaited_once()
+    dispatch.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

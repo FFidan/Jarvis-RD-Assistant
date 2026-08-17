@@ -25,6 +25,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 from jarvis_common.testing_contract_apps import (
     PITestAppOptions,
@@ -62,7 +63,10 @@ async def _pi_app(contract_conn):
     mock_embedder.search_similar = AsyncMock(return_value=[])
     mock_embedder.hybrid_search = AsyncMock(return_value=[])
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=app,
@@ -77,7 +81,11 @@ async def _pi_app(contract_conn):
             dependency_overrides={get_embedder: lambda: mock_embedder},
         ),
     ) as wired_app:
-        yield wired_app
+        yield SignedIdentityMiddleware(
+            wired_app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -58,7 +58,10 @@ async def admin_client(contract_conn):
     _admin_id, admin_cookie = await _seed_user_with_session(
         contract_conn, "session-revocation-admin@example.com", "admin"
     )
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (

@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock
 
 import asyncpg
 import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
 from jarvis_common.identity_assertions import (
@@ -25,9 +28,12 @@ from jarvis_common.identity_capabilities import (
 )
 from jarvis_common.identity_middleware import IdentityAssertionMiddleware
 from jarvis_common.testing import make_pool_and_conn
+from learning_engine.deps import get_db_pool as get_learning_db_pool
+from learning_engine.routers import internal_domains as learning_internal_domains
 from paper_ingestion.deps import get_db_pool as get_research_db_pool
 from paper_ingestion.deps import get_scheduler as get_research_scheduler
 from paper_ingestion.routers import internal_config
+from paper_ingestion.routers import internal_domains as research_internal_domains
 from paper_ingestion.services.config_write import ConfigWriteResult
 from platform_api.auth_cookie_relay import AuthCookieRelayMiddleware
 from platform_api.config import PlatformSettings
@@ -295,6 +301,13 @@ def test_service_principal_manifest_is_exact_and_deny_by_default() -> None:
         service_principal_scopes("telegram", "learning", _HTTP_DELETE, "/api/projects/42") is None
     )
     assert service_principal_scopes("research", "learning", "GET", "/api/projects") is None
+    assert service_principal_scopes(
+        "learning", "research", "POST", "/internal/domains/library"
+    ) == ("research:library:write",)
+    assert (
+        service_principal_scopes("research", "research", "POST", "/internal/domains/library")
+        is None
+    )
     assert (
         service_principal_scopes(
             "research", "research", "PUT", "/internal/platform/config/pulse.cron"
@@ -646,7 +659,24 @@ def _build_platform_config_client(
         audience="research",
         keys={"current": VerificationKey(private_key.public_key())},
     )
-    pool, _ = make_pool_and_conn(with_transaction=False)
+    pool, conn = make_pool_and_conn(
+        with_transaction=False,
+        direct_methods=True,
+        execute_return="UPDATE 1",
+    )
+    conn.fetchrow.return_value = {
+        "delivery_id": uuid.uuid4(),
+        "scope_user_id": 0,
+        "user_id": 7,
+        "user_role": "admin",
+        "session_id": "session-7",
+        "zotero_scope_changed": False,
+        "key": "pulse.cron",
+        "value": "0 4 * * *",
+        "encrypted_value": None,
+        "attempts": 0,
+        "next_attempt_at": datetime.now(UTC),
+    }
     research_client = AsyncMock(spec=httpx.AsyncClient)
     if isinstance(research_result, BaseException):
         research_client.put.side_effect = research_result
@@ -699,13 +729,27 @@ def test_platform_config_write_binds_exact_research_command(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"key": "pulse.cron", "value": "0 4 * * *"}
-    downstream_call = research_client.put.await_args
-    assert downstream_call is not None
+    assert response.json() == {
+        "key": "pulse.cron",
+        "value": "0 4 * * *",
+        "delivery_state": "applied",
+    }
+    assert research_client.put.await_count == 2
+    validation_call, delivery_call = research_client.put.await_args_list
+    assert validation_call.kwargs["json"] == {
+        "value": "0 4 * * *",
+        "phase": "validate",
+        "zotero_scope_changed": False,
+    }
+    assert delivery_call.kwargs["json"] == {
+        "value": "0 4 * * *",
+        "phase": "apply",
+        "zotero_scope_changed": False,
+    }
+    downstream_call = delivery_call
     assert downstream_call.args == (
         "http://paper_ingestion:8000/internal/platform/config/pulse.cron",
     )
-    assert downstream_call.kwargs["json"] == {"value": "0 4 * * *"}
     assert downstream_call.kwargs["timeout"] == 310.0
     headers = cast(dict[str, str], downstream_call.kwargs["headers"])
     claims = verifier.verify(
@@ -797,6 +841,185 @@ def _build_research_config_client() -> tuple[TestClient, IdentityAssertionSigner
     return TestClient(app), signer
 
 
+def _build_domain_command_client(
+    *,
+    audience: Literal["learning", "research"],
+    router: APIRouter,
+    pool_dependency: Callable[..., Any],
+) -> tuple[TestClient, IdentityAssertionSigner]:
+    """Build one owner-command router behind the production identity middleware."""
+    private_key = Ed25519PrivateKey.generate()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="current",
+        signing_key=private_key,
+    )
+    verifier = IdentityAssertionVerifier(
+        issuer="jarvis-platform",
+        audience=audience,
+        keys={"current": VerificationKey(private_key.public_key())},
+    )
+    pool, _ = make_pool_and_conn(with_transaction=False)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.identity_verifier = verifier
+    app.dependency_overrides[pool_dependency] = lambda: cast(asyncpg.Pool, pool)
+    app.add_middleware(
+        IdentityAssertionMiddleware,
+        scope_resolver=lambda method, path: required_identity_scopes(audience, method, path),
+    )
+    return TestClient(app), signer
+
+
+def test_research_erasure_routes_require_the_exact_signed_user() -> None:
+    """Research accepts only Platform commands whose body matches the assertion."""
+    client, signer = _build_domain_command_client(
+        audience="research",
+        router=research_internal_domains.router,
+        pool_dependency=get_research_db_pool,
+    )
+    request_uuid = uuid.uuid4()
+    path = f"/internal/domains/erasure/{request_uuid}/research"
+
+    def call(*, asserted_user_id: int, body_user_id: int, request_id: str) -> httpx.Response:
+        assertion = signer.issue(
+            audience="research",
+            subject="service:platform",
+            principal="platform",
+            user_id=asserted_user_id,
+            request_id=request_id,
+            request_method="POST",
+            request_path=path,
+            scopes=("research:erasure:write",),
+        )
+        return client.post(
+            path,
+            json={"user_id": body_user_id},
+            headers={"X-Jarvis-Identity": assertion, "X-Request-Id": request_id},
+        )
+
+    accepted = call(asserted_user_id=7, body_user_id=7, request_id="research-erasure-ok")
+    denied = call(asserted_user_id=8, body_user_id=7, request_id="research-erasure-mismatch")
+
+    assert accepted.status_code == 200, accepted.text
+    assert denied.status_code == 403
+
+
+def test_research_library_command_binds_learning_subject_and_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Research accepts only the exact signed Learning library command."""
+    client, signer = _build_domain_command_client(
+        audience="research",
+        router=research_internal_domains.router,
+        pool_dependency=get_research_db_pool,
+    )
+    ownership = AsyncMock()
+    add_to_library = AsyncMock()
+    monkeypatch.setattr(research_internal_domains, "assert_paper_ownership", ownership)
+    monkeypatch.setattr(research_internal_domains, "add_to_library", add_to_library)
+    path = "/internal/domains/library"
+
+    def call(
+        *,
+        asserted_user_id: int,
+        body_user_id: int,
+        request_id: uuid.UUID,
+        body_request_id: uuid.UUID | None = None,
+    ) -> httpx.Response:
+        assertion = signer.issue(
+            audience="research",
+            subject="service:learning",
+            principal="learning",
+            user_id=asserted_user_id,
+            request_id=str(request_id),
+            request_method="POST",
+            request_path=path,
+            scopes=("research:library:write",),
+        )
+        return client.post(
+            path,
+            json={
+                "request_id": str(body_request_id or request_id),
+                "user_id": body_user_id,
+                "paper_id": 42,
+            },
+            headers={"X-Jarvis-Identity": assertion, "X-Request-Id": str(request_id)},
+        )
+
+    accepted = call(asserted_user_id=7, body_user_id=7, request_id=uuid.uuid4())
+    denied_subject = call(asserted_user_id=8, body_user_id=7, request_id=uuid.uuid4())
+    denied_request = call(
+        asserted_user_id=7,
+        body_user_id=7,
+        request_id=uuid.uuid4(),
+        body_request_id=uuid.uuid4(),
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json() == {"acknowledged": True}
+    assert denied_subject.status_code == 403
+    assert denied_request.status_code == 403
+    ownership.assert_awaited_once()
+    add_to_library.assert_awaited_once()
+
+
+def test_learning_owner_routes_require_the_exact_signed_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Learning rejects a Research command for a different asserted subject."""
+    client, signer = _build_domain_command_client(
+        audience="learning",
+        router=learning_internal_domains.router,
+        pool_dependency=get_learning_db_pool,
+    )
+    apply_command = AsyncMock(return_value=True)
+    monkeypatch.setattr(learning_internal_domains, "apply_command", apply_command)
+    path = "/internal/domains/paper-read"
+
+    def call(
+        *,
+        asserted_user_id: int,
+        body_user_id: int,
+        request_id: uuid.UUID,
+        body_request_id: uuid.UUID | None = None,
+    ) -> httpx.Response:
+        request_id_text = str(request_id)
+        assertion = signer.issue(
+            audience="learning",
+            subject="service:research",
+            principal="research",
+            user_id=asserted_user_id,
+            request_id=request_id_text,
+            request_method="POST",
+            request_path=path,
+            scopes=("learning:domain:write",),
+        )
+        return client.post(
+            path,
+            json={
+                "request_id": str(body_request_id or request_id),
+                "user_id": body_user_id,
+                "paper_id": 42,
+            },
+            headers={"X-Jarvis-Identity": assertion, "X-Request-Id": request_id_text},
+        )
+
+    accepted = call(asserted_user_id=7, body_user_id=7, request_id=uuid.uuid4())
+    denied = call(asserted_user_id=8, body_user_id=7, request_id=uuid.uuid4())
+    mismatched_request = call(
+        asserted_user_id=7,
+        body_user_id=7,
+        request_id=uuid.uuid4(),
+        body_request_id=uuid.uuid4(),
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert denied.status_code == 403
+    assert mismatched_request.status_code == 403
+    apply_command.assert_awaited_once()
+
+
 def test_research_config_command_requires_and_uses_verified_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -840,6 +1063,10 @@ def test_research_config_command_requires_and_uses_verified_identity(
         "key": "pulse.cron",
         "value": "0 4 * * *",
         "schedule_apply_warnings": [],
+        "litellm_delivery_roles": [],
+        "litellm_delivery_pending": None,
+        "effective_num_ctx_role": None,
+        "effective_num_ctx_value": None,
     }
     assert write.await_args is not None
     assert write.await_args.kwargs["caller_user_id"] == 7

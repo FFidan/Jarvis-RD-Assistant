@@ -71,6 +71,7 @@ def _platform_app():
     from platform_api.routers import configuration
 
     mock_pool, conn = _make_pool_and_conn()
+    conn.fetchval.return_value = None
     app = FastAPI()
     app.include_router(configuration.router)
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
@@ -134,7 +135,6 @@ def _signed_research_app(app: FastAPI, role: str | None) -> SignedIdentityMiddle
     return SignedIdentityMiddleware(
         app,
         audience="research",
-        verifier_app=app,
         user_id=1 if role is not None else None,
         role=role,
     )
@@ -223,8 +223,6 @@ async def test_set_encrypted_key_writes_bytea(_app):
     conn.execute.assert_awaited()
     # Use call_args_list[0]: the first call is always the UPSERT.
     call_args = conn.execute.call_args_list[0]
-    sql = call_args.args[0]
-    assert "encrypted_value" in sql
     # SYSTEM_KEY: user_id ($1) must be NULL — write is system-scoped, not user-scoped.
     assert call_args.args[1] is None, (
         "llm.anthropic.api_key is a SYSTEM_KEY: DB row must be written with user_id=NULL"
@@ -1098,7 +1096,7 @@ async def test_removing_a_provider_key_clears_it_and_records_the_change(
     assert _cache_invalidations.await_args.args[0].endswith(
         "/internal/platform/providers/anthropic/cache/invalidate"
     )
-    audit = _statement_with(conn, "audit_log")
+    audit = _statement_with(conn, "platform.append_audit_event")
     assert audit[2] == "secret.remove"
     assert audit[3] == "llm.anthropic.api_key"
 

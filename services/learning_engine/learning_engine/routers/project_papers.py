@@ -4,11 +4,17 @@ import logging
 import uuid
 
 import asyncpg
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import assert_paper_ownership, log_audit
 from jarvis_common.auth import current_user_id_strict
-from jarvis_common.library import add_to_library
+from jarvis_common.service_auth import (
+    ServiceCommand,
+    ServiceCommandUnavailableError,
+    authorize_service_command,
+)
 
+from learning_engine.config import get_learning_engine_settings
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ProjectPaperItem, ProjectPaperLinkResponse
 from learning_engine.routers._guards import assert_project_owner as _assert_project_owner
@@ -16,6 +22,42 @@ from learning_engine.routers._guards import assert_project_owner as _assert_proj
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["project-papers"])
+
+
+async def _add_to_research_library(request: Request, *, user_id: int, paper_id: int) -> None:
+    """Ask Research to add one paper without retaining a Learning connection."""
+    settings = get_learning_engine_settings()
+    request_id = str(uuid.uuid4())
+    path = "/internal/domains/library"
+    try:
+        token = settings.learning_service_token_file.read_text(encoding="utf-8").strip()
+        headers = await authorize_service_command(
+            request.app.state.http_client,
+            platform_url=settings.platform_api_url,
+            principal="learning",
+            token=token,
+            command=ServiceCommand(
+                audience="research",
+                method="POST",
+                path=path,
+                user_id=user_id,
+                request_id=request_id,
+            ),
+        )
+        response = await request.app.state.http_client.post(
+            f"{settings.paper_ingestion_url.rstrip('/')}{path}",
+            headers=headers,
+            json={"request_id": request_id, "user_id": user_id, "paper_id": paper_id},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("acknowledged") is not True:
+            raise ServiceCommandUnavailableError("Research acknowledgement is unavailable")
+    except (OSError, httpx.HTTPError, ServiceCommandUnavailableError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Paper library is temporarily unavailable"
+        ) from exc
 
 
 @router.get("/{project_id}/papers", response_model=list[ProjectPaperItem])
@@ -61,16 +103,16 @@ async def link_paper(
     """Link a paper to a project."""
     should_push_zotero = False
     async with db_pool.acquire() as conn:
+        await _assert_project_owner(conn, project_id, user_id)
+        await assert_paper_ownership(conn, paper_id, user_id)
+
+    await _add_to_research_library(request, user_id=user_id, paper_id=paper_id)
+
+    async with db_pool.acquire() as conn:
         async with conn.transaction():
-            # Scope by owner. Cannot link a paper into another user's project.
+            # Recheck after the owner command so a concurrently removed project
+            # cannot receive a new link.
             await _assert_project_owner(conn, project_id, user_id)
-            await assert_paper_ownership(conn, paper_id, user_id)
-            await add_to_library(
-                conn,
-                user_id=user_id,
-                paper_id=paper_id,
-                added_via="manual_save",
-            )
             result = await conn.execute(
                 "INSERT INTO project_papers (project_id, paper_id) "
                 "VALUES ($1, $2) ON CONFLICT DO NOTHING",

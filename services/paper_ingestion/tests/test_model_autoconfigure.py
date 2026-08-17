@@ -201,7 +201,7 @@ async def test_first_boot_autoconfigure_seeds_real_pulled_model(contract_conn, m
         delivers the stored model id to LiteLLM via update_litellm_model
         (which itself resolves llm.<machine>.<role>_num_ctx via _get_num_ctx).
     """
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     hw = _hw(16.0, 2)  # deterministic tier-2 (MID, 16 GB), machine_id="test"
     app = SimpleNamespace(
         state=SimpleNamespace(
@@ -286,7 +286,7 @@ async def test_first_boot_autoconfigure_seeds_real_pulled_model(contract_conn, m
 async def test_autoconfigure_tags_fetch_failure_keeps_legacy_fallback(contract_conn, monkeypatch):
     """Ollama unreachable at hook time → installed=[] → catalog-only smallest-first
     seeding (qwen3:1.7b, the smallest smart entry) instead of crashing boot."""
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     app = SimpleNamespace(
         state=SimpleNamespace(
             db_pool=pool,
@@ -306,7 +306,7 @@ async def test_autoconfigure_tags_fetch_failure_keeps_legacy_fallback(contract_c
 async def test_autoconfigure_never_clobbers_manual_num_ctx(contract_conn, monkeypatch):
     """A pre-existing per-machine num_ctx row (manual operator choice) survives
     the hook untouched — ON CONFLICT DO NOTHING semantics, same as the model rows."""
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     await contract_conn.execute(
         "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)",
         "llm.test.smart_num_ctx",

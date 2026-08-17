@@ -12,7 +12,7 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -849,10 +849,13 @@ async def _replace_source(
     release: asyncio.Event | None = None,
 ) -> None:
     """Increment a source generation, optionally holding the update transaction."""
+    from jarvis_common.db_helpers import lock_paper_content_generation
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             if started is not None:
                 started.set()
+            await lock_paper_content_generation(conn, paper_id)
             await conn.execute(
                 "UPDATE papers SET content_generation = content_generation + 1 WHERE id = $1",
                 paper_id,
@@ -876,7 +879,7 @@ async def test_direct_review_and_source_replacement_serialize_in_both_orders(
     _contract_pool,
     monkeypatch,
 ):
-    """The paper lock orders direct review and replacement without a stale write."""
+    """The generation lock orders direct review and replacement without a stale write."""
     from fastapi import HTTPException
 
     import learning_engine.routers.review as review_module
@@ -886,7 +889,7 @@ async def test_direct_review_and_source_replacement_serialize_in_both_orders(
         _contract_pool,
         "direct-review-race",
     )
-    handler = getattr(review_module.submit_review, "__wrapped__", review_module.submit_review)
+    handler = review_module._submit_review
     try:
         action_locked = asyncio.Event()
         release_action = asyncio.Event()
@@ -899,7 +902,6 @@ async def test_direct_review_and_source_replacement_serialize_in_both_orders(
         monkeypatch.setattr(review_module, "_build_fsrs_manager_from_db", gated_manager)
         action = asyncio.create_task(
             handler(
-                request=MagicMock(),
                 card_id=card_id,
                 body=ReviewRequest(rating=3, review_duration_ms=100),
                 db_pool=_contract_pool,
@@ -950,7 +952,6 @@ async def test_direct_review_and_source_replacement_serialize_in_both_orders(
         )
         action = asyncio.create_task(
             handler(
-                request=MagicMock(),
                 card_id=card_id,
                 body=ReviewRequest(rating=3, review_duration_ms=100),
                 db_pool=_contract_pool,
@@ -1001,7 +1002,7 @@ async def test_offline_review_and_source_replacement_serialize_in_both_orders(
         _contract_pool,
         "offline-review-race",
     )
-    handler = getattr(review_module.sync_reviews, "__wrapped__", review_module.sync_reviews)
+    handler = review_module._sync_reviews
     original_check = review_module._card_source_is_current
     try:
         source_locked = asyncio.Event()
@@ -1028,7 +1029,6 @@ async def test_offline_review_and_source_replacement_serialize_in_both_orders(
         )
         action = asyncio.create_task(
             handler(
-                request=MagicMock(),
                 body=first_body,
                 db_pool=_contract_pool,
                 user_id=user_id,
@@ -1092,7 +1092,6 @@ async def test_offline_review_and_source_replacement_serialize_in_both_orders(
         )
         action = asyncio.create_task(
             handler(
-                request=MagicMock(),
                 body=second_body,
                 db_pool=_contract_pool,
                 user_id=user_id,

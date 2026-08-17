@@ -13,7 +13,8 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from starlette.types import ASGIApp, Receive, Scope, Send
+from fastapi import FastAPI
+from starlette.types import Receive, Scope, Send
 
 from jarvis_common.identity_assertions import (
     IdentityAssertionSigner,
@@ -57,13 +58,14 @@ class SignedIdentityMiddleware:
         Backend application that enforces :class:`IdentityAssertionMiddleware`.
     audience : {"learning", "research"}
         Destination audience used for capability classification and signing.
-    verifier_app : Any
-        FastAPI application whose state the backend middleware reads.
     user_id : int or None, default=1
         Authenticated test user. ``None`` models an API-key principal without a
         browser identity.
     role : str or None, optional
         Browser role embedded in the assertion.
+    session_pool : Any or None, optional
+        Platform-scoped contract pool used to resolve the request's browser
+        session. When supplied, its user and role replace the fixed values.
 
     Notes
     -----
@@ -75,12 +77,12 @@ class SignedIdentityMiddleware:
 
     def __init__(
         self,
-        app: ASGIApp,
+        app: FastAPI,
         *,
         audience: IdentityAudience,
-        verifier_app: Any,
         user_id: int | None = 1,
         role: str | None = None,
+        session_pool: Any | None = None,
     ) -> None:
         """Create and install one ephemeral signer-verifier pair."""
         private_key = Ed25519PrivateKey.generate()
@@ -88,16 +90,47 @@ class SignedIdentityMiddleware:
         self._audience: IdentityAudience = audience
         self._user_id = user_id
         self._role = role
+        self._session_pool = session_pool
         self._signer = IdentityAssertionSigner(
             issuer="jarvis-platform-test",
             key_id="ephemeral-test-key",
             signing_key=private_key,
         )
-        verifier_app.state.identity_verifier = IdentityAssertionVerifier(
+        app.state.identity_verifier = IdentityAssertionVerifier(
             issuer="jarvis-platform-test",
             audience=audience,
             keys={"ephemeral-test-key": VerificationKey(private_key.public_key())},
         )
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate application attributes used by contract fixtures."""
+        return getattr(self._app, name)
+
+    async def _request_identity(self, scope: Scope) -> tuple[int | None, str | None]:
+        """Resolve a browser cookie through Platform when configured."""
+        if self._session_pool is None:
+            return self._user_id, self._role
+
+        from starlette.requests import Request
+
+        raw_cookie = Request(scope).cookies.get("jarvis_session")
+        if raw_cookie is None:
+            return None, None
+        try:
+            session_id = uuid.UUID(raw_cookie)
+        except ValueError:
+            return None, None
+        row = await self._session_pool.fetchrow(
+            """SELECT s.user_id, u.role
+               FROM platform.sessions AS s
+               JOIN platform.users AS u ON u.id = s.user_id
+               WHERE s.id = $1 AND s.revoked_at IS NULL
+                 AND s.expires_at > NOW() AND u.deleted_at IS NULL""",
+            session_id,
+        )
+        if row is None:
+            return None, None
+        return int(row["user_id"]), str(row["role"])
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Sign each protected HTTP request for its exact method and path."""
@@ -112,15 +145,16 @@ class SignedIdentityMiddleware:
             await self._app(scope, receive, send)
             return
 
+        user_id, role = await self._request_identity(scope)
         request_id = str(uuid.uuid4())
-        principal = "browser" if self._user_id is not None else "api-key"
-        subject = f"user:{self._user_id}" if self._user_id is not None else "api-key"
+        principal = "browser" if user_id is not None else "api-key"
+        subject = f"user:{user_id}" if user_id is not None else "api-key"
         assertion = self._signer.issue(
             audience=self._audience,
             subject=subject,
             principal=principal,
-            user_id=self._user_id,
-            user_role=self._role,
+            user_id=user_id,
+            user_role=role,
             request_id=request_id,
             request_method=method,
             request_path=path,
@@ -128,10 +162,10 @@ class SignedIdentityMiddleware:
         )
         forwarded = dict(scope)
         state = dict(scope.get("state", {}))
-        if self._user_id is not None:
-            state["user_id"] = self._user_id
-        if self._role is not None:
-            state["user_role"] = self._role
+        if user_id is not None:
+            state["user_id"] = user_id
+        if role is not None:
+            state["user_role"] = role
         state["identity_principal"] = principal
         state["identity_scopes"] = scopes
         forwarded["state"] = state

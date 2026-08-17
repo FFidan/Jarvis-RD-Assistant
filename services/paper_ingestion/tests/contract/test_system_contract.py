@@ -35,6 +35,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 pytestmark = [
     pytest.mark.contract,
@@ -67,7 +68,10 @@ async def pi_test_client(contract_conn):
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -84,7 +88,12 @@ async def pi_test_client(contract_conn):
                 },
             ),
         ):
-            async with make_contract_client(app, None) as client:
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                user_id=None,
+            )
+            async with make_contract_client(signed_app, None) as client:
                 yield client
     finally:
         app.state.limiter.enabled = True
@@ -155,10 +164,10 @@ async def test_readiness_audit_log_count_reflects_db(pi_test_client, contract_co
     get_secrets_settings.cache_clear()
 
     # Insert a real audit_log row in the same transaction.
-    # Schema: (id serial, user_id text, action text, resource text, timestamp, metadata jsonb)
+    # Identify the runtime authority that produced the row, as production audit writes do.
     await contract_conn.execute(
-        """INSERT INTO audit_log (action, resource)
-           VALUES ('d5_bypass_probe', 'contract_test')"""
+        """INSERT INTO audit_log (action, resource, caller_role)
+           VALUES ('d5_bypass_probe', 'contract_test', 'jarvis_research_runtime')"""
     )
 
     resp = await pi_test_client.get("/api/system/readiness")

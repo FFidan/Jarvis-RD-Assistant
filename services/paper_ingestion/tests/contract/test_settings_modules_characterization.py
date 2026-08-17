@@ -54,11 +54,13 @@ async def test_write_config_lookback_days_persists_through_validator(contract_co
     # Validator must accept this value without raising
     _validate_lookback_days(value)
 
-    # Write via the raw DB helper (bypasses scheduler / LiteLLM side-effects)
-    await _write_config_row(contract_conn, user_id=None, key=key, value=value)
-
-    # Read back via the effective-row helper (NULL user_id → system row path)
-    row = await _fetch_effective_config_row(contract_conn, key, user_id=None)
+    platform_pool = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
+    async with platform_pool.acquire() as conn:
+        await _write_config_row(conn, user_id=None, key=key, value=value)
+        row = await _fetch_effective_config_row(conn, key, user_id=None)
 
     assert row is not None, f"Expected a row for key={key!r} after write"
     # asyncpg JSONB codec returns Python native types

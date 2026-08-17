@@ -56,6 +56,13 @@ def mock_pool(mock_request):
     return pool, mock_request
 
 
+def _enable_transactions(conn: AsyncMock) -> None:
+    """Configure an async context manager for a mocked connection savepoint."""
+    conn.transaction = MagicMock()
+    conn.transaction.return_value.__aenter__ = AsyncMock(return_value=None)
+    conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
+
+
 # ---------------------------------------------------------------------------
 # expires_at IS NOT NULL defense-in-depth
 # ---------------------------------------------------------------------------
@@ -84,6 +91,7 @@ async def test_populate_state_rejects_null_expires_at(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -116,6 +124,7 @@ async def test_populate_state_accepts_valid_session(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -150,6 +159,7 @@ async def test_populate_state_accepts_expired_within_grace(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -181,6 +191,7 @@ async def test_populate_state_rejects_expired_outside_grace(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -216,9 +227,7 @@ def _wire_conn(pool, *, row, renewed=None):
     the atomic renewal UPDATE ``fetchval`` returns (None ⇒ the predicate — grace /
     revoked / throttle — matched no row). Both acquires yield this same conn.
     """
-    wired, conn = make_pool_and_conn(
-        fetchrow_return=row, fetchval_return=renewed, with_transaction=False
-    )
+    wired, conn = make_pool_and_conn(fetchrow_return=row, fetchval_return=renewed)
     # The pool under test comes from the fixture; graft the wired acquire onto it.
     pool.acquire = wired.acquire
     return conn

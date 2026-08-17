@@ -1,7 +1,9 @@
 """Audit log helper: append security and destructive-mutation events."""
 
+import hashlib
 import json
 import logging
+import re
 from typing import Any
 
 import asyncpg
@@ -13,6 +15,10 @@ logger = logging.getLogger(__name__)
 # a request body that found its way into metadata) would bloat audit_log
 # without value. Above this threshold we replace the payload with a marker.
 _METADATA_MAX_BYTES = 4096
+_ERASABLE_METADATA_KEYS = frozenset(
+    {"email", "ip", "client_ip", "raw_client_ip", "name", "username", "user_agent", "user_id"}
+)
+_SAFE_RESOURCE_RE = re.compile(r"^/?[a-z][a-z0-9_./:-]{0,255}$")
 
 
 def _cap_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -45,6 +51,30 @@ def _cap_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return json.loads(encoded)
 
 
+def _immutable_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Return audit-safe facts without erasable text values.
+
+    The mutable Platform subject mapping owns identity and personal metadata.
+    Immutable audit rows retain only typed operational facts, never arbitrary
+    text that could contain an erasable identifier.
+    """
+    capped = _cap_metadata(metadata)
+    return {
+        key: value
+        for key, value in capped.items()
+        if key not in _ERASABLE_METADATA_KEYS and isinstance(value, bool | int | float | type(None))
+    }
+
+
+def _immutable_resource(resource: str, user_id: str | None) -> str:
+    """Return a bounded non-identifying resource accepted by the database."""
+    sanitized = resource.replace(user_id, "subject") if user_id else resource
+    if _SAFE_RESOURCE_RE.fullmatch(sanitized):
+        return sanitized
+    digest = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+    return f"resource_hash:{digest}"
+
+
 async def log_audit_strict(
     conn: Any,
     *,
@@ -56,13 +86,12 @@ async def log_audit_strict(
     """Insert an audit event on the caller's transaction and propagate failure."""
     await conn.execute(
         """
-        INSERT INTO audit_log (user_id, action, resource, metadata)
-        VALUES ($1, $2, $3, $4)
+        SELECT platform.append_audit_event($1, $2, $3, $4::jsonb)
         """,
         user_id,
         action,
-        resource,
-        _cap_metadata(metadata),
+        _immutable_resource(resource, user_id),
+        _immutable_metadata(metadata),
     )
 
 
@@ -79,18 +108,18 @@ async def log_audit(
     ``metadata`` is JSON-encoded and capped at 4 KB by :func:`_cap_metadata`
     to prevent a single oversize event from bloating the audit_log table.
     """
-    capped = _cap_metadata(metadata)
+    immutable_metadata = _immutable_metadata(metadata)
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO audit_log (user_id, action, resource, metadata)
-                VALUES ($1, $2, $3, $4)
-                """,
-                user_id,
-                action,
-                resource,
-                capped,
-            )
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    SELECT platform.append_audit_event($1, $2, $3, $4::jsonb)
+                    """,
+                    user_id,
+                    action,
+                    _immutable_resource(resource, user_id),
+                    immutable_metadata,
+                )
     except Exception as exc:
         logger.warning("audit_log insert failed: %r", exc, exc_info=True)

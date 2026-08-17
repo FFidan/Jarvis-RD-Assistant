@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -68,9 +70,11 @@ def _app_with_txn():
 # ---------------------------------------------------------------------------
 
 
-async def test_unlink_paper_from_task_success(_app_with_txn):
+async def test_unlink_paper_from_task_success(_app_with_txn, monkeypatch):
     """Success path: task owned by caller + link exists → 204 and transaction entered."""
     app, conn, txn_cm = _app_with_txn
+    audit = AsyncMock()
+    monkeypatch.setattr("learning_engine.routers.tasks.log_audit", audit)
     conn.fetchval.return_value = 5  # task id (ownership check passes)
     conn.execute.return_value = "DELETE 1"
 
@@ -82,10 +86,11 @@ async def test_unlink_paper_from_task_success(_app_with_txn):
     assert resp.status_code == 204
     # Transaction context-manager must have been entered exactly once.
     txn_cm.__aenter__.assert_awaited_once()
-    # execute is called at least once for the DELETE (log_audit also calls it via pool).
+    # execute is called for the DELETE within the route's transaction.
     assert conn.execute.await_count >= 1
     first_call_sql = conn.execute.call_args_list[0].args[0]
     assert "DELETE" in first_call_sql and "task_paper_links" in first_call_sql
+    audit.assert_awaited_once()
 
 
 async def test_unlink_paper_from_task_task_not_found(_app_with_txn):

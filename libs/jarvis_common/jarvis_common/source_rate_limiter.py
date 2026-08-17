@@ -207,18 +207,7 @@ class PersistentSourceRateLimiter:
                         # covers the gap between check and write.
                         claim_attempts += 1
                         claimed_row = await conn.fetchrow(
-                            """
-                            INSERT INTO source_health
-                                (user_id, source_type, last_request_at, updated_at)
-                            VALUES ($1, $2, now(), now())
-                            ON CONFLICT (user_id, source_type) DO UPDATE
-                               SET last_request_at = now(),
-                                   updated_at      = now()
-                             WHERE source_health.last_request_at IS NULL
-                                OR source_health.last_request_at
-                                       < now() - ($3 || ' seconds')::interval
-                            RETURNING last_request_at
-                            """,
+                            "SELECT * FROM research.claim_source_slot_v1($1, $2, $3)",
                             self._user_id,
                             self._source_type,
                             str(self._min_interval),
@@ -296,18 +285,7 @@ class PersistentSourceRateLimiter:
             async with self._pool.acquire() as conn:
                 if status == "ok":
                     await conn.execute(
-                        """
-                        INSERT INTO source_health
-                            (user_id, source_type, last_request_at, last_status,
-                             cooldown_until, consecutive_failures, updated_at)
-                        VALUES ($1, $2, $3, $4, NULL, 0, $3)
-                        ON CONFLICT (user_id, source_type) DO UPDATE
-                           SET last_request_at = EXCLUDED.last_request_at,
-                               last_status = EXCLUDED.last_status,
-                               updated_at = EXCLUDED.updated_at,
-                               cooldown_until = NULL,
-                               consecutive_failures = 0
-                        """,
+                        "SELECT research.update_source_health_v1($1, $2, $3, $4, NULL)",
                         self._user_id,
                         self._source_type,
                         now,
@@ -321,17 +299,7 @@ class PersistentSourceRateLimiter:
                     )
                     cooldown_dt = now + timedelta(seconds=cooldown_s)
                     await conn.execute(
-                        """
-                        INSERT INTO source_health
-                            (user_id, source_type, last_request_at, last_status,
-                             cooldown_until, consecutive_failures, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, 0, $3)
-                        ON CONFLICT (user_id, source_type) DO UPDATE
-                           SET last_request_at = EXCLUDED.last_request_at,
-                               last_status = EXCLUDED.last_status,
-                               updated_at = EXCLUDED.updated_at,
-                               cooldown_until = EXCLUDED.cooldown_until
-                        """,
+                        "SELECT research.update_source_health_v1($1, $2, $3, $4, $5)",
                         self._user_id,
                         self._source_type,
                         now,
@@ -340,20 +308,7 @@ class PersistentSourceRateLimiter:
                     )
                 else:  # "error"
                     await conn.execute(
-                        """
-                        INSERT INTO source_health
-                            (user_id, source_type, last_request_at, last_status,
-                             consecutive_failures, updated_at)
-                        VALUES ($1, $2, $3, $4, 1, $3)
-                        ON CONFLICT (user_id, source_type) DO UPDATE
-                           SET last_request_at = EXCLUDED.last_request_at,
-                               last_status = EXCLUDED.last_status,
-                               updated_at = EXCLUDED.updated_at,
-                               consecutive_failures =
-                                   COALESCE(
-                                       source_health.consecutive_failures, 0
-                                   ) + 1
-                        """,
+                        "SELECT research.update_source_health_v1($1, $2, $3, $4, NULL)",
                         self._user_id,
                         self._source_type,
                         now,
@@ -425,17 +380,7 @@ class PersistentSourceRateLimiter:
         try:
             async with self._pool.acquire() as conn:
                 await conn.execute(
-                    """
-                    INSERT INTO source_health
-                        (user_id, source_type, last_request_at, last_status,
-                         cooldown_until, consecutive_failures, updated_at)
-                    VALUES ($1, $2, $3, 'ok', NULL, 0, $3)
-                    ON CONFLICT (user_id, source_type) DO UPDATE
-                       SET last_status = 'ok',
-                           cooldown_until = NULL,
-                           consecutive_failures = 0,
-                           updated_at = EXCLUDED.updated_at
-                    """,
+                    "SELECT research.update_source_health_v1($1, $2, $3, 'reset', NULL)",
                     self._user_id,
                     self._source_type,
                     now,

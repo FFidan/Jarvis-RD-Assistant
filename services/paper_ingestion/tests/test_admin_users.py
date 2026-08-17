@@ -723,6 +723,7 @@ async def test_restore_user_allowed_with_model_hmac_key(monkeypatch) -> None:
     """With a real JARVIS_MODEL_HMAC_KEY the restore proceeds and clears deleted_at."""
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
     conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
     conn.fetchrow = AsyncMock(
         side_effect=[
             {

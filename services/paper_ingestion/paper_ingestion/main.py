@@ -376,8 +376,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
         model_id: str = best["id"]
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb) "
-                "ON CONFLICT (user_id, key) DO NOTHING",
+                "SELECT platform.set_research_config_v1(NULL, $1, $2::jsonb, 'insert')",
                 config_key,
                 model_id,
             )
@@ -387,8 +386,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
             num_ctx = safe_num_ctx(entry, seed_hardware, embed_reserve_gb)
             async with pool.acquire() as conn:
                 await conn.execute(
-                    "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb) "
-                    "ON CONFLICT (user_id, key) DO NOTHING",
+                    "SELECT platform.set_research_config_v1(NULL, $1, $2::jsonb, 'insert')",
                     f"llm.{machine_id}.{ROLE_TO_ALIAS[config_key]}_num_ctx",
                     num_ctx,
                 )
@@ -402,9 +400,9 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
 
     async with pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO user_config (key, value) "
-            "VALUES ('system.models_autoconfigured', 'true'::jsonb) "
-            "ON CONFLICT (user_id, key) DO NOTHING"
+            "SELECT platform.set_research_config_v1(NULL, $1, $2::jsonb, 'insert')",
+            "system.models_autoconfigured",
+            True,
         )
 
 
@@ -568,16 +566,6 @@ async def _qdrant_unavailable_handler(
     )
 
 
-# SessionMiddleware reads the jarvis_session cookie and populates
-# request.state.user_id. Added AFTER configure_middleware_and_errors so it
-# sits OUTSIDE (i.e. runs BEFORE) RequestIDMiddleware/SlowAPI/CORS/ProxyHeaders
-# in the request flow — Starlette add_middleware prepends, so the last-added
-# middleware is outermost and executes first. This means request.state.user_id
-# is already set when SlowAPI's rate-limit key function runs, which is what
-# makes the per-user rate-limit guarantee hold.
-from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
-
-app.add_middleware(SessionMiddleware)
 if _identity_settings.identity_assertions_required:
     app.add_middleware(
         IdentityAssertionMiddleware,
@@ -600,6 +588,7 @@ from paper_ingestion.routers import (  # noqa: E402
     highlights,
     infra_events,
     internal_config,
+    internal_domains,
     jobs,
     knowledge_graph,
     my_day,
@@ -628,6 +617,7 @@ from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(backups_router.router)
 app.include_router(internal_config.router)
+app.include_router(internal_domains.router)
 app.include_router(settings_ai_router.router)
 app.include_router(topics.router)
 app.include_router(settings.router)

@@ -53,10 +53,7 @@ _DISCOVERY_TOPICS_SQL = "SELECT id, name, query_terms FROM topics"
 # down is lost; this stamp is what lets the next boot notice and catch up.
 AUTO_PIPELINE_LAST_RUN_KEY = "scheduler.auto_pipeline.last_run"
 
-_LAST_RUN_UPSERT_SQL = (
-    "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb) "
-    "ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
-)
+_LAST_RUN_UPSERT_SQL = "SELECT platform.set_research_config_v1(NULL, $1, $2::jsonb, 'upsert')"
 
 
 def _resolve_topic_pairs(topics_rows) -> list[tuple[int | None, str, list[str]]]:

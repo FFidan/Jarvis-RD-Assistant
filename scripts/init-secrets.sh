@@ -375,6 +375,7 @@ sync_database_password postgres_cluster_bootstrap_password.txt
 sync_database_password postgres_legacy_rollback_password.txt
 sync_database_password postgres_backup_reader_password.txt
 sync_database_password postgres_restore_operator_password.txt
+sync_database_password postgres_erasure_executor_password.txt
 sync_database_password litellm_runtime_password.txt
 sync_database_password litellm_migrator_password.txt
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"

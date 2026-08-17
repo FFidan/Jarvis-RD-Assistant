@@ -41,6 +41,8 @@ VECTOR_API_URL              vector_api_url              main.py health check
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from jarvis_common.config import JarvisCommonSettings
 from pydantic import Field, SecretStr
 
@@ -92,6 +94,18 @@ class PaperIngestionSettings(JarvisCommonSettings):
     vector_api_url: str = Field(
         default="http://vector:8686",
         description="Vector sidecar API URL for best-effort health checks (VECTOR_API_URL).",
+    )
+    platform_api_url: str = Field(
+        default="http://platform_api:8003",
+        description="Platform signer origin for exact Learning owner commands (PLATFORM_API_URL).",
+    )
+    learning_engine_url: str = Field(
+        default="http://learning_engine:8001",
+        description="Learning owner API origin for domain commands (LEARNING_ENGINE_URL).",
+    )
+    research_service_token_file: Path = Field(
+        default=Path("/run/secrets/research_service_token"),
+        description="Research-only service credential used to request Platform assertions.",
     )
 
     # --- Embedding ------------------------------------------------------

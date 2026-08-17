@@ -37,6 +37,7 @@ from jarvis_common.owner import (
 from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field
 
+from platform_api.repos.erasure import cancel_active_request, create_or_get_request
 from platform_api.routers._auth_shared import build_verify_link
 from platform_api.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_token
 
@@ -644,9 +645,8 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
                 """,
                 user_id,
             )
+            erasure_request_id = await create_or_get_request(conn, user_id)
 
-            # Soft delete only — the daily data_purge job hard-deletes after
-            # the 30-day grace, when ownership is no longer attached to this row.
             await log_audit_strict(
                 conn,
                 action="admin.user.soft_delete",
@@ -654,6 +654,7 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
                 user_id=str(caller_id) if caller_id is not None else None,
             )
 
+    response.headers["X-Jarvis-Erasure-Request-Id"] = str(erasure_request_id)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
@@ -679,6 +680,17 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext('admin_role_mutation'))")
+            erasure_state = await conn.fetchval(
+                """SELECT state FROM erasure_requests
+                   WHERE user_id = $1 AND state NOT IN ('complete', 'attention_required')
+                   ORDER BY requested_at DESC LIMIT 1 FOR UPDATE""",
+                user_id,
+            )
+            if erasure_state not in {None, "requested"}:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Account erasure has already started and cannot be restored",
+                )
             target = await conn.fetchrow(
                 """
                 SELECT id, email, role, created_at, last_login_at, deleted_at
@@ -686,6 +698,7 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
                 WHERE id = $1
                   AND deleted_at IS NOT NULL
                   AND deleted_at >= NOW() - INTERVAL '30 days'
+                FOR UPDATE
                 """,
                 user_id,
             )
@@ -716,6 +729,7 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="The user changed while restore was in progress; reload and retry",
                 )
+            await cancel_active_request(conn, user_id)
 
     await log_audit(
         pool,

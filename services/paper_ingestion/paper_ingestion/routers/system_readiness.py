@@ -209,10 +209,31 @@ async def _job_queue_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
 
 
 async def _outbox_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
-    """Report whether the cross-domain outbox has a queryable durable state."""
+    """Report durable lag, retry, and dead-letter facts for the Research outbox."""
     try:
         async with db_pool.acquire() as conn:
-            relation = await conn.fetchval("SELECT to_regclass('ops.outbox_events')::text")
+            row = await conn.fetchrow(
+                """SELECT
+                    COUNT(*) FILTER (
+                        WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
+                    )::int AS pending,
+                    COUNT(*) FILTER (
+                        WHERE attempts > 0 AND delivered_at IS NULL AND dead_lettered_at IS NULL
+                    )::int AS retries,
+                    COUNT(*) FILTER (WHERE dead_lettered_at IS NOT NULL)::int AS dead_letters,
+                    COALESCE(MAX(EXTRACT(EPOCH FROM NOW() - created_at)) FILTER (
+                        WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
+                    ), 0)::int AS lag_seconds
+                FROM domain_events"""
+            )
+            if row is None:
+                raise RuntimeError("outbox diagnostic returned no row")
+            pending, retries, dead_letters, lag = (
+                int(row["pending"]),
+                int(row["retries"]),
+                int(row["dead_letters"]),
+                int(row["lag_seconds"]),
+            )
     except Exception as exc:  # noqa: BLE001 — readiness reports bounded failure type
         return ReadinessCheck(
             name="outbox",
@@ -220,18 +241,17 @@ async def _outbox_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
             detail=f"unavailable: {type(exc).__name__}",
             remediation="Check the operations schema grants and database connectivity.",
         )
-    if relation is None:
-        return ReadinessCheck(
-            name="outbox",
-            status="amber",
-            detail="not installed at schema 114; lag, retries, and dead letters unavailable",
-            remediation="Complete the cross-domain command installation before cutover.",
-        )
     return ReadinessCheck(
         name="outbox",
-        status="amber",
-        detail="installed but no compatible diagnostic query is registered",
-        remediation="Upgrade the operator diagnostic query with the outbox schema.",
+        status="amber" if retries or dead_letters or lag > 300 else "green",
+        detail=(
+            f"pending={pending}; retries={retries}; dead_letters={dead_letters}; lag_seconds={lag}"
+        ),
+        remediation=(
+            "Inspect Learning command delivery and dead letters before cutover."
+            if retries or dead_letters or lag > 300
+            else ""
+        ),
     )
 
 

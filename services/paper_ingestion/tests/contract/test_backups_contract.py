@@ -18,6 +18,7 @@ import json
 import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 pytestmark = [
     pytest.mark.contract,
@@ -119,7 +120,10 @@ async def admin_client(contract_conn, backups_dir):
     from paper_ingestion.main import app
 
     _uid, cookie = await _seed_admin_user(contract_conn)
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -128,7 +132,12 @@ async def admin_client(contract_conn, backups_dir):
                 app, set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None}
             ),
         ):
-            async with make_contract_client(app, cookie) as client:
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+            )
+            async with make_contract_client(signed_app, cookie) as client:
                 yield client
     finally:
         app.state.limiter.enabled = True
@@ -146,7 +155,10 @@ async def plain_client(contract_conn, backups_dir):
     from paper_ingestion.main import app
 
     _uid, cookie = await _seed_plain_user(contract_conn)
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -155,7 +167,12 @@ async def plain_client(contract_conn, backups_dir):
                 app, set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None}
             ),
         ):
-            async with make_contract_client(app, cookie) as client:
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+            )
+            async with make_contract_client(signed_app, cookie) as client:
                 yield client
     finally:
         app.state.limiter.enabled = True
@@ -176,7 +193,10 @@ async def owner_client(contract_conn, backups_dir, monkeypatch):
     owner_id, cookie = await _seed_admin_user(contract_conn)
     await _set_database_owner(contract_conn, owner_id)
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -185,7 +205,12 @@ async def owner_client(contract_conn, backups_dir, monkeypatch):
                 app, set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None}
             ),
         ):
-            async with make_contract_client(app, cookie) as client:
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+            )
+            async with make_contract_client(signed_app, cookie) as client:
                 yield client
     finally:
         app.state.limiter.enabled = True

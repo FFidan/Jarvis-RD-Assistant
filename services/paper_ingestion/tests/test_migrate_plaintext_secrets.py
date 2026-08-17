@@ -35,9 +35,6 @@ async def test_migrate_rewrites_plaintext_rows(fernet_key):
     # Each call's $2 (the ciphertext) must decrypt back to the original plaintext
     plaintext_by_id = {row["id"]: row["value"] for row in rows}
     for call in conn.execute.await_args_list:
-        sql = call.args[0]
-        assert "UPDATE user_config" in sql
-        assert "encrypted_value = $2" in sql
         row_id = call.args[1]
         ciphertext_bytes = call.args[2]
         # ciphertext is bytes; decode to str then run decrypt_secret

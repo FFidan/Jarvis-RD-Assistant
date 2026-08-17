@@ -31,6 +31,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 from jarvis_common.testing_contract_apps import (
     PITestAppOptions,
@@ -57,7 +58,10 @@ async def _pi_threads_app(contract_conn):
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=app,
@@ -69,7 +73,11 @@ async def _pi_threads_app(contract_conn):
             disable_limiter=True,
         ),
     ) as wired_app:
-        yield wired_app
+        yield SignedIdentityMiddleware(
+            wired_app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 # ---------------------------------------------------------------------------

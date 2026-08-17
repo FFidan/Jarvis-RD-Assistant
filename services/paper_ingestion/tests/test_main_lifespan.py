@@ -432,11 +432,19 @@ async def test_autoconfigure_models_hook_sets_flag_and_writes_user_config() -> N
     ):
         await _autoconfigure_models_hook(app)
 
-    # At least 3 INSERT calls: smart + fast roles + flag (embed is not
-    # auto-configured — it is dimension-locked to the Qdrant collection).
-    execute_calls = [str(call) for call in conn.execute.await_args_list]
-    insert_calls = [c for c in execute_calls if "INSERT INTO user_config" in c]
-    assert len(insert_calls) >= 3  # 2 roles + autoconfigured flag
+    # Smart + fast roles and the completion flag are bound to owner-capability
+    # calls (embed remains dimension-locked to the Qdrant collection).
+    bound_keys = {
+        arg
+        for call_args in conn.execute.await_args_list
+        for arg in call_args.args[1:]
+        if isinstance(arg, str)
+    }
+    assert {
+        "llm.smart_model",
+        "llm.fast_model",
+        "system.models_autoconfigured",
+    } <= bound_keys
 
 
 @pytest.mark.asyncio

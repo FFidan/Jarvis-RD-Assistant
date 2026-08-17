@@ -51,16 +51,15 @@ async def log_event(
         correlation_id = correlation_id_var.get()
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO system_events"
-                " (level, category, source, message, context, correlation_id)"
-                " VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
-                level,
-                category,
-                source,
-                message,
-                context or {},
-                correlation_id,
-            )
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT platform.append_system_event_v1($1, $2, $3, $4, $5::jsonb, $6)",
+                    level,
+                    category,
+                    source,
+                    message,
+                    context or {},
+                    correlation_id,
+                )
     except (asyncpg.PostgresError, OSError) as exc:
         logger.warning("log_event failed: %s", exc)

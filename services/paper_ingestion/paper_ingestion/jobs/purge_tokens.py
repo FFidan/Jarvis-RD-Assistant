@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 # Daily at 03:20 — after classifier training (03:30) but before Pulse deck (04:00)
 _PURGE_TOKENS_CRON = "20 3 * * *"
 
-_DELETE_EXPIRED_TOKENS = "DELETE FROM magic_link_tokens WHERE expires_at < NOW() - INTERVAL '1 day'"
-
 
 async def purge_expired_magic_link_tokens(pool: Any) -> None:
     """Delete ``magic_link_tokens`` rows that expired more than 1 day ago.
@@ -36,14 +34,11 @@ async def purge_expired_magic_link_tokens(pool: Any) -> None:
     exception so a transient DB failure does not crash the scheduler.
     """
     try:
-        result = await pool.execute(_DELETE_EXPIRED_TOKENS)
-        try:
-            deleted = int(result.split()[-1])
-        except Exception:
-            logger.debug(
-                "purge_tokens: could not parse delete-count from %r", result, exc_info=True
+        deleted = int(
+            await pool.fetchval(
+                "SELECT platform.purge_identity_retention_v1($1)", "magic_link_tokens"
             )
-            deleted = -1
+        )
         logger.info("purge_tokens: deleted %d expired magic_link_token(s)", deleted)
     except Exception:
         logger.exception("purge_tokens: failed to purge expired magic_link_tokens")

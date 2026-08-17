@@ -800,38 +800,14 @@ class TestProcrastinateLookupBroadExcept:
                 await get_unified(MagicMock(), "job-xyz")
 
     @pytest.mark.asyncio
-    async def test_migration_054_missing_fallback_still_returns_a_row(self) -> None:
-        """The ``job_progress`` join-missing fallback is schema degradation, not an outage.
-
-        It must keep returning a row (progress/progress_message as None), never
-        raise ``JobLookupUnavailable`` — that would turn a merely-unmigrated DB
-        into a false 503 on every job lookup.
-        """
+    async def test_missing_jobs_capability_is_an_outage(self) -> None:
+        """A schema below the startup-verified floor cannot masquerade as not found."""
         import asyncpg
-        from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
-
-        raw_row = {
-            "id": 42,
-            "queue_name": "paper_ingestion",
-            "task_name": "paper.process",
-            "status": "doing",
-            "args": {"job_id": "job-xyz", "user_id": "1"},
-            "attempts": 1,
-            "progress": None,
-            "progress_message": None,
-            "result": None,
-            "error": None,
-            "created_at": None,
-            "started_at": None,
-            "finished_at": None,
-        }
+        from jarvis_common.jobs import JobLookupUnavailable, get_procrastinate_job_for_jarvis_id
 
         conn = MagicMock()
         conn.fetchrow = AsyncMock(
-            side_effect=[
-                asyncpg.UndefinedColumnError("job_progress.progress does not exist"),
-                _DictRecord(raw_row),
-            ]
+            side_effect=asyncpg.UndefinedFunctionError("jarvis_job_read_v1 does not exist")
         )
 
         pool_cm = MagicMock()
@@ -841,62 +817,10 @@ class TestProcrastinateLookupBroadExcept:
         pool = MagicMock()
         pool.acquire = MagicMock(return_value=pool_cm)
 
-        result = await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
+        with pytest.raises(JobLookupUnavailable):
+            await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
 
-        assert result is not None, "migration-054-missing must still return a row, not None/raise"
-        assert result["task_name"] == "paper.process"
-        assert conn.fetchrow.call_count == 2, "must retry without the job_progress JOIN"
-
-
-# ---------------------------------------------------------------------------
-# _STATUS_CASE_SQL DRY invariant
-# ---------------------------------------------------------------------------
-
-
-class TestStatusCaseSql:
-    """_STATUS_CASE_SQL must be consistent with PROCRASTINATE_STATUS_MAP.
-
-    The SQL fragment is derived from PROCRASTINATE_STATUS_MAP at module load;
-    these tests verify the derivation is correct and complete so that adding
-    a new procrastinate status to the map automatically propagates to the SQL.
-    """
-
-    def test_every_map_key_appears_as_when_clause(self) -> None:
-        """Each key in PROCRASTINATE_STATUS_MAP has a corresponding WHEN clause."""
-        from jarvis_common.jobs import _STATUS_CASE_SQL, PROCRASTINATE_STATUS_MAP
-
-        for proc_status in PROCRASTINATE_STATUS_MAP:
-            assert f"WHEN '{proc_status}'" in _STATUS_CASE_SQL, (
-                f"_STATUS_CASE_SQL is missing a WHEN clause for '{proc_status}'. "
-                "Add the key to PROCRASTINATE_STATUS_MAP and regenerate."
-            )
-
-    def test_every_map_value_appears_as_then_clause(self) -> None:
-        """Each target value in PROCRASTINATE_STATUS_MAP has a THEN clause."""
-        from jarvis_common.jobs import _STATUS_CASE_SQL, PROCRASTINATE_STATUS_MAP
-
-        for jarvis_status in set(PROCRASTINATE_STATUS_MAP.values()):
-            assert f"THEN '{jarvis_status}'" in _STATUS_CASE_SQL, (
-                f"_STATUS_CASE_SQL is missing a THEN clause for '{jarvis_status}'."
-            )
-
-    def test_fallback_else_clause_present(self) -> None:
-        """The ELSE 'running' fallback clause must always be present."""
-        from jarvis_common.jobs import _STATUS_CASE_SQL
-
-        assert "ELSE 'running' END" in _STATUS_CASE_SQL, (
-            "_STATUS_CASE_SQL must end with ELSE 'running' END for unknown statuses."
-        )
-
-    def test_when_then_count_matches_map_length(self) -> None:
-        """Number of WHEN clauses equals the number of entries in the map."""
-        from jarvis_common.jobs import _STATUS_CASE_SQL, PROCRASTINATE_STATUS_MAP
-
-        when_count = _STATUS_CASE_SQL.count("WHEN '")
-        assert when_count == len(PROCRASTINATE_STATUS_MAP), (
-            f"_STATUS_CASE_SQL has {when_count} WHEN clauses but "
-            f"PROCRASTINATE_STATUS_MAP has {len(PROCRASTINATE_STATUS_MAP)} entries."
-        )
+        conn.fetchrow.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

@@ -106,14 +106,15 @@ async def create_template(
     fields_json = [f.model_dump() for f in body.fields]
     async with db_pool.acquire() as conn:
         try:
-            row = await conn.fetchrow(
-                """INSERT INTO extraction_templates (name, description, fields, is_default)
-                   VALUES ($1, $2, $3::jsonb, $4) RETURNING *""",
-                body.name,
-                body.description,
-                fields_json,
-                body.is_default,
-            )
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """INSERT INTO extraction_templates (name, description, fields, is_default)
+                       VALUES ($1, $2, $3::jsonb, $4) RETURNING *""",
+                    body.name,
+                    body.description,
+                    fields_json,
+                    body.is_default,
+                )
         except asyncpg.exceptions.UndefinedTableError:
             raise HTTPException(503, _MISSING_TABLE_DETAIL.format(table="extraction_templates"))
         except asyncpg.UniqueViolationError:

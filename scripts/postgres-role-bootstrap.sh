@@ -307,6 +307,7 @@ provision_login jarvis_migrator postgres_migrator_password
 provision_login jarvis_legacy_rollback postgres_legacy_rollback_password
 provision_login jarvis_backup_reader postgres_backup_reader_password
 provision_login jarvis_restore_operator postgres_restore_operator_password
+provision_login jarvis_erasure_executor postgres_erasure_executor_password
 provision_login jarvis_litellm_runtime litellm_runtime_password
 provision_login jarvis_litellm_migrator litellm_migrator_password
 
@@ -348,7 +349,8 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -c "
   REVOKE CONNECT, TEMPORARY ON DATABASE ${database} FROM PUBLIC;
   GRANT CONNECT ON DATABASE ${database} TO
     jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime,
-    jarvis_migrator, jarvis_legacy_rollback, jarvis_backup_reader, jarvis_restore_operator;
+    jarvis_migrator, jarvis_legacy_rollback, jarvis_backup_reader, jarvis_restore_operator,
+    jarvis_erasure_executor;
   REVOKE CONNECT, TEMPORARY ON DATABASE litellm FROM PUBLIC;
   GRANT CONNECT ON DATABASE litellm TO
     jarvis_litellm_runtime, jarvis_litellm_migrator,

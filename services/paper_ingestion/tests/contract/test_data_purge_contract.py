@@ -9,14 +9,15 @@ the filters the job builds, and the assertions read the resulting collection.
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import asyncpg
 import pytest
+import pytest_asyncio
+from jarvis_common.db_helpers import init_pg_connection
 
-from jarvis_common.testing import SharedConnPool
 from paper_ingestion.jobs import data_purge
 
 pytestmark = [
@@ -62,67 +63,68 @@ class _PointStore:
         self.points = [point for point in self.points if id(point) not in removed]
 
 
-# Verified: services/paper_ingestion/paper_ingestion/jobs/data_purge.py:104
-# Verified: services/paper_ingestion/paper_ingestion/jobs/data_purge.py:209
-async def test_purge_redacts_retained_vectors_and_deletes_unreferenced_ones(
-    contract_conn: asyncpg.Connection,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_retired_purge_task_is_a_noop() -> None:
+    """Only Platform's durable coordinator may schedule user erasure."""
+    await data_purge.data_purge_task(object())
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def research_erasure_connections(contract_pg_dsn, _contract_pool):
+    """Yield bootstrap and Research runtime connections to the contract DB."""
+    password = "research-erasure-contract-password"
+    bootstrap = await asyncpg.connect(contract_pg_dsn)
+    await bootstrap.execute(
+        "ALTER ROLE jarvis_research_runtime LOGIN PASSWORD 'research-erasure-contract-password'"
+    )
+    runtime = await asyncpg.connect(
+        contract_pg_dsn,
+        user="jarvis_research_runtime",
+        password=password,
+    )
+    await init_pg_connection(runtime)
+    try:
+        yield bootstrap, runtime
+    finally:
+        await runtime.close()
+        await bootstrap.close()
+
+
+async def test_research_erasure_capability_clears_every_user_attributable_table(
+    research_erasure_connections,
 ) -> None:
-    """Public and survivor-held papers keep redacted vectors; a private one loses its own."""
-    expired_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, deleted_at)"
-        " VALUES ('purge-split-expired@contract.example.com', NOW() - INTERVAL '60 days')"
-        " RETURNING id"
+    """The fixed owner capability leaves no Research row keyed to the account."""
+    bootstrap, runtime = research_erasure_connections
+    user_id = uuid.uuid4().int % 1_000_000_000 + 1
+    event_id = uuid.uuid4()
+    await bootstrap.execute(
+        """INSERT INTO research.domain_events
+           (id, event_type, user_id, paper_id)
+           VALUES ($1, 'paper.read', $2, 1)""",
+        event_id,
+        user_id,
     )
-    survivor_id = await contract_conn.fetchval(
-        "INSERT INTO users (email) VALUES ('purge-split-survivor@contract.example.com')"
-        " RETURNING id"
-    )
-    papers = await contract_conn.fetch(
-        """INSERT INTO papers (
-               external_id, source_type, title, authors, url,
-               discovered_by, visibility_scope
-           ) VALUES
-               ('purge-split-public', 'arxiv', 'Public retained', ARRAY['A'],
-                'https://example.test/purge-split-public', $1, 'public'),
-               ('purge-split-library', 'local', 'Library retained', ARRAY['A'],
-                'https://example.test/purge-split-library', $1, 'private'),
-               ('purge-split-private', 'local', 'Private only', ARRAY['A'],
-                'https://example.test/purge-split-private', $1, 'private')
-           RETURNING external_id, id""",
-        expired_id,
-    )
-    paper_ids = {row["external_id"]: row["id"] for row in papers}
-    await contract_conn.execute(
-        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
-        survivor_id,
-        paper_ids["purge-split-library"],
+    await bootstrap.execute(
+        """INSERT INTO research.zotero_push_claims
+           (paper_id, user_id, lease_id, lease_expires_at)
+           VALUES (1, $1, $2, NOW() + INTERVAL '1 minute')""",
+        user_id,
+        uuid.uuid4(),
     )
 
-    store = _PointStore(
-        [
-            {"paper_id": paper_ids["purge-split-public"], "user_id": expired_id},
-            {"paper_id": paper_ids["purge-split-library"], "user_id": expired_id},
-            {"paper_id": paper_ids["purge-split-private"], "user_id": expired_id},
-            {"paper_id": paper_ids["purge-split-public"], "user_id": survivor_id},
-        ]
-    )
-    monkeypatch.setattr(data_purge, "_anonymize_audit_log_for_users", AsyncMock(return_value=0))
-    monkeypatch.setattr(data_purge, "log_audit", AsyncMock())
-    app = SimpleNamespace(
-        state=SimpleNamespace(db_pool=SharedConnPool(contract_conn), qdrant_client=store)
-    )
+    with pytest.raises(Exception, match="caller is not allowed"):
+        await bootstrap.execute("SELECT research.erase_user_data($1)", user_id)
+    await runtime.execute("SELECT research.erase_user_data($1)", user_id)
 
-    await data_purge.data_purge_task(app)
-
-    surviving = {(point["paper_id"], point["user_id"]) for point in store.points}
-    assert (paper_ids["purge-split-public"], None) in surviving, "public paper lost its vector"
-    assert (paper_ids["purge-split-library"], None) in surviving, (
-        "a paper still in a surviving user's library lost its vector"
+    table_names = await bootstrap.fetch(
+        """SELECT table_name FROM information_schema.columns
+           WHERE table_schema = 'research' AND column_name = 'user_id'"""
     )
-    assert paper_ids["purge-split-private"] not in {p["paper_id"] for p in store.points}, (
-        "an unreferenced private paper's vector outlived its owner"
-    )
-    assert (paper_ids["purge-split-public"], survivor_id) in surviving, (
-        "another user's attribution was redacted"
-    )
+    assert table_names
+    for row in table_names:
+        table_name = str(row["table_name"])
+        assert table_name.replace("_", "").isalnum()
+        residual = await bootstrap.fetchval(
+            f'SELECT COUNT(*) FROM research."{table_name}" WHERE user_id = $1',
+            user_id,
+        )
+        assert residual == 0, f"Research erasure left rows in {table_name}"

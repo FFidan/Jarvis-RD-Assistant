@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -17,6 +18,7 @@ from jarvis_common.testing import SignedIdentityMiddleware
 
 from platform_api.deps import get_db_pool, get_identity_signer, limiter
 from platform_api.routers import configuration, providers
+from platform_api.services import config_delivery as delivery_service
 from tests.conftest import _make_pool_and_conn
 
 _UI_PREF_VALUES = {
@@ -39,7 +41,11 @@ _UI_PREF_VALUES = {
 @pytest.fixture()
 def _app():
     """Create a minimal Platform app with deterministic owner dependencies."""
-    pool, conn = _make_pool_and_conn()
+    pool, conn = _make_pool_and_conn(
+        direct_methods=True,
+        execute_return="UPDATE 1",
+        fetchval_return=None,
+    )
     signer = IdentityAssertionSigner(
         issuer="jarvis-platform-test",
         key_id="settings-events",
@@ -79,10 +85,30 @@ def _app():
     app.dependency_overrides[verify_api_key] = lambda: None
     limiter_was_enabled = limiter.enabled
     limiter.enabled = False
-    try:
-        yield app, conn, research_client
-    finally:
-        limiter.enabled = limiter_was_enabled
+    commands: list[delivery_service.ConfigCommand] = []
+    validate_value = delivery_service.validate_value
+
+    async def _validate(**kwargs: Any) -> None:
+        commands.append(kwargs["command"])
+        await validate_value(**kwargs)
+
+    async def _deliver(**kwargs: Any) -> tuple[bool, dict[str, Any]]:
+        payload = await delivery_service._send_value(
+            client=kwargs["client"],
+            signer=kwargs["signer"],
+            command=commands[-1],
+            phase="apply",
+        )
+        return True, payload
+
+    with (
+        patch.object(delivery_service, "validate_value", side_effect=_validate),
+        patch.object(delivery_service, "deliver", side_effect=_deliver),
+    ):
+        try:
+            yield app, conn, research_client
+        finally:
+            limiter.enabled = limiter_was_enabled
 
 
 def _identity_app(app: FastAPI, role: str | None = "admin") -> SignedIdentityMiddleware:
@@ -90,7 +116,6 @@ def _identity_app(app: FastAPI, role: str | None = "admin") -> SignedIdentityMid
     return SignedIdentityMiddleware(
         app,
         audience="research",
-        verifier_app=app,
         user_id=1,
         role=role,
     )
@@ -139,7 +164,12 @@ async def test_non_admin_forwards_each_personal_preference(
             )
 
     assert response.status_code == 200, response.text
-    assert research_client.put.await_args.kwargs["json"] == {"value": value}
+    assert research_client.put.await_count == 2
+    assert research_client.put.await_args.kwargs["json"] == {
+        "value": value,
+        "phase": "apply",
+        "zotero_scope_changed": False,
+    }
 
 
 @pytest.mark.asyncio

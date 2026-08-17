@@ -82,6 +82,7 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     # Platform-owned bootstrap and gateway-auth routes use purpose-built guards
     # rather than caller-ID dependencies.
     "services/platform_api/platform_api/routers/internal_auth.py::GET /authorize": "internal: trusted gateway peer plus session or operations-key authorization",  # noqa: E501
+    "services/platform_api/platform_api/routers/internal_services.py::POST /authorize": "internal: service bootstrap token authorizes an exact signed command",  # noqa: E501
     "services/platform_api/platform_api/routers/setup.py::GET /status": "public: fail-closed setup-state probe required before authentication",  # noqa: E501
     "services/platform_api/platform_api/routers/setup.py::POST /admin": "bootstrap: setup-token-gated first-admin creation under a database lock",  # noqa: E501
     # Restore status requires an admin session, operations key, or restore token.
@@ -97,6 +98,19 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::PUT /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::DELETE /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/settings_sources.py::GET /sources": "shared source-plugin registry",  # noqa: E501
+    # Internal domain and job commands are authenticated by the signed-identity
+    # middleware, then bind the verified principal, subject, path and request ID
+    # inside each handler. They deliberately do not resolve browser sessions.
+    "services/learning_engine/learning_engine/routers/internal_domains.py::POST /paper-read": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::POST /paper-deleted": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::PUT /projects/{project_id}/zotero-collection": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::PUT /journal": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::POST /erasure/{request_id}": "internal: exact signed Platform erasure command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/jobs.py::POST /dispatch": "internal: exact signed Platform job dispatch bound to the verified user",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/internal_domains.py::POST /erasure/{request_id}/qdrant": "internal: exact signed Platform erasure command with subject and request binding",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/internal_domains.py::POST /erasure/{request_id}/research": "internal: exact signed Platform erasure command with subject and request binding",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/internal_domains.py::POST /library": "internal: exact signed Learning command with subject and request binding",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/jobs.py::POST /dispatch": "internal: exact signed Platform job dispatch bound to the verified user",  # noqa: E501
     # Shared global topics catalog (`topics` has no user_id column;
     # per-user subscriptions live on the *subscription* routes, which do
     # resolve identity). CRUD here mutates the shared catalog only.

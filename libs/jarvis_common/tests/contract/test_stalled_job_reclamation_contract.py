@@ -46,7 +46,8 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
-_TASK_NAME = "stalled_job_reclamation_probe"
+_TASK_NAME = "paper.process"
+_QUEUE_NAME = "paper_ingestion"
 _OWNED_SEARCH_PATH = "ops,platform,research,learning,public,pg_catalog"
 
 
@@ -64,9 +65,10 @@ async def _new_doing_job(
     return await pg.fetchval(
         """
         INSERT INTO procrastinate_jobs (queue_name, task_name, args, status, worker_id)
-        VALUES ('builtin', $1, jsonb_build_object('job_id', $2::text), 'doing', $3)
+        VALUES ($1, $2, jsonb_build_object('job_id', $3::text), 'doing', $4)
         RETURNING id
         """,
+        _QUEUE_NAME,
         _TASK_NAME,
         jarvis_job_id,
         worker_id,
@@ -88,6 +90,7 @@ async def test_reclamation_selects_stale_and_orphaned_jobs_only(
     contract_pg_dsn: str, contract_conn
 ) -> None:
     """A fresh worker row shields its job; a stale or absent one does not."""
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
     from procrastinate import App  # noqa: PLC0415
     from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
 
@@ -109,10 +112,12 @@ async def test_reclamation_selects_stale_and_orphaned_jobs_only(
         )
     )
     worker_ids: list[int] = []
+    job_ids: list[int] = []
     try:
         worker_id = await _new_worker(pg)
         worker_ids.append(worker_id)
         job_id = await _new_doing_job(pg, worker_id=worker_id, jarvis_job_id="reclaim-bound")
+        job_ids.append(job_id)
 
         # Leg 1 — the worker row is fresh: the job is invisible to the sweep.
         await _reclaim_stalled_jobs(app)
@@ -138,6 +143,7 @@ async def test_reclamation_selects_stale_and_orphaned_jobs_only(
         # Leg 3 — no worker row at all: reclaimed regardless of any heartbeat.
         worker_ids.append(await _new_worker(pg))
         orphan_id = await _new_doing_job(pg, worker_id=None, jarvis_job_id="reclaim-orphan")
+        job_ids.append(orphan_id)
         assert await _reclaim_stalled_jobs(app) >= 1
         assert await _job_status(pg, orphan_id) == "failed"
         orphan_error = await _progress_error(contract_conn, "reclaim-orphan")
@@ -146,7 +152,7 @@ async def test_reclamation_selects_stale_and_orphaned_jobs_only(
     finally:
         # Committed rows: events cascade with their job, and the worker rows go
         # once nothing references them.
-        await pg.execute("DELETE FROM procrastinate_jobs WHERE task_name = $1", _TASK_NAME)
+        await pg.execute("DELETE FROM procrastinate_jobs WHERE id = ANY($1::bigint[])", job_ids)
         await pg.execute(
             "DELETE FROM procrastinate_workers WHERE id = ANY($1::bigint[])", worker_ids
         )

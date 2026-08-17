@@ -57,6 +57,7 @@ def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
 async def test_restore_clears_deleted_at_within_grace(monkeypatch) -> None:
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
     conn.fetchrow = AsyncMock(
         side_effect=[
             {**_user_row(id=5), "deleted_at": _FIXED_NOW},
@@ -80,6 +81,7 @@ async def test_restore_clears_deleted_at_within_grace(monkeypatch) -> None:
 async def test_restore_not_found_or_past_grace_raises_404(monkeypatch) -> None:
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
     conn.fetchrow = AsyncMock(return_value=None)
     pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
@@ -149,7 +151,9 @@ async def test_soft_delete_writes_audit(monkeypatch) -> None:
     from fastapi import Response
 
     conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value="user")  # non-admin target: last-admin guard skipped
+    conn.fetchval = AsyncMock(
+        side_effect=["user", None]
+    )  # target role, then no active erasure request
     conn.execute = AsyncMock(return_value="UPDATE 1")
 
     calls = _patch_audit(monkeypatch)
@@ -173,7 +177,7 @@ async def test_soft_delete_targets_the_deleted_users_sessions(monkeypatch) -> No
     from fastapi import Response
 
     conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value="user")
+    conn.fetchval = AsyncMock(side_effect=["user", None])
     conn.execute = AsyncMock(return_value="UPDATE 1")
 
     _patch_audit(monkeypatch)

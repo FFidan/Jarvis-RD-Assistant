@@ -31,7 +31,10 @@ async def _sources_pool(contract_conn):
     """SharedConnPool wrapping the per-test contract connection."""
     from jarvis_common.testing import SharedConnPool
 
-    return SharedConnPool(contract_conn)
+    return SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
 
 
 @pytest.fixture()

@@ -7,6 +7,7 @@ ZoteroClient methods are patched at the class level.
 from __future__ import annotations
 
 import hashlib
+from itertools import chain, repeat
 import json
 import re
 import uuid
@@ -119,6 +120,14 @@ def _cm(conn):
     return cm
 
 
+def _phased_push_pool(config_conn: AsyncMock, push_conn: AsyncMock) -> MagicMock:
+    """Return enough short-lived DB leases for a connection-free push flow."""
+    push_conn.fetchval = AsyncMock(side_effect=lambda _sql, *_args: _args[2])
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=chain([_cm(config_conn)], repeat(_cm(push_conn))))
+    return pool
+
+
 # ---------------------------------------------------------------------------
 # Test: not configured
 # ---------------------------------------------------------------------------
@@ -133,7 +142,13 @@ async def test_push_paper_not_configured():
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http)
         # ZoteroClient should never be instantiated
         mock_client.assert_not_called()
@@ -169,11 +184,16 @@ async def test_push_paper_filters_project_collections_by_owner_user():
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(return_value=None)
 
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         mock_zotero = mock_client.return_value
         mock_zotero.search_by_doi = AsyncMock(return_value=None)
         mock_zotero.ensure_collection = AsyncMock(return_value="OWNER")
@@ -210,10 +230,15 @@ async def test_push_paper_collection_failure_prevents_item_creation():
     push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         zotero = mock_client.return_value
         zotero.search_by_doi = AsyncMock(return_value=None)
         zotero.ensure_collection = AsyncMock(side_effect=RuntimeError("Zotero unavailable"))
@@ -256,12 +281,17 @@ async def test_push_paper_no_project_links():
     paper = _paper_row(project_ids=None)  # NULL → empty list in service
     paper_conn = _make_conn(fetchrow=paper)
 
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(paper_conn)])
+    pool = _phased_push_pool(config_conn, paper_conn)
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
         mock_client.return_value.create_item.assert_not_called()
 
@@ -294,12 +324,17 @@ async def test_push_paper_happy_path():
     push_conn.fetch = AsyncMock(side_effect=[[FakeRecord({"id": 7})], topic_rows])
     push_conn.execute = AsyncMock(return_value=None)
 
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         mock_zotero = mock_client.return_value
         mock_zotero.search_by_doi = AsyncMock(return_value=None)
         mock_zotero.ensure_collection = AsyncMock(return_value="COLL1234")
@@ -351,8 +386,7 @@ async def test_push_paper_doi_dedupe():
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(return_value=None)
 
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -382,8 +416,7 @@ async def test_push_paper_doi_lookup_failure_prevents_duplicate_creation():
     push_conn.fetchrow = AsyncMock(return_value=paper)
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
         zotero = mock_client.return_value
@@ -432,8 +465,7 @@ async def test_push_paper_duplicate_link_does_not_abort_job():
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(side_effect=_raise_on_item_link)
 
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -481,8 +513,7 @@ async def test_push_paper_bbt_fallback():
     push_conn.fetch = AsyncMock(return_value=topic_rows)
     push_conn.execute = AsyncMock(return_value=None)
 
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -526,9 +557,8 @@ async def test_resync_delegates_force_repush():
     mock_push.assert_awaited_once_with(42, pool, http, owner_user_id=5, force=True)
 
 
-async def test_push_force_clears_key_under_advisory_lock():
-    """force=True nulls the owner's link item_key (bypassing the already-pushed
-    early-return) and runs the push body under a session advisory lock."""
+async def test_push_force_clears_key_without_retaining_a_connection():
+    """force=True clears the owner's key in a short database phase."""
     paper = _paper_row(project_ids=[10], zotero_item_key=None)
     project = _project_row(col_key="PRECOLL")
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
@@ -538,8 +568,7 @@ async def test_push_force_clears_key_under_advisory_lock():
         return_value=[]
     )  # explicit owner 7 -> no resolve fetch; topics empty
     push_conn.execute = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
         mz = mock_client.return_value
@@ -555,10 +584,9 @@ async def test_push_force_clears_key_under_advisory_lock():
     assert any(
         "paper_user_zotero_links" in s and "zotero_item_key = NULL" in s for s in executed
     ), executed
-    assert any("pg_advisory_lock" in s for s in executed), executed
-    assert any("pg_advisory_unlock" in s for s in executed), executed
-    # single push connection preserved (config + push only).
-    assert pool.acquire.call_count == 2
+    assert not any("pg_advisory_lock" in s for s in executed), executed
+    assert not any("pg_advisory_unlock" in s for s in executed), executed
+    assert pool.acquire.call_count > 2
 
 
 # ---------------------------------------------------------------------------
@@ -2394,13 +2422,8 @@ async def test_get_zotero_config_does_not_log_exc_string(caplog):
 # ---------------------------------------------------------------------------
 
 
-async def test_push_paper_to_zotero_acquires_single_connection():
-    """push_paper_to_zotero acquires exactly one DB connection for the push body.
-
-    The config connection (_get_zotero_config) is a separate acquire that is
-    always present. The push body must use exactly one additional acquire.
-    Total expected: 2 acquires (1 config + 1 push).
-    """
+async def test_push_paper_to_zotero_uses_short_database_phases():
+    """Pushes release each database phase before external Zotero work."""
     paper = _paper_row(project_ids=[10])
     project = _project_row(col_key="PRECOLL")
 
@@ -2410,12 +2433,17 @@ async def test_push_paper_to_zotero_acquires_single_connection():
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(return_value=None)
 
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         mock_zotero = mock_client.return_value
         mock_zotero.search_by_doi = AsyncMock(return_value=None)
         mock_zotero.create_item = AsyncMock(
@@ -2425,10 +2453,63 @@ async def test_push_paper_to_zotero_acquires_single_connection():
 
         await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
 
-    # Exactly 2 acquire() calls: config + push body.
-    assert pool.acquire.call_count == 2, (
-        f"Expected 2 pool.acquire() calls (config + push), got {pool.acquire.call_count}"
-    )
+    assert pool.acquire.call_count > 2
+
+
+async def test_active_push_claim_suppresses_competing_remote_creation():
+    """A live durable claim prevents a second worker from creating remotely."""
+    paper = _paper_row(project_ids=[10])
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(return_value=paper)
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(return_value=None)
+    pool = _phased_push_pool(config_conn, push_conn)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as client_class,
+        patch(
+            "paper_ingestion.integrations._zotero_push._claim_push", AsyncMock(return_value=None)
+        ),
+    ):
+        client_class.return_value.create_item = AsyncMock()
+        await push_paper_to_zotero(
+            paper_id=1, db_pool=pool, http_client=AsyncMock(spec=httpx.AsyncClient), owner_user_id=7
+        )
+
+    client_class.return_value.create_item.assert_not_called()
+
+
+async def test_expired_push_claim_is_replaced_in_a_short_database_phase():
+    """The claim upsert recovers a crashed worker only after its lease expires."""
+    from paper_ingestion.integrations._zotero_push import _claim_push
+
+    lease_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=lease_id)
+    pool = MagicMock()
+    pool.acquire.return_value = _cm(conn)
+    with patch("paper_ingestion.integrations._zotero_push.uuid.uuid4", return_value=lease_id):
+        assert await _claim_push(pool, 1, 7) == lease_id
+
+    conn.fetchval.assert_awaited_once()
+    assert conn.fetchval.await_args.args[1:] == (1, 7, lease_id)
+
+
+async def test_active_push_claim_is_renewed_and_loss_aborts_remote_creation():
+    """Long remote pushes renew their claim and stop if another owner replaces it."""
+    from paper_ingestion.integrations._zotero_push import _maintain_push_claim
+
+    conn = AsyncMock()
+    conn.execute = AsyncMock(side_effect=["UPDATE 1", "UPDATE 0"])
+    pool = MagicMock()
+    pool.acquire.return_value = _cm(conn)
+    with patch("paper_ingestion.integrations._zotero_push.asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(RuntimeError, match="claim was lost"):
+            await _maintain_push_claim(pool, 1, 7, uuid.uuid4())
+
+    assert conn.execute.await_count == 2
+    assert "lease_expires_at = NOW()" in conn.execute.await_args_list[0].args[0]
 
 
 async def test_push_already_pushed_syncs_new_project_collection():
@@ -2441,10 +2522,15 @@ async def test_push_already_pushed_syncs_new_project_collection():
     push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
     push_conn.fetch = AsyncMock(return_value=[])  # explicit owner 7 -> no resolve fetch
     push_conn.execute = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         mz = mock_client.return_value
         mz.create_item = AsyncMock()
         mz.add_item_to_collections = AsyncMock()
@@ -2462,10 +2548,15 @@ async def test_push_already_pushed_collection_failure_propagates():
     push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
     push_conn.fetch = AsyncMock(return_value=[])
     push_conn.execute = AsyncMock(return_value=None)
-    pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    pool = _phased_push_pool(config_conn, push_conn)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations._zotero_push._persist_project_collection_key",
+            AsyncMock(),
+        ),
+    ):
         zotero = mock_client.return_value
         zotero.add_item_to_collections = AsyncMock(
             side_effect=RuntimeError("collection update failed")

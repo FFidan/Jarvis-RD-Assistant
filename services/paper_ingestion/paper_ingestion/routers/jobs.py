@@ -1,8 +1,7 @@
-"""Jobs REST endpoints for paper_ingestion service.
+"""Owner-local Research enqueue command for the unified jobs facade.
 
-Thin shim over :func:`jarvis_common.jobs_router.build_jobs_router` — see that
-module for endpoint contracts and shared invariants (LE-002 ownership
-coercion, mutable-default fix, ``noop.test`` toggle).
+Platform owns the browser-facing jobs API. This router accepts one signed
+Platform dispatch command and owns the Research task-registry boundary.
 
 Internal-only kinds (``paper.download``, ``papers.scan_local``,
 ``extraction.single``, ``citations.batch_fetch``, ``digest.weekly``,
@@ -16,112 +15,81 @@ HTTP 422 before the handler runs.
 
 from __future__ import annotations
 
-from typing import Literal
+import uuid
+from typing import Annotated, Any
 
-from jarvis_common.jobs_router import build_jobs_router
-from pydantic import BaseModel, Field
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Request
+from jarvis_common import assert_paper_ownership, assert_papers_ownership
+from jarvis_common.job_contracts import (
+    RESEARCH_PAYLOAD_SCHEMAS,
+    RESEARCH_PUBLIC_JOB_KINDS,
+    ExtractionBatchPayload,
+    NoopTestPayload,
+    PaperAnalyzePayload,
+    PaperProcessPayload,
+    PapersBatchProcessPayload,
+    PapersBatchSummarizePayload,
+    PulseGeneratePayload,
+    paper_ids_for_payload,
+)
+from pydantic import BaseModel
 
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import get_db_pool
 
 # ---------------------------------------------------------------------------
-# Per-kind payload schemas — one model per public job kind.
-# Wire format:
-#   {"kind": "paper.process", "payload": {"paper_id": 42}}
+# Per-kind payload schemas shared with the Platform facade.
 # ---------------------------------------------------------------------------
 
 
-class PulseGeneratePayload(BaseModel):
-    kind: Literal["pulse.generate"]
-    # Optional ISO timestamp used for deterministic testing only.
-    now: str | None = None
+PI_PAYLOAD_SCHEMAS = RESEARCH_PAYLOAD_SCHEMAS
+PI_PUBLIC_JOB_KINDS = RESEARCH_PUBLIC_JOB_KINDS
+_extract_paper_ids = paper_ids_for_payload
+router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+type DatabasePool = Annotated[asyncpg.Pool, Depends(get_db_pool)]
 
 
-class PaperProcessPayload(BaseModel):
-    kind: Literal["paper.process"]
-    paper_id: int
-    force: bool = False
+class OwnerDispatchRequest(BaseModel):
+    """Platform-authorized enqueue request for one Research-owned job."""
+
+    kind: str
+    payload: dict[str, Any]
 
 
-class PaperAnalyzePayload(BaseModel):
-    kind: Literal["paper.analyze"]
-    paper_id: int
+@router.post("/dispatch", status_code=202)
+async def dispatch_owner_job(
+    body: OwnerDispatchRequest,
+    request: Request,
+    db_pool: DatabasePool,
+) -> dict[str, str]:
+    """Authorize and enqueue a Research job for the signed Platform subject."""
+    user_id = getattr(request.state, "user_id", None)
+    if getattr(request.state, "identity_principal", None) != "platform" or not isinstance(
+        user_id, int
+    ):
+        raise HTTPException(status_code=403, detail="Job dispatch is forbidden")
+    if body.kind not in PI_PUBLIC_JOB_KINDS:
+        raise HTTPException(status_code=400, detail="Research job kind is not allowed")
+    schema = PI_PAYLOAD_SCHEMAS[body.kind]
+    payload = schema.model_validate({**body.payload, "kind": body.kind}).model_dump(
+        exclude={"kind"}
+    )
+    paper_ids = _extract_paper_ids(payload)
+    if isinstance(paper_ids, int):
+        async with db_pool.acquire() as conn:
+            await assert_paper_ownership(conn, paper_ids, user_id)
+    elif isinstance(paper_ids, list):
+        async with db_pool.acquire() as conn:
+            await assert_papers_ownership(conn, paper_ids, user_id)
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
+    task = KIND_TO_TASK.get(body.kind)
+    if task is None:
+        raise HTTPException(status_code=503, detail="Research job dispatch is unavailable")
+    job_id = str(uuid.uuid4())
+    await task.defer_async(job_id=job_id, user_id=user_id, **payload)
+    return {"job_id": job_id, "status": "queued"}
 
-# Same bound as the dedicated batch endpoints (models/papers.py ProcessBatchRequest):
-# one request may not enqueue an unbounded amount of per-paper work.
-_MAX_BATCH_PAPER_IDS = 50
-
-
-class PapersBatchProcessPayload(BaseModel):
-    kind: Literal["papers.batch_process"]
-    paper_ids: list[int] = Field(..., min_length=1, max_length=_MAX_BATCH_PAPER_IDS)
-
-
-class PapersBatchSummarizePayload(BaseModel):
-    kind: Literal["papers.batch_summarize"]
-    paper_ids: list[int] = Field(..., min_length=1, max_length=_MAX_BATCH_PAPER_IDS)
-
-
-class ExtractionBatchPayload(BaseModel):
-    kind: Literal["extraction.batch"]
-    paper_ids: list[int] = Field(..., min_length=1, max_length=_MAX_BATCH_PAPER_IDS)
-
-
-class NoopTestPayload(BaseModel):
-    """Test-only handler — only accepted when JARVIS_ENABLE_TEST_JOBS=1."""
-
-    kind: Literal["noop.test"]
-    # Allow any extra keys so test callers can attach markers without schema changes.
-    model_config = {"extra": "allow"}
-
-
-PI_PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {
-    "pulse.generate": PulseGeneratePayload,
-    "paper.process": PaperProcessPayload,
-    "paper.analyze": PaperAnalyzePayload,
-    "papers.batch_process": PapersBatchProcessPayload,
-    "papers.batch_summarize": PapersBatchSummarizePayload,
-    "extraction.batch": ExtractionBatchPayload,
-    "noop.test": NoopTestPayload,
-}
-
-PI_PUBLIC_JOB_KINDS: frozenset[str] = frozenset(
-    {
-        "pulse.generate",
-        "paper.process",
-        "paper.analyze",
-        "papers.batch_process",
-        "papers.batch_summarize",
-        "extraction.batch",
-    }
-)
-
-
-def _extract_paper_ids(payload: dict) -> int | list[int] | None:
-    """Return paper IDs from single-paper and batch paper-scoped payloads.
-
-    Scopes the factory's ownership check to single-paper kinds
-    (``paper.process``, ``paper.analyze``) and batch kinds
-    (``papers.batch_process``, ``papers.batch_summarize``, ``extraction.batch``).
-    Workers still revalidate, but public enqueue is denied up front.
-    """
-    paper_id = payload.get("paper_id")
-    if isinstance(paper_id, int):
-        return paper_id
-    paper_ids = payload.get("paper_ids")
-    if isinstance(paper_ids, list) and all(isinstance(pid, int) for pid in paper_ids):
-        return paper_ids
-    return None
-
-
-router = build_jobs_router(
-    service_name="paper_ingestion",
-    public_kinds=PI_PUBLIC_JOB_KINDS,
-    get_db_pool=get_db_pool,
-    limiter=limiter,
-    payload_schemas=PI_PAYLOAD_SCHEMAS,  # discriminated mode → 422 on shape errors
-    paper_ownership_extractor=_extract_paper_ids,
-)
 
 __all__ = [
     "PI_PUBLIC_JOB_KINDS",

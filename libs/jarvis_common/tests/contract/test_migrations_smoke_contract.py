@@ -98,13 +98,11 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
         await bootstrap.execute(legacy_init)
         await bootstrap.execute("DELETE FROM schema_migrations WHERE version >= 102")
         for migration in sorted((db_dir / "migrations").glob("01[0-1][0-9]_*.sql")):
-            if migration.name.startswith("0114_"):
+            version = int(migration.name.split("_", maxsplit=1)[0])
+            if version >= 114:
                 continue
             await bootstrap.execute(migration.read_text(encoding="utf-8"))
-            await bootstrap.execute(
-                "INSERT INTO schema_migrations (version) VALUES ($1)",
-                int(migration.name.split("_", maxsplit=1)[0]),
-            )
+            await bootstrap.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
         await bootstrap.execute(
             "CREATE ROLE jarvis_bootstrap LOGIN PASSWORD 'bootstrap-contract-password' "
             "SUPERUSER CREATEROLE NOINHERIT NOBYPASSRLS; "
@@ -113,6 +111,11 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
         await bootstrap.execute(
             "CREATE ROLE jarvis_migrator LOGIN PASSWORD 'migration-contract-password' "
             "NOINHERIT NOBYPASSRLS"
+        )
+        await bootstrap.execute(
+            "CREATE ROLE jarvis_erasure_executor LOGIN "
+            "PASSWORD 'erasure-executor-contract-password' NOSUPERUSER NOCREATEDB "
+            "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
         )
         await bootstrap.execute(
             "CREATE ROLE jarvis_platform_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
@@ -147,6 +150,14 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
         )
         await bootstrap.execute("GRANT SELECT, INSERT ON schema_migrations TO jarvis_migrator")
         await bootstrap.execute("GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION")
+        await bootstrap.execute(
+            """
+            INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
+            VALUES
+                ('paper_ingestion', 'paper.process', '{"job_id":"upgrade-known","user_id":7}'::jsonb, 'todo'),
+                ('paper_ingestion', 'legacy.unknown', '{"job_id":"upgrade-history","user_id":7}'::jsonb, 'succeeded')
+            """
+        )
 
         migrator_pool = await asyncpg.create_pool(
             live_pg_dsn,
@@ -173,6 +184,46 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
             "SELECT sha256 FROM ops.schema_migrations WHERE version = 114"
         )
         assert recorded_hash == "2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24"
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 115")
+            == "852dc3ab061d731179d1cd53714887eca328db436eb6e2a4891d98bb1a1e6bcc"
+        )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 116")
+            == "9bbd93a0176f882062a66674cf9897d49473bfdc181c620a4d79131adb99fca6"
+        )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 117")
+            == "d8ff5e67cb30eb0ac0efb6be7e25cc0101b3ee18cd1902e91b8a50cd4954117b"
+        )
+        current_version = await bootstrap.fetchval("SELECT max(version) FROM ops.schema_migrations")
+        assert current_version == 117
+        assert await bootstrap.fetchrow(
+            """
+            SELECT owner_queue, owner_service FROM ops.procrastinate_jobs
+            WHERE args->>'job_id' = 'upgrade-known'
+            """
+        ) == ("paper_ingestion", "research")
+        assert await bootstrap.fetchrow(
+            """
+            SELECT owner_queue, owner_service FROM ops.procrastinate_jobs
+            WHERE args->>'job_id' = 'upgrade-history'
+            """
+        ) == ("legacy_unknown", "legacy_unknown")
+        executor = await bootstrap.fetchrow(
+            "SELECT rolcanlogin, rolbypassrls, rolinherit FROM pg_roles "
+            "WHERE rolname = 'jarvis_erasure_executor'"
+        )
+        assert executor == (True, False, False)
+        for privilege in ("DELETE", "INSERT", "SELECT", "UPDATE"):
+            assert not await bootstrap.fetchval(
+                "SELECT has_table_privilege('jarvis_erasure_executor', 'platform.users', $1)",
+                privilege,
+            )
+        assert await bootstrap.fetchval(
+            "SELECT has_function_privilege('jarvis_erasure_executor', "
+            "'platform.finalize_erasure(uuid)', 'EXECUTE')"
+        )
         assert not await bootstrap.fetchval(
             """
             SELECT EXISTS (

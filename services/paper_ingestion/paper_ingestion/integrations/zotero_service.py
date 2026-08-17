@@ -56,7 +56,6 @@ from paper_ingestion.integrations._zotero_poll import (  # noqa: F401
 from paper_ingestion.integrations._zotero_push import (  # noqa: F401
     _push_paper_with_conn,
     _resolve_project_collection_keys,
-    _session_push_lock,
     push_paper_to_zotero,
     resync_paper_to_zotero,
 )

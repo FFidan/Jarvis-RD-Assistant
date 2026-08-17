@@ -832,17 +832,33 @@ class _TaskReentrantAsyncLock:
 class SharedAcquireCM:
     """Async CM returned by SharedConnPool.acquire(); always yields the same conn."""
 
-    def __init__(self, conn: Any, lock: _TaskReentrantAsyncLock) -> None:
+    def __init__(
+        self,
+        conn: Any,
+        lock: _TaskReentrantAsyncLock,
+        session_authorization: str | None,
+    ) -> None:
         """Hold the shared connection and the reentrant lock used to serialize access."""
         self._conn = conn
         self._lock = lock
+        self._session_authorization = session_authorization
+        self._owns_authorization = False
 
     async def __aenter__(self) -> Any:
         await self._lock.acquire()
+        if self._session_authorization is not None and self._lock._depth == 1:
+            await self._conn.execute(
+                f"SET LOCAL SESSION AUTHORIZATION {self._session_authorization}"
+            )
+            self._owns_authorization = True
         return self._conn
 
     async def __aexit__(self, *_: Any) -> None:
-        self._lock.release()
+        try:
+            if self._owns_authorization:
+                await self._conn.execute("RESET SESSION AUTHORIZATION")
+        finally:
+            self._lock.release()
         return None
 
 
@@ -859,14 +875,58 @@ class SharedConnPool:
     against the contract DB.
     """
 
-    def __init__(self, conn: Any) -> None:
-        """Wrap *conn* with a reentrant lock so all pool-shaped calls share one connection."""
+    def __init__(
+        self,
+        conn: Any,
+        *,
+        session_authorization: str | None = None,
+        _lock: _TaskReentrantAsyncLock | None = None,
+    ) -> None:
+        """Wrap *conn* with serialized access and an optional runtime identity.
+
+        ``session_authorization`` is restricted to the three product runtime
+        roles. Contract applications use it so capability checks observe the
+        same login identity as production while direct fixture assertions
+        regain the administrative test identity after each pool operation.
+        """
+        allowed_roles = {
+            "jarvis_platform_runtime",
+            "jarvis_research_runtime",
+            "jarvis_learning_runtime",
+        }
+        if session_authorization is not None and session_authorization not in allowed_roles:
+            raise ValueError("unsupported contract runtime identity")
         self._conn = conn
-        self._lock = _TaskReentrantAsyncLock()
+        self._lock = _lock or _TaskReentrantAsyncLock()
+        self._session_authorization = session_authorization
+
+    def with_session_authorization(self, role: str) -> SharedConnPool:
+        """Return a role-specific view sharing this connection's access lock.
+
+        Parameters
+        ----------
+        role : str
+            Supported product runtime role applied for each acquired operation.
+
+        Returns
+        -------
+        SharedConnPool
+            Pool-shaped view that serializes against every sibling view of the
+            same contract connection.
+        """
+        return SharedConnPool(
+            self._conn,
+            session_authorization=role,
+            _lock=self._lock,
+        )
 
     def acquire(self) -> SharedAcquireCM:  # not async — returns an async-CM
         """Return an async CM that yields the shared connection under the reentrant lock."""
-        return SharedAcquireCM(self._conn, self._lock)
+        return SharedAcquireCM(
+            self._conn,
+            self._lock,
+            self._session_authorization,
+        )
 
     async def close(self) -> None:  # idempotent; the real pool's lifecycle is the fixture's
         """No-op — the underlying connection is managed by the fixture, not this pool shim."""

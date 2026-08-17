@@ -73,6 +73,11 @@ def _bootstrap_command(compose: dict) -> str:
     return command[0].replace("$$", "$")
 
 
+def test_ollama_bootstrap_is_one_shot(compose: dict) -> None:
+    """A successful model pull must not restart and pull the same models forever."""
+    assert compose["services"]["ollama-bootstrap"]["restart"] == "no"
+
+
 def _pull_stub(tmp_path: Path, body: str) -> dict[str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -470,8 +475,8 @@ def test_app_version_sources_agree():
         (REPO_ROOT / "docker-compose.yml").read_text(),
     )
 
-    assert len(compose_defaults) == 10, (
-        "docker-compose.yml must carry exactly ten application-version defaults; "
+    assert len(compose_defaults) == 11, (
+        "docker-compose.yml must carry exactly eleven application-version defaults; "
         f"found {len(compose_defaults)}"
     )
     root_packages = [
@@ -775,6 +780,7 @@ SECRET_PROVISIONING = {
     "postgres_legacy_rollback_password": "update",
     "postgres_backup_reader_password": "update",
     "postgres_restore_operator_password": "update",
+    "postgres_erasure_executor_password": "update",
     "litellm_runtime_password": "update",
     "litellm_migrator_password": "update",
     "postgres_legacy_source_password": "update",
@@ -823,6 +829,7 @@ def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(com
         "postgres_legacy_rollback_password",
         "postgres_backup_reader_password",
         "postgres_restore_operator_password",
+        "postgres_erasure_executor_password",
         "litellm_migrator_password",
     }
     for service_name, password_secret in expected.items():
@@ -848,6 +855,14 @@ def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(com
     assert finalizer["depends_on"]["jarvis-migrator"]["condition"] == (
         "service_completed_successfully"
     )
+    executor = compose["services"]["erasure-executor"]
+    assert executor["restart"] == "unless-stopped"
+    assert executor["command"] == ["python", "-m", "platform_api.erasure_executor"]
+    assert _secret_sources(executor) == {"postgres_erasure_executor_password"}
+    assert executor["environment"] == {
+        "POSTGRES_USER": "jarvis_erasure_executor",
+        "POSTGRES_PASSWORD_FILE": "/run/secrets/postgres_erasure_executor_password",
+    }
 
 
 def test_backup_and_restore_use_distinct_database_credentials(compose):

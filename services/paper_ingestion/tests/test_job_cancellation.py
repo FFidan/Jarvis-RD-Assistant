@@ -231,7 +231,7 @@ class TestJobLookupOutageReturns503:
             ),
             patch.object(
                 jobs_router_mod.jobs_lib,
-                "get_procrastinate_job_for_jarvis_id",
+                "cancel_unified",
                 AsyncMock(side_effect=JobLookupUnavailable("db down")),
             ),
         ):

@@ -24,6 +24,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 from jarvis_common.testing_contract_apps import (
     PITestAppOptions,
     make_contract_client as _make_client,
@@ -47,7 +48,10 @@ async def _pi_app_with_pool(contract_conn):
     from paper_ingestion.main import app as pi_app
 
     # search-preview reads http_client from app.state via get_http_client dep.
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=pi_app,
@@ -58,7 +62,11 @@ async def _pi_app_with_pool(contract_conn):
             state_overrides={"embedder": None, "http_client": MagicMock()},
         ),
     ) as app:
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 def _make_paper_create(

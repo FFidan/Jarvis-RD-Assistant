@@ -46,6 +46,7 @@ DATABASE_PASSWORD_FILES = {
     "postgres_legacy_rollback_password.txt",
     "postgres_backup_reader_password.txt",
     "postgres_restore_operator_password.txt",
+    "postgres_erasure_executor_password.txt",
     "litellm_runtime_password.txt",
     "litellm_migrator_password.txt",
 }

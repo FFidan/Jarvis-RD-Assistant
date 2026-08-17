@@ -326,9 +326,8 @@ async def _pulse_train_classifier_job(
             )
             if not opt_in_exists:
                 await conn.execute(
-                    """INSERT INTO user_config (user_id, key, value)
-                       VALUES ($1, 'pulse.classifier_opt_in', 'true'::jsonb)
-                       ON CONFLICT (user_id, key) DO NOTHING""",
+                    "SELECT platform.set_research_config_v1("
+                    "$1, 'pulse.classifier_opt_in', 'true'::jsonb, 'insert')",
                     user_id,
                 )
     await ctx.update_progress(1.0, "Done")

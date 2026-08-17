@@ -24,6 +24,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 from jarvis_common.testing_contract_apps import (
     PITestAppOptions,
     make_contract_client as _make_client,
@@ -48,7 +49,10 @@ async def _pi_app_with_pool(contract_conn):
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app as pi_app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=pi_app,
@@ -59,7 +63,11 @@ async def _pi_app_with_pool(contract_conn):
             state_overrides={"embedder": None},
         ),
     ) as app:
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1404,11 +1412,21 @@ async def test_hard_delete_shared_paper_removes_only_callers_private_rows(
         )
         == "reading"
     )
-    # Every caller-private row/link is gone, while B's complete private surface
-    # and the canonical chunk remain.
-    assert set(
-        (await _caller_private_paper_counts(contract_conn, paper_id, user_a_id)).values()
-    ) == {0}
+    # The library membership is removed immediately. Owner-local details stay
+    # available for retry until Learning acknowledges its dependent cleanup.
+    caller_counts = await _caller_private_paper_counts(contract_conn, paper_id, user_a_id)
+    assert caller_counts.pop("user_library") == 0
+    assert set(caller_counts.values()) == {1}
+    deletion = await contract_conn.fetchrow(
+        """SELECT event.delivered_at, pending.user_id, pending.paper_id
+           FROM domain_events AS event
+           JOIN pending_paper_deletions AS pending ON pending.event_id = event.id
+           WHERE event.event_type = 'paper.deleted'
+             AND event.user_id = $1 AND event.paper_id = $2""",
+        user_a_id,
+        paper_id,
+    )
+    assert tuple(deletion) == (None, user_a_id, paper_id)
     assert set(
         (await _caller_private_paper_counts(contract_conn, paper_id, user_b_id)).values()
     ) == {1}
@@ -1473,8 +1491,8 @@ async def test_hard_delete_sole_holder_preserves_shared_row_regardless_of_discov
     """A session-scoped delete never removes the canonical paper row.
 
     A is the only library holder, while B is the recorded discoverer. A's
-    private rows are removed, but shared SQL and Qdrant data remain available
-    independently of membership count or discovery attribution.
+        membership is removed immediately, while retryable owner cleanup and
+        shared SQL/Qdrant data remain independent of discovery attribution.
     """
     vector_calls = _spy_vector_deletes(monkeypatch)
 
@@ -1513,7 +1531,8 @@ async def test_hard_delete_sole_holder_preserves_shared_row_regardless_of_discov
     assert surviving_paper_row == paper_id, (
         f"shared papers row {paper_id} must survive a session-scoped delete"
     )
-    # (a) A's user_library + paper_user_state rows are gone.
+    # The membership is gone immediately; private state remains until the
+    # durable Learning acknowledgement permits owner-local cleanup.
     a_library_row = await contract_conn.fetchval(
         "SELECT 1 FROM user_library WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
     )
@@ -1521,7 +1540,14 @@ async def test_hard_delete_sole_holder_preserves_shared_row_regardless_of_discov
     a_state_row = await contract_conn.fetchval(
         "SELECT 1 FROM paper_user_state WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
     )
-    assert a_state_row is None, "A's paper_user_state row must be removed"
+    assert a_state_row == 1
+    pending = await contract_conn.fetchval(
+        """SELECT count(*) FROM pending_paper_deletions
+           WHERE user_id = $1 AND paper_id = $2""",
+        user_a_id,
+        paper_id,
+    )
+    assert pending == 1
     # Shared vectors are not touched because the row was not physically deleted.
     assert vector_calls == [], (
         f"delete_paper_vectors must not run for a session-scoped delete: {vector_calls}"
@@ -3069,51 +3095,36 @@ async def test_process_library_enqueues_bounded_reconciliation_when_chunks_exist
 
 
 # ---------------------------------------------------------------------------
-# F10: daily_log.papers_read incremented by PUT /reading
+# Reading transitions publish durable Learning projections
 # ---------------------------------------------------------------------------
 
 
-async def test_f10_reading_increments_daily_log_papers_read(
+async def test_reading_records_a_pending_learning_projection(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """First PUT /reading (from to_read) increments daily_log.papers_read by 1.
-
-    # Verified: paper_id_a starts in state='to_read' (testing_db.py:829-830).
-    # daily_log.papers_read column: db/init.sql:547.
-    # Conflict key: UNIQUE NULLS NOT DISTINCT (user_id, log_date) — init.sql:1477-1478.
-    """
+    """First PUT /reading records an owner-local event for Learning delivery."""
     paper_id = contract_two_users.paper_id_a
     user_id = contract_two_users.user_a_id
-
-    # Baseline: capture papers_read before the call
-    before = await contract_conn.fetchval(
-        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
-        user_id,
-    )
-    before = before or 0
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.put(f"/api/papers/{paper_id}/reading")
 
     assert resp.status_code in (200, 204), resp.text[:200]
 
-    after = await contract_conn.fetchval(
-        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+    event = await contract_conn.fetchrow(
+        """SELECT delivered_at, attempts FROM domain_events
+           WHERE event_type = 'paper.read' AND user_id = $1 AND paper_id = $2""",
         user_id,
+        paper_id,
     )
-    assert after == before + 1, (
-        f"daily_log.papers_read should be {before + 1} after first PUT /reading; got {after}"
-    )
+    assert event is not None
+    assert tuple(event) == (None, 0)
 
 
-async def test_f10_re_reading_does_not_double_count(
+async def test_re_reading_does_not_duplicate_the_projection(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """Re-marking an already-reading paper does NOT increment papers_read again.
-
-    # Verified: allowed=('to_read','reading','done') permits re-mark; dedup must
-    # check state_before='reading' and skip the increment in that case.
-    """
+    """Re-marking an already-reading paper does not record another event."""
     paper_id = contract_two_users.paper_id_a
     user_id = contract_two_users.user_a_id
 
@@ -3123,8 +3134,10 @@ async def test_f10_re_reading_does_not_double_count(
     assert resp1.status_code in (200, 204), resp1.text[:200]
 
     count_after_first = await contract_conn.fetchval(
-        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        """SELECT count(*) FROM domain_events
+           WHERE event_type = 'paper.read' AND user_id = $1 AND paper_id = $2""",
         user_id,
+        paper_id,
     )
 
     # Second call: reading → reading (same state, must NOT increment)
@@ -3133,53 +3146,42 @@ async def test_f10_re_reading_does_not_double_count(
     assert resp2.status_code in (200, 204), resp2.text[:200]
 
     count_after_second = await contract_conn.fetchval(
-        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        """SELECT count(*) FROM domain_events
+           WHERE event_type = 'paper.read' AND user_id = $1 AND paper_id = $2""",
         user_id,
+        paper_id,
     )
-    assert count_after_second == count_after_first, (
-        f"Re-marking reading must not double-count papers_read: "
-        f"after first={count_after_first}, after second={count_after_second}"
-    )
+    assert count_after_first == 1
+    assert count_after_second == count_after_first
 
 
-async def test_f10_papers_read_scoped_to_acting_user(
+async def test_reading_projection_is_scoped_to_the_acting_user(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """PUT /reading for user A does not affect user B's daily_log.papers_read.
-
-    # Verified: daily_log is keyed (user_id, log_date); the upsert must bind user_a_id,
-    # not bleed into user_b's row.
-    """
+    """PUT /reading for user A records no event for user B."""
     paper_id = contract_two_users.paper_id_a
     user_a_id = contract_two_users.user_a_id
     user_b_id = contract_two_users.user_b_id
-
-    b_before = await contract_conn.fetchval(
-        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
-        user_b_id,
-    )
-    b_before = b_before or 0
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.put(f"/api/papers/{paper_id}/reading")
     assert resp.status_code in (200, 204), resp.text[:200]
 
-    b_after = await contract_conn.fetchval(
-        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+    b_events = await contract_conn.fetchval(
+        """SELECT count(*) FROM domain_events
+           WHERE event_type = 'paper.read' AND user_id = $1 AND paper_id = $2""",
         user_b_id,
+        paper_id,
     )
-    b_after = b_after or 0
+    assert b_events == 0
 
-    assert b_after == b_before, (
-        f"User B's papers_read must be unchanged; before={b_before}, after={b_after}"
-    )
-
-    # Sanity: user A's row DID get incremented
-    a_after = await contract_conn.fetchval(
-        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+    a_events = await contract_conn.fetchval(
+        """SELECT count(*) FROM domain_events
+           WHERE event_type = 'paper.read' AND user_id = $1 AND paper_id = $2""",
         user_a_id,
+        paper_id,
     )
-    assert (a_after or 0) >= 1, f"User A's papers_read must be >=1; got {a_after}"
+    assert a_events == 1
 
 
 async def test_batch_save_rejects_external_id_over_column_width(

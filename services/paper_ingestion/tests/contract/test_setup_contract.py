@@ -88,7 +88,10 @@ async def setup_client(contract_conn, monkeypatch):
     monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
     get_secrets_settings.cache_clear()
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -117,7 +120,10 @@ async def setup_app(contract_conn, monkeypatch):
 
     monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
     get_secrets_settings.cache_clear()
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -727,12 +733,16 @@ async def test_create_first_admin_writes_owner_config_row(setup_client, contract
         f"owner.user_id row must equal the new admin id {user_id}; got {owner_value!r}"
     )
     audit = await contract_conn.fetchrow(
-        "SELECT user_id, resource, metadata FROM audit_log WHERE action = 'admin.owner.bootstrap'"
+        """SELECT event.user_id, event.resource, event.metadata, subject.user_id AS subject_user_id
+           FROM audit_log AS event
+           LEFT JOIN audit_subjects AS subject ON subject.id = event.subject_id
+           WHERE event.action = 'admin.owner.bootstrap'"""
     )
     assert audit is not None
-    assert audit["user_id"] == str(user_id)
+    assert audit["user_id"] is None
+    assert audit["subject_user_id"] == user_id
     assert audit["resource"] == "owner.user_id"
-    assert audit["metadata"] == {"source": "first_admin"}
+    assert audit["metadata"] == {}
 
 
 async def test_first_admin_owner_row_rolls_back_with_session_failure(

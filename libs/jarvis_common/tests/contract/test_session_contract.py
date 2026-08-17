@@ -46,6 +46,12 @@ pytestmark = [
 ]
 
 
+@pytest_asyncio.fixture(autouse=True, loop_scope="session")
+async def _platform_runtime_identity(contract_conn):
+    """Run each route contract under the real Platform runtime identity."""
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -77,7 +83,7 @@ async def _auth_app(contract_conn):
     from platform_api.main import app
     from platform_api.routers.auth import router as auth_router  # noqa: F401
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
     with patch_pi_test_app(
         shared,
         app=app,

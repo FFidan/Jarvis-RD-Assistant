@@ -425,6 +425,23 @@ services:
     networks:
       - jarvis
 
+  erasure-executor:
+    image: ghcr.io/limitcycle-oss/jarvis-platform-api:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.6}}
+    pull_policy: missing
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      POSTGRES_USER: jarvis_erasure_executor
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_erasure_executor_password
+    secrets:
+      - postgres_erasure_executor_password
+    command: ["python", "-m", "platform_api.erasure_executor"]
+    depends_on:
+      migration-authority-finalize:
+        condition: service_completed_successfully
+    networks:
+      - jarvis
+
   paper_ingestion:
     image: ghcr.io/limitcycle-oss/jarvis-paper-ingestion:${JARVIS_IMAGE_TAG:-${JARVIS_VERSION:-1.2.6}}${TORCH_VARIANT_SUFFIX:-}
     pull_policy: missing
@@ -453,6 +470,9 @@ services:
       AUTO_FETCH_INTERVAL_HOURS: ${AUTO_FETCH_INTERVAL_HOURS:-0}
       # QDRANT_API_KEY is injected via Docker Secret (_FILE convention)
       QDRANT_API_KEY_FILE: /run/secrets/qdrant_api_key
+      PLATFORM_API_URL: http://platform_api:8003
+      LEARNING_ENGINE_URL: http://learning_engine:8001
+      JARVIS_RESEARCH_SERVICE_TOKEN_FILE: /run/secrets/research_service_token
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
       # Ask relevance tuning: relative gate vs the best hit per query facet,
       # and a hard reranker-score floor (empty = backend-aware default).
@@ -491,6 +511,7 @@ services:
       - jarvis_model_hmac_key
       - postgres_research_runtime_password
       - qdrant_api_key
+      - research_service_token
       - litellm_master_key
       - jarvis_config_key
       - platform_identity_public_key
@@ -549,6 +570,9 @@ services:
       - "127.0.0.1:${LEARNING_ENGINE_HOST_PORT:-8011}:8001"
     environment:
       <<: *shared-env
+      PLATFORM_API_URL: http://platform_api:8003
+      PAPER_INGESTION_URL: http://paper_ingestion:8000
+      JARVIS_LEARNING_SERVICE_TOKEN_FILE: /run/secrets/learning_service_token
       JARVIS_API_KEY_FILE: /run/secrets/jarvis_api_key
       JARVIS_MODEL_HMAC_KEY_FILE: /run/secrets/jarvis_model_hmac_key
       LITELLM_MASTER_KEY_FILE: /run/secrets/litellm_master_key
@@ -564,6 +588,7 @@ services:
       - jarvis_api_key
       - jarvis_model_hmac_key
       - postgres_learning_runtime_password
+      - learning_service_token
       - litellm_master_key
       - jarvis_config_key
       - platform_identity_public_key
@@ -1098,6 +1123,8 @@ secrets:
     file: ./secrets/postgres_backup_reader_password.txt
   postgres_restore_operator_password:
     file: ./secrets/postgres_restore_operator_password.txt
+  postgres_erasure_executor_password:
+    file: ./secrets/postgres_erasure_executor_password.txt
   litellm_runtime_password:
     file: ./secrets/litellm_runtime_password.txt
   litellm_migrator_password:

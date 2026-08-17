@@ -86,20 +86,14 @@ async def _write_config_row(
 ) -> None:
     if encrypted_value is not None:
         await conn.execute(
-            """INSERT INTO user_config (user_id, key, value, encrypted_value)
-               VALUES ($1, $2, NULL, $3)
-               ON CONFLICT (user_id, key) DO UPDATE
-                   SET value = NULL, encrypted_value = $3, updated_at = NOW()""",
+            "SELECT platform.upsert_config_v1($1, $2, NULL, $3)",
             user_id,
             key,
             encrypted_value,
         )
         return
     await conn.execute(
-        """INSERT INTO user_config (user_id, key, value)
-           VALUES ($1, $2, $3::jsonb)
-           ON CONFLICT (user_id, key) DO UPDATE
-               SET value = $3::jsonb, encrypted_value = NULL, updated_at = NOW()""",
+        "SELECT platform.upsert_config_v1($1, $2, $3::jsonb, NULL)",
         user_id,
         key,
         value,
@@ -189,8 +183,7 @@ async def migrate_plaintext_secrets(db_pool: asyncpg.Pool) -> int:
                 )
                 continue
             await conn.execute(
-                "UPDATE user_config SET value = NULL, encrypted_value = $2, updated_at = NOW() "
-                "WHERE id = $1",
+                "SELECT platform.reencrypt_config_v1($1, $2)",
                 row["id"],
                 ciphertext_bytes,
             )

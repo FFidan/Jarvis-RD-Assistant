@@ -45,6 +45,7 @@ pytestmark = [
 async def pi_test_client(contract_conn):
     """paper_ingestion ASGI client wired to the contract_conn transaction."""
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
     from jarvis_common.testing_contract_apps import (
         make_contract_client,
         patch_app_state,
@@ -53,12 +54,20 @@ async def pi_test_client(contract_conn):
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with (
         patch_app_state(app, {"db_pool": shared}),
         patch_dependency_overrides(app, set_overrides={get_db_pool: lambda: shared}),
     ):
-        async with make_contract_client(app, None) as client:
+        signed_app = SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
+        async with make_contract_client(signed_app, None) as client:
             yield client
 
 
@@ -164,7 +173,7 @@ async def test_prepare_single_paper_rag_title_from_real_db(contract_conn):
     body = AskRequest(question="What is the main idea?", max_chunks=5)
     messages, sources = await prepare_single_paper_rag(
         embedder,
-        SharedConnPool(contract_conn),
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
         paper_id=paper_id,
         body=body,
         http_client=mock_http,
@@ -208,7 +217,7 @@ async def test_prepare_single_paper_rag_404_on_missing_paper(contract_conn):
     with pytest.raises(PaperNotFoundError):
         await prepare_single_paper_rag(
             embedder,
-            SharedConnPool(contract_conn),
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
             paper_id=999_999_999,
             body=body,
             http_client=mock_http,
@@ -283,7 +292,7 @@ async def test_prepare_cross_paper_rag_titles_from_real_db(contract_conn):
     body = CrossPaperAskRequest(question="How do transformers work?", decompose=False)
     result = await prepare_cross_paper_rag(
         embedder,
-        SharedConnPool(contract_conn),
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
         body,
         user_id=None,
     )
@@ -368,7 +377,7 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
     body = CrossPaperAskRequest(question="Any question?", decompose=False)
     result = await prepare_cross_paper_rag(
         embedder,
-        SharedConnPool(contract_conn),
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
         body,
         user_id=99,  # user 99 has no library membership for this paper
     )
@@ -483,7 +492,7 @@ async def test_neither_rag_path_serves_a_chunk_whose_stored_row_is_gone(contract
     assert remaining == 0, "precondition: the promotion discarded the stored chunk rows"
 
     embedder = _stub_vector_layer(seeded["id"], 0, _SUPERSEDED_EXCERPT)
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
 
     with pytest.raises(NoRelevantChunksError):
         await prepare_single_paper_rag(
@@ -534,7 +543,7 @@ async def test_both_rag_paths_keep_chunks_backed_by_a_stored_row(contract_conn):
     await _add_to_library(contract_conn, reader_id, paper_id)
 
     embedder = _stub_vector_layer(paper_id, 0, _STORED_EXCERPT)
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
 
     _messages, sources = await prepare_single_paper_rag(
         embedder,
@@ -631,7 +640,7 @@ async def test_cross_paper_rag_serves_a_healthy_paper_beside_one_whose_rows_are_
 
     result = await prepare_cross_paper_rag(
         embedder,
-        SharedConnPool(contract_conn),
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
         CrossPaperAskRequest(question="What do the papers say?", decompose=False),
         user_id=reader_id,
     )

@@ -1496,7 +1496,7 @@ def _worker_task(handler, pool, outcome: list) -> MagicMock:
 
 
 def _jobs_app(pool, *, user_id: int):
-    """Return a FastAPI app serving the jobs router against mocked dependencies."""
+    """Return the Research owner-command app with a verified Platform identity."""
     from fastapi import FastAPI  # noqa: PLC0415
     from jarvis_common.auth import current_user_id_strict  # noqa: PLC0415
 
@@ -1510,7 +1510,19 @@ def _jobs_app(pool, *, user_id: int):
     app.include_router(_jobs_router_module.router)
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[current_user_id_strict] = lambda: user_id
-    return app
+
+    class _PlatformIdentity:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+
+        async def __call__(self, scope, receive, send):
+            forwarded = dict(scope)
+            state = dict(scope.get("state", {}))
+            state.update(user_id=user_id, identity_principal="platform")
+            forwarded["state"] = state
+            await self.wrapped(forwarded, receive, send)
+
+    return _PlatformIdentity(app)
 
 
 def _jobs_client(app):
@@ -1542,7 +1554,7 @@ async def test_jobs_endpoint_analyze_force_wins_no_rebuild_for_non_holder(tmp_pa
     with patch.dict(task_registry._TASK_MAP, {"paper.analyze": task}):
         async with _jobs_client(_jobs_app(pool, user_id=_NON_HOLDER_ID)) as client:
             resp = await client.post(
-                "/api/jobs",
+                "/api/jobs/dispatch",
                 json={
                     "kind": "paper.analyze",
                     "payload": {"paper_id": _REBUILD_PAPER_ID, "force": True},
@@ -1575,7 +1587,7 @@ async def test_jobs_endpoint_batch_force_wins_no_rebuild_for_non_holder(tmp_path
     with patch.dict(task_registry._TASK_MAP, {"papers.batch_process": task}):
         async with _jobs_client(_jobs_app(pool, user_id=_NON_HOLDER_ID)) as client:
             resp = await client.post(
-                "/api/jobs",
+                "/api/jobs/dispatch",
                 json={
                     "kind": "papers.batch_process",
                     "payload": {"paper_ids": [_REBUILD_PAPER_ID], "force": True},

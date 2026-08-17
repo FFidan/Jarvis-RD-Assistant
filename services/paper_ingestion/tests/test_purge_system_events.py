@@ -15,12 +15,12 @@ from paper_ingestion.scheduler import purge_system_events_task
 def _make_purge_pool():
     """Create a pool supporting both purge writes and event-log acquisition.
 
-    The purge writes go through ``pool.execute`` directly and must stay
+    The purge writes go through ``pool.fetchval`` directly and must stay
     independent of the event-log conn behind ``acquire()``, so no
     ``direct_methods`` here.
     """
     pool, _event_conn = make_pool_and_conn()
-    pool.execute = AsyncMock()
+    pool.fetchval = AsyncMock()
     return pool
 
 
@@ -31,23 +31,13 @@ async def test_purge_deletes_app_events_older_than_30_days_keeps_newer():
     app = MagicMock()
     app.state.db_pool = pool
 
-    # Mock the execute calls to return deletion counts
-    # asyncpg.execute returns "DELETE <n>" format
-    pool.execute.side_effect = [
-        "DELETE 42",  # app events deleted
-        "DELETE 0",  # no infra events deleted
-    ]
+    pool.fetchval.side_effect = [42, 0]
 
-    await purge_system_events_task(app)
+    with patch("jarvis_common.event_log.log_event", new_callable=AsyncMock) as mock_log:
+        await purge_system_events_task(app)
 
-    # Verify execute was called with correct DELETE statements
-    assert pool.execute.call_count == 2
-
-    calls = pool.execute.call_args_list
-    assert "category != 'infra'" in calls[0][0][0]
-    assert "30 days" in calls[0][0][0]
-    assert "category = 'infra'" in calls[1][0][0]
-    assert "7 days" in calls[1][0][0]
+    assert pool.fetchval.await_count == 2
+    assert mock_log.await_args.kwargs["message"] == "deleted 42 app + 0 infra events"
 
 
 @pytest.mark.asyncio
@@ -57,24 +47,13 @@ async def test_purge_deletes_infra_events_older_than_7_days_keeps_newer():
     app = MagicMock()
     app.state.db_pool = pool
 
-    # Mock the execute calls
-    pool.execute.side_effect = [
-        "DELETE 5",  # app events deleted
-        "DELETE 12",  # infra events deleted
-    ]
+    pool.fetchval.side_effect = [5, 12]
 
-    await purge_system_events_task(app)
+    with patch("jarvis_common.event_log.log_event", new_callable=AsyncMock) as mock_log:
+        await purge_system_events_task(app)
 
-    # Verify execute was called with correct DELETE statements
-    assert pool.execute.call_count == 2
-
-    calls = pool.execute.call_args_list
-    # First call: app events (category != 'infra', 30 days)
-    assert "category != 'infra'" in calls[0][0][0]
-    assert "30 days" in calls[0][0][0]
-    # Second call: infra events (category = 'infra', 7 days)
-    assert "category = 'infra'" in calls[1][0][0]
-    assert "7 days" in calls[1][0][0]
+    assert pool.fetchval.await_count == 2
+    assert mock_log.await_args.kwargs["message"] == "deleted 5 app + 12 infra events"
 
 
 @pytest.mark.asyncio
@@ -84,11 +63,7 @@ async def test_purge_emits_log_event_with_counts():
     app = MagicMock()
     app.state.db_pool = pool
 
-    # Mock the execute calls
-    pool.execute.side_effect = [
-        "DELETE 42",  # app events
-        "DELETE 12",  # infra events
-    ]
+    pool.fetchval.side_effect = [42, 12]
 
     # Mock log_event to track the call
     with patch("jarvis_common.event_log.log_event", new_callable=AsyncMock) as mock_log:
@@ -112,20 +87,16 @@ async def test_purge_handles_malformed_delete_response():
     app = MagicMock()
     app.state.db_pool = pool
 
-    # Mock execute with malformed responses (no count at end)
-    pool.execute.side_effect = [
-        "INVALID",  # bad response
-        "DELETE",  # no count
-    ]
+    pool.fetchval.side_effect = ["INVALID", "DELETE"]
 
-    # Should not raise; log_event should be called with -1 counts
-    with patch("jarvis_common.event_log.log_event", new_callable=AsyncMock) as mock_log:
+    with (
+        patch("jarvis_common.event_log.log_event", new_callable=AsyncMock) as mock_log,
+        patch("paper_ingestion.scheduler.logger") as mock_logger,
+    ):
         await purge_system_events_task(app)
 
-        mock_log.assert_called_once()
-        call_kwargs = mock_log.call_args[1]
-        # Both counts should be -1 due to parse failure
-        assert "-1" in call_kwargs["message"]
+    mock_log.assert_not_awaited()
+    mock_logger.exception.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -135,8 +106,7 @@ async def test_purge_handles_pool_exception():
     app = MagicMock()
     app.state.db_pool = pool
 
-    # Make execute raise an exception
-    pool.execute.side_effect = RuntimeError("Database connection failed")
+    pool.fetchval.side_effect = RuntimeError("Database connection failed")
 
     # Should not raise; exception should be logged
     with patch("paper_ingestion.scheduler.logger") as mock_logger:

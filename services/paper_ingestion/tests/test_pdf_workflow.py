@@ -3328,7 +3328,11 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
 
     promoted = _PROMOTED_ROW
     conn = _promoting_conn(
-        {"visibility_scope": "public", "pdf_url": _SUPERSEDED_PDF_URL},
+        {
+            "id": _PROMOTED_PAPER_ID,
+            "visibility_scope": "public",
+            "pdf_url": _SUPERSEDED_PDF_URL,
+        },
         promoted,
         _RESET_ROW,
     )
@@ -3338,7 +3342,7 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
             conn, _paper_with_pdf_url("promotion-discard", _TRUSTED_PDF_URL)
         )
 
-    conn.execute.assert_awaited_once_with(_DELETE_DERIVED_CHUNKS_SQL, 4242)
+    conn.execute.assert_any_await(_DELETE_DERIVED_CHUNKS_SQL, 4242)
     assert record["pdf_downloaded"] is False
     assert record["pdf_local_path"] is None
     assert record["chunked_at"] is None
@@ -3362,7 +3366,11 @@ async def test_promotion_records_the_id_of_the_paper_it_discarded() -> None:
     from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
     conn = _promoting_conn(
-        {"visibility_scope": "private", "pdf_url": _SUPERSEDED_PDF_URL},
+        {
+            "id": _PROMOTED_PAPER_ID,
+            "visibility_scope": "private",
+            "pdf_url": _SUPERSEDED_PDF_URL,
+        },
         _PROMOTED_ROW,
         _RESET_ROW,
     )
@@ -3390,7 +3398,11 @@ async def test_promotion_that_discards_nothing_records_no_id() -> None:
     from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
     conn = _promoting_conn(
-        {"visibility_scope": "public", "pdf_url": _TRUSTED_PDF_URL},
+        {
+            "id": _PROMOTED_PAPER_ID,
+            "visibility_scope": "public",
+            "pdf_url": _TRUSTED_PDF_URL,
+        },
         _PROMOTED_ROW,
     )
     collected: list[int] = []

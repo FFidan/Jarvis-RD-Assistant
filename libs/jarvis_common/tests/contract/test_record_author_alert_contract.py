@@ -87,6 +87,7 @@ async def test_record_author_alert_first_call_returns_true(contract_conn) -> Non
     from jarvis_common.db_helpers import record_author_alert
 
     tracked_author_id, paper_id, user_id = await _seed_triple(contract_conn)
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
 
     result = await record_author_alert(
         contract_conn,
@@ -107,6 +108,7 @@ async def test_record_author_alert_second_call_returns_false(contract_conn) -> N
     from jarvis_common.db_helpers import record_author_alert
 
     tracked_author_id, paper_id, user_id = await _seed_triple(contract_conn)
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
 
     first = await record_author_alert(
         contract_conn,
@@ -134,6 +136,7 @@ async def test_record_author_alert_exactly_one_row_after_duplicate(contract_conn
     from jarvis_common.db_helpers import record_author_alert
 
     tracked_author_id, paper_id, user_id = await _seed_triple(contract_conn)
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
 
     await record_author_alert(
         contract_conn,
@@ -172,6 +175,7 @@ async def test_record_author_alert_distinct_triples_both_succeed(contract_conn) 
 
     triple_a = await _seed_triple(contract_conn)
     triple_b = await _seed_triple(contract_conn)
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
 
     result_a = await record_author_alert(
         contract_conn,
