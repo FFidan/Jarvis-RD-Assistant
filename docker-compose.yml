@@ -48,21 +48,14 @@ x-shared-env: &shared-env
   PULSE_STAGE2_MODEL: ${PULSE_STAGE2_MODEL:-smart}
   PULSE_STAGE2_MAX_RETRIES: ${PULSE_STAGE2_MAX_RETRIES:-1}
   JARVIS_TRUST_CF_CONNECTING_IP: ${JARVIS_TRUST_CF_CONNECTING_IP:-false}
-  # Source CIDRs allowed to use the X-Owner-User-Id override (the Telegram bot's
-  # per-user service calls). Trusts the bot's own pinned address only, NOT the
-  # whole jarvis bridge — any other container on the bridge would otherwise be
-  # able to act as any user. Defaults track JARVIS_TELEGRAM_BOT_IP, which setup
-  # derives from JARVIS_NET_SUBNET. Loopback covers same-host calls.
-  OWNER_OVERRIDE_ALLOWED_CIDRS: ${OWNER_OVERRIDE_ALLOWED_CIDRS:-127.0.0.0/8,${JARVIS_TELEGRAM_BOT_IP:-10.137.241.250}/32}
   # Source CIDRs trusted as reverse-proxy hops when extracting the real client IP
   # from X-Forwarded-For (rate-limit keying). Trusts loopback plus only the
   # dashboard's pinned address. Empty in code falls back to loopback-only.
   TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8,${JARVIS_DASHBOARD_IP:-10.137.241.253}/32}
   # Numeric CIDRs uvicorn's ProxyHeadersMiddleware trusts as the immediate proxy
   # hop before rewriting scope["client"] from X-Forwarded-For. Distinct from
-  # TRUSTED_PROXY_CIDRS above (rate-limit keying) — this one drives the client
-  # rewrite the X-Owner-User-Id guard depends on to reject nginx-relayed browser
-  # requests. MUST include the dashboard's exact pinned address.
+  # TRUSTED_PROXY_CIDRS above (rate-limit keying); it MUST include the
+  # dashboard's exact pinned address.
   TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-127.0.0.0/8,${JARVIS_DASHBOARD_IP:-10.137.241.253}/32}
   # Plain HTTP may carry setup/auth secrets only when nginx can prove that the
   # client is the Docker host itself. Remote LAN clients remain diagnostics-only.

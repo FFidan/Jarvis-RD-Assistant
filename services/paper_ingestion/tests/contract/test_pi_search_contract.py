@@ -58,7 +58,7 @@ async def _pi_app_with_pool(contract_conn):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=True,
+            remove_identity_overrides=True,
             state_overrides={"embedder": None, "http_client": MagicMock()},
         ),
     ) as app:

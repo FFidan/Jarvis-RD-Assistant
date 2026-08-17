@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 
 import asyncpg
 import pytest
-from fastapi import HTTPException
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 from jarvis_common.testing_contract_apps import make_contract_client as _client
 
@@ -44,20 +44,13 @@ def _template_row(id=1, name="Default Template", is_default=True):
 
 @pytest.fixture()
 def _app(request):
-    """Full app with mocked DB, bypassed API-key auth, limiter off.
+    """Full app with mocked DB, signed identity, and limiter disabled.
 
     ``request.param`` (parametrized via indirect) is the simulated session
-    role: ``None``/``"user"`` exercise the rejection path (the real
-    ``require_admin`` raises 403 when ``request.state.user_role != 'admin'``),
-    ``"admin"`` exercises the success path.
-
-    The ``require_admin`` override resolves the role via the live ASGI request
-    rather than a FastAPI-injected ``Request`` dependency: an injected
-    ``Request`` param on the override callable is misresolved by FastAPI as a
-    query parameter once the slowapi-wrapped endpoint also declares a body.
+    role: ``None``/``"user"`` exercise the rejection path and ``"admin"``
+    exercises the success path through the production identity middleware.
     """
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import current_user_id_strict, require_admin
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
@@ -68,32 +61,27 @@ def _app(request):
     conn.fetchrow.return_value = _template_row(id=3, name="New Template")
     conn.execute.return_value = "DELETE 1"
 
-    async def _patched_require_admin() -> None:
-        if user_role != "admin":
-            raise HTTPException(status_code=403, detail="Admin role required")
-
-    overrides = {
-        verify_api_key: lambda: None,
-        require_admin: _patched_require_admin,
-    }
-    # When a role is present there is a valid session; steer current_user_id_strict
-    # to a fixed user so list_templates (which now gates on session) passes.
-    if user_role is not None:
-        overrides[current_user_id_strict] = lambda: 1
-
     with patch_pi_test_app(
         mock_pool,
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=True,
             override_db_dependency=True,
             disable_limiter=True,
-            dependency_overrides=overrides,
+            dependency_overrides={verify_api_key: lambda: None},
         ),
-    ):
-        yield app, conn
+    ) as patched_app:
+        yield (
+            SignedIdentityMiddleware(
+                patched_app,
+                audience="research",
+                user_id=1 if user_role is not None else None,
+                role=user_role,
+            ),
+            conn,
+        )
 
 
 _VALID_BODY = {

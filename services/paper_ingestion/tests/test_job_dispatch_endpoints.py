@@ -27,7 +27,7 @@ def app_with_pool():
     """
     from jarvis_common.auth import (
         current_user_id_strict,
-        get_current_user_id_or_bot,
+        get_current_user_id,
         require_admin,
         require_admin_or_api_key,
         verify_api_key,
@@ -43,13 +43,13 @@ def app_with_pool():
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             # The pulse_app factory below adds per-test overrides for these
             # two seams; declaring them here removes any in-test write again
             # on exit so it cannot leak past the fixture.
-            dependency_absent=(get_current_user_id_or_bot, require_admin_or_api_key),
+            dependency_absent=(get_current_user_id, require_admin_or_api_key),
             dependency_overrides={
                 verify_api_key: lambda: None,
                 current_user_id_strict: lambda: 42,
@@ -75,7 +75,7 @@ def platform_jobs_app():
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             dependency_overrides={
@@ -410,7 +410,7 @@ class _AdvisoryLockPool:
 @pytest.fixture()
 def pulse_app(app_with_pool):
     """The pulse app wired to a lock-modelling pool, with audit writes stubbed."""
-    from jarvis_common.auth import get_current_user_id_or_bot, require_admin_or_api_key
+    from jarvis_common.auth import get_current_user_id, require_admin_or_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.routers import pulse as pulse_router
 
@@ -421,7 +421,7 @@ def pulse_app(app_with_pool):
 
         pool = _AdvisoryLockPool(held_elsewhere=held_elsewhere, in_flight_id=in_flight_id)
         app.dependency_overrides[get_db_pool] = lambda: pool
-        app.dependency_overrides[get_current_user_id_or_bot] = lambda: _PULSE_UID
+        app.dependency_overrides[get_current_user_id] = lambda: _PULSE_UID
         app.dependency_overrides[require_admin_or_api_key] = lambda: None
 
         async def _defer(**_kwargs):

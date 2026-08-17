@@ -146,7 +146,7 @@ async def test_auth_required_stashes_platform_user() -> None:
 
 
 @pytest.mark.asyncio
-async def test_backend_auth_exchanges_and_strips_local_owner_marker() -> None:
+async def test_backend_auth_exchanges_and_strips_local_paired_user_marker() -> None:
     platform_requests: list[dict[str, object]] = []
     backend_headers: httpx.Headers | None = None
 
@@ -169,7 +169,7 @@ async def test_backend_auth_exchanges_and_strips_local_owner_marker() -> None:
     ):
         response = await backend_client.get(
             "http://research:8000/api/papers/42",
-            headers={"X-Owner-User-Id": "7", "X-API-Key": "must-not-leave"},
+            headers={"X-Jarvis-Paired-User-Id": "7", "X-API-Key": "must-not-leave"},
         )
 
     assert response.status_code == 200
@@ -178,7 +178,7 @@ async def test_backend_auth_exchanges_and_strips_local_owner_marker() -> None:
     assert backend_headers is not None
     assert backend_headers["X-Jarvis-Identity"] == "signed-assertion"
     assert "X-Request-Id" in backend_headers
-    assert "X-Owner-User-Id" not in backend_headers
+    assert "X-Jarvis-Paired-User-Id" not in backend_headers
     assert "X-API-Key" not in backend_headers
 
 
@@ -202,7 +202,7 @@ async def test_backend_auth_denies_unmanifested_route_before_exchange() -> None:
         with pytest.raises(RuntimeError, match="not allowlisted"):
             await backend_client.delete(
                 "http://research:8000/api/admin/users/7",
-                headers={"X-Owner-User-Id": "7"},
+                headers={"X-Jarvis-Paired-User-Id": "7"},
             )
 
     assert exchanges == 0
@@ -248,7 +248,7 @@ async def test_backend_auth_propagates_active_w3c_trace() -> None:
     ):
         with trace.get_tracer("test").start_as_current_span("telegram.command"):
             await backend_client.get(
-                "http://research:8000/api/papers/42", headers={"X-Owner-User-Id": "7"}
+                "http://research:8000/api/papers/42", headers={"X-Jarvis-Paired-User-Id": "7"}
             )
 
     assert platform_headers is not None and "traceparent" in platform_headers

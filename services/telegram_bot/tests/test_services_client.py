@@ -2,7 +2,7 @@
 
 Verifies:
 - Correct URL on the right base service (learning_engine vs paper_ingestion)
-- X-Owner-User-Id == str(user_id) and no general API key in headers
+- X-Jarvis-Paired-User-Id == str(user_id) and no general API key in headers
 - Correct query params / request body
 - Parsed return values
 - 404 → None for fetch_project and complete_task
@@ -131,8 +131,9 @@ def _make_http(response: MagicMock) -> AsyncMock:
 def _assert_owner_headers(call_kwargs: dict, user_id: int = USER_ID) -> None:
     """Assert only the local assertion-exchange marker is present."""
     headers = call_kwargs.get("headers", {})
-    assert headers.get("X-Owner-User-Id") == str(user_id), (
-        f"X-Owner-User-Id expected {user_id!r}, got {headers.get('X-Owner-User-Id')!r}"
+    marker = "X-Jarvis-Paired-User-Id"
+    assert headers.get(marker) == str(user_id), (
+        f"{marker} expected {user_id!r}, got {headers.get(marker)!r}"
     )
     assert "X-API-Key" not in headers
 
@@ -762,7 +763,7 @@ async def test_log_focus_session_none_user_id_omits_owner_header(config: BotConf
 
     _, call_kwargs = http.post.call_args
     headers = call_kwargs.get("headers", {})
-    assert "X-Owner-User-Id" not in headers
+    assert "X-Jarvis-Paired-User-Id" not in headers
 
 
 @pytest.mark.asyncio

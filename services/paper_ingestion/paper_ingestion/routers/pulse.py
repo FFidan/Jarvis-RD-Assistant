@@ -22,7 +22,6 @@ from jarvis_common import (
     ErrorResponse,
     current_user_id_strict,
     get_current_user_id,
-    get_current_user_id_or_bot,
     log_audit,
     require_admin_or_api_key,
 )
@@ -82,7 +81,7 @@ router = APIRouter(
 async def generate_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    current_uid: int = Depends(get_current_user_id_or_bot),
+    current_uid: int = Depends(get_current_user_id),
     _admin: None = Depends(require_admin_or_api_key),
 ) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
@@ -164,7 +163,7 @@ async def generate_pulse(
 async def get_today(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> PulseDeckResponse | None:
     """Fetch today's Pulse deck, falling back to the last non-empty deck within 7 days.
 

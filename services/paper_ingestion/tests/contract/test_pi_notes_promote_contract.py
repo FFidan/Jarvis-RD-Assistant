@@ -50,7 +50,7 @@ pytestmark = [
 async def _pi_app_with_pool_and_verifier(contract_conn):
     """PI app wired to contract conn + real QuoteVerifier on app.state.verifier."""
     from jarvis_common import (
-        current_user_id_strict_with_owner_override,
+        current_user_id_strict,
         get_current_user_id,
     )
     from jarvis_common.testing import SharedConnPool
@@ -70,7 +70,7 @@ async def _pi_app_with_pool_and_verifier(contract_conn):
         patch_dependency_overrides(
             app,
             remove_overrides={
-                current_user_id_strict_with_owner_override,
+                current_user_id_strict,
                 get_current_user_id,
             },
         ),

@@ -254,9 +254,9 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``task_done_{id}`` — mark a task done via the Learning Engine REST API.
 
-    Ownership is enforced server-side: the LE ``PUT /api/tasks/{id}`` endpoint scopes
-    by the forwarded ``X-Owner-User-Id`` header, so a non-owned task returns 404 →
-    "not found" with no existence leak.
+    Ownership is enforced server-side: the LE ``PUT /api/tasks/{id}`` endpoint
+    scopes by the identity assertion obtained from Telegram's paired-user
+    marker, so a non-owned task returns 404, with no existence leak.
     """
     query = update.callback_query
     if query is None:

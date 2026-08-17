@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import author_matches, delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_strict, get_current_user_id_or_bot
+from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import record_author_alert
 from jarvis_common.paper_visibility import paper_visibility_sql
 
@@ -228,7 +228,7 @@ async def auto_detect_authors(
 async def check_tracked_authors(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(current_user_id_strict),
 ) -> AuthorCheckResponse:
     """Check tracked authors against recent papers (last 24 hours).
 

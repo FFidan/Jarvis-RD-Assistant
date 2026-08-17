@@ -297,7 +297,7 @@ def asgi_client():
     import httpx
     from httpx import ASGITransport
     from jarvis_common.auth import (
-        current_user_id_strict_with_owner_override,
+        current_user_id_strict,
         verify_api_key,
     )
     from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
@@ -314,12 +314,12 @@ def asgi_client():
                     get_db_pool=get_db_pool,
                     limiter=limiter,
                     options=PITestAppOptions(
-                        remove_owner_override=False,
+                        remove_identity_overrides=False,
                         override_db_dependency=True,
                         disable_limiter=True,
                         dependency_overrides={
                             verify_api_key: lambda: None,
-                            current_user_id_strict_with_owner_override: lambda: user_id,
+                            current_user_id_strict: lambda: user_id,
                         },
                     ),
                 )

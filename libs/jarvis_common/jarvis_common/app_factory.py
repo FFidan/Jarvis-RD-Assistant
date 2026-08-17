@@ -48,7 +48,6 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from jarvis_common.auth import (
     RAW_CLIENT_SCOPE_KEY,
     invalidate_api_key_login_cache,
-    refresh_allowed_networks_cache,
     refresh_api_key_cache,
     validate_production_config,
 )
@@ -363,17 +362,10 @@ def _resolve_db_pool_kwargs(overrides: dict[str, Any]) -> dict[str, Any]:
 def _log_auth_status() -> None:
     """Log the API-key/DEV_MODE configuration once at startup.
 
-    Also refreshes the module-level caches so that any key/CIDR rotation that
-    happened between import time and startup (e.g. Docker secret mount settling)
-    takes effect without a service restart.
+    Refreshes the API-key cache so a secret mount that settles after import is
+    observed without a service restart.
     """
     refresh_api_key_cache()
-    try:
-        refresh_allowed_networks_cache()
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            "refresh_allowed_networks_cache failed at startup (invalid CIDR?)", exc_info=True
-        )
     dev_mode = get_core_settings().dev_mode
     secret = get_secrets_settings().jarvis_api_key
     api_key = secret.get_secret_value() if secret else ""
@@ -536,10 +528,8 @@ class RawClientStashMiddleware:
     actual socket peer — and stashes it under
     :data:`jarvis_common.auth.RAW_CLIENT_SCOPE_KEY` before
     ProxyHeadersMiddleware overwrites ``scope["client"]`` in place from
-    X-Forwarded-For. The X-Owner-User-Id guard in :mod:`jarvis_common.auth`
-    requires BOTH this raw peer AND the rewritten client to be allowlisted, so
-    a forged XFF from a non-allowlisted source can no longer spoof its way
-    onto the owner-override path.
+    X-Forwarded-For. The rate limiter uses both values to distinguish the
+    transport peer from forwarded client metadata.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -636,8 +626,7 @@ def configure_middleware_and_errors(
     # 5. RawClientStashMiddleware -- added AFTER ProxyHeadersMiddleware so it runs
     # OUTSIDE it (Starlette: later-added = more outer = runs first), snapshotting
     # the raw socket peer BEFORE ProxyHeadersMiddleware mutates scope["client"]
-    # from X-Forwarded-For. The X-Owner-User-Id guard (jarvis_common.auth) requires
-    # BOTH the stashed raw peer AND the rewritten client to be allowlisted (M5).
+    # from X-Forwarded-For for rate-limit keying.
     app.add_middleware(RawClientStashMiddleware)
 
     # 6. MaintenanceMiddleware -- added last in the shared stack so it runs ahead

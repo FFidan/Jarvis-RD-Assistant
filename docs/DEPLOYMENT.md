@@ -701,21 +701,14 @@ exclusively via the `/pair` code flow. To pair: open the dashboard → Settings
 → Integrations → Telegram, generate a one-time code, and send `/pair <code>`
 to the bot. The retired `/start PAIR_<code>` pairing path no longer works.
 
-**Telegram owner-override network.** The bot calls service endpoints with
-`X-Owner-User-Id` to make per-user requests, trusted only from
-`OWNER_OVERRIDE_ALLOWED_CIDRS`. The bundled compose stack sets this
-automatically to the bot's own pinned address as a `/32` (it tracks
-`JARVIS_TELEGRAM_BOT_IP`, which setup derives from `JARVIS_NET_SUBNET`;
-default `10.137.241.250`), so no change is needed for the default stack and no
-other container on the bridge can send the header. **If you override
-`JARVIS_NET_SUBNET`, the bot's pin and the allowlist both follow it** — only
-set `OWNER_OVERRIDE_ALLOWED_CIDRS` explicitly if the bot reaches the services
-from some other network. (The bare code default `127.0.0.0/8` is loopback-only;
-the compose stack adds the bot's address to it.)
+**Telegram identity boundary.** Telegram is a database-free REST client. It
+does not hold PostgreSQL or configuration-encryption credentials and does not
+forward a generic impersonation header. Platform supplies only the route-bound
+assertion or service capability required by the called API.
 
 **Ownership backfill.** The NULL-owner backfill for pre-existing product rows
 is part of the schema-101 baseline in `db/init.sql`, not a startup migration.
-The only startup ownership migration is 0105, described next.
+The one-shot migrator applies ownership migration 0105, described next.
 
 **Instance-owner migration (0105).** An upgraded instance with exactly one live
 administrator assigns that account as the owner automatically. An instance with
@@ -755,8 +748,9 @@ The standard stack separates request handling from destructive restore work:
 
 | Service | Restore-related access |
 |---|---|
-| `paper_ingestion` | Reads backup archives, writes the small request/status trigger volume, and exposes the authenticated admin API. It has no restore inbox, host-secret write mount, or Docker socket. |
-| `postgres-backup` | The backup sidecar owns database reloads, PDF swaps, Qdrant snapshot staging, and the narrow writable host-secret mount used for the three restored data keys. |
+| `paper_ingestion` | Reads backup archives, queues a browser-confirmed restore intent, and exposes the authenticated admin API. It has no restore inbox, host-secret write mount, or Docker socket. |
+| `postgres-backup` | Scheduled read-only backup, inventory, and retention work. It has no restore credential or restore authority. |
+| `postgres-restore` | A host-started transient no-listener job. It reconstructs roles, owners, grants, defaults, and search paths, migrates, then permits writers to resume. |
 | `restore-uploader` | Writes only allowlisted uploads to the restore inbox and reads a hashed, expiring upload grant from the trigger volume. It has no database credentials, application secrets, or Docker socket. |
 
 Learning Engine and Telegram receive the maintenance trigger read-only. None of

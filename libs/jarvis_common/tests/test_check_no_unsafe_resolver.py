@@ -79,6 +79,18 @@ class TestImportsUnsafe:
         hits, aliases = _imports_unsafe(_parse(src))
         assert len(hits) == 2
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "current_user_id_with_owner_override",
+            "current_user_id_strict_with_owner_override",
+            "get_current_user_id_or_bot",
+        ],
+    )
+    def test_retired_owner_override_import_flagged(self, name: str) -> None:
+        hits, _ = _imports_unsafe(_parse(f"from jarvis_common.auth import {name}"))
+        assert hits == [(1, f"import {name}")]
+
 
 # ---------------------------------------------------------------------------
 # _depends_on_unsafe
@@ -226,7 +238,7 @@ class TestMissingResolver:
                 _REL,
                 "@router.put('/{paper_id}/save')\n"
                 "async def save(request: Request, "
-                "user_id: int = Depends(get_current_user_id_or_bot)):\n"
+                "user_id: int = Depends(get_current_user_id)):\n"
                 "    return {}\n",
             ),
             (_REL, "async def helper(conn):\n    return 1\n"),

@@ -480,7 +480,7 @@ async def test_run_paper_digest_warns_when_api_returns_no_data():
 
 @pytest.mark.asyncio
 async def test_paper_digest_per_pairing_user_scope():
-    """Each paired user gets their own API call with X-Owner-User-Id scoping (N1 fix).
+    """Each paired user gets their own API call with X-Jarvis-Paired-User-Id scoping (N1 fix).
 
     Two pairings → two _fetch_digest_from_api calls with different user_ids,
     so the backend scopes the digest to each user's data independently.

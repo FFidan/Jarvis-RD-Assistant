@@ -120,6 +120,8 @@ def test_direct_forged_identity_header_is_rejected() -> None:
         "/api/papers",
         headers={
             "X-Jarvis-User-ID": "42",
+            "X-Owner-User-ID": "42",
+            "X-API-Key": "generic-key-must-not-establish-user-identity",
             "X-Request-ID": "request-1",
         },
     )

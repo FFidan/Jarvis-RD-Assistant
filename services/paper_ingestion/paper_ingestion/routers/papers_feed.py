@@ -6,7 +6,7 @@ from datetime import date
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, escape_like
-from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
+from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion import papers_service
 from paper_ingestion.converters import row_to_feed_paper, row_to_paper_response
@@ -234,7 +234,7 @@ async def list_feed_papers(
     view: str | None = Query(default=None, max_length=64),
     scope: str = Query(default="library", max_length=16),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> FeedResponse:
     """Return papers for the What's New feed.
 

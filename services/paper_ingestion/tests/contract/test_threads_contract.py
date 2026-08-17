@@ -68,7 +68,7 @@ async def _pi_threads_app(contract_conn):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=True,
+            remove_identity_overrides=True,
             override_db_dependency=True,
             disable_limiter=True,
         ),

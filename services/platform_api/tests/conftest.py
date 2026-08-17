@@ -45,6 +45,6 @@ async def _platform_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
         app=platform_app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=True),
+        options=PITestAppOptions(remove_identity_overrides=True),
     ) as app:
         yield app

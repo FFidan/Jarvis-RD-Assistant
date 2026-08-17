@@ -379,7 +379,7 @@ async def test_pair_command_rejects_expired_token(contract_conn):
 # writing the DB directly, so the DB-state assertions are obsolete.  Their two
 # guarantees are now covered elsewhere:
 #
-#   (a) "the bot issues the right REST call (URL + X-Owner-User-Id) and renders
+#   (a) "the bot issues the right REST call (URL + X-Jarvis-Paired-User-Id) and renders
 #       correctly" — covered by the http-mock unit tests in
 #       services/telegram_bot/tests/test_command_handlers.py and
 #       test_callback_handlers.py:
@@ -415,7 +415,7 @@ async def test_pair_command_rejects_expired_token(contract_conn):
 # The old A247b forced auth_check → (True, None) to
 # exercise a consumer-side ``$2 IS NULL`` catch-all in complete_task.  That
 # direct-DB path no longer exists in the bot — the handler PUTs to the LE, which
-# enforces ownership via X-Owner-User-Id and returns 404 for non-owned tasks
+# enforces ownership via X-Jarvis-Paired-User-Id and returns 404 for non-owned tasks
 # (test_update_task_cross_tenant_returns_404 proves the row stays unchanged;
 # test_task_done_non_owned_task_returns_not_found_no_leak proves the bot renders
 # "not found" with no existence leak).
@@ -503,10 +503,10 @@ async def test_tg_paper_detail_callback_owner_sees_paper(contract_conn, contract
     mock_http.get.assert_awaited_once()
     url_arg: str = mock_http.get.await_args[0][0]
     assert str(paper_id_a) in url_arg, f"Expected paper_id {paper_id_a} in GET URL; got {url_arg!r}"
-    # X-Owner-User-Id header scopes the request to user_a
+    # The local paired-user marker is exchanged for user_a's signed assertion.
     headers: dict = mock_http.get.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(user_a_id), (
-        f"Expected X-Owner-User-Id={user_a_id}; got {headers!r}"
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(user_a_id), (
+        f"Expected X-Jarvis-Paired-User-Id={user_a_id}; got {headers!r}"
     )
 
 
@@ -757,13 +757,13 @@ async def test_tg_paper_feedback_idor_rejected(contract_conn, contract_two_users
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contract_two_users):
-    """W1B.1-8: /stats command sends X-Owner-User-Id scoped to each caller's user_id.
+    """W1B.1-8: /stats stages each caller's user ID for assertion exchange.
 
     User A and User B each make a /stats call. The outbound LE GET must carry
-    the caller's own user_id in X-Owner-User-Id (not the other user's id).
+    the caller's own user_id in the pre-auth marker (not the other user's id).
     Verified: paper_commands.py:141–162 (stats_command, _owner_headers).
 
-    RED proof: removing X-Owner-User-Id from _owner_headers → header assertion fails.
+    Mutation proof: removing the paired-user marker from _owner_headers fails this assertion.
     """
     from unittest.mock import patch
 
@@ -810,8 +810,8 @@ async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contra
 
         mock_http.get.assert_awaited_once()
         headers: dict = mock_http.get.await_args[1]["headers"]
-        assert headers.get("X-Owner-User-Id") == str(user_id), (
-            f"Expected X-Owner-User-Id={user_id} for user {user_id}; got {headers!r}"
+        assert headers.get("X-Jarvis-Paired-User-Id") == str(user_id), (
+            f"Expected X-Jarvis-Paired-User-Id={user_id} for user {user_id}; got {headers!r}"
         )
 
     # Confirm the two user_ids differ so the assertions above are meaningful
@@ -873,7 +873,7 @@ async def test_tg_focus_command_starts_scoped_durable_session(contract_conn, con
     mock_http.post.assert_awaited_once()
     _, kwargs = mock_http.post.await_args
     assert kwargs["json"] == {"duration_seconds": 1500, "source": "telegram"}
-    assert kwargs["headers"]["X-Owner-User-Id"] == str(user_a_id)
+    assert kwargs["headers"]["X-Jarvis-Paired-User-Id"] == str(user_a_id)
     update.message.reply_text.assert_awaited_once()
     reply_text: str = update.message.reply_text.call_args[0][0]
     assert "25" in reply_text, f"Expected duration '25' in reply; got: {reply_text!r}"
@@ -924,9 +924,9 @@ async def test_tg_pulse_now_command_enqueues_pulse_job(contract_conn, contract_t
     assert "/api/pulse/generate" in url_arg, (
         f"Expected /api/pulse/generate in POST URL; got {url_arg!r}"
     )
-    # X-Owner-User-Id header present
+    # X-Jarvis-Paired-User-Id header present
     headers: dict = mock_http.post.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(user_a_id)
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(user_a_id)
     # Confirmation reply sent
     update.message.reply_text.assert_awaited_once()
     reply_text: str = update.message.reply_text.call_args[0][0]

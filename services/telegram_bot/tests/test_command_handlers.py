@@ -960,7 +960,7 @@ async def test_discover_strips_bidi_chars():
 
 @pytest.mark.asyncio
 async def test_briefing_scopes_to_user_via_owner_header_when_paired():
-    """/briefing run by a paired user forwards X-Owner-User-Id on every REST gather."""
+    """A paired /briefing stages its user ID on every pre-auth request."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.side_effect = [
@@ -976,7 +976,7 @@ async def test_briefing_scopes_to_user_via_owner_header_when_paired():
     # All four gathers carry the owner header scoping the response to user 7.
     assert mock_http.get.await_count == 4
     for call in mock_http.get.await_args_list:
-        assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+        assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
 
 
 @pytest.mark.asyncio
@@ -1002,7 +1002,7 @@ async def test_briefing_unpaired_owner_gets_pairing_message():
 
 @pytest.mark.asyncio
 async def test_tasks_scopes_query_to_paired_user():
-    """A12: /tasks run by a paired user forwards X-Owner-User-Id + ?status=in_progress."""
+    """A12: /tasks stages paired identity and the in-progress filter."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=[])
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.return_value = make_http_response([])
@@ -1012,7 +1012,7 @@ async def test_tasks_scopes_query_to_paired_user():
 
     call = mock_http.get.await_args
     assert "/api/tasks" in call.args[0]
-    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
     assert call.kwargs["params"]["status"] == "in_progress"
 
 
@@ -1027,14 +1027,14 @@ async def test_tasks_scopes_query_with_project_filter():
         await tasks_command(update, context)
 
     call = mock_http.get.await_args
-    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
     assert call.kwargs["params"]["status"] == "in_progress"
     assert call.kwargs["params"]["project_id"] == 3
 
 
 @pytest.mark.asyncio
 async def test_done_passes_user_id_via_owner_header():
-    """/done from a paired user forwards X-Owner-User-Id on the PUT /api/tasks call."""
+    """/done stages the paired identity before its PUT assertion exchange."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=["5"])
     context.user_data["jarvis_user_id"] = 7
     # 404 → unowned/nonexistent task → "not found"
@@ -1046,14 +1046,14 @@ async def test_done_passes_user_id_via_owner_header():
     mock_http.put.assert_awaited_once()
     call = mock_http.put.await_args
     assert "/api/tasks/5" in call.args[0]
-    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
     text = update.message.reply_text.call_args[0][0]
     assert "not found" in text.lower() or "5" in text
 
 
 @pytest.mark.asyncio
 async def test_projects_scopes_listing_to_paired_user():
-    """A13: /projects from a paired user forwards X-Owner-User-Id + ?status=active."""
+    """A13: /projects stages paired identity and the active filter."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.return_value = make_http_response([])
@@ -1063,7 +1063,7 @@ async def test_projects_scopes_listing_to_paired_user():
 
     call = mock_http.get.await_args
     assert "/api/projects" in call.args[0]
-    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
     assert call.kwargs["params"] == {"status": "active"}
 
 
@@ -1089,7 +1089,7 @@ async def test_projects_unpaired_owner_gets_pairing_message():
 
 @pytest.mark.asyncio
 async def test_newproject_passes_user_id_via_owner_header():
-    """/newproject from a paired user forwards X-Owner-User-Id on the POST /api/projects call."""
+    """A paired user carries its private marker on POST /api/projects."""
     update, context, _, mock_http = _make_paired_update_and_context(
         jarvis_user_id=7, args=["Alpha"]
     )
@@ -1102,12 +1102,12 @@ async def test_newproject_passes_user_id_via_owner_header():
     mock_http.post.assert_awaited_once()
     call = mock_http.post.await_args
     assert "/api/projects" in call.args[0]
-    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
     assert call.kwargs["json"]["name"] == "Alpha"
 
 
 # ---------------------------------------------------------------------------
-# Cross-user: X-Owner-User-Id forwarded by paper commands for paired users
+# Paired-user context staged by paper commands before assertion exchange
 # ---------------------------------------------------------------------------
 
 
@@ -1120,7 +1120,7 @@ from telegram_bot.handlers.commands.system_commands import pulse_now_command  # 
 
 @pytest.mark.asyncio
 async def test_papers_command_sends_owner_user_id_for_paired_user():
-    """/papers sends X-Owner-User-Id when invoked by a paired user."""
+    """/papers stages the paired user's local assertion marker."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=[])
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -1133,13 +1133,13 @@ async def test_papers_command_sends_owner_user_id_for_paired_user():
 
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "7"
     assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
 async def test_stats_command_sends_owner_user_id_for_paired_user():
-    """/stats sends X-Owner-User-Id when invoked by a paired user."""
+    """/stats stages the paired user's local assertion marker."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -1158,13 +1158,13 @@ async def test_stats_command_sends_owner_user_id_for_paired_user():
 
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "7"
     assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
 async def test_next_command_sends_owner_user_id_for_paired_user():
-    """/next sends X-Owner-User-Id when invoked by a paired user."""
+    """/next stages the paired user's local assertion marker."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -1177,7 +1177,7 @@ async def test_next_command_sends_owner_user_id_for_paired_user():
 
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "7"
 
 
 @pytest.mark.asyncio
@@ -1226,7 +1226,7 @@ async def test_next_command_labels_stale_unverified_pulse_without_diagnostic_lea
 
 @pytest.mark.asyncio
 async def test_inbox_command_sends_owner_user_id_for_paired_user():
-    """/inbox sends X-Owner-User-Id when invoked by a paired user."""
+    """/inbox stages the paired user's local assertion marker."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -1239,12 +1239,12 @@ async def test_inbox_command_sends_owner_user_id_for_paired_user():
 
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "7"
 
 
 @pytest.mark.asyncio
 async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
-    """/pulse_now sends X-Owner-User-Id when invoked by a paired user."""
+    """/pulse_now stages the paired user's local assertion marker."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -1256,7 +1256,7 @@ async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
 
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "7"
 
 
 @pytest.mark.asyncio
@@ -1278,12 +1278,12 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
     stats_calls = [c for c in mock_http.get.await_args_list if c.args[0].endswith("/api/stats")]
     assert stats_calls, "briefing must call /api/stats for due-card count"
     headers = stats_calls[0].kwargs["headers"]
-    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "7"
     assert "X-API-Key" not in headers
 
 
 # ---------------------------------------------------------------------------
-# focus_alarm threads X-Owner-User-Id for paired users
+# focus_alarm stages paired-user context for assertion exchange
 # ---------------------------------------------------------------------------
 
 
@@ -1314,8 +1314,8 @@ async def test_focus_start_sends_owner_user_id_for_paired_user():
 
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == "42", (
-        f"focus start must send X-Owner-User-Id=42, headers={headers}"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "42", (
+        f"focus start must stage paired user 42, headers={headers}"
     )
     assert "X-API-Key" not in headers
     assert mock_http.post.await_args.kwargs["json"] == {

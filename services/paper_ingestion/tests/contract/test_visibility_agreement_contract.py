@@ -760,7 +760,7 @@ async def _promotion_app(contract_conn):
     from unittest.mock import MagicMock
 
     from jarvis_common import (
-        current_user_id_strict_with_owner_override,
+        current_user_id_strict,
         get_current_user_id,
     )
     from jarvis_common.testing import SharedConnPool
@@ -784,7 +784,7 @@ async def _promotion_app(contract_conn):
         patch_dependency_overrides(
             app,
             remove_overrides={
-                current_user_id_strict_with_owner_override,
+                current_user_id_strict,
                 get_current_user_id,
             },
         ),

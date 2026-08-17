@@ -99,7 +99,7 @@ def test_patch_pi_test_app_none_pool_leaves_db_pool_untouched():
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=False),
+        options=PITestAppOptions(remove_identity_overrides=False),
     ):
         assert not hasattr(app.state, "db_pool")
 
@@ -115,7 +115,7 @@ def test_patch_pi_test_app_none_pool_rejects_db_dependency_override():
             app=app,
             get_db_pool=get_db_pool,
             limiter=limiter,
-            options=PITestAppOptions(remove_owner_override=False, override_db_dependency=True),
+            options=PITestAppOptions(remove_identity_overrides=False, override_db_dependency=True),
         ):
             pass
 
@@ -134,7 +134,7 @@ def test_patch_pi_test_app_dependency_absent_cleans_in_test_writes():
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=False, dependency_absent=(dep,)),
+        options=PITestAppOptions(remove_identity_overrides=False, dependency_absent=(dep,)),
     ):
         assert dep not in app.dependency_overrides
         app.dependency_overrides[dep] = lambda: "added-inside"
@@ -154,7 +154,7 @@ def test_patch_pi_test_app_state_absent_removes_and_restores():
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=False, state_absent=("qdrant_client",)),
+        options=PITestAppOptions(remove_identity_overrides=False, state_absent=("qdrant_client",)),
     ):
         assert not hasattr(app.state, "qdrant_client")
         assert app.state.db_pool is pool

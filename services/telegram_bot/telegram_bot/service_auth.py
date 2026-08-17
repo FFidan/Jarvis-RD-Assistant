@@ -52,7 +52,7 @@ class TelegramBackendAuth(httpx.Auth):
             If the destination is not an exact configured/allowlisted backend
             or no valid paired-user marker is present.
         """
-        raw_user_id = request.headers.pop("X-Owner-User-Id", None)
+        raw_user_id = request.headers.pop("X-Jarvis-Paired-User-Id", None)
         try:
             user_id = int(raw_user_id or "")
         except ValueError as exc:

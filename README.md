@@ -145,16 +145,27 @@ Runs on your own hardware with Ollama, with optional cloud-model access through 
 
 ```mermaid
 flowchart TD
-    UI["React Dashboard · :3001<br/>(nginx reverse-proxies to backends)"]
-    UI --> PI["Paper Ingestion · FastAPI :8000<br/>discovery · PDF · embedding · RAG · summarization · knowledge graph"]
-    UI --> LE["Learning Engine · FastAPI :8001<br/>card generation · FSRS scheduling · review tracking · projects · analytics"]
-    PI --> PG[("Postgres · :5432")]
+    UI["React Dashboard · nginx"]
+    UI --> GW["Gateway identity hop"]
+    GW --> PL["Platform API · identity · configuration · audit · pairing · jobs"]
+    GW --> PI["Research · discovery · PDF · embedding · RAG · summarization"]
+    GW --> LE["Learning · cards · reviews · projects · analytics"]
+    TG["Telegram (optional)"] --> PL
+    TG --> PI
+    TG --> LE
+    PL --> PG
+    PI --> PG[("Postgres · platform / research / learning / ops")]
     PI --> QD[("Qdrant · :6333")]
     PI --> LL["LiteLLM · :4000"]
     LE --> PG
     LE --> LL
     LL --> OL["Ollama · :11434"]
 ```
+
+The gateway obtains a Platform-signed, request-bound assertion before sending a
+browser request to a product API. Telegram is a REST client: it has no
+PostgreSQL or configuration-encryption credential and sends no generic
+impersonation header downstream.
 
 **Optional services:** Telegram bot (`--profile telegram`), Langfuse LLM-trace observability (off by default — `make observability-up`; see [docs/contracts/04-observability.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/contracts/04-observability.md)).
 

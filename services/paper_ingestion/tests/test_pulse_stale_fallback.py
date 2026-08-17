@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jarvis_common import get_current_user_id, get_current_user_id_or_bot, verify_api_key
+from jarvis_common import get_current_user_id, verify_api_key
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -109,7 +109,7 @@ def client():
     # Add it here so the converted ``Depends(get_current_user_id)`` pulse routes
     # default to user 1 (identical to the pre-conversion symbol-stub behaviour).
     app.dependency_overrides[get_current_user_id] = lambda: 1
-    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 1
+    app.dependency_overrides[get_current_user_id] = lambda: 1
 
     with TestClient(app, raise_server_exceptions=False, backend_options={"use_uvloop": True}) as tc:
         yield tc, pool, conn

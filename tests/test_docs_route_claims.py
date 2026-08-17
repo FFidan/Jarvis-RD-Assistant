@@ -580,6 +580,37 @@ def test_restore_capability_table_matches_compose_mount_boundaries() -> None:
     assert "/var/run/docker.sock:/var/run/docker.sock:ro" not in compose
 
 
+def test_public_docs_describe_platform_owned_identity_and_restore() -> None:
+    """Platform assertions and transient restore authority stay documented."""
+    architecture = _read(_ARCHITECTURE_DOC)
+    deployment = _read(_DEPLOYMENT_DOC)
+    security = _read(_SECURITY_DOC)
+
+    assert "Platform-signed, request-bound assertion" in architecture
+    assert "database-free REST client" in security
+    assert "Scheduled read-only backup" in deployment
+    assert "host-started transient no-listener job" in deployment
+
+
+def test_public_docs_exclude_retired_identity_and_migration_claims() -> None:
+    """Retired identity and migration terminology must not return to public docs."""
+    security = _read(_SECURITY_DOC)
+    contributing = _read(_REPO_ROOT / "CONTRIBUTING.md")
+    testing_contract = _read(_REPO_ROOT / "docs/contracts/07-testing.md")
+    deployment = _read(_DEPLOYMENT_DOC)
+    release = _read(_REPO_ROOT / "docs/RELEASE.md")
+
+    for retired in (
+        "OWNER_OVERRIDE_ALLOWED_CIDRS",
+        "current_user_id_strict_with_owner_override",
+        "remove_owner_override=True",
+    ):
+        assert retired not in security + contributing + testing_contract
+    assert "The only startup ownership migration is 0105" not in deployment
+    assert "2026-09-17" in release
+    assert "fresh-host restore has passed without that role" in release
+
+
 def test_security_copy_limits_owner_recovery_and_suppressed_email_logs() -> None:
     """Security docs must not turn recovery keys or log metadata into login paths."""
     security = _read(_SECURITY_DOC)

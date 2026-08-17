@@ -47,7 +47,7 @@ async def _pi_app_admin(contract_conn):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=True,
+            remove_identity_overrides=True,
             dependency_overrides={require_admin: _allow_admin},
         ),
     ) as wired_app:

@@ -289,10 +289,7 @@ def test_nginx_proxies_backend_liveness_routes():
 
 
 def test_nginx_proxied_locations_strip_owner_header():
-    """Every proxied location must strip a browser-supplied X-Owner-User-Id:
-    only the container-bridge bot (which never traverses nginx) may set it.
-    A future location added without this line — or a deleted strip line —
-    would silently reopen an owner-impersonation hole with no other signal."""
+    """Every proxied location strips the retired header no backend honors."""
     proxied_blocks = _browser_proxy_blocks(_nginx_text())
     assert len(proxied_blocks) >= 1, "no proxy_pass location blocks found in nginx.conf"
     identity_strip = NGINX_IDENTITY_STRIP_CONF.read_text()

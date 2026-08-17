@@ -53,7 +53,7 @@ async def _autoenqueue_app(contract_conn):
     (contract_two_users) works.
     """
     from jarvis_common import (
-        current_user_id_strict_with_owner_override,
+        current_user_id_strict,
         get_current_user_id,
     )
     from paper_ingestion.main import app
@@ -67,7 +67,7 @@ async def _autoenqueue_app(contract_conn):
         patch_dependency_overrides(
             app,
             remove_overrides={
-                current_user_id_strict_with_owner_override,
+                current_user_id_strict,
                 get_current_user_id,
             },
         ),

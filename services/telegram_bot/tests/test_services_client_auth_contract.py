@@ -1,7 +1,7 @@
 """Static contract: every services_client target endpoint resolves identity via
 the owner-override dependency (never session-only).
 
-The Telegram bot authenticates cross-service calls with X-Owner-User-Id + the
+The Telegram bot authenticates cross-service calls with X-Jarvis-Paired-User-Id + the
 shared API key — it has no browser session. So each endpoint the bot's
 services_client targets MUST resolve the caller via an override-capable
 dependency. Walks the real route dependants in both service apps and asserts
@@ -20,16 +20,9 @@ try:  # FastAPI >=0.137 flattens the route tree through this public iterator.
 except ImportError:  # FastAPI <0.137 keeps app.routes a flat APIRoute list.
     _iter_route_contexts = None
 
-from jarvis_common.auth import (
-    current_user_id_strict,
-    current_user_id_strict_with_owner_override,
-    current_user_id_with_owner_override,
-)
+from jarvis_common.auth import current_user_id_strict
 
-_OVERRIDE_RESOLVERS = {
-    current_user_id_with_owner_override,
-    current_user_id_strict_with_owner_override,
-}
+_IDENTITY_RESOLVERS = {current_user_id_strict}
 
 # (method, full path template) the bot's services_client targets.
 # Adding a services_client call REQUIRES adding its endpoint here.
@@ -112,19 +105,14 @@ def _app_targets():
     "method,path",
     [(m, p) for _, targets in [(None, _LE_TARGETS), (None, _PI_TARGETS)] for m, p in targets],
 )
-def test_bot_target_endpoint_uses_owner_override(method: str, path: str) -> None:
-    """Each bot-target endpoint must bind an owner-override resolver, never session-only."""
+def test_bot_target_endpoint_requires_signed_identity_state(method: str, path: str) -> None:
+    """Each bot target resolves identity only from verified assertion state."""
     for app, targets in _app_targets():
         if (method, path) not in targets:
             continue
         calls = _dependency_calls(_effective_dependant_for(app, method, path))
-        assert calls & _OVERRIDE_RESOLVERS, (
-            f"{method} {path} does not resolve identity via an owner-override dep "
-            f"— the Telegram bot (X-Owner-User-Id, no session) would 401"
-        )
-        assert current_user_id_strict not in calls, (
-            f"{method} {path} resolves via session-only current_user_id_strict — "
-            f"the bot has no browser session and would 401"
+        assert calls & _IDENTITY_RESOLVERS, (
+            f"{method} {path} does not resolve identity through the strict state seam"
         )
         return
     raise AssertionError(f"{method} {path} not mapped to an app")

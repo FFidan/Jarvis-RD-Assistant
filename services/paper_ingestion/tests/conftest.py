@@ -183,7 +183,7 @@ async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
         app=pi_app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=True),
+        options=PITestAppOptions(remove_identity_overrides=True),
     ) as app:
         yield SignedIdentityMiddleware(
             app,
@@ -204,7 +204,7 @@ async def _platform_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
         app=platform_app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=True),
+        options=PITestAppOptions(remove_identity_overrides=True),
     ) as app:
         yield app
 
@@ -222,7 +222,7 @@ async def _pi_app(contract_conn: Any) -> AsyncIterator[Any]:
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             mock_http_client=True,

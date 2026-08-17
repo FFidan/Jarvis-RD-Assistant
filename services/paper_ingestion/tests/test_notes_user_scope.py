@@ -66,7 +66,7 @@ def _wired_app(user_id: int | None, fetchrow_side_effects: list):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             disable_limiter=True,
             dependency_overrides={
                 get_db_pool: lambda: pool,

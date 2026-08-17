@@ -1,8 +1,8 @@
 """Guard: cross-service auth-DI boundary for learning_engine.
 
 The Telegram bot calls a small, fixed set of LE endpoints *per user* with
-``X-API-Key`` + ``X-Owner-User-Id`` (no session cookie). Those endpoints MUST
-resolve identity via ``current_user_id_strict_with_owner_override`` so the
+``X-API-Key`` + ``X-Jarvis-Paired-User-Id`` (no session cookie). Those endpoints MUST
+resolve identity via ``current_user_id_strict`` so the
 header-authenticated owner is honored — a session-only resolver would 401 the
 bot.
 
@@ -33,7 +33,7 @@ Telegram→LE call sites (grounded at HEAD 2026-06-02):
 - ``GET  /api/projects/{id}/milestones`` -> milestones.list_milestones
 - ``GET  /api/milestones/upcoming``   -> milestones.list_upcoming_milestones
   (the project/task/milestone group is reached by the Telegram bot per-user
-   with X-Owner-User-Id once the REST-decoupling lands.)
+   with X-Jarvis-Paired-User-Id once the REST-decoupling lands.)
 
 The handlers carry an ``@limiter.limit`` decorator, so the undecorated
 function is reached via ``.__wrapped__`` (mirrors test_review_sync.py).
@@ -53,7 +53,6 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 from jarvis_common.auth import (
     current_user_id_strict,
-    current_user_id_strict_with_owner_override,
 )
 from jarvis_common.testing import make_pool_and_conn
 from learning_engine.deps import get_db_pool
@@ -144,39 +143,28 @@ def test_learning_nudges_reject_non_telegram_principal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Telegram-reachable LE endpoints: MUST honor X-Owner-User-Id (owner override)
+# Telegram-reachable Learning endpoints require verified ASGI identity
 # ---------------------------------------------------------------------------
 
 
-def test_get_next_review_uses_owner_override_resolver() -> None:
-    """GET /api/review/next is reached by the Telegram bot with
-    X-Owner-User-Id; it must resolve the owner, not require a session."""
-    assert (
-        _user_id_dep(review.get_next_review).dependency
-        is current_user_id_strict_with_owner_override
-    )
+def test_get_next_review_uses_strict_identity() -> None:
+    """GET /api/review/next reads only identity verified for Learning."""
+    assert _user_id_dep(review.get_next_review).dependency is current_user_id_strict
 
 
-def test_submit_review_uses_owner_override_resolver() -> None:
-    """POST /api/review/{card_id:int} is reached by the Telegram bot per-user."""
-    assert (
-        _user_id_dep(review.submit_review).dependency is current_user_id_strict_with_owner_override
-    )
+def test_submit_review_uses_strict_identity() -> None:
+    """POST /api/review/{card_id:int} reads only verified identity."""
+    assert _user_id_dep(review.submit_review).dependency is current_user_id_strict
 
 
-def test_get_stats_uses_owner_override_resolver() -> None:
-    """GET /api/stats is reached by the Telegram bot (paper_commands,
-    daily_briefing, review_reminder) per-user with X-Owner-User-Id."""
-    assert _user_id_dep(review.get_stats).dependency is current_user_id_strict_with_owner_override
+def test_get_stats_uses_strict_identity() -> None:
+    """GET /api/stats reads only identity verified for Learning."""
+    assert _user_id_dep(review.get_stats).dependency is current_user_id_strict
 
 
-def test_log_focus_session_uses_owner_override_resolver() -> None:
-    """POST /api/executive/focus/log is reached by the Telegram bot
-    (system_commands) per-user with X-Owner-User-Id."""
-    assert (
-        _user_id_dep(executive.log_focus_session).dependency
-        is current_user_id_strict_with_owner_override
-    )
+def test_log_focus_session_uses_strict_identity() -> None:
+    """POST /api/executive/focus/log reads only verified identity."""
+    assert _user_id_dep(executive.log_focus_session).dependency is current_user_id_strict
 
 
 def test_telegram_reachable_le_routes_registered() -> None:
@@ -202,136 +190,90 @@ def test_telegram_reachable_le_routes_registered() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cards_router_is_session_only_by_design() -> None:
-    """cards.py is NOT reached by the Telegram bot per-user. It is
-    deliberately left on the session-only resolver — converting it would add
-    an unused X-Owner-User-Id surface. This guard fails loudly if a future
-    change silently widens the auth surface here without a documented caller.
-    """
+def test_cards_router_uses_strict_identity() -> None:
+    """Card listing accepts only verified ASGI identity."""
     dep = _user_id_dep(cards.list_cards)
     assert dep.dependency is current_user_id_strict
-    assert dep.dependency is not current_user_id_strict_with_owner_override
 
 
-def test_quick_add_task_is_session_only_by_design() -> None:
-    """POST /api/executive/tasks is NOT reached by the Telegram bot per-user.
-    No cross-service caller of this route exists (only /api/executive/focus/log
-    is Telegram-reached). The owner-override resolver is unnecessary blast
-    radius — any shared-API-key holder from an allowlisted net could create
-    tasks in any user's account via X-Owner-User-Id. This guard fails loudly
-    if a future change silently re-widens the auth surface without a documented
-    caller (DA-03).
-    """
+def test_quick_add_task_uses_strict_identity() -> None:
+    """POST /api/executive/tasks accepts only verified ASGI identity."""
     dep = _user_id_dep(executive.quick_add_task)
     assert dep.dependency is current_user_id_strict
-    assert dep.dependency is not current_user_id_strict_with_owner_override
 
 
 # ---------------------------------------------------------------------------
-# Executive My-Day routes — owner-override resolver pinned
+# Executive My Day routes use strict verified identity
 # ---------------------------------------------------------------------------
 
 
-def test_get_my_day_uses_owner_override_resolver() -> None:
-    """GET /api/executive/my-day is reached by the Telegram bot per-user — must use owner-override resolver."""
-    assert (
-        _user_id_dep(executive.get_my_day).dependency is current_user_id_strict_with_owner_override
-    )
+def test_get_my_day_uses_strict_identity() -> None:
+    """GET /api/executive/my-day reads only verified identity."""
+    assert _user_id_dep(executive.get_my_day).dependency is current_user_id_strict
 
 
-def test_get_my_day_bundle_uses_owner_override_resolver() -> None:
-    """GET /api/executive/my-day/bundle is reached by the Telegram bot per-user — must use owner-override resolver."""
-    assert (
-        _user_id_dep(executive.get_my_day_bundle).dependency
-        is current_user_id_strict_with_owner_override
-    )
+def test_get_my_day_bundle_uses_strict_identity() -> None:
+    """GET /api/executive/my-day/bundle reads only verified identity."""
+    assert _user_id_dep(executive.get_my_day_bundle).dependency is current_user_id_strict
 
 
 # ---------------------------------------------------------------------------
-# T8: project/task/milestone read+update endpoints — owner-override pinned
-# (Telegram REST-decoupling reaches these per-user with X-Owner-User-Id)
+# Project and task endpoints use strict verified identity
 # ---------------------------------------------------------------------------
 
 
-def test_list_projects_uses_owner_override_resolver() -> None:
-    """GET /api/projects must honor X-Owner-User-Id for the Telegram bot."""
-    assert (
-        _user_id_dep(projects.list_projects).dependency
-        is current_user_id_strict_with_owner_override
-    )
+def test_list_projects_uses_strict_identity() -> None:
+    """GET /api/projects reads only verified identity."""
+    assert _user_id_dep(projects.list_projects).dependency is current_user_id_strict
 
 
-def test_create_project_uses_owner_override_resolver() -> None:
-    """POST /api/projects must honor X-Owner-User-Id for the Telegram bot."""
-    assert (
-        _user_id_dep(projects.create_project).dependency
-        is current_user_id_strict_with_owner_override
-    )
+def test_create_project_uses_strict_identity() -> None:
+    """POST /api/projects reads only verified identity."""
+    assert _user_id_dep(projects.create_project).dependency is current_user_id_strict
 
 
-def test_get_project_uses_owner_override_resolver() -> None:
-    """GET /api/projects/{id} must honor X-Owner-User-Id for the Telegram bot."""
-    assert (
-        _user_id_dep(projects.get_project).dependency is current_user_id_strict_with_owner_override
-    )
+def test_get_project_uses_strict_identity() -> None:
+    """GET /api/projects/{id} reads only verified identity."""
+    assert _user_id_dep(projects.get_project).dependency is current_user_id_strict
 
 
-def test_list_tasks_uses_owner_override_resolver() -> None:
-    """GET /api/projects/{id}/tasks must honor X-Owner-User-Id for the Telegram bot."""
-    assert _user_id_dep(tasks.list_tasks).dependency is current_user_id_strict_with_owner_override
+def test_list_tasks_uses_strict_identity() -> None:
+    """GET /api/projects/{id}/tasks reads only verified identity."""
+    assert _user_id_dep(tasks.list_tasks).dependency is current_user_id_strict
 
 
-def test_update_task_uses_owner_override_resolver() -> None:
-    """PUT /api/tasks/{id} must honor X-Owner-User-Id (bot marks tasks done)."""
-    assert _user_id_dep(tasks.update_task).dependency is current_user_id_strict_with_owner_override
+def test_update_task_uses_strict_identity() -> None:
+    """PUT /api/tasks/{id} reads only verified identity."""
+    assert _user_id_dep(tasks.update_task).dependency is current_user_id_strict
 
 
-def test_list_all_tasks_uses_owner_override_resolver() -> None:
-    """GET /api/tasks (cross-project) must honor X-Owner-User-Id for the Telegram bot."""
-    assert (
-        _user_id_dep(tasks.list_all_tasks).dependency is current_user_id_strict_with_owner_override
-    )
+def test_list_all_tasks_uses_strict_identity() -> None:
+    """GET /api/tasks reads only verified identity."""
+    assert _user_id_dep(tasks.list_all_tasks).dependency is current_user_id_strict
 
 
-def test_list_milestones_uses_owner_override_resolver() -> None:
-    """GET /api/projects/{id}/milestones must honor X-Owner-User-Id for the Telegram bot."""
-    assert (
-        _user_id_dep(milestones.list_milestones).dependency
-        is current_user_id_strict_with_owner_override
-    )
+def test_list_milestones_uses_strict_identity() -> None:
+    """GET /api/projects/{id}/milestones reads only verified identity."""
+    assert _user_id_dep(milestones.list_milestones).dependency is current_user_id_strict
 
 
-def test_list_upcoming_milestones_uses_owner_override_resolver() -> None:
-    """GET /api/milestones/upcoming must honor X-Owner-User-Id for the Telegram bot."""
-    assert (
-        _user_id_dep(milestones.list_upcoming_milestones).dependency
-        is current_user_id_strict_with_owner_override
-    )
+def test_list_upcoming_milestones_uses_strict_identity() -> None:
+    """GET /api/milestones/upcoming reads only verified identity."""
+    assert _user_id_dep(milestones.list_upcoming_milestones).dependency is current_user_id_strict
 
 
 # ---------------------------------------------------------------------------
-# T8: DELETE endpoints stay session-only by design — guard against accidental
-# widening when their read/update siblings were converted to owner-override.
+# Destructive endpoints use the same strict verified identity seam
 # ---------------------------------------------------------------------------
 
 
-def test_delete_task_is_session_only_by_design() -> None:
-    """DELETE /api/tasks/{id} is NOT widened — no Telegram caller deletes tasks.
-
-    Leaving it session-only keeps a destructive operation off the
-    X-Owner-User-Id surface. Fails loudly if a future change widens it.
-    """
+def test_delete_task_uses_strict_identity() -> None:
+    """DELETE /api/tasks/{id} accepts only verified ASGI identity."""
     dep = _user_id_dep(tasks.delete_task)
     assert dep.dependency is current_user_id_strict
-    assert dep.dependency is not current_user_id_strict_with_owner_override
 
 
-def test_delete_project_is_session_only_by_design() -> None:
-    """DELETE /api/projects/{id} is NOT widened — no Telegram caller deletes projects.
-
-    Leaving it session-only keeps a destructive (cascading) operation off the
-    X-Owner-User-Id surface. Fails loudly if a future change widens it.
-    """
+def test_delete_project_uses_strict_identity() -> None:
+    """DELETE /api/projects/{id} accepts only verified ASGI identity."""
     dep = _user_id_dep(projects.delete_project)
     assert dep.dependency is current_user_id_strict
-    assert dep.dependency is not current_user_id_strict_with_owner_override

@@ -133,7 +133,6 @@ explicitly set in the environment. An explicit env var always wins.
 | `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for automatic magic-link delivery. Without them, an administrator can still create a 24-hour invitation or 15-minute recovery link and share it privately. Explicit empty-string secret values are rejected; leave the fields unset when email is intentionally disabled. | Optional; recommended when users need self-service recovery |
 | `SMTP_REPLY_TO` | Optional Reply-To address for sign-in emails. When set, email clients route replies here instead of the From address. Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
 | `SMTP_FROM_NAME` | Optional sender display name shown in the From header (e.g. `JARVIS RD`). Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
-| `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the Telegram bot's own pinned address as a `/32` (tracks `JARVIS_TELEGRAM_BOT_IP`, which setup derives from `JARVIS_NET_SUBNET`; default `10.137.241.250`), so no other container on the bridge can send the header. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
 | `ALLOW_PRIVATE_SMTP_HOST` | Default `false`. When `false`, the SMTP host is validated at config-save AND at magic-link send time and rejected if it resolves to a private/loopback/link-local/reserved address (SSRF guard). Set `true` ONLY if you run a legitimate **internal SMTP relay** on a private address/hostname — otherwise magic-link delivery to that relay is refused. | No (set only for an internal relay) |
 
 ### Outbound Connection Pinning
@@ -181,30 +180,14 @@ self-hosted gateway use. Administrators should only configure endpoints they
 trust, because prompts and relevant source excerpts are sent there when a custom
 model is assigned.
 
-### X-Owner-User-Id Mechanism
+### Platform assertions and Telegram
 
-The Telegram bot sends `X-Owner-User-Id: <user_id>` to route per-user API
-calls. This header is only honored when all three guards pass:
-
-1. A valid `JARVIS_API_KEY` is present on the request.
-2. The source IP falls within `OWNER_OVERRIDE_ALLOWED_CIDRS`.
-3. The supplied `user_id` exists in the `users` table and is not deleted.
-
-Any guard failure returns 403. The mechanism is implemented in
-`current_user_id_strict_with_owner_override` in `libs/jarvis_common/jarvis_common/auth.py`.
-
-The bot resolves the `user_id` it injects from `telegram_user_pairings` — the
-durable record written when a user runs `/pair <token>` in the bot. This is
-the bot's sole identity mechanism; it does not rely on a fixed chat-id
-environment variable. The `telegram.owner_chat_id` config key is active: the scheduler reads it to
-resolve the deployment owner's Telegram chat ID for timezone-based nudge
-scheduling and job failure-alert delivery (see
-`services/telegram_bot/telegram_bot/scheduler.py`).
-
-The bot's product-data tenant isolation (projects, tasks, milestones, papers,
-author alerts) is enforced entirely server-side by the service endpoints it
-calls — the same routes the web app uses. The bot is a REST caller, not a
-second writer implementing its own scoping.
+Platform is the sole signer of short-lived, request-bound assertions. nginx
+obtains one for browser API traffic, and service principals receive only their
+declared capabilities. Telegram is a database-free REST client: it has no
+PostgreSQL or configuration-encryption credential and sends no generic
+impersonation header. Pairing and per-user authorization are resolved by the
+owning Platform or product API boundary.
 
 ### Config Key Rotation
 
@@ -237,30 +220,16 @@ transaction, grants owner and same-domain runtime access, and confirms that
 foreign-domain roles have no table privileges. The source inventory separately
 fails unclassified cross-domain writes and unreviewed computed SQL.
 
-The physical schema and service credentials remain in compatibility mode until
-the declared schemas, roles, and secrets are installed. During that interval,
-services still share the existing database login. The manifest and projection
-test specify the cutover boundary; they do not by themselves provide runtime
-isolation.
+The physical `platform`, `research`, `learning`, and `ops` schemas are owned by
+NOLOGIN roles. Platform, Research, Learning, and LiteLLM use distinct runtime
+or migration identities. A one-shot migrator is the only normal migration
+authority; runtime startup checks the schema floor and integrity read-only.
 
 ---
 
 ## Proxy-Trust and Source-IP Allowlisting
 
-Two auth surfaces use `request.client.host` to determine source IP for
-allowlist checks. The reported IP is rewritten by `ProxyHeadersMiddleware`
-when the request originates from a host in `trusted_proxy_hosts` (see
-`configure_middleware_and_errors` in
-`libs/jarvis_common/jarvis_common/app_factory.py`). If `trusted_proxy_hosts`
-is broader than the actual reverse-proxy fleet, an attacker behind any
-included host could spoof `X-Forwarded-For` to forge the source IP.
-
-The IP-allowlist call sites are:
-
-- `_ip_in_allowlist` (`libs/jarvis_common/jarvis_common/auth.py`) — backs
-  `OWNER_OVERRIDE_ALLOWED_CIDRS` for the `X-Owner-User-Id` header bypass;
-  mis-trusted XFF forges the operator's IP guard.
-**Deployment requirement:** keep `trusted_proxy_hosts` scoped to the actual
+Keep `trusted_proxy_hosts` scoped to the actual
 reverse-proxy hop. Do not set `trusted_proxy_hosts="*"` in production. In the
 standard stack, the application trusts only loopback and the dashboard
 container's derived `/32` address. Nginx, in turn, accepts forwarded HTTPS
@@ -282,9 +251,10 @@ These values are numeric because uvicorn matches the immediate socket peer
 before applying `X-Forwarded-For`. Setup and update accept an IPv4 `/27` or
 larger network and derive the gateway and highest five usable addresses from
 `JARVIS_NET_SUBNET`; a custom subnet does not require Compose or nginx edits.
-Nginx also strips any browser-supplied `X-Owner-User-Id` header before proxying;
-only the container-internal caller that does not traverse nginx can set it.
-Override the defaults only for a proxy topology whose exact peers you control.
+Nginx defensively strips browser-supplied identity headers before proxying.
+Identity is established by the Platform assertion boundary, not a client-set
+header bypass. Override proxy defaults only for a topology whose exact peers
+you control.
 
 ### Transport header scope
 

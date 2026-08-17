@@ -89,7 +89,7 @@ async def _pi_pulse_app(contract_conn):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             mock_http_client=True,
@@ -1870,7 +1870,7 @@ async def test_pulse_generate_non_admin_returns_403(
 
 
 # POST /api/pulse/generate: ops API-key caller (no admin session) passes the auth gate
-# Verified: routers/pulse.py generate_pulse depends on get_current_user_id_or_bot
+# Verified: routers/pulse.py generate_pulse depends on get_current_user_id
 # and require_admin_or_api_key (auth.py:551-553 admits when the session role is absent).
 
 
@@ -1884,25 +1884,23 @@ async def test_pulse_generate_accepts_api_key_caller_without_admin_session(
     The bot and cron reach this endpoint with an API key and no browser session,
     so request.state.user_role is absent. The gate must be require_admin_or_api_key,
     which admits a session-less ops caller. Identity resolves through
-    get_current_user_id_or_bot, so that is the dependency the override supplies.
+    get_current_user_id, so that is the dependency the override supplies.
     """
     from unittest.mock import AsyncMock, patch
 
-    from jarvis_common import get_current_user_id_or_bot
+    from jarvis_common import get_current_user_id
     from jarvis_common.task_registry import _TASK_MAP
 
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)
 
-    _pi_pulse_app.dependency_overrides[get_current_user_id_or_bot] = lambda: (
-        contract_two_users.user_a_id
-    )
+    _pi_pulse_app.dependency_overrides[get_current_user_id] = lambda: contract_two_users.user_a_id
     try:
         with patch.dict(_TASK_MAP, {"pulse.generate": fake_task}):
             async with _client(_pi_pulse_app, None) as c:
                 resp = await c.post("/api/pulse/generate")
     finally:
-        _pi_pulse_app.dependency_overrides.pop(get_current_user_id_or_bot, None)
+        _pi_pulse_app.dependency_overrides.pop(get_current_user_id, None)
 
     assert resp.status_code not in (401, 403), (
         f"Session-less ops API-key caller must pass the auth gate on "

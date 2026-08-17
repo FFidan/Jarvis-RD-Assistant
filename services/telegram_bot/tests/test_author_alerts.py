@@ -55,7 +55,7 @@ async def test_run_author_alerts_calls_check_authors_per_pairing() -> None:
         url = call.args[0]
         assert url.endswith("/api/authors/check")
         assert "X-API-Key" not in call.kwargs["headers"]
-        seen_owner_ids.add(call.kwargs["headers"]["X-Owner-User-Id"])
+        seen_owner_ids.add(call.kwargs["headers"]["X-Jarvis-Paired-User-Id"])
     assert seen_owner_ids == {"1", "2"}
     # No matches → nothing sent.
     bot.send_message.assert_not_awaited()

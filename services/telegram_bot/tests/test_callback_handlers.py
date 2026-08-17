@@ -185,7 +185,7 @@ async def test_paper_detail_callback_uses_only_paired_user_marker():
     mock_http.get.assert_awaited_once()
     call_kwargs = mock_http.get.await_args[1]
     headers = call_kwargs["headers"]
-    assert headers.get("X-Owner-User-Id") == "1"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "1"
     assert "X-API-Key" not in headers
 
 
@@ -660,7 +660,7 @@ async def test_project_detail_success():
     assert urls[1].endswith("/api/projects/3/tasks")
     assert urls[2].endswith("/api/projects/3/milestones")
     for c in mock_http.get.await_args_list:
-        assert c.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+        assert c.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
@@ -726,7 +726,7 @@ async def test_task_done_success():
     put_call = mock_http.put.await_args
     assert put_call.args[0].endswith("/api/tasks/10")
     assert put_call.kwargs["json"] == {"status": "done"}
-    assert put_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert put_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
@@ -772,18 +772,18 @@ async def test_task_done_service_error_replies_gracefully():
 # Cross-tenant task-done writes are now blocked server-side.
 #
 # Post-REST-migration, task_done_callback no longer runs an ownership pre-check
-# in the bot — it PUTs to the Learning Engine, which scopes by the forwarded
-# X-Owner-User-Id header.  A non-owned task therefore returns 404 (→ "not
+# in the bot — Telegram auth exchanges the local user marker for a signed
+# Learning assertion. A non-owned task therefore returns 404 (→ "not
 # found", no existence leak).  The cross-tenant *denial* guarantee is proven by
 # the LE contract test (T8: test_update_task_cross_tenant_returns_404); the bot
-# tests below assert the two things the bot is responsible for: forwarding the
-# owner identity, and surfacing a 404 as "not found".
+# tests below assert the two things the bot is responsible for: staging paired
+# identity for the exchange, and surfacing a 404 as "not found".
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_task_done_forwards_owner_user_id_for_paired_user():
-    """Bot half: the PUT forwards X-Owner-User-Id so the LE can scope."""
+    """The bot stages paired identity before the PUT assertion exchange."""
     update, context, _, mock_http = _make_paired_callback("task_done_5")
     mock_http.put.return_value = make_http_response({"id": 5, "status": "done"})
 
@@ -793,7 +793,7 @@ async def test_task_done_forwards_owner_user_id_for_paired_user():
     put_call = mock_http.put.await_args
     assert put_call.args[0].endswith("/api/tasks/5")
     assert put_call.kwargs["json"] == {"status": "done"}
-    assert put_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert put_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
     assert "X-API-Key" not in put_call.kwargs["headers"]
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "done" in text.lower() or "5" in text
@@ -803,7 +803,7 @@ async def test_task_done_forwards_owner_user_id_for_paired_user():
 async def test_task_done_non_owned_task_returns_not_found_no_leak():
     """Bot half: a non-owned task → LE 404 → 'not found' (no existence leak)."""
     update, context, _, mock_http = _make_paired_callback("task_done_9")
-    # The LE scopes by X-Owner-User-Id; another user's task is invisible → 404.
+    # The LE scopes by the signed assertion; another user's task is invisible.
     mock_http.put.return_value = make_http_response(None, status=404)
 
     await task_done_callback(update, context)
@@ -954,7 +954,7 @@ async def test_start_review_unauthed_acks_before_returning():
 
 
 # ---------------------------------------------------------------------------
-# Cross-user: X-Owner-User-Id forwarded from paired callbacks
+# Paired-user context staged by callbacks before assertion exchange
 # ---------------------------------------------------------------------------
 
 _PAIRED_CHAT_ID = 55555
@@ -982,7 +982,7 @@ def _make_paired_callback(callback_data: str) -> tuple:
 
 @pytest.mark.asyncio
 async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
-    """paper_detail_callback includes X-Owner-User-Id for a paired user."""
+    """paper_detail_callback includes X-Jarvis-Paired-User-Id for a paired user."""
     update, context, _, mock_http = _make_paired_callback("paper_detail_42")
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -996,13 +996,13 @@ async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
 
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
     assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
 async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
-    """paper_action_callback includes X-Owner-User-Id for a paired user."""
+    """paper_action_callback includes X-Jarvis-Paired-User-Id for a paired user."""
     update, context, _, _ = _make_paired_callback("paper:save:7")
     mock_http = _make_action_mock_http()
     context.application.bot_data["http_client"] = mock_http
@@ -1011,13 +1011,13 @@ async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
 
     mock_http.request.assert_awaited_once()
     headers = mock_http.request.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
     assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
 async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
-    """paper_feedback_callback includes X-Owner-User-Id for a paired user."""
+    """paper_feedback_callback includes X-Jarvis-Paired-User-Id for a paired user."""
     update, context, _, _ = _make_paired_callback("paper:feedback_pos:7:pulse_thumbs")
     mock_http = AsyncMock()
     mock_resp = MagicMock()
@@ -1029,7 +1029,7 @@ async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
 
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
     assert "X-API-Key" not in headers
 
 
@@ -1037,9 +1037,8 @@ async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
 async def test_paper_feedback_callback_uses_paired_user_identity_in_request():
     """TG-02: paper_feedback_callback forwards the authenticated user's identity.
 
-    The assert jarvis_user_id is not None guard (post-auth-check) ensures the
-    paired user ID — not None — is threaded into _owner_headers and onward to
-    the backend.  Asserts X-Owner-User-Id equals the paired user's id.
+    The post-auth guard ensures the paired user ID, not ``None``, is threaded
+    into ``_owner_headers`` for the later assertion exchange.
     """
     update, context, _, _ = _make_paired_callback("paper:feedback_neg:55:feed_thumbs")
     mock_http = AsyncMock()
@@ -1053,16 +1052,15 @@ async def test_paper_feedback_callback_uses_paired_user_identity_in_request():
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
     # Must carry the exact paired user ID — not None, not the env chat_id.
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 # ---------------------------------------------------------------------------
 # TG-N2: project_detail user-scoping defense-in-depth
 #
-# Post-REST-migration the bot no longer issues SQL; per-user scoping is enforced
-# by forwarding X-Owner-User-Id on every backend GET (the Learning Engine scopes
-# the SQL).  These tests assert the header is forwarded on each of the three
-# project-detail GETs (project, tasks, milestones).
+# The bot no longer issues SQL. It stages paired identity on each request, and
+# Telegram auth exchanges that marker for the signed assertion that Learning
+# uses for SQL scoping. These tests cover all three project-detail requests.
 # ---------------------------------------------------------------------------
 
 
@@ -1085,7 +1083,7 @@ def _project_detail_responses() -> list:
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_project_fetch() -> None:
-    """TG-N2: the project GET forwards X-Owner-User-Id so the LE scopes it."""
+    """TG-N2: the project GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
 
@@ -1093,12 +1091,12 @@ async def test_project_detail_with_user_id_scopes_project_fetch() -> None:
 
     project_call = mock_http.get.await_args_list[0]
     assert project_call.args[0].endswith("/api/projects/3")
-    assert project_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert project_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_task_fetch() -> None:
-    """TG-N2: the tasks GET forwards X-Owner-User-Id so the LE scopes it."""
+    """TG-N2: the tasks GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
 
@@ -1106,12 +1104,12 @@ async def test_project_detail_with_user_id_scopes_task_fetch() -> None:
 
     task_call = mock_http.get.await_args_list[1]
     assert task_call.args[0].endswith("/api/projects/3/tasks")
-    assert task_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert task_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_milestone_fetch() -> None:
-    """TG-N2: the milestones GET forwards X-Owner-User-Id so the LE scopes it."""
+    """TG-N2: the milestones GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
 
@@ -1119,7 +1117,7 @@ async def test_project_detail_with_user_id_scopes_milestone_fetch() -> None:
 
     milestone_call = mock_http.get.await_args_list[2]
     assert milestone_call.args[0].endswith("/api/projects/3/milestones")
-    assert milestone_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert milestone_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 # ---------------------------------------------------------------------------

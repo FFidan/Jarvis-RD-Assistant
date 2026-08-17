@@ -47,7 +47,7 @@ async def _pi_app(contract_conn):
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=False, disable_limiter=True),
+        options=PITestAppOptions(remove_identity_overrides=False, disable_limiter=True),
     ) as wired_app:
         yield SignedIdentityMiddleware(
             wired_app,

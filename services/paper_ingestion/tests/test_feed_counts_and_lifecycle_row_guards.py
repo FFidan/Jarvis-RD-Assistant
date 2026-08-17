@@ -211,7 +211,6 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
     """
     from jarvis_common.auth import (
         get_current_user_id,
-        get_current_user_id_or_bot,
         verify_api_key,
     )
     from paper_ingestion.deps import get_db_pool
@@ -226,7 +225,7 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_current_user_id] = lambda: 7
-    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 7
+    app.dependency_overrides[get_current_user_id] = lambda: 7
 
     with (
         patch(
@@ -259,7 +258,6 @@ async def test_f10_projection_failure_does_not_fail_reading_mark():
 
     from jarvis_common.auth import (
         get_current_user_id,
-        get_current_user_id_or_bot,
         verify_api_key,
     )
     from paper_ingestion.deps import get_db_pool
@@ -274,7 +272,7 @@ async def test_f10_projection_failure_does_not_fail_reading_mark():
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_current_user_id] = lambda: 7
-    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 7
+    app.dependency_overrides[get_current_user_id] = lambda: 7
 
     with (
         patch(

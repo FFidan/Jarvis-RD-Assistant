@@ -210,9 +210,9 @@ rows exist after it runs.
 ## Cross-User Isolation Requirement
 
 JARVIS is multi-tenant. **Every new endpoint that touches user-owned data MUST
-use `current_user_id_strict` (or `current_user_id_strict_with_owner_override`
-for Telegram bot routes) as a `Depends(...)` dependency.** This is a hard
-requirement, not a style suggestion.
+use strict ASGI identity resolution as a `Depends(...)` dependency.** Service
+calls cross the Platform assertion boundary; they do not use a generic owner
+override. This is a hard requirement, not a style suggestion.
 
 ```python
 from jarvis_common.auth import current_user_id_strict

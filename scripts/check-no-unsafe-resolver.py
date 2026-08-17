@@ -33,15 +33,20 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Forbidden resolver names (the permissive, None-returning ones).
-UNSAFE_NAMES = frozenset({"current_user_id_or_none"})
+UNSAFE_NAMES = frozenset(
+    {
+        "current_user_id_or_none",
+        "current_user_id_with_owner_override",
+        "current_user_id_strict_with_owner_override",
+        "get_current_user_id_or_bot",
+    }
+)
 
 # Resolvers that establish a real, non-None caller identity (or hard 401/403).
 SAFE_NAMES = frozenset(
     {
         "current_user_id_strict",
-        "current_user_id_strict_with_owner_override",
         "get_current_user_id",
-        "get_current_user_id_or_bot",
         "require_admin",
         "require_admin_or_api_key",
         "require_telegram_principal",

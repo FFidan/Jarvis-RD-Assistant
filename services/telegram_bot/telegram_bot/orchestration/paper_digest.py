@@ -119,10 +119,11 @@ async def _fetch_digest_from_api(
     http_client : httpx.AsyncClient
         Shared HTTP client.
     config : BotConfig
-        Bot configuration (for service URL and API key).
+        Bot configuration (for service URL).
     user_id : int
-        DB user PK.  Adds ``X-Owner-User-Id`` header so the backend
-        scopes the digest to that user's paper_user_state rows.
+        DB user PK. The client auth flow exchanges its local paired-user
+        marker for an assertion that scopes the digest to that user's
+        paper_user_state rows.
 
     Returns
     -------

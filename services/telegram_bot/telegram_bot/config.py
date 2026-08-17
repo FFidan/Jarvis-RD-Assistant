@@ -231,7 +231,7 @@ def _owner_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
         transport and replaces it with a signed Platform assertion.
     """
     del config
-    return {"X-Owner-User-Id": str(user_id)} if user_id is not None else {}
+    return {"X-Jarvis-Paired-User-Id": str(user_id)} if user_id is not None else {}
 
 
 __all__ = ["BotConfig", "service_headers"]

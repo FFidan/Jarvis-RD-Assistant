@@ -74,7 +74,7 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     http_client.post.assert_awaited_once()
     post_args, post_kwargs = http_client.post.await_args
     assert post_args[0].endswith("/api/authors/check")
-    assert post_kwargs["headers"]["X-Owner-User-Id"] == "1"
+    assert post_kwargs["headers"]["X-Jarvis-Paired-User-Id"] == "1"
     assert "X-API-Key" not in post_kwargs["headers"]
 
     bot.send_message.assert_awaited_once()
@@ -187,7 +187,7 @@ async def test_daily_briefing_passes_owner_headers_on_every_call():
     for call in http_client.get.await_args_list:
         headers = call.kwargs["headers"]
         assert "X-API-Key" not in headers
-        assert headers["X-Owner-User-Id"] == "42"
+        assert headers["X-Jarvis-Paired-User-Id"] == "42"
 
 
 @pytest.mark.asyncio
@@ -247,7 +247,7 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
     http_client.get.assert_awaited_once()
     get_args, get_kwargs = http_client.get.await_args
     assert get_args[0].endswith("/api/milestones/upcoming")
-    assert get_kwargs["headers"]["X-Owner-User-Id"] == "1"
+    assert get_kwargs["headers"]["X-Jarvis-Paired-User-Id"] == "1"
 
     bot.send_message.assert_awaited_once()
     _, kwargs = bot.send_message.await_args
@@ -390,8 +390,8 @@ def test_owner_headers_are_confined_to_the_canonical_client():
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     headers_with_user = _owner_headers(config, 42)
     assert "X-API-Key" not in headers_with_user
-    assert headers_with_user["X-Owner-User-Id"] == "42"
+    assert headers_with_user["X-Jarvis-Paired-User-Id"] == "42"
 
     headers_no_user = _owner_headers(config, None)
     assert "X-API-Key" not in headers_no_user
-    assert "X-Owner-User-Id" not in headers_no_user
+    assert "X-Jarvis-Paired-User-Id" not in headers_no_user

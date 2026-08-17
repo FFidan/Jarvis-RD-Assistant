@@ -33,8 +33,8 @@ async def _send_reminder_to_chat(
     chat_id : int
         Target Telegram chat ID.
     user_id : int
-        DB user PK. Adds ``X-Owner-User-Id`` + ``X-API-Key`` headers
-        so the backend scopes stats to that user.
+        DB user PK. The client auth flow exchanges its local paired-user
+        marker for an assertion that scopes stats to that user.
     """
     try:
         stats = await services_client.fetch_stats(http_client, config, user_id)
@@ -79,9 +79,9 @@ async def run_review_reminder(
 ) -> None:
     """Send a review reminder if cards are due.
 
-    Iterates ``telegram_user_pairings`` and delivers per-user reminders by
-    sending ``X-Owner-User-Id`` + ``X-API-Key`` headers.  Skips with a warning
-    when no pairings exist.
+    Iterates ``telegram_user_pairings`` and delivers per-user reminders
+    through Telegram's route-bound backend assertion flow. Skips with a
+    warning when no pairings exist.
 
     Parameters
     ----------

@@ -383,6 +383,20 @@ JARVIS_IMAGE_TAG=<previous-version> docker compose up -d --no-build
 If the target predates published images, or the installation uses local builds,
 check out the target tag and rebuild instead.
 
+### v1.2.5 in-place rollback window
+
+During the documented v1.2.6 rollback window, the exact v1.2.5 application can
+reconnect to the expanded schema with its dedicated legacy credential and
+compatibility search path. Stop v1.2.6 writers, verify a safety backup, select
+the tested v1.2.5 images and credential, then verify health and critical
+workflows. This credential is never mounted in v1.2.6 runtimes. If the
+in-place path is unsuitable, restore the verified pre-upgrade backup through
+the normal restore procedure. The compatibility role cannot retire before
+2026-09-17, v1.2.6 publication, closure of the supported rollback window, and
+evidence that the exact v1.2.5 path is no longer supported plus a current
+fresh-host restore has passed without that role. This document does not claim
+that those retirement conditions have been met.
+
 ### Database Rollback
 
 Database migrations are intentionally forward-only. To revert a schema change:

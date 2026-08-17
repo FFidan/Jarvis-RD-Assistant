@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 from jarvis_common.testing_contract_apps import make_contract_client as _client
 
@@ -31,14 +32,13 @@ def _topic_row(id: int = 1, name: str = "ML Topics") -> FakeRecord:
 
 @pytest.fixture()
 def _app(request: pytest.FixtureRequest):
-    """App with mocked DB, bypassed API-key auth, limiter off.
+    """App with mocked DB, signed identity, and limiter disabled.
 
     ``request.param``:
     - ``None``    — API-key-only caller, no session (auth gate must reject).
     - ``"user"``  — authenticated user session (auth gate must pass).
     """
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
@@ -47,23 +47,27 @@ def _app(request: pytest.FixtureRequest):
     mock_pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_topic_row()]
 
-    overrides = {verify_api_key: lambda: None}
-    if user_role is not None:
-        overrides[current_user_id_strict] = lambda: 1
-
     with patch_pi_test_app(
         mock_pool,
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=True,
             override_db_dependency=True,
             disable_limiter=True,
-            dependency_overrides=overrides,
+            dependency_overrides={verify_api_key: lambda: None},
         ),
-    ):
-        yield app, conn
+    ) as patched_app:
+        yield (
+            SignedIdentityMiddleware(
+                patched_app,
+                audience="research",
+                user_id=1 if user_role is not None else None,
+                role=user_role,
+            ),
+            conn,
+        )
 
 
 # ---------------------------------------------------------------------------
