@@ -577,7 +577,7 @@ def test_restore_capability_table_matches_compose_mount_boundaries() -> None:
     assert "backup_trigger:/backup-trigger:ro" in compose
     assert "restore_inbox:/restore-inbox:rw" in compose
     assert "./secrets:/host-secrets:rw" in compose
-    assert "/var/run/docker.sock:/var/run/docker.sock:ro" in compose
+    assert "/var/run/docker.sock:/var/run/docker.sock:ro" not in compose
 
 
 def test_security_copy_limits_owner_recovery_and_suppressed_email_logs() -> None:

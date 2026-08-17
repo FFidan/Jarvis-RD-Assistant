@@ -13,6 +13,8 @@ from jarvis_common.service_auth import (
     ServiceCommandUnavailableError,
     authorize_service_command,
 )
+from jarvis_common.telemetry import event_context, restored_correlation, restored_span
+from opentelemetry.trace import SpanKind
 
 EventType = Literal["paper.read", "paper.deleted"]
 
@@ -73,8 +75,8 @@ async def record_event(
     event_id = uuid.uuid4()
     await conn.execute(
         """
-        INSERT INTO domain_events (id, event_type, user_id, paper_id)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO domain_events (id, event_type, user_id, paper_id, payload)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
         ON CONFLICT (event_type, user_id, paper_id)
             WHERE event_type = 'paper.deleted'
               AND delivered_at IS NULL AND dead_lettered_at IS NULL
@@ -84,6 +86,7 @@ async def record_event(
         event_type,
         user_id,
         paper_id,
+        event_context(),
     )
     row = await conn.fetchval(
         """SELECT id FROM domain_events
@@ -107,7 +110,7 @@ async def deliver_pending_events(
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, event_type, user_id, paper_id
+            SELECT id, event_type, user_id, paper_id, payload
             FROM domain_events
             WHERE delivered_at IS NULL AND dead_lettered_at IS NULL AND next_attempt_at <= NOW()
             ORDER BY created_at
@@ -124,34 +127,48 @@ async def deliver_pending_events(
             if event_type == "paper.read"
             else "/internal/domains/paper-deleted"
         )
+        payload = row.get("payload") if hasattr(row, "get") else None
+        payload = payload if isinstance(payload, dict) else {}
         try:
-            headers = await authorize_service_command(
-                client,
-                platform_url=settings.platform_url,
-                principal="research",
-                token=settings.service_token,
-                command=ServiceCommand(
-                    audience="learning",
-                    method="POST",
-                    path=path,
-                    user_id=int(row["user_id"]),
-                    request_id=str(event_id),
-                ),
-            )
-            response = await client.post(
-                f"{settings.learning_url.rstrip('/')}{path}",
-                headers=headers,
-                json={
-                    "request_id": str(event_id),
-                    "user_id": int(row["user_id"]),
-                    "paper_id": int(row["paper_id"]),
-                },
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict) or payload.get("acknowledged") is not True:
-                raise ServiceCommandUnavailableError("Learning acknowledgement is unavailable")
+            with restored_correlation(payload.get("correlation_id")):
+                with restored_span(
+                    carrier=payload,
+                    service="research",
+                    name="outbox.delivery",
+                    kind=SpanKind.PRODUCER,
+                ):
+                    headers = await authorize_service_command(
+                        client,
+                        platform_url=settings.platform_url,
+                        principal="research",
+                        token=settings.service_token,
+                        command=ServiceCommand(
+                            audience="learning",
+                            method="POST",
+                            path=path,
+                            user_id=int(row["user_id"]),
+                            request_id=str(event_id),
+                        ),
+                    )
+                    response = await client.post(
+                        f"{settings.learning_url.rstrip('/')}{path}",
+                        headers=headers,
+                        json={
+                            "request_id": str(event_id),
+                            "user_id": int(row["user_id"]),
+                            "paper_id": int(row["paper_id"]),
+                        },
+                        timeout=10.0,
+                    )
+                    response.raise_for_status()
+                    acknowledgement = response.json()
+                    if (
+                        not isinstance(acknowledgement, dict)
+                        or acknowledgement.get("acknowledged") is not True
+                    ):
+                        raise ServiceCommandUnavailableError(
+                            "Learning acknowledgement is unavailable"
+                        )
         except (httpx.HTTPError, ServiceCommandUnavailableError, ValueError):
             await _mark_failure(pool, event_id)
         else:

@@ -278,7 +278,6 @@ def test_capability_classifier_exempts_only_non_api_and_preflight_routes() -> No
     assert required_identity_scopes("learning", "POST", "/api/cards") == ("learning:cards:write",)
     assert required_identity_scopes("research", "OPTIONS", "/api/papers") is None
     assert required_identity_scopes("research", "GET", "/health") is None
-    assert required_identity_scopes("research", "GET", "/infra-events") is None
     assert required_identity_scopes("research", "PUT", "/internal/platform/config/pulse.cron") == (
         "research:config:write",
     )

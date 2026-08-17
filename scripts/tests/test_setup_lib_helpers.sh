@@ -2964,7 +2964,6 @@ SMTP_FROM=jarvis@verified.dev
 LITELLM_SALT_KEY=a=b=c
 BACKUP_ENCRYPT_KEY=Zm9v+bar/baz==
 JARVIS_MODEL_HMAC_KEY=he said "hi"
-INFRA_INGEST_KEY=it's fine
 QDRANT_API_KEY=plainvalue
 MY_CUSTOM_FLAG="a b=c"
 CORS_ORIGINS=https://old.example
@@ -3000,7 +2999,6 @@ expect_eq "merge preserves a value with #"              "$(mval SMTP_USER)"     
 expect_eq "merge preserves a value with ="              "$(mval LITELLM_SALT_KEY)"      "a=b=c"
 expect_eq "merge preserves a value with + and /"        "$(mval BACKUP_ENCRYPT_KEY)"    "Zm9v+bar/baz=="
 expect_eq "merge preserves a value with a double-quote" "$(mval JARVIS_MODEL_HMAC_KEY)" 'he said "hi"'
-expect_eq "merge preserves a value with a single-quote" "$(mval INFRA_INGEST_KEY)"      "it's fine"
 expect_eq "merge preserves leading+trailing spaces"     "$(mval LANGFUSE_SALT)"         "  spaced  "
 expect_eq "merge preserves a CRLF-terminated value"     "$(mval POSTGRES_PASSWORD)"     "crlfvalue"
 expect_eq "merge preserves an untouched neighbour"      "$(mval QDRANT_API_KEY)"        "plainvalue"

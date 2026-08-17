@@ -38,7 +38,6 @@ chmod 644 secrets/*.txt
 | `qdrant_api_key.txt` | `qdrant`, `paper_ingestion` | Qdrant vector database API key |
 | `jarvis_config_key.txt` | `paper_ingestion`, `learning_engine` | Fernet key for at-rest encryption of `user_config.encrypted_value`; generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `jarvis_model_hmac_key.txt` | `paper_ingestion`, `learning_engine`, `telegram_bot` | HMAC key that signs Pulse classifier pickle blobs; **auto-generated** by `scripts/init-secrets.sh` (`openssl rand -hex 32`) |
-| `infra_ingest_key.txt` | `paper_ingestion`, vector sidecar | Shared key authenticating the vector sidecar to `POST /infra-events`; **auto-generated** by `scripts/init-secrets.sh` (`openssl rand -hex 32`) |
 | `backup_encrypt_key.txt` | `postgres-backup` | Passphrase used by `backup.sh` to encrypt backup archives at rest; **auto-generated** by `scripts/init-secrets.sh` (`openssl rand -base64 32`) |
 
 ## Mode Bits Reminder

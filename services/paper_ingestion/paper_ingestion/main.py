@@ -586,7 +586,6 @@ from paper_ingestion.routers import (  # noqa: E402
     discovery,
     extractions,
     highlights,
-    infra_events,
     internal_config,
     internal_domains,
     jobs,
@@ -650,7 +649,6 @@ app.include_router(system_readiness.router)
 app.include_router(system_capabilities.router)
 app.include_router(jobs.router)
 app.include_router(source_config_router.router)
-app.include_router(infra_events.router)
 
 
 # ---------------------------------------------------------------------------
@@ -692,27 +690,6 @@ async def _probe_ollama(request: Request) -> str:
         return "unavailable"
 
 
-async def _probe_vector(request: Request) -> str:
-    """Vector sidecar probe — the API is optional so failures map to
-    ``"unknown"`` (not ``"unavailable"``) and do not drag overall status to
-    ``"degraded"``.
-
-    When ``vector_api_url`` is unset (the sidecar is disabled) the probe
-    short-circuits to ``"unknown"`` without a network round-trip.
-    """
-    vector_url = get_paper_ingestion_settings().vector_api_url.strip()
-    if not vector_url:
-        return "unknown"
-    try:
-        resp = await asyncio.wait_for(
-            request.app.state.http_client.get(f"{vector_url}/health"),
-            timeout=3.0,
-        )
-        return "ok" if resp.status_code == 200 else "unknown"
-    except Exception:
-        return "unknown"
-
-
 register_health_routes(
     app,
     service_name="paper_ingestion",
@@ -721,7 +698,6 @@ register_health_routes(
         ("qdrant", _probe_qdrant),
         ("litellm", make_litellm_probe()),
         ("ollama", _probe_ollama),
-        ("vector", _probe_vector),
     ],
     limiter=limiter,
 )

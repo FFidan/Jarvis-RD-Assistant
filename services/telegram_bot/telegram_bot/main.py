@@ -13,6 +13,7 @@ import sys
 import time
 from typing import Any
 
+from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.maintenance import (
     ensure_outbound_egress_allowed,
@@ -24,6 +25,7 @@ from jarvis_common.maintenance import (
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.sentry import maybe_init_sentry
 from jarvis_common.settings import get_core_settings
+from jarvis_common.telemetry import configure_telemetry, flush_telemetry
 from telegram import BotCommand, Update
 from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
 from telegram.request import HTTPXRequest
@@ -113,6 +115,13 @@ async def post_init(application: Application) -> None:
         If restored credentials await review before Telegram resources start.
     """
     ensure_outbound_egress_allowed("Telegram bot startup")
+    settings = get_jarvis_common_settings()
+    configure_telemetry(
+        service="telegram_bot",
+        enabled=settings.observability_enabled,
+        otlp_endpoint=getattr(settings, "otel_exporter_otlp_traces_endpoint", None),
+        timeout_ms=getattr(settings, "otel_export_timeout_ms", 5_000),
+    )
     config: BotConfig = application.bot_data["config"]
     platform_client = pinned_async_client(
         JARVIS_SERVICE_POLICY,
@@ -174,36 +183,42 @@ async def post_shutdown(application: Application) -> None:
     application : Application
         The python-telegram-bot Application instance.
     """
-    import telegram_bot.internal_api as _iapi  # local import to avoid circular refs
+    try:
+        import telegram_bot.internal_api as _iapi  # local import to avoid circular refs
 
-    # Gracefully stop the internal uvicorn server
-    if _iapi._server_state.server is not None:
-        _iapi._server_state.server.should_exit = True
-    if _iapi._server_state.task is not None:
-        try:
-            await asyncio.wait_for(_iapi._server_state.task, timeout=5.0)
-        except TimeoutError:
-            logger.warning("Internal API server task did not stop within 5 s — continuing shutdown")
-        except asyncio.CancelledError:
-            logger.warning("Internal API server task was cancelled during shutdown")
+        # Gracefully stop the internal uvicorn server
+        if _iapi._server_state.server is not None:
+            _iapi._server_state.server.should_exit = True
+        if _iapi._server_state.task is not None:
+            try:
+                await asyncio.wait_for(_iapi._server_state.task, timeout=5.0)
+            except TimeoutError:
+                logger.warning(
+                    "Internal API server task did not stop within 5 s — continuing shutdown"
+                )
+            except asyncio.CancelledError:
+                logger.warning("Internal API server task was cancelled during shutdown")
 
-    watcher_task = application.bot_data.get("secrets_rotation_watcher_task")
-    if watcher_task is not None:
-        watcher_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await watcher_task
+        watcher_task = application.bot_data.get("secrets_rotation_watcher_task")
+        if watcher_task is not None:
+            watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await watcher_task
 
-    scheduler = application.bot_data.get("scheduler")
-    if scheduler:
-        await scheduler.stop()
+        scheduler = application.bot_data.get("scheduler")
+        if scheduler:
+            await scheduler.stop()
 
-    http_client = application.bot_data.get("http_client")
-    if http_client:
-        await http_client.aclose()
+        http_client = application.bot_data.get("http_client")
+        if http_client:
+            await http_client.aclose()
 
-    platform_client = application.bot_data.get("platform_client")
-    if platform_client:
-        await platform_client.aclose()
+        platform_client = application.bot_data.get("platform_client")
+        if platform_client:
+            await platform_client.aclose()
+    finally:
+        # The global provider survives bot restarts; only flush this lifecycle.
+        flush_telemetry()
 
     logger.info("Bot shutdown: resources released")
 

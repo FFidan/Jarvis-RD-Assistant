@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 from jarvis_common.identity_capabilities import IdentityAudience, service_principal_scopes
+from jarvis_common.telemetry import correlation_id, trace_headers
 
 from telegram_bot.config import BotConfig
 
@@ -60,9 +61,10 @@ class TelegramBackendAuth(httpx.Auth):
             raise RuntimeError("Telegram backend requests require a positive paired user")
 
         audience = self._resolve_audience(request)
-        request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+        request_id = request.headers.get("X-Request-Id") or correlation_id() or str(uuid.uuid4())
         response = await self._platform_client.post(
             f"{self._config.platform_api_url}/internal/telegram/authorize",
+            headers=trace_headers(),
             json={
                 "audience": audience,
                 "method": request.method,
@@ -80,6 +82,8 @@ class TelegramBackendAuth(httpx.Auth):
         request.headers.pop("X-API-Key", None)
         request.headers["X-Jarvis-Identity"] = assertion
         request.headers["X-Request-Id"] = request_id
+        request.headers["X-Correlation-Id"] = request_id
+        request.headers.update(trace_headers())
         yield request
 
     def _resolve_audience(self, request: httpx.Request) -> IdentityAudience:

@@ -34,9 +34,6 @@ SEMANTIC_SCHOLAR_API_KEY    semantic_scholar_api_key    routers/search_helpers.p
                                                          sources/semantic_scholar_source.py
 PUBMED_API_KEY              pubmed_api_key              sources/pubmed_source.py
 OPENALEX_API_KEY            openalex_api_key            sources/openalex_source.py
-INFRA_INGEST_KEY            infra_ingest_key            routers/infra_events.py
-INFRA_INGEST_KEY_FILE       infra_ingest_key_file       routers/infra_events.py
-VECTOR_API_URL              vector_api_url              main.py health check
 """
 
 from __future__ import annotations
@@ -90,10 +87,6 @@ class PaperIngestionSettings(JarvisCommonSettings):
     ollama_base_url: str = Field(
         default="http://ollama:11434",
         description="Ollama server base URL (OLLAMA_BASE_URL).",
-    )
-    vector_api_url: str = Field(
-        default="http://vector:8686",
-        description="Vector sidecar API URL for best-effort health checks (VECTOR_API_URL).",
     )
     platform_api_url: str = Field(
         default="http://platform_api:8003",
@@ -269,24 +262,6 @@ class PaperIngestionSettings(JarvisCommonSettings):
     openalex_api_key: SecretStr | None = Field(
         default=None,
         description="Required OpenAlex API key (OPENALEX_API_KEY).",
-    )
-    # --- Infrastructure ingest key --------------------------------------
-    # infra_ingest_key and infra_ingest_key_file are read via PaperIngestionSettings
-    # in routers/infra_events.py.  Mirrors the dual-source pattern used for
-    # JARVIS_API_KEY so Docker Secret mounts take precedence.
-    infra_ingest_key: SecretStr | None = Field(
-        default=None,
-        description=(
-            "Secret key for the /api/infra-events endpoint (INFRA_INGEST_KEY). "
-            "Superseded by INFRA_INGEST_KEY_FILE when both are set."
-        ),
-    )
-    infra_ingest_key_file: str | None = Field(
-        default=None,
-        description=(
-            "Path to a file containing the infra-ingest key "
-            "(INFRA_INGEST_KEY_FILE).  Docker Secret mount path."
-        ),
     )
 
 

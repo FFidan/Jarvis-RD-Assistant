@@ -7,7 +7,9 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 import pytest
+from jarvis_common.telemetry import configure_telemetry
 from jarvis_common.testing import make_bot_config, make_ptb_context, make_telegram_update
+from opentelemetry import trace
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import auth_check
@@ -218,6 +220,39 @@ async def test_backend_auth_requires_paired_user_marker() -> None:
     ):
         with pytest.raises(RuntimeError, match="paired user"):
             await backend_client.get("http://research:8000/api/papers/42")
+
+
+@pytest.mark.asyncio
+async def test_backend_auth_propagates_active_w3c_trace() -> None:
+    """The Platform authorization and signed backend request share the command trace."""
+    platform_headers: httpx.Headers | None = None
+    backend_headers: httpx.Headers | None = None
+
+    async def platform_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal platform_headers
+        platform_headers = request.headers
+        return httpx.Response(200, json={"assertion": "signed"})
+
+    async def backend_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal backend_headers
+        backend_headers = request.headers
+        return httpx.Response(200)
+
+    configure_telemetry(service="test", enabled=False, otlp_endpoint=None, timeout_ms=1)
+    async with (
+        _client(platform_handler) as platform_client,
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(backend_handler),
+            auth=TelegramBackendAuth(_config(), platform_client),
+        ) as backend_client,
+    ):
+        with trace.get_tracer("test").start_as_current_span("telegram.command"):
+            await backend_client.get(
+                "http://research:8000/api/papers/42", headers={"X-Owner-User-Id": "7"}
+            )
+
+    assert platform_headers is not None and "traceparent" in platform_headers
+    assert backend_headers is not None and "traceparent" in backend_headers
 
 
 async def _response(status_code: int) -> httpx.Response:

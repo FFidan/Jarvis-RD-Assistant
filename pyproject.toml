@@ -248,7 +248,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # that legitimately gained a branch or a parameter rather than one that grew
 # unattended: the reader-facing selection now threaded through the feed count
 # path, the identification step on the upload path, and citation resolution.
-max = { C901 = 55, PLR0911 = 9, PLR0912 = 28, PLR0913 = 87, PLR0915 = 20 }
+max = { C901 = 54, PLR0911 = 9, PLR0912 = 27, PLR0913 = 87, PLR0915 = 20 }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

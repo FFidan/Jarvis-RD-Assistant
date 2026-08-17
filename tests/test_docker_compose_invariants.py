@@ -815,7 +815,6 @@ SECRET_PROVISIONING = {
     "langfuse_salt": "update",
     "cloudflare_tunnel_token": "update",
     "backup_encrypt_key": "update",
-    "infra_ingest_key": "update",
     "langfuse_init_pk": "setup",
     "langfuse_init_sk": "setup",
 }
@@ -825,6 +824,30 @@ def _secret_sources(service: dict[str, Any]) -> set[str]:
     return {
         entry if isinstance(entry, str) else entry["source"] for entry in service.get("secrets", [])
     }
+
+
+def test_vector_is_socketless_and_cannot_write_product_logs(compose) -> None:
+    """Optional aggregate logging must not read Docker or call Research."""
+    vector = compose["services"]["vector"]
+    rendered = json.dumps(vector)
+    assert "/var/run/docker.sock" not in rendered
+    assert "infra_ingest_key" not in rendered
+    assert "paper_ingestion" not in vector.get("depends_on", {})
+    assert "vector_data" not in compose.get("volumes", {})
+    vector_config = (REPO_ROOT / "infra/vector.toml").read_text(encoding="utf-8")
+    assert "docker_logs" not in vector_config
+    assert "/infra-events" not in vector_config
+    assert "$1" not in vector_config
+
+
+def test_observability_make_target_does_not_enable_telegram() -> None:
+    """Optional telemetry must not activate the separately profiled bot service."""
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    target = re.search(r"(?ms)^observability-up:.*?(?=^\S|\Z)", makefile)
+
+    assert target is not None
+    assert "telegram_bot" not in target.group()
+    assert "vector platform_api paper_ingestion learning_engine dashboard" in target.group()
 
 
 def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(compose):

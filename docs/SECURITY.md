@@ -260,16 +260,6 @@ The IP-allowlist call sites are:
 - `_ip_in_allowlist` (`libs/jarvis_common/jarvis_common/auth.py`) — backs
   `OWNER_OVERRIDE_ALLOWED_CIDRS` for the `X-Owner-User-Id` header bypass;
   mis-trusted XFF forges the operator's IP guard.
-- `_infra_ip_in_allowlist`
-  (`services/paper_ingestion/paper_ingestion/routers/infra_events.py`) —
-  backs `INFRA_INGEST_ALLOWED_CIDRS` for the Vector sidecar ingest
-  endpoint; mis-trusted XFF forges the sidecar's IP and reduces the
-  defense-in-depth to the static shared key (`INFRA_INGEST_KEY`) alone.
-  Note: `/infra-events` authenticates with a static shared key (constant-time
-  `hmac.compare_digest`) plus the CIDR allowlist — it is NOT a challenge-response
-  scheme and has no replay/nonce protection; the internal-network + default-deny
-  CIDR posture is the boundary.
-
 **Deployment requirement:** keep `trusted_proxy_hosts` scoped to the actual
 reverse-proxy hop. Do not set `trusted_proxy_hosts="*"` in production. In the
 standard stack, the application trusts only loopback and the dashboard

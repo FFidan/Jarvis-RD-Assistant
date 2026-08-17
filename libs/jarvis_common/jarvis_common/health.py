@@ -42,7 +42,6 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from jarvis_common.auth import verify_api_key
-from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.maintenance import maintenance_active
 from jarvis_common.models import (
     DatabaseRuntimeDiagnostics,
@@ -50,6 +49,7 @@ from jarvis_common.models import (
     HealthDiagnostics,
 )
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
+from jarvis_common.telemetry import correlation_id, metrics_snapshot, trace_id
 from jarvis_common.version import app_version
 
 if TYPE_CHECKING:
@@ -131,10 +131,11 @@ def _runtime_diagnostics(request: Request) -> HealthDiagnostics:
             pool_max=pool_max,
             pool_wait_pressure=pool_wait_pressure,
         )
-    correlation_id = correlation_id_var.get()
     return HealthDiagnostics(
-        correlation_id=str(correlation_id) if correlation_id is not None else None,
+        correlation_id=correlation_id(),
+        trace_id=trace_id(),
         database=database,
+        telemetry=metrics_snapshot(getattr(request.app.state, "service_name", "unknown")),
     )
 
 

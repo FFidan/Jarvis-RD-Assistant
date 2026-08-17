@@ -626,23 +626,6 @@ async def test_litellm_probe_uses_dedicated_client_when_shared_pool_times_out(
     assert calls == {"shared": 1, "dedicated": 1}
 
 
-async def test_vector_probe_short_circuits_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_probe_vector returns 'unknown' with no network round-trip when vector_api_url is empty."""
-    import paper_ingestion.main as pi_main
-    from paper_ingestion.config import PaperIngestionSettings
-
-    settings = PaperIngestionSettings(vector_api_url="")
-    monkeypatch.setattr(pi_main, "get_paper_ingestion_settings", lambda: settings)
-
-    request = _fake_request()
-    http = AsyncMock()
-    http.get = AsyncMock(side_effect=AssertionError("vector probe must not make a request"))
-    request.app.state.http_client = http
-
-    assert await pi_main._probe_vector(request) == "unknown"
-    http.get.assert_not_called()
-
-
 async def test_paper_ingestion_qdrant_probe_checks_required_collection() -> None:
     """_probe_qdrant returns 'ok' only when the paper chunk collection exists."""
     import paper_ingestion.main as pi_main

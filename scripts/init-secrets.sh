@@ -96,7 +96,6 @@ sync_secret() {
       LITELLM_SALT_KEY)            value=$(openssl rand -hex 32) ;;
       POSTGRES_PASSWORD)           value=$(openssl rand -hex 24) ;;
       QDRANT_API_KEY)              value=$(openssl rand -hex 24) ;;
-      INFRA_INGEST_KEY)            value=$(openssl rand -hex 32) ;;
       JARVIS_CONFIG_KEY)           value=$(openssl rand -base64 32 | tr -d '\n') ;;
       JARVIS_MODEL_HMAC_KEY)       value=$(openssl rand -hex 32) ;;
       LANGFUSE_NEXTAUTH_SECRET)    value=$(openssl rand -hex 32) ;;
@@ -379,9 +378,6 @@ sync_database_password postgres_erasure_executor_password.txt
 sync_database_password litellm_runtime_password.txt
 sync_database_password litellm_migrator_password.txt
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
-# INFRA_INGEST_KEY authenticates the Vector log-shipper sidecar to POST /infra-events.
-# Mounted by paper_ingestion and vector services via Docker Secret.
-sync_secret INFRA_INGEST_KEY   infra_ingest_key.txt   "openssl rand -hex 32"
 # JARVIS_CONFIG_KEY is the Fernet write-key for the user_config table.
 # sync_secret preserves any existing .env value verbatim; rotating this key
 # would render every encrypted user_config row unreadable, so we never

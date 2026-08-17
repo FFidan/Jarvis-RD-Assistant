@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from jarvis_common.logging_config import DEFAULT_PII_KEYS, _make_pii_scrubber
+import logging
+
+from jarvis_common.logging_config import (
+    DEFAULT_PII_KEYS,
+    ForwardingJSONFormatter,
+    _make_pii_scrubber,
+)
 
 
 def test_pii_scrubber_drops_sensitive_keys() -> None:
@@ -55,3 +61,29 @@ def test_pii_scrubber_no_error_when_keys_absent() -> None:
     scrubber = _make_pii_scrubber(DEFAULT_PII_KEYS)
     out = scrubber(None, "info", {"event": "no PII here"})
     assert out == {"event": "no PII here"}
+
+
+def test_forwarding_formatter_exports_only_safe_metadata() -> None:
+    """Optional transport excludes message, exception, and structured secrets."""
+    formatter = ForwardingJSONFormatter("test")
+    record = logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="Authorization: Bearer secret-token password=hunter2 prompt=private input",
+        args=(),
+        exc_info=None,
+    )
+    record.headers = {"Cookie": "session-secret"}
+    record.prompt = "private user prompt"
+
+    payload = formatter.format(record)
+
+    assert "secret-token" not in payload
+    assert "hunter2" not in payload
+    assert "private input" not in payload
+    assert "session-secret" not in payload
+    assert "private user prompt" not in payload
+    assert "message" not in payload
+    assert "exception" not in payload

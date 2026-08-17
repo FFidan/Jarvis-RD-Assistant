@@ -180,8 +180,8 @@ check: no-tracked-secrets secure-secrets deps-check lint
 # while paper_ingestion/learning_engine are published and pull. Forcing --build here
 # would rebuild the multi-GB torch images from a cold cache.
 observability-up: gen-langfuse-keys
-	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
-	  $(COMPOSE) --profile observability up -d langfuse paper_ingestion learning_engine
+	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 LOG_FORWARD_ADDRESS=vector:9000 \
+	  $(COMPOSE) --profile observability up -d langfuse vector platform_api paper_ingestion learning_engine dashboard
 
 ## Docker shortcuts
 up: gen-langfuse-keys init-secrets

@@ -133,8 +133,6 @@ class CoreSettings(BaseSettings):
     # Comma-separated CIDRs allowed to POST to the infra-ingest endpoint.
     # Default-deny: empty means infra-ingest is unprovisioned and _check_auth
     # returns 503. Operator must explicitly opt in by setting the env var,
-    # e.g. INFRA_INGEST_ALLOWED_CIDRS="127.0.0.1/8,::1/128".
-    infra_ingest_allowed_cidrs: str = ""
     # Advanced host override for deployment ownership. Keep the raw text here:
     # the owner resolver must distinguish a malformed authoritative value from
     # a missing value instead of making all CoreSettings consumers fail to load.

@@ -58,7 +58,6 @@ _ROUTE_DECORATORS = frozenset({"get", "post", "put", "patch", "delete"})
 ALLOWLIST = frozenset(
     {
         "services/paper_ingestion/paper_ingestion/routers/system.py",
-        "services/paper_ingestion/paper_ingestion/routers/infra_events.py",
     }
 )
 

@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import FastAPI
+from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.testing import make_pool_and_conn
 
 
@@ -345,3 +346,103 @@ async def test_projection_retries_a_non_mapping_acknowledgement() -> None:
     assert delivered == 0
     assert conn.execute.await_args is not None
     assert conn.execute.await_args.args[1] == event_id
+
+
+@pytest.mark.asyncio
+async def test_outbox_event_persists_only_trace_and_correlation_context() -> None:
+    """Outbox metadata excludes user-content while retaining delivery ancestry."""
+    from paper_ingestion.repos.domain_events import record_event
+
+    event_id = uuid.uuid4()
+    _pool, conn = make_pool_and_conn(fetchval_return=event_id)
+    corr = uuid.uuid4()
+    token = correlation_id_var.set(corr)
+    try:
+        await record_event(conn, event_type="paper.read", user_id=7, paper_id=42)
+    finally:
+        correlation_id_var.reset(token)
+
+    payload = conn.execute.await_args.args[5]
+    assert payload == {"correlation_id": str(corr)}
+
+
+@pytest.mark.asyncio
+async def test_outbox_delivery_restores_persisted_correlation_for_signed_command() -> None:
+    """Delivery uses the original correlation context when authorizing the owner command."""
+    from jarvis_common.telemetry import correlation_id
+    from paper_ingestion.repos import domain_events
+
+    event_id = uuid.uuid4()
+    corr = uuid.uuid4()
+    pool, conn = make_pool_and_conn()
+    conn.fetch.return_value = [
+        {
+            "id": event_id,
+            "event_type": "paper.read",
+            "user_id": 7,
+            "paper_id": 42,
+            "payload": {"correlation_id": str(corr)},
+        }
+    ]
+    client = AsyncMock()
+    response = MagicMock()
+    response.json.return_value = {"acknowledged": True}
+    client.post.return_value = response
+    seen: list[tuple[str | None, str | None]] = []
+
+    async def authorize(*_args, **_kwargs):
+        command = _kwargs["command"]
+        seen.append((correlation_id(), command.request_id))
+        return {
+            "X-Jarvis-Identity": "signed",
+            "X-Request-Id": command.request_id,
+            "X-Correlation-Id": correlation_id(),
+        }
+
+    with patch("paper_ingestion.repos.domain_events.authorize_service_command", authorize):
+        await domain_events.deliver_pending_events(
+            pool,
+            client,
+            settings=domain_events.DomainDeliverySettings(
+                platform_url="http://platform",
+                learning_url="http://learning",
+                service_token="test-token",
+            ),
+        )
+
+    assert seen == [(str(corr), str(event_id))]
+    assert client.post.await_args_list[0].kwargs["headers"]["X-Request-Id"] == str(event_id)
+    assert client.post.await_args_list[0].kwargs["headers"]["X-Correlation-Id"] == str(corr)
+
+
+@pytest.mark.asyncio
+async def test_service_command_keeps_request_id_distinct_from_active_correlation() -> None:
+    """The signed idempotency identifier never replaces the active correlation header."""
+    from jarvis_common.service_auth import ServiceCommand, authorize_service_command
+
+    corr = uuid.uuid4()
+    token = correlation_id_var.set(corr)
+    client = AsyncMock()
+    response = MagicMock()
+    response.json.return_value = {"assertion": "signed"}
+    client.post.return_value = response
+    try:
+        headers = await authorize_service_command(
+            client,
+            platform_url="http://platform",
+            principal="research",
+            token="token",
+            command=ServiceCommand(
+                audience="learning",
+                method="POST",
+                path="/internal/domains/paper-read",
+                user_id=7,
+                request_id="event-id",
+            ),
+        )
+    finally:
+        correlation_id_var.reset(token)
+
+    assert client.post.await_args.kwargs["json"]["request_id"] == "event-id"
+    assert headers["X-Request-Id"] == "event-id"
+    assert headers["X-Correlation-Id"] == str(corr)

@@ -68,6 +68,9 @@ x-shared-env: &shared-env
   # client is the Docker host itself. Remote LAN clients remain diagnostics-only.
   TRUSTED_LOCAL_CLIENT_CIDRS: ${TRUSTED_LOCAL_CLIENT_CIDRS:-127.0.0.0/8,::1/128,${JARVIS_NET_GATEWAY_IP:-10.137.241.1}/32}
   OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+  OTEL_EXPORT_TIMEOUT_MS: ${OTEL_EXPORT_TIMEOUT_MS:-5000}
+  LOG_FORWARD_ADDRESS: ${LOG_FORWARD_ADDRESS:-}
 
 services:
   # ==========================================================================
@@ -489,8 +492,6 @@ services:
       JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
       JARVIS_IDENTITY_ASSERTIONS_REQUIRED: "true"
       JARVIS_IDENTITY_CURRENT_PUBLIC_KEY_FILE: /run/secrets/platform_identity_public_key
-      # Vector sidecar uses this to authenticate to POST /infra-events
-      INFRA_INGEST_KEY_FILE: /run/secrets/infra_ingest_key
       # Gates the first-run setup wizard's WRITE endpoints while no admin exists.
       JARVIS_SETUP_TOKEN_FILE: /run/secrets/jarvis_setup_token
       # SMTP relay for magic-link / invite email. An env-configured relay is read
@@ -516,7 +517,6 @@ services:
       - litellm_master_key
       - jarvis_config_key
       - platform_identity_public_key
-      - infra_ingest_key
       - smtp_pass
       - langfuse_init_pk
       - langfuse_init_sk
@@ -1092,28 +1092,11 @@ services:
     profiles: [observability]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
-    # docker.sock is mounted RO for log scraping only — no capabilities needed.
     cap_drop: [ALL]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infra/vector.toml:/etc/vector/vector.toml:ro
-      - vector_data:/var/lib/vector
     environment:
       VECTOR_LOG: warn
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        set -euo pipefail
-        INFRA_KEY=$$(cat /run/secrets/infra_ingest_key)
-        exec env INFRA_KEY="$$INFRA_KEY" vector --config /etc/vector/vector.toml
-    secrets:
-      - infra_ingest_key
-    depends_on:
-      platform_api:
-        condition: service_healthy
-      paper_ingestion:
-        condition: service_started
     mem_limit: 256m
     logging:
       driver: json-file
@@ -1136,7 +1119,6 @@ volumes:
   caddy_data:
   caddy_config:
   langfuse_postgres_data:
-  vector_data:
 
 networks:
   jarvis:
@@ -1211,8 +1193,6 @@ secrets:
     file: ./secrets/cloudflare_tunnel_token.txt
   backup_encrypt_key:
     file: ./secrets/backup_encrypt_key.txt
-  infra_ingest_key:
-    file: ./secrets/infra_ingest_key.txt
   langfuse_init_pk:
     file: ./secrets/langfuse_init_pk.txt
   langfuse_init_sk:

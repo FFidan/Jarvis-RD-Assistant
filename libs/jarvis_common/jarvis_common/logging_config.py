@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
+import socket
 import sys
+import threading
 import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -54,6 +57,71 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info and record.exc_info[0] is not None:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry)
+
+
+class ForwardingJSONFormatter(JSONFormatter):
+    """Render only safe metadata for optional off-process forwarding."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Return the explicit safe metadata allowlist for Vector."""
+        payload = json.loads(super().format(record))
+        return json.dumps(
+            {
+                key: payload[key]
+                for key in (
+                    "timestamp",
+                    "level",
+                    "logger",
+                    "service",
+                    "request_id",
+                    "correlation_id",
+                )
+            },
+            separators=(",", ":"),
+        )
+
+
+class BoundedUDPLogHandler(logging.Handler):
+    """Forward rendered logs through a bounded UDP queue without blocking callers."""
+
+    def __init__(self, address: str, *, queue_size: int = 512) -> None:
+        """Start a daemon sender for the validated ``host:port`` destination."""
+        super().__init__()
+        host, _, port_text = address.rpartition(":")
+        self._destination = (host, int(port_text))
+        self._queue: queue.Queue[bytes] = queue.Queue(maxsize=queue_size)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="jarvis-log-forwarder", daemon=True)
+        self._thread.start()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Queue one bounded payload, dropping it immediately when saturated."""
+        try:
+            payload = self.format(record).encode("utf-8")
+            if len(payload) > 8_192:
+                return
+            self._queue.put_nowait(payload)
+        except (OSError, UnicodeError, ValueError, queue.Full):
+            return
+
+    def _run(self) -> None:
+        """Send queued payloads; DNS and UDP failures are isolated to this thread."""
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
+            while not self._stop.is_set():
+                try:
+                    payload = self._queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                try:
+                    udp_socket.sendto(payload, self._destination)
+                except OSError:
+                    continue
+
+    def close(self) -> None:
+        """Bound shutdown so logging teardown never waits on a failed destination."""
+        self._stop.set()
+        self._thread.join(timeout=0.2)
+        super().close()
 
 
 class SystemEventHandler(logging.Handler):
@@ -261,6 +329,7 @@ def configure_logging(
     log_level: str = "INFO",
     *,
     pii_keys: frozenset[str] | None = None,
+    log_forward_address: str | None = None,
 ) -> None:
     """Replace default logging config with structured JSON output.
 
@@ -279,6 +348,8 @@ def configure_logging(
         Keys to scrub from structlog event dicts before rendering (L-07).
         ``None`` uses :data:`DEFAULT_PII_KEYS`; pass an explicit set to extend
         or override (most callers should accept the default).
+    log_forward_address : str | None
+        Optional Vector UDP destination. When omitted, reads the shared setting.
 
     """
     keys = pii_keys if pii_keys is not None else DEFAULT_PII_KEYS
@@ -289,6 +360,14 @@ def configure_logging(
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter(service_name))
     root.addHandler(handler)
+    if log_forward_address is None:
+        from jarvis_common.config import get_jarvis_common_settings
+
+        log_forward_address = get_jarvis_common_settings().log_forward_address
+    if log_forward_address:
+        forwarder = BoundedUDPLogHandler(log_forward_address)
+        forwarder.setFormatter(ForwardingJSONFormatter(service_name))
+        root.addHandler(forwarder)
     # Quiet noisy third-party loggers
     for noisy in ("httpx", "httpcore", "asyncio", "uvicorn.access"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

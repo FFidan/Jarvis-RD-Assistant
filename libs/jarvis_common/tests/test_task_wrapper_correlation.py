@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from jarvis_common.logging_config import correlation_id_var
+from jarvis_common.telemetry import configure_telemetry
+from opentelemetry import trace
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -201,3 +203,21 @@ async def test_task_wrapper_resets_correlation_id_var_after_handler(monkeypatch)
         assert correlation_id_var.get() is None
     finally:
         correlation_id_var.reset(prior_token)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_proxy_preserves_raw_task_registration_and_adds_context() -> None:
+    """The enqueue facade carries context while the underlying task stays the registered task."""
+    import jarvis_common.task_registry as task_registry
+
+    configure_telemetry(service="test", enabled=False, otlp_endpoint=None, timeout_ms=1)
+    raw_task = SimpleNamespace(defer_async=AsyncMock(return_value="queued"))
+    proxy = task_registry._TaskEnqueueProxy(raw_task)
+
+    with trace.get_tracer("test").start_as_current_span("request"):
+        result = await proxy.defer_async(job_id="job", user_id=7)
+
+    assert result == "queued"
+    payload = raw_task.defer_async.await_args.kwargs
+    assert payload["job_id"] == "job"
+    assert payload["_jarvis_telemetry"]["traceparent"].startswith("00-")

@@ -24,7 +24,9 @@ class HealthDiagnostics(BaseModel):
     """Authenticated operational details that do not require observability."""
 
     correlation_id: str | None = None
+    trace_id: str | None = None
     database: DatabaseRuntimeDiagnostics | None = None
+    telemetry: dict[str, int] | None = None
 
 
 class HealthCheckResponse(BaseModel):
@@ -52,6 +54,8 @@ class ErrorResponse(BaseModel):
 
     detail: str
     request_id: str | None = None
+    correlation_id: str | None = None
+    trace_id: str | None = None
 
 
 class JobCreateResponse(BaseModel):

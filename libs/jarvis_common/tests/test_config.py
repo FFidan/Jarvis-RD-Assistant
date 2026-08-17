@@ -36,6 +36,9 @@ class TestJarvisCommonSettings:
         assert s.cors_origins == "https://localhost:3001"
         assert s.litellm_base_url == "http://litellm:4000"
         assert s.langfuse_host is None
+        assert s.otel_exporter_otlp_traces_endpoint is None
+        assert s.otel_export_timeout_ms == 5_000
+        assert s.log_forward_address is None
         assert s.trusted_proxy_cidrs == ""
         assert s.trust_cf_connecting_ip is False
         assert s.migration_lock_contended_ok is False
@@ -138,6 +141,25 @@ class TestJarvisCommonSettings:
         s = JarvisCommonSettings()
         assert s.migration_lock_contended_ok is True
 
+    def test_observability_export_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://otel:4318/v1/traces")
+        monkeypatch.setenv("OTEL_EXPORT_TIMEOUT_MS", "1200")
+        monkeypatch.setenv("LOG_FORWARD_ADDRESS", "vector:9000")
+
+        settings = JarvisCommonSettings()
+
+        assert settings.otel_exporter_otlp_traces_endpoint == "http://otel:4318/v1/traces"
+        assert settings.otel_export_timeout_ms == 1200
+        assert settings.log_forward_address == "vector:9000"
+
+    @pytest.mark.parametrize("address", ["vector", "vector:0", "vector:65536", "vector:not-a-port"])
+    def test_log_forward_address_rejects_invalid_values(
+        self, monkeypatch: pytest.MonkeyPatch, address: str
+    ) -> None:
+        monkeypatch.setenv("LOG_FORWARD_ADDRESS", address)
+        with pytest.raises(ValueError, match="LOG_FORWARD_ADDRESS"):
+            JarvisCommonSettings()
+
     def test_factory_returns_fresh_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LITELLM_BASE_URL", "http://custom:9999")
         s = get_jarvis_common_settings()
@@ -161,7 +183,6 @@ class TestPaperIngestionSettings:
             "QDRANT_URL",
             "QDRANT_API_KEY",
             "OLLAMA_BASE_URL",
-            "VECTOR_API_URL",
             "EMBEDDING_MODEL",
             "EMBEDDING_MODEL_NAME",
             "EMBEDDING_DIMENSION",
@@ -171,7 +192,6 @@ class TestPaperIngestionSettings:
         assert s.qdrant_url == "http://qdrant:6333"
         assert s.qdrant_api_key is None
         assert s.ollama_base_url == "http://ollama:11434"
-        assert s.vector_api_url == "http://vector:8686"
         assert s.embedding_model == "embed"
         assert s.embedding_model_name == "qwen3-embedding:4b"
         assert s.embedding_dimension == 2560
@@ -188,8 +208,6 @@ class TestPaperIngestionSettings:
         assert s.semantic_scholar_api_key is None
         assert s.pubmed_api_key is None
         assert s.openalex_api_key is None
-        assert s.infra_ingest_key is None
-        assert s.infra_ingest_key_file is None
         assert not hasattr(s, "telegram_bot_token")
 
     def test_inherits_common_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:

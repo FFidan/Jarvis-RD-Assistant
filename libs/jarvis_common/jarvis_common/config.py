@@ -51,7 +51,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
@@ -178,6 +178,42 @@ class JarvisCommonSettings(BaseSettings):
             "SDK and Instructor patching are skipped."
         ),
     )
+    otel_exporter_otlp_traces_endpoint: str | None = Field(
+        default=None,
+        description="Optional OTLP trace endpoint (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).",
+    )
+    otel_export_timeout_ms: int = Field(
+        default=5_000,
+        gt=0,
+        le=60_000,
+        description="Bounded telemetry export timeout in milliseconds (OTEL_EXPORT_TIMEOUT_MS).",
+    )
+    log_forward_address: str | None = Field(
+        default=None,
+        description="Optional Vector UDP destination as host:port (LOG_FORWARD_ADDRESS).",
+    )
+
+    @field_validator("otel_exporter_otlp_traces_endpoint", "log_forward_address", mode="before")
+    @classmethod
+    def _empty_observability_address_is_none(cls, value: object) -> object:
+        """Normalize optional observability addresses without accepting whitespace."""
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("log_forward_address")
+    @classmethod
+    def _validate_log_forward_address(cls, value: str | None) -> str | None:
+        """Require a bounded UDP destination in ``host:port`` form."""
+        if value is None:
+            return None
+        host, separator, port_text = value.rpartition(":")
+        if not separator or not host or not port_text.isdecimal():
+            raise ValueError("LOG_FORWARD_ADDRESS must use host:port form")
+        port = int(port_text)
+        if not 1 <= port <= 65_535:
+            raise ValueError("LOG_FORWARD_ADDRESS port must be between 1 and 65535")
+        return value
 
     # --- Trusted-proxy CIDRs --------------------------------------------
     trusted_proxy_cidrs: str = Field(

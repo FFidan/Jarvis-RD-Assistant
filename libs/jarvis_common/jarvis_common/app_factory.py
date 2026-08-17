@@ -72,6 +72,7 @@ from jarvis_common.migrations import check_migrations
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.settings import get_core_settings, get_secrets_settings
+from jarvis_common.telemetry import configure_telemetry, flush_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +423,18 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
         # risk and no need for a manual compensating-teardown path.
         async with AsyncExitStack() as stack:
             settings = get_jarvis_common_settings()
+            configure_telemetry(
+                service=config.service_name,
+                enabled=settings.observability_enabled,
+                otlp_endpoint=getattr(settings, "otel_exporter_otlp_traces_endpoint", None),
+                timeout_ms=getattr(settings, "otel_export_timeout_ms", 5_000),
+            )
+            # The SDK owns final provider shutdown at process exit. Each app
+            # lifecycle only gets a bounded flush, including failed startup.
+            stack.callback(
+                flush_telemetry,
+                timeout_ms=getattr(settings, "otel_export_timeout_ms", 5_000),
+            )
             database_url = build_database_url(
                 user=settings.postgres_user,
                 password_file=settings.postgres_password_file,
@@ -431,6 +444,7 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
             stack.push_async_callback(db_pool.close)
             app.state.db_pool = db_pool
             app.state.database_url = database_url
+            app.state.service_name = config.service_name
 
             # Runtime roles only inspect the completed schema. DDL belongs to
             # the one-shot migrator, which must have completed before APIs run.

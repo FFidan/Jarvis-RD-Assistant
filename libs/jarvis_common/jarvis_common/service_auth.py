@@ -8,6 +8,8 @@ from dataclasses import dataclass
 import httpx
 
 from jarvis_common.identity_capabilities import IdentityAudience, ServicePrincipal
+from jarvis_common.telemetry import correlation_id as active_correlation_id
+from jarvis_common.telemetry import trace_headers
 
 
 class ServiceCommandUnavailableError(RuntimeError):
@@ -39,19 +41,21 @@ async def authorize_service_command(
     request ID. Transport and payload failures are intentionally collapsed to
     a stable unavailable condition so callers never expose downstream details.
     """
-    correlation_id = command.request_id or str(uuid.uuid4())
+    request_id = command.request_id or str(uuid.uuid4())
+    correlation_id = active_correlation_id() or request_id
     try:
         response = await client.post(
             f"{platform_url.rstrip('/')}/internal/services/authorize",
             headers={
                 "X-Jarvis-Service-Principal": principal,
                 "X-Jarvis-Service-Token": token,
+                **trace_headers(),
             },
             json={
                 "audience": command.audience,
                 "method": command.method,
                 "path": command.path,
-                "request_id": correlation_id,
+                "request_id": request_id,
                 "user_id": command.user_id,
             },
             timeout=10.0,
@@ -65,7 +69,12 @@ async def authorize_service_command(
     assertion = payload.get("assertion")
     if not isinstance(assertion, str) or not assertion:
         raise ServiceCommandUnavailableError("service command authorization is unavailable")
-    return {"X-Jarvis-Identity": assertion, "X-Request-Id": correlation_id}
+    return {
+        "X-Jarvis-Identity": assertion,
+        "X-Request-Id": request_id,
+        "X-Correlation-Id": correlation_id,
+        **trace_headers(),
+    }
 
 
 __all__ = ["ServiceCommand", "ServiceCommandUnavailableError", "authorize_service_command"]

@@ -120,7 +120,9 @@ After the vLLM container is healthy, expose it through the local LiteLLM route a
 
 ## Observability (optional, off by default)
 
-LLM-call tracing via Langfuse is opt-in. `OBSERVABILITY_ENABLED` defaults to `false` and the Langfuse SDK is never constructed — zero overhead.
+LLM-call tracing, optional OTLP export, and aggregate application logs are
+opt-in. `OBSERVABILITY_ENABLED` defaults to `false`; the SDK and log forwarder
+are never constructed in the default profile.
 
 To enable (provisions a loopback-only Langfuse instance, no signup needed):
 
@@ -129,7 +131,7 @@ To enable (provisions a loopback-only Langfuse instance, no signup needed):
 make observability-up
 ```
 
-Open `http://localhost:3002` and sign in with `LANGFUSE_INIT_USER_EMAIL` (default `operator@jarvis.local`). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts.
+Open `http://localhost:3002` and sign in with `LANGFUSE_INIT_USER_EMAIL` (default `operator@jarvis.local`). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts. The command also starts Vector and the core application services with a bounded UDP log forwarder to `vector:9000`; view the optional aggregate with `docker compose logs vector`. The forwarder exports only safe metadata, never log messages or user content. Vector does not mount the Docker socket or write infrastructure logs to JARVIS tables. Telegram remains separately profile-gated.
 
 Full contract and rotation procedure: [docs/contracts/04-observability.md](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/contracts/04-observability.md) §9.
 
@@ -376,7 +378,6 @@ requires restarting its service consumers.
 | `litellm_salt_key` | `LITELLM_SALT_KEY` | Encrypts provider/model keys stored in LiteLLM's admin DB — **never rotate**: rotating orphans all stored model keys and requires re-entering them |
 | `telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (`telegram` profile only) |
 | `qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
-| `infra_ingest_key` | `INFRA_INGEST_KEY_FILE` | Shared key for the infrastructure ingestion endpoint |
 | `backup_encrypt_key` | `BACKUP_ENCRYPT_KEYFILE` | Encrypts backup archives at rest — required in every environment; backups refuse to run without it, though sets written by older releases without a key stay restorable |
 
 **Observability profile secrets** (auto-provisioned by `make observability-up`; only present when the `observability` profile is active):
@@ -759,8 +760,7 @@ The standard stack separates request handling from destructive restore work:
 | `restore-uploader` | Writes only allowlisted uploads to the restore inbox and reads a hashed, expiring upload grant from the trigger volume. It has no database credentials, application secrets, or Docker socket. |
 
 Learning Engine and Telegram receive the maintenance trigger read-only. None of
-the three restore roles above mounts the Docker socket; the optional Vector log
-collector's separate read-only Docker socket is unrelated to restore authority.
+the restore roles or optional Vector log collector mounts the Docker socket.
 
 Do not restore with raw database drops, archive extraction, or volume deletion.
 Those paths bypass the signed manifest, safety backup, staged swap, and secret

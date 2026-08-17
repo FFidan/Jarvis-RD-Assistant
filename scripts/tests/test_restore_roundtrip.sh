@@ -195,7 +195,7 @@ ROLE_SECRET_FILES='postgres_platform_runtime_password.txt postgres_research_runt
 SOURCE_BOOTSTRAP_PASSWORD='source-postgres_cluster_bootstrap_password.txt'
 TARGET_BOOTSTRAP_PASSWORD='target-postgres_cluster_bootstrap_password.txt'
 
-TARGET_LOCAL_CREDENTIAL_FILES='postgres_password.txt postgres_cluster_bootstrap_password.txt jarvis_api_key.txt jarvis_setup_token.txt qdrant_api_key.txt litellm_master_key.txt backup_encrypt_key.txt smtp_pass.txt telegram_bot_token.txt cloudflare_tunnel_token.txt langfuse_pg_password.txt langfuse_nextauth_secret.txt langfuse_salt.txt langfuse_init_user_password.txt langfuse_init_pk.txt langfuse_init_sk.txt infra_ingest_key.txt future_credential.txt'
+TARGET_LOCAL_CREDENTIAL_FILES='postgres_password.txt postgres_cluster_bootstrap_password.txt jarvis_api_key.txt jarvis_setup_token.txt qdrant_api_key.txt litellm_master_key.txt backup_encrypt_key.txt smtp_pass.txt telegram_bot_token.txt cloudflare_tunnel_token.txt langfuse_pg_password.txt langfuse_nextauth_secret.txt langfuse_salt.txt langfuse_init_user_password.txt langfuse_init_pk.txt langfuse_init_sk.txt future_credential.txt'
 DATA_KEY_FILES='jarvis_config_key.txt jarvis_model_hmac_key.txt litellm_salt_key.txt'
 
 write_fixture_secret() { printf '%s' "$2" > "$WORK/secrets/$1"; }

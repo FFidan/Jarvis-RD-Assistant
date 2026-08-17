@@ -12,7 +12,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from jarvis_common.logging_config import SystemEventHandler
+from jarvis_common.logging_config import (
+    BoundedUDPLogHandler,
+    ForwardingJSONFormatter,
+    SystemEventHandler,
+    configure_logging,
+)
 from jarvis_common.testing import make_pool_and_conn
 
 
@@ -25,6 +30,33 @@ def _make_mock_pool(
     conn.executemany = AsyncMock(side_effect=executemany_side_effect)
     conn.execute = AsyncMock()
     return pool, conn
+
+
+def test_udp_forwarder_drops_immediately_when_queue_is_saturated() -> None:
+    """A saturated optional destination never delays normal log emission."""
+    handler = BoundedUDPLogHandler("localhost:9000", queue_size=1)
+    handler.setFormatter(ForwardingJSONFormatter("test"))
+    handler._stop.set()
+    handler._thread.join(timeout=0.2)
+    handler._queue.put_nowait(b"already full")
+    record = logging.LogRecord("test", logging.INFO, "", 0, "message", (), None)
+
+    handler.emit(record)
+
+    assert handler._queue.qsize() == 1
+    handler.close()
+
+
+def test_logging_profile_off_has_no_udp_forwarder() -> None:
+    """An empty optional address keeps structured stdout entirely local."""
+    root = logging.getLogger()
+    original_handlers = root.handlers[:]
+    try:
+        configure_logging("test", log_forward_address="")
+        assert not any(isinstance(handler, BoundedUDPLogHandler) for handler in root.handlers)
+    finally:
+        root.handlers.clear()
+        root.handlers.extend(original_handlers)
 
 
 # ---------------------------------------------------------------------------

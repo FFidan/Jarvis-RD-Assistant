@@ -7,6 +7,7 @@ Each handler function is tested directly with mocked Update + Context objects.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -808,6 +809,27 @@ async def test_post_init_calls_set_my_commands():
     assert names == {spec.name for spec in menu_command_specs()}
     assert application.bot_data["platform_client"] is platform_client
     assert application.bot_data["http_client"] is backend_client
+
+
+@pytest.mark.asyncio
+async def test_post_shutdown_flushes_telemetry_even_when_resource_cleanup_fails() -> None:
+    """A bot restart flushes telemetry but leaves the process provider alive."""
+    from telegram_bot.main import post_shutdown  # noqa: PLC0415
+
+    application = SimpleNamespace(
+        bot_data={"scheduler": SimpleNamespace(stop=AsyncMock(side_effect=RuntimeError("stop")))}
+    )
+    with (
+        patch(
+            "telegram_bot.internal_api._server_state",
+            SimpleNamespace(server=None, task=None),
+        ),
+        patch("telegram_bot.main.flush_telemetry") as flush_telemetry,
+        pytest.raises(RuntimeError, match="stop"),
+    ):
+        await post_shutdown(application)
+
+    flush_telemetry.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------

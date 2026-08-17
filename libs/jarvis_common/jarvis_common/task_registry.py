@@ -16,12 +16,15 @@ Procrastinate can dispatch to them, not where jobs are queried or exposed.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from time import perf_counter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import procrastinate
+from opentelemetry.trace import SpanKind
 from procrastinate.contrib.aiopg import AiopgConnector
 
 from jarvis_common.event_log import log_event
@@ -34,6 +37,12 @@ from jarvis_common.maintenance import (
     maintenance_skip_reason,
 )
 from jarvis_common.settings import get_jobs_settings
+from jarvis_common.telemetry import (
+    capture_task_context,
+    pop_task_context,
+    record_worker,
+    restored_span,
+)
 
 if TYPE_CHECKING:
     import asyncpg
@@ -76,6 +85,30 @@ class TaskDependencies:
 
     pool: asyncpg.Pool
     http_client: httpx.AsyncClient
+
+
+class _LegacyHandler(Protocol):
+    """Callable contract retained by legacy job adapters."""
+
+    def __call__(
+        self,
+        pool: asyncpg.Pool,
+        http_client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        ctx: Any,
+    ) -> Awaitable[dict[str, Any]]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _HandlerExecution:
+    """Values shared across one legacy handler lifecycle."""
+
+    dependencies: TaskDependencies
+    payload: dict[str, Any]
+    task_kind: str
+    job_id: str
+    correlation_id: uuid.UUID
+    started: float
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +237,7 @@ class TaskRegistry:
                     dependencies=self.require_dependencies(),
                 )
 
-            self.kind_to_task[kind] = _task_wrapper
+            self.kind_to_task[kind] = _TaskEnqueueProxy(_task_wrapper)
 
         logger.debug(
             "register_tasks: registered %d tasks on queue=%r: %s",
@@ -221,6 +254,23 @@ _DEFAULT_REGISTRY = TaskRegistry(app, task_map=_TASK_MAP)
 # Module-level adapters delegate to the default registry.
 _pool: asyncpg.Pool | None = None
 _http_client: httpx.AsyncClient | None = None
+
+
+class _TaskEnqueueProxy:
+    """Add propagation metadata without changing Procrastinate registration."""
+
+    def __init__(self, task: Any) -> None:
+        self._task = task
+
+    async def defer_async(self, **payload: Any) -> Any:
+        return await self._task.defer_async(**capture_task_context(payload))
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Delegate direct task execution without treating it as an enqueue."""
+        return await self._task(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._task, name)
 
 
 def set_dependencies(
@@ -268,67 +318,113 @@ def _terminal_error_payload(exc: BaseException) -> dict[str, Any]:
 async def _run_legacy_handler(
     context: procrastinate.JobContext,
     payload: dict[str, Any],
-    handler: Callable[
-        [asyncpg.Pool, httpx.AsyncClient, dict[str, Any], Any],
-        Awaitable[dict[str, Any]],
-    ],
+    handler: _LegacyHandler,
     *,
     dependencies: TaskDependencies | None = None,
 ) -> dict[str, Any]:
     """Run a legacy handler and persist terminal Procrastinate outcome payloads."""
-    import uuid  # noqa: PLC0415
-
     if dependencies is None:
         pool, http_client = _require_dependencies()
-    else:
-        pool, http_client = dependencies.pool, dependencies.http_client
-    ctx = make_ctx_shim(context, pool=pool)
+        dependencies = TaskDependencies(pool=pool, http_client=http_client)
+    ctx = make_ctx_shim(context, pool=dependencies.pool)
 
     # Derive task_kind and job_id for structured event emission.
     task_kind: str = getattr(getattr(context, "job", None), "task_name", "") or ""
     job_id: str = ctx.job_id  # JARVIS UUID (or procrastinate bigint as str)
 
-    corr = uuid.uuid4()
+    carrier, corr = pop_task_context(payload)
     token = correlation_id_var.set(corr)
+    started = perf_counter()
     try:
-        await log_event(
-            pool=pool,
-            level="info",
-            category="job",
-            source=task_kind,
-            message="started",
-            context={"job_id": job_id, "task_kind": task_kind},
-            correlation_id=corr,
-        )
-        try:
-            result = await handler(pool, http_client, payload, ctx)
-        except Exception as exc:
-            # CancelledError (a BaseException) propagates without persistence:
-            # a cancel is not a job failure and must not poison retry state.
-            await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
-            await log_event(
-                pool=pool,
-                level="error",
-                category="job",
-                source=task_kind,
-                message="failed",
-                context={"job_id": job_id, "task_kind": task_kind, "error": repr(exc)[:500]},
-                correlation_id=corr,
+        with restored_span(
+            carrier=carrier,
+            service="worker",
+            name="job.execute",
+            kind=SpanKind.CONSUMER,
+        ):
+            return await _run_handler_with_context(
+                _HandlerExecution(
+                    dependencies=dependencies,
+                    payload=payload,
+                    task_kind=task_kind,
+                    job_id=job_id,
+                    correlation_id=corr,
+                    started=started,
+                ),
+                ctx,
+                handler,
             )
-            raise
-        await ctx.record_terminal_outcome(result=result, is_error=False)
-        await log_event(
-            pool=pool,
-            level="info",
-            category="job",
-            source=task_kind,
-            message="finished",
-            context={"job_id": job_id, "task_kind": task_kind, "result": str(result)[:500]},
-            correlation_id=corr,
-        )
-        return result
     finally:
         correlation_id_var.reset(token)
+
+
+async def _run_handler_with_context(
+    execution: _HandlerExecution,
+    ctx: Any,
+    handler: _LegacyHandler,
+) -> dict[str, Any]:
+    """Emit lifecycle events while one restored worker span is active."""
+    await log_event(
+        pool=execution.dependencies.pool,
+        level="info",
+        category="job",
+        source=execution.task_kind,
+        message="started",
+        context={"job_id": execution.job_id, "task_kind": execution.task_kind},
+        correlation_id=execution.correlation_id,
+    )
+    try:
+        result = await handler(
+            execution.dependencies.pool,
+            execution.dependencies.http_client,
+            execution.payload,
+            ctx,
+        )
+    except Exception as exc:
+        # CancelledError (a BaseException) propagates without persistence:
+        # a cancel is not a job failure and must not poison retry state.
+        await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
+        await log_event(
+            pool=execution.dependencies.pool,
+            level="error",
+            category="job",
+            source=execution.task_kind,
+            message="failed",
+            context={
+                "job_id": execution.job_id,
+                "task_kind": execution.task_kind,
+                "error": repr(exc)[:500],
+            },
+            correlation_id=execution.correlation_id,
+        )
+        record_worker(
+            service="worker",
+            outcome="error",
+            duration_s=perf_counter() - execution.started,
+            task_kind=execution.task_kind,
+        )
+        raise
+    await ctx.record_terminal_outcome(result=result, is_error=False)
+    await log_event(
+        pool=execution.dependencies.pool,
+        level="info",
+        category="job",
+        source=execution.task_kind,
+        message="finished",
+        context={
+            "job_id": execution.job_id,
+            "task_kind": execution.task_kind,
+            "result": str(result)[:500],
+        },
+        correlation_id=execution.correlation_id,
+    )
+    record_worker(
+        service="worker",
+        outcome="success",
+        duration_s=perf_counter() - execution.started,
+        task_kind=execution.task_kind,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------

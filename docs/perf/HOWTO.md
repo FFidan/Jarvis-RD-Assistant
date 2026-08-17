@@ -59,8 +59,8 @@ All knobs are optional. Sensible defaults are shown.
 # This preloads pg_stat_statements and grants SYS_PTRACE to paper_ingestion.
 make profile-stack-up
 
-# Optional: also start the Vector log-aggregation sidecar (mounts docker.sock).
-# Requires explicit opt-in because it carries privileged docker-socket access.
+# Optional: start the socketless Vector aggregate for redacted application metadata.
+# It receives UDP input only; no Docker socket or privileged host access is used.
 docker compose --profile observability up -d vector
 
 # Default: full snapshot

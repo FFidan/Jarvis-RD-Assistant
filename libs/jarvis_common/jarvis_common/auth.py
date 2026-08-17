@@ -454,9 +454,6 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     core = get_core_settings()
     if request.url.path in _HEALTH_PATHS:
         return
-    # Infrastructure events authenticate with their dedicated X-Infra-Key.
-    if request.url.path == "/infra-events" or request.url.path.startswith("/infra-events/"):
-        return
     # Sign-in, verification, and logout routes perform their own authentication.
     # These endpoints have their own validation (token TTL + single-use).
     if request.url.path.startswith("/api/auth/"):
