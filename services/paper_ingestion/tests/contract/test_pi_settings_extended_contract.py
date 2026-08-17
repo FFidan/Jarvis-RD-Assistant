@@ -100,8 +100,8 @@ async def test_s03_nudge_update_persists_to_db(
 ):
     """PUT /api/nudges/{id} updates the row; re-fetch reflects new state.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/settings.py:280
-    # (update_nudge: admin-only; cron validation; dynamic_update).
+    # Verified: services/paper_ingestion/paper_ingestion/routers/settings_sources.py:67
+    # (update_nudge: admin-only; cron validation; owner-defined capability).
     """
     await _promote_user_to_admin(contract_conn, contract_two_users.user_a_id)
     # Use an existing seeded nudge row (UNIQUE constraint on nudge_type prevents inserts).

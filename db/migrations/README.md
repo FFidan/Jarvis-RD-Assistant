@@ -4,7 +4,7 @@ This directory is the ledger for incremental schema migrations applied on top of
 
 The repository's squashed baseline schema version is `101`; it is fully captured
 in `db/init.sql`. A fresh database starts at that baseline and then applies the
-incremental files below. The current schema version is `117`, also recorded in
+incremental files below. The current schema version is `118`, also recorded in
 `db/SCHEMA_VERSION`.
 
 New migrations land here numbered sequentially (`0102_<descriptive>.sql` and up)
@@ -29,8 +29,14 @@ and are applied via `run_migrations`
 | `0115` | `0115_cross_domain_boundaries.sql` | Add owner-local domain delivery, audit identity indirection, and durable erasure coordination. |
 | `0116` | `0116_unified_job_facade.sql` | Move the public jobs facade to Platform and enforce durable queue ownership. |
 | `0117` | `0117_owner_capabilities.sql` | Replace remaining foreign runtime writes with owner-local delivery and exact database capabilities. |
+| `0118` | `0118_enforce_runtime_privileges.sql` | Revoke transitional cross-domain grants and enforce capability-only runtime mutations. |
 
 The migration runner serializes application with PostgreSQL advisory lock 42,
 records each applied version in `schema_migrations`, and refuses files newer
 than the running code during restore. Operators should not execute individual
 SQL files by hand.
+
+Owner/ACL-free backups deliberately omit role-bound database authority. The
+on-demand recovery workflow reapplies the manifest-pinned `db/restore-authority.sql`
+only after forward migration reaches the packaged schema; it is not a migration
+and must not be invoked independently.

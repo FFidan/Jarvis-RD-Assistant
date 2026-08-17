@@ -12,9 +12,9 @@ bootstrap_password_file="postgres_cluster_bootstrap_password"
 owner_roles="jarvis_platform_owner jarvis_research_owner jarvis_learning_owner jarvis_ops_owner"
 
 case "$mode" in
-  prepare|finalize) ;;
+  prepare|finalize|restore-prepare|restore-finalize) ;;
   *)
-    echo "[cluster-bootstrap] expected prepare or finalize mode." >&2
+    echo "[cluster-bootstrap] expected prepare, finalize, restore-prepare, or restore-finalize mode." >&2
     exit 2
     ;;
 esac
@@ -145,7 +145,7 @@ assert_recovery_roles() {
       (SELECT count(*) FROM pg_roles
        WHERE rolname = 'jarvis_backup_reader'
          AND NOT (rolcanlogin AND NOT rolsuper AND NOT rolcreatedb
-                  AND NOT rolcreaterole AND NOT rolbypassrls AND NOT rolinherit))
+                  AND NOT rolcreaterole AND rolbypassrls AND NOT rolinherit))
       +
       (SELECT count(*) FROM pg_auth_members AS membership
        JOIN pg_roles AS member ON member.oid = membership.member
@@ -156,7 +156,7 @@ assert_recovery_roles() {
       (SELECT count(*) FROM pg_roles
        WHERE rolname = 'jarvis_restore_operator'
          AND NOT (rolcanlogin AND NOT rolsuper AND rolcreatedb
-                  AND NOT rolcreaterole AND NOT rolbypassrls AND rolinherit))
+                  AND NOT rolcreaterole AND rolbypassrls AND rolinherit))
       +
       (SELECT count(*) FROM pg_auth_members AS membership
        JOIN pg_roles AS member ON member.oid = membership.member
@@ -179,9 +179,10 @@ assert_recovery_roles() {
   fi
 }
 
-transfer_v125_objects() {
+transfer_owned_objects() {
   target_database="$1"
-  target_role="$2"
+  source_role="$2"
+  target_role="$3"
   connect_as "$bootstrap_role" "$bootstrap_password_file" -d "$target_database" -c "
     DO \$\$
     DECLARE
@@ -192,7 +193,7 @@ transfer_v125_objects() {
         SELECT n.nspname, c.relname, c.relkind
         FROM pg_class AS c
         JOIN pg_namespace AS n ON n.oid = c.relnamespace
-        WHERE c.relowner = (SELECT oid FROM pg_roles WHERE rolname = 'jarvis')
+        WHERE c.relowner = (SELECT oid FROM pg_roles WHERE rolname = '${source_role}')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
           AND n.nspname !~ '^pg_toast'
           AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
@@ -228,7 +229,7 @@ transfer_v125_objects() {
                pg_get_function_identity_arguments(p.oid) AS identity_arguments
         FROM pg_proc AS p
         JOIN pg_namespace AS n ON n.oid = p.pronamespace
-        WHERE p.proowner = (SELECT oid FROM pg_roles WHERE rolname = 'jarvis')
+        WHERE p.proowner = (SELECT oid FROM pg_roles WHERE rolname = '${source_role}')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
           AND NOT EXISTS (
             SELECT 1 FROM pg_depend AS d
@@ -245,7 +246,7 @@ transfer_v125_objects() {
         SELECT n.nspname, t.typname
         FROM pg_type AS t
         JOIN pg_namespace AS n ON n.oid = t.typnamespace
-        WHERE t.typowner = (SELECT oid FROM pg_roles WHERE rolname = 'jarvis')
+        WHERE t.typowner = (SELECT oid FROM pg_roles WHERE rolname = '${source_role}')
           AND (
             (t.typrelid = 0 AND t.typtype IN ('d', 'e', 'm', 'r'))
             OR (
@@ -270,6 +271,94 @@ transfer_v125_objects() {
     END
     \$\$;"
 }
+
+transfer_schema_objects() {
+  target_database="$1"
+  source_schema="$2"
+  target_role="$3"
+  connect_as "$bootstrap_role" "$bootstrap_password_file" -d "$target_database" -c "
+    DO \$\$
+    DECLARE
+      obj record;
+      command text;
+    BEGIN
+      FOR obj IN
+        SELECT c.relname, c.relkind
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = '${source_schema}'
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+          AND NOT (c.relkind = 'S' AND EXISTS (
+            SELECT 1 FROM pg_depend AS owned_sequence
+            WHERE owned_sequence.classid = 'pg_class'::regclass
+              AND owned_sequence.objid = c.oid
+              AND owned_sequence.refclassid = 'pg_class'::regclass
+              AND owned_sequence.deptype IN ('a', 'i')))
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend AS d
+            WHERE d.classid = 'pg_class'::regclass
+              AND d.objid = c.oid AND d.deptype = 'e')
+      LOOP
+        command := CASE obj.relkind
+          WHEN 'S' THEN 'ALTER SEQUENCE '
+          WHEN 'v' THEN 'ALTER VIEW '
+          WHEN 'm' THEN 'ALTER MATERIALIZED VIEW '
+          WHEN 'f' THEN 'ALTER FOREIGN TABLE '
+          ELSE 'ALTER TABLE '
+        END;
+        EXECUTE command || format('%I.%I OWNER TO ${target_role}', '${source_schema}', obj.relname);
+      END LOOP;
+
+      FOR obj IN
+        SELECT p.proname, p.prokind,
+               pg_get_function_identity_arguments(p.oid) AS identity_arguments
+        FROM pg_proc AS p
+        JOIN pg_namespace AS n ON n.oid = p.pronamespace
+        WHERE n.nspname = '${source_schema}'
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend AS d
+            WHERE d.classid = 'pg_proc'::regclass
+              AND d.objid = p.oid AND d.deptype = 'e')
+      LOOP
+        command := CASE WHEN obj.prokind = 'p' THEN 'ALTER PROCEDURE ' ELSE 'ALTER FUNCTION ' END;
+        EXECUTE command || format('%I.%I(%s) OWNER TO ${target_role}', '${source_schema}', obj.proname, obj.identity_arguments);
+      END LOOP;
+
+      FOR obj IN
+        SELECT t.typname
+        FROM pg_type AS t
+        JOIN pg_namespace AS n ON n.oid = t.typnamespace
+        WHERE n.nspname = '${source_schema}'
+          AND ((t.typrelid = 0 AND t.typtype IN ('d', 'e', 'm', 'r'))
+               OR (t.typtype = 'c' AND EXISTS (
+                 SELECT 1 FROM pg_class AS composite_relation
+                 WHERE composite_relation.oid = t.typrelid
+                   AND composite_relation.relkind = 'c')))
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend AS d
+            WHERE d.classid = 'pg_type'::regclass
+              AND d.objid = t.oid AND d.deptype = 'e')
+      LOOP
+        EXECUTE format('ALTER TYPE %I.%I OWNER TO ${target_role}', '${source_schema}', obj.typname);
+      END LOOP;
+    END
+    \$\$;
+    ALTER SCHEMA ${source_schema} OWNER TO ${target_role};"
+}
+
+if [ "$mode" = "restore-finalize" ]; then
+  authority_file="/app/db/restore-authority.sql"
+  if [ ! -f "$authority_file" ] || [ ! -s "$authority_file" ] || [ -L "$authority_file" ]; then
+    echo "[cluster-bootstrap] restore authority contract is missing or unsafe." >&2
+    exit 1
+  fi
+  connect_as "$bootstrap_role" "$bootstrap_password_file" -f "$authority_file"
+  normalize_memberships
+  assert_final_memberships
+  assert_recovery_roles
+  echo "[cluster-bootstrap] restored database authority finalized." >&2
+  exit 0
+fi
 
 if [ "$mode" = "finalize" ]; then
   live_floor="$(migration_floor)" || exit 1
@@ -311,24 +400,58 @@ provision_login jarvis_erasure_executor postgres_erasure_executor_password
 provision_login jarvis_litellm_runtime litellm_runtime_password
 provision_login jarvis_litellm_migrator litellm_migrator_password
 
+# pg_dump disables row-security to prevent silently incomplete archives. The
+# isolated read-only backup login needs bypass authority once any governed table
+# enables RLS; it still receives no write, DDL, or role membership.
+connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
+  'ALTER ROLE jarvis_backup_reader WITH BYPASSRLS'
+
 # Restore is an exceptional, on-demand database swap authority. It is never
 # mounted into the scheduled backup container and is not a superuser.
 connect_as "$bootstrap_role" "$bootstrap_password_file" -c "
-  ALTER ROLE jarvis_restore_operator WITH CREATEDB INHERIT;
+  ALTER ROLE jarvis_restore_operator WITH CREATEDB INHERIT BYPASSRLS;
   GRANT pg_signal_backend TO jarvis_restore_operator;
   GRANT jarvis_legacy_rollback TO jarvis_restore_operator;
   GRANT jarvis_litellm_migrator TO jarvis_restore_operator;"
+
+if [ "$mode" = "restore-prepare" ]; then
+  restored_floor="$(migration_floor)" || exit 1
+  case "$restored_floor" in
+    113)
+      # Owner-free archives and historical upgrades can leave predecessor
+      # objects split across bootstrap principals. Normalize the complete
+      # public schema before migration 0114 performs its domain transfer.
+      transfer_schema_objects "$database" public jarvis_legacy_rollback
+      ;;
+    ''|*[!0-9]*)
+      echo "[cluster-bootstrap] restored migration floor is invalid." >&2
+      exit 1
+      ;;
+    *)
+      if [ "$restored_floor" -lt 114 ]; then
+        echo "[cluster-bootstrap] restored migration floor is unsupported." >&2
+        exit 1
+      fi
+      transfer_schema_objects "$database" platform jarvis_platform_owner
+      transfer_schema_objects "$database" research jarvis_research_owner
+      transfer_schema_objects "$database" learning jarvis_learning_owner
+      transfer_schema_objects "$database" ops jarvis_ops_owner
+      ;;
+  esac
+fi
 
 # The v1.2.5 database and objects follow the renamed bootstrap role. Transfer
 # them to the isolated rollback login before migration 0114 assumes that owner.
 prepared_floor="$(migration_floor)" || exit 1
 if [ "$prepared_floor" = "113" ]; then
-  if ! role_exists jarvis; then
-    echo "[cluster-bootstrap] v1.2.5 bootstrap owner is unavailable." >&2
-    exit 1
+  if [ "$mode" != "restore-prepare" ]; then
+    if ! role_exists jarvis; then
+      echo "[cluster-bootstrap] v1.2.5 bootstrap owner is unavailable." >&2
+      exit 1
+    fi
+    transfer_schema_objects "$database" public jarvis_legacy_rollback
+    connect_as "$bootstrap_role" "$bootstrap_password_file" -c 'ALTER ROLE jarvis NOLOGIN'
   fi
-  transfer_v125_objects "$database" jarvis_legacy_rollback
-  connect_as "$bootstrap_role" "$bootstrap_password_file" -c 'ALTER ROLE jarvis NOLOGIN'
 fi
 connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
   "ALTER DATABASE ${database} OWNER TO jarvis_legacy_rollback"
@@ -360,9 +483,10 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -c "
 # Existing LiteLLM objects were owned by the v1.2.5 cluster login. Transfer them
 # before the pinned migration job and establish least-privilege future grants.
 if role_exists jarvis; then
-  transfer_v125_objects litellm jarvis_litellm_migrator
+  transfer_owned_objects litellm jarvis jarvis_litellm_migrator
 fi
 connect_as "$bootstrap_role" "$bootstrap_password_file" -d litellm -c "
+  REASSIGN OWNED BY jarvis_restore_operator TO jarvis_litellm_migrator;
   REASSIGN OWNED BY jarvis_cluster_bootstrap TO jarvis_litellm_migrator;
   REASSIGN OWNED BY jarvis_legacy_rollback TO jarvis_litellm_migrator;
   REVOKE CREATE ON SCHEMA public FROM PUBLIC;
@@ -398,7 +522,7 @@ case "$live_floor" in
   113)
     normalize_memberships
     connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
-      'GRANT SELECT, INSERT, UPDATE ON TABLE public.schema_migrations TO jarvis_migrator'
+      'GRANT USAGE ON SCHEMA public TO jarvis_migrator; GRANT SELECT, INSERT, UPDATE ON TABLE public.schema_migrations TO jarvis_migrator'
     for owner_role in $owner_roles; do
       connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
         "GRANT CREATE ON DATABASE ${database} TO ${owner_role}; REVOKE ${owner_role} FROM jarvis_migrator; GRANT ${owner_role} TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE; GRANT ${owner_role} TO jarvis_legacy_rollback WITH INHERIT FALSE"
@@ -417,6 +541,10 @@ case "$live_floor" in
       exit 1
     fi
     normalize_memberships
+    if [ "$mode" = "restore-prepare" ]; then
+      connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
+        'GRANT USAGE ON SCHEMA ops TO jarvis_migrator; GRANT SELECT, INSERT ON TABLE ops.schema_migrations TO jarvis_migrator'
+    fi
     assert_final_memberships
     ;;
 esac

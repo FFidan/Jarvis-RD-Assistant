@@ -16,7 +16,6 @@ from jarvis_common import dynamic_update
 from jarvis_common.auth import require_admin
 from jarvis_common.config_metadata import (
     _NUDGE_ALLOWED_COLUMNS,
-    _NUDGE_JSONB_COLUMNS,
     _SOURCE_ALLOWED_COLUMNS,
     _SOURCE_JSONB_COLUMNS,
 )
@@ -86,14 +85,23 @@ async def update_nudge(
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        row = await dynamic_update(
-            conn,
-            "scheduled_nudges",
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM learning.update_scheduled_nudge_v1(
+                $1, $2, $3, $4, $5, $6, $7::jsonb
+            )
+            """,
             nudge_id,
-            updates,
-            _NUDGE_ALLOWED_COLUMNS,
-            jsonb_columns=_NUDGE_JSONB_COLUMNS,
+            "cron_expression" in updates,
+            updates.get("cron_expression"),
+            "enabled" in updates,
+            updates.get("enabled"),
+            "config" in updates,
+            updates.get("config"),
         )
+
+        if row is None:
+            raise HTTPException(404, f"Nudge {nudge_id} not found")
 
     return NudgeResponse(**dict(row))
 

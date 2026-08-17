@@ -80,10 +80,15 @@ async def _job_status(pg: asyncpg.Connection, job_id: int) -> str:
 
 
 async def _progress_error(conn: asyncpg.Connection, jarvis_job_id: str) -> dict[str, Any] | None:
-    raw = await conn.fetchval(
-        "SELECT error FROM job_progress WHERE jarvis_job_id = $1", jarvis_job_id
-    )
-    return json.loads(raw) if isinstance(raw, str) else raw
+    """Inspect an uncommitted progress row without granting Research table access."""
+    await conn.execute("RESET SESSION AUTHORIZATION")
+    try:
+        raw = await conn.fetchval(
+            "SELECT error FROM ops.job_progress WHERE jarvis_job_id = $1", jarvis_job_id
+        )
+        return json.loads(raw) if isinstance(raw, str) else raw
+    finally:
+        await conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
 
 
 async def test_reclamation_selects_stale_and_orphaned_jobs_only(

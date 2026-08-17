@@ -77,7 +77,7 @@ describe('useRestoreRecoveryController', () => {
     useMaintenanceStore.getState().clear();
     getRestoreStatusMock.mockResolvedValue(restoreStatus({ state: 'idle' }));
     requestRestoreMock.mockResolvedValue({
-      status: 'scheduled',
+      status: 'requested',
       status_token: 'new-session-token',
       restore_id: restoreId,
       source: 'local',

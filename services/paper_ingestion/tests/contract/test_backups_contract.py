@@ -426,7 +426,7 @@ async def test_restore_request_writes_sentinel(admin_client, restore_paths, rest
     )
     assert resp.status_code == 202, resp.text
     body = resp.json()
-    assert body["status"] == "scheduled"
+    assert body["status"] == "requested"
     # The response returns one restore token for polling until expiry or use.
     token = body["status_token"]
     assert token

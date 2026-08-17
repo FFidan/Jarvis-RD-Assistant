@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -25,6 +26,17 @@ _DML = ("DELETE", "INSERT", "SELECT", "UPDATE")
 def _manifest() -> dict[str, Any]:
     """Load the tracked ownership contract."""
     return json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+async def test_restore_authority_matches_the_versioned_manifest() -> None:
+    """Recovery authority is immutable for the declared schema version."""
+    manifest = _manifest()
+    authority = manifest["restore_authority"]
+    authority_path = _REPO_ROOT / authority["path"]
+    assert authority["schema_version"] == int(
+        (_REPO_ROOT / "db" / "SCHEMA_VERSION").read_text(encoding="utf-8").strip()
+    )
+    assert hashlib.sha256(authority_path.read_bytes()).hexdigest() == authority["sha256"]
 
 
 async def _object_owner(
@@ -154,6 +166,138 @@ async def test_learning_runtime_retains_approved_research_reads(
     await learning_pool.fetchval("SELECT content_generation FROM research.papers LIMIT 1")
 
 
+async def test_runtime_foreign_table_grants_match_the_final_contract(
+    contract_conn: asyncpg.Connection,
+) -> None:
+    """Runtime roles retain only declared foreign reads and queue operations."""
+    manifest = _manifest()
+    queue_tables = {
+        "procrastinate_events",
+        "procrastinate_jobs",
+        "procrastinate_periodic_defers",
+        "procrastinate_workers",
+    }
+    expected: dict[str, dict[tuple[str, str], set[str]]] = {
+        "jarvis_platform_runtime": {
+            ("ops", "schema_migrations"): {"SELECT"},
+        },
+        "jarvis_research_runtime": {
+            ("platform", "user_config"): {"SELECT"},
+            ("platform", "users"): {"SELECT"},
+            **{
+                ("learning", table): {"SELECT"}
+                for table in {
+                    "cards",
+                    "daily_log",
+                    "decks",
+                    "journal_entries",
+                    "milestones",
+                    "project_papers",
+                    "projects",
+                    "review_logs",
+                    "scheduled_nudges",
+                    "task_paper_links",
+                    "tasks",
+                }
+            },
+            **{("ops", table): set(_DML) for table in queue_tables},
+            ("ops", "schema_migrations"): {"SELECT"},
+        },
+        "jarvis_learning_runtime": {
+            ("platform", "llm_usage_log"): {"SELECT"},
+            ("platform", "user_config"): {"SELECT"},
+            **{
+                ("research", table): {"SELECT"}
+                for table in {
+                    "paper_chunks",
+                    "paper_recommendations",
+                    "paper_summaries",
+                    "paper_user_state",
+                    "paper_user_zotero_links",
+                    "papers",
+                    "thread",
+                    "user_library",
+                }
+            },
+            **{("ops", table): set(_DML) for table in queue_tables},
+            ("ops", "schema_migrations"): {"SELECT"},
+        },
+    }
+    runtime_domains = {
+        domain["runtime_role"]: name
+        for name, domain in manifest["domains"].items()
+        if domain["runtime_role"] is not None
+    }
+    for runtime, own_domain in runtime_domains.items():
+        for domain_name, tables in manifest["tables"].items():
+            if domain_name == own_domain:
+                continue
+            schema = manifest["domains"][domain_name]["schema"]
+            for table in tables:
+                allowed = expected[runtime].get((schema, table), set())
+                for privilege in _DML:
+                    assert await contract_conn.fetchval(
+                        "SELECT has_table_privilege($1, $2, $3)",
+                        runtime,
+                        f"{schema}.{table}",
+                        privilege,
+                    ) is (privilege in allowed), f"{runtime} {schema}.{table} {privilege}"
+
+    assert await contract_conn.fetchval(
+        "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+        "jarvis_research_runtime",
+        "platform.audit_readiness_v1()",
+    )
+    assert await contract_conn.fetchval(
+        "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+        "jarvis_research_runtime",
+        "learning.update_scheduled_nudge_v1(integer,boolean,text,boolean,boolean,boolean,jsonb)",
+    )
+    assert not await contract_conn.fetchval(
+        "SELECT has_function_privilege('public', $1, 'EXECUTE')",
+        "platform.audit_readiness_v1()",
+    )
+    for runtime, function in (
+        ("jarvis_platform_runtime", "platform.audit_readiness_v1()"),
+        ("jarvis_platform_runtime", "platform.set_research_config_v1(bigint,text,jsonb,text)"),
+        ("jarvis_platform_runtime", "platform.finalize_erasure(uuid)"),
+        ("jarvis_learning_runtime", "learning.clear_zotero_collection_keys_v1(integer)"),
+        (
+            "jarvis_learning_runtime",
+            "learning.update_scheduled_nudge_v1(integer,boolean,text,boolean,boolean,boolean,jsonb)",
+        ),
+    ):
+        assert not await contract_conn.fetchval(
+            "SELECT has_function_privilege($1, $2, 'EXECUTE')", runtime, function
+        )
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_research_runtime")
+    try:
+        row = await contract_conn.fetchrow(
+            "SELECT latest_event_at, event_count FROM platform.audit_readiness_v1()"
+        )
+        assert row is not None
+        assert row["event_count"] >= 0
+    finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
+
+    with pytest.raises(asyncpg.RaiseError, match="audit readiness caller is not allowed"):
+        async with contract_conn.transaction():
+            await contract_conn.execute("SET LOCAL ROLE jarvis_platform_owner")
+            await contract_conn.fetchrow(
+                "SELECT latest_event_at, event_count FROM platform.audit_readiness_v1()"
+            )
+    with pytest.raises(asyncpg.RaiseError, match="scheduled nudge caller is not allowed"):
+        async with contract_conn.transaction():
+            await contract_conn.execute("SET LOCAL ROLE jarvis_learning_owner")
+            await contract_conn.fetchrow(
+                """
+                SELECT * FROM learning.update_scheduled_nudge_v1(
+                    1, false, NULL, false, NULL, false, NULL
+                )
+                """
+            )
+
+
 async def test_backup_reader_can_dump_all_domains_but_cannot_mutate(
     contract_conn: asyncpg.Connection,
 ) -> None:
@@ -164,8 +308,12 @@ async def test_backup_reader_can_dump_all_domains_but_cannot_mutate(
         "research.papers",
         "learning.cards",
         "ops.schema_migrations",
+        "ops.procrastinate_jobs",
     ):
         await contract_conn.fetchval(f"SELECT COUNT(*) FROM {relation}")
+    assert await contract_conn.fetchval(
+        "SELECT rolbypassrls FROM pg_roles WHERE rolname = 'jarvis_backup_reader'"
+    )
     with pytest.raises(asyncpg.InsufficientPrivilegeError):
         async with contract_conn.transaction():
             await contract_conn.execute(
@@ -202,16 +350,81 @@ async def test_runtime_login_cannot_assume_an_owner(live_pg_dsn: str) -> None:
         await bootstrap.close()
 
 
+async def test_restore_authority_reapplies_current_privileges(live_pg_dsn: str) -> None:
+    """The recovery contract restores grants only at the packaged schema."""
+    bootstrap = await asyncpg.connect(live_pg_dsn)
+    try:
+        await bootstrap.execute((_REPO_ROOT / "db" / "init.sql").read_text(encoding="utf-8"))
+        await bootstrap.execute(
+            "REVOKE ALL ON platform.users FROM jarvis_platform_runtime; "
+            "ALTER DEFAULT PRIVILEGES FOR ROLE jarvis_platform_owner IN SCHEMA platform "
+            "GRANT EXECUTE ON FUNCTIONS TO jarvis_platform_runtime"
+        )
+        authority_sql = (_REPO_ROOT / "db" / "restore-authority.sql").read_text(encoding="utf-8")
+        await bootstrap.execute(
+            "\n".join(line for line in authority_sql.splitlines() if not line.startswith("\\"))
+        )
+        recovery_attributes = await bootstrap.fetch(
+            "SELECT rolname, rolbypassrls FROM pg_roles "
+            "WHERE rolname IN ('jarvis_backup_reader', 'jarvis_restore_operator') "
+            "ORDER BY rolname"
+        )
+        assert [(row["rolname"], row["rolbypassrls"]) for row in recovery_attributes] == [
+            ("jarvis_backup_reader", True),
+            ("jarvis_restore_operator", True),
+        ]
+
+        for privilege in _DML:
+            assert await bootstrap.fetchval(
+                "SELECT has_table_privilege($1, $2, $3)",
+                "jarvis_platform_runtime",
+                "platform.users",
+                privilege,
+            )
+        await bootstrap.execute("SET ROLE jarvis_platform_owner")
+        await bootstrap.execute(
+            "CREATE FUNCTION platform.restored_default_function_probe() "
+            "RETURNS integer LANGUAGE sql AS 'SELECT 1'"
+        )
+        await bootstrap.execute("RESET ROLE")
+        inherited_execute = await bootstrap.fetchval(
+            "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+            "jarvis_platform_runtime",
+            "platform.restored_default_function_probe()",
+        )
+        default_acl = await bootstrap.fetch(
+            """
+            SELECT defaclnamespace::regnamespace::text AS schema, defaclacl::text
+            FROM pg_default_acl
+            WHERE defaclrole = 'jarvis_platform_owner'::regrole
+              AND defaclobjtype = 'f'
+            """
+        )
+        function_acl = await bootstrap.fetchval(
+            "SELECT proacl::text FROM pg_proc WHERE oid = $1::regprocedure",
+            "platform.restored_default_function_probe()",
+        )
+        assert not inherited_execute, (default_acl, function_acl)
+    finally:
+        await bootstrap.close()
+
+
 async def test_owner_default_privileges_apply_to_new_tables(
     contract_conn: asyncpg.Connection,
 ) -> None:
-    """Objects created by an owner inherit the declared runtime grant policy.
+    """Owner defaults grant storage access without granting new capabilities.
 
     Verified: db/migrations/0114_owned_schemas_and_roles.sql — owner default privileges.
     """
     await contract_conn.execute("SET LOCAL ROLE jarvis_platform_owner")
     await contract_conn.execute(
         "CREATE TABLE platform.ownership_default_privilege_probe (id integer PRIMARY KEY)"
+    )
+    await contract_conn.execute(
+        """
+        CREATE FUNCTION platform.ownership_default_function_probe()
+        RETURNS integer LANGUAGE sql AS 'SELECT 1'
+        """
     )
     await contract_conn.execute("RESET ROLE")
 
@@ -233,6 +446,15 @@ async def test_owner_default_privileges_apply_to_new_tables(
     assert not await contract_conn.fetchval(
         "SELECT has_table_privilege('jarvis_backup_reader', $1, 'INSERT')",
         "platform.ownership_default_privilege_probe",
+    )
+    assert not await contract_conn.fetchval(
+        "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+        "jarvis_platform_runtime",
+        "platform.ownership_default_function_probe()",
+    )
+    assert not await contract_conn.fetchval(
+        "SELECT has_function_privilege('public', $1, 'EXECUTE')",
+        "platform.ownership_default_function_probe()",
     )
 
 

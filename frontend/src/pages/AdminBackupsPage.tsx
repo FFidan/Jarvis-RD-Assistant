@@ -4,7 +4,7 @@
  * Accessible at /admin/backups (admin role; AdminOnlyRoute guards the route).
  * Shows sidecar status, restore points grouped from GET /api/admin/backups/restore-points,
  * allows an on-demand backup (confirm), per-file download (expandable per card),
- * a guided one-click restore (typed-RESTORE confirm + polled progress that degrades
+ * a host-started restore request (typed-RESTORE confirmation plus progress that degrades
  * gracefully while the app is briefly unreachable mid-restore), an in-browser
  * off-host upload that stages another server's backup in the restore inbox, and
  * the manual host runbook as the advanced fallback.
@@ -174,7 +174,7 @@ function InboxRestoreSection({
                   disabled={disabled}
                   onClick={() => onRestore(p.timestamp, legacyMissingPdfs)}
                 >
-                  Restore to this point
+                  Request host restore
                 </button>
               </li>
             );
@@ -316,7 +316,7 @@ function RestorePointCard({
             disabled={restoreDisabled}
             onClick={() => onRestore(point.timestamp, legacyMissingPdfs, unknownSchema)}
           >
-            {isThisRestoring ? 'Restoring…' : 'Restore to this point'}
+            {isThisRestoring ? 'Restore requested…' : 'Request host restore'}
           </button>
           <button
             type="button"
@@ -645,7 +645,23 @@ export function AdminBackupsPage() {
         )}
       </div>
 
-      {restoreController.showRestorePanel && (
+      {restoreController.showRestorePanel && restoreController.status?.state === 'pending' && (
+        <div
+          data-testid="restore-requested"
+          role="status"
+          aria-live="polite"
+          className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4 space-y-2"
+        >
+          <div className="text-sm font-medium">Restore requested; host action required</div>
+          <p className="text-sm text-muted-foreground">
+            Nothing has been restored yet. On the deployment host, run{' '}
+            <code>jarvis-research restore run</code> to start the one-shot restore job. This
+            browser request cannot start a restore itself.
+          </p>
+        </div>
+      )}
+
+      {restoreController.showRestorePanel && restoreController.status?.state !== 'pending' && (
         <GuidedRecoveryView
           restoringTimestamp={restoreController.restoringTimestamp}
           pollError={restoreController.pollError}
@@ -701,10 +717,10 @@ export function AdminBackupsPage() {
         }}
         title={
           confirmAllowMissingPdfs
-            ? 'Restore this older backup without PDFs?'
-            : 'Restore from this backup?'
+            ? 'Request host restore of this older backup without PDFs?'
+            : 'Request host restore from this backup?'
         }
-        confirmLabel="Restore"
+        confirmLabel="Request host restore"
         description={
           <>
             {confirmSchemaUncheckable && (
@@ -729,9 +745,10 @@ export function AdminBackupsPage() {
                 {confirmPoint
                   ? ` from ${formatDateTime(confirmPoint.created_at)}`
                   : ''}
-                . A safety backup is taken first. This host&apos;s infrastructure credentials
-                stay unchanged; off-host outbound connections remain blocked until reviewed. The
-                app is briefly unavailable while it restores. Type{' '}
+                . A safety backup is taken first after the host starts the restore. This host&apos;s
+                infrastructure credentials stay unchanged; off-host outbound connections remain
+                blocked until reviewed. This request does not start the restore: after requesting,
+                run <code>jarvis-research restore run</code> on the deployment host. Type{' '}
                 <span className="font-mono font-semibold">RESTORE</span> to confirm.
               </span>
             )}

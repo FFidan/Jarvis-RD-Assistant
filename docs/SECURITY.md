@@ -433,31 +433,38 @@ topology changes.
 
 The application does not perform database restores. An active administrator
 must type **RESTORE**; the app then writes a request to the `backup_trigger`
-volume. The `postgres-backup` sidecar takes the safety backup, verifies the
-selected restore point, loads staging databases, and performs the swap. The app
-mounts backup archives read-only, and the operations API key cannot start a
-restore.
+volume. That request remains inert until an operator runs
+`jarvis-research restore run` on the host. The command starts a profile-gated,
+transient restore job that takes the safety backup, verifies the selected
+restore point, loads staging databases, and performs the swap. Dedicated
+bootstrap and migration jobs then reconstruct database authority and advance
+the restored schema before maintenance can end. The continuously running
+`postgres-backup` service has read-only database authority, cannot resolve the
+restore credential, and cannot execute a restore. The app mounts backup
+archives read-only, and the operations API key cannot start a restore.
 
 A failure before the swap leaves the live databases in place. Once the swap
 begins, a failure keeps the service in maintenance until the operator recovers
 from the safety restore point. Restoring a point from a newer application
 version is refused.
 
-A compromised admin session can still request a destructive rollback. Typed
-confirmation and the safety point reduce accidents, not a deliberate admin
-action. See the [risk register](known-residual-risks.md).
+A compromised admin session can queue a destructive rollback but cannot execute
+it without host access. Typed confirmation, host execution, and the safety point
+reduce accidents; host compromise remains outside that protection. See the
+[risk register](known-residual-risks.md).
 
 ### Fresh-host uploads
 
 Browser uploads go to the dedicated `restore-uploader` container, not the
 application. It can write only to `restore_inbox` and can read only the hashed,
 expiring upload grant from `backup_trigger`. It has no database credentials,
-Docker socket, or host-secret mount. A restore still requires the separate
-admin confirmation.
+Docker socket, or host-secret mount. A restore still requires both the separate
+admin confirmation and the host command.
 
-The backup sidecar checks the signed archive set and proves that the supplied
+The scheduled backup service publishes only a bounded inbox inventory. The
+transient restore job checks the signed archive set and proves that the supplied
 key can decrypt it before the swap. It removes the one-time key and plaintext
 staging on normal and recorded-failure exits; a forced `SIGKILL` can delay that
-cleanup until the next run. Same-host restores do not use the inbox key. The
+cleanup until the next recovery run. Same-host restores do not use the inbox key. The
 [backup and restore guide](manual/backup-and-restore.md) contains both browser
 and headless recovery procedures.

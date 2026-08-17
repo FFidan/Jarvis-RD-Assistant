@@ -631,14 +631,37 @@ case "${1:-}" in
         case "$run_script" in
           *"> /backup-trigger/.restore_request.json"*)
             cat > "$STUB_TRIGGER_DIR/.restore_request.json"
+            cp "$STUB_TRIGGER_DIR/.restore_request.json" \
+              "$STUB_BACKUP_DIR/.captured_restore_request.json"
             exit 0 ;;
           *"rm -f /backup-trigger/.restore_request.json"*)
             rm -f "$STUB_TRIGGER_DIR/.restore_request.json"
+            exit 0 ;;
+          *"cat /backup-trigger/.restore_request.json"*)
+            cat "$STUB_TRIGGER_DIR/.restore_request.json" 2>/dev/null || true
             exit 0 ;;
           *"cat /backup-trigger/.restore_status.json"*)
             cat "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null || printf '{}\n'
             exit 0 ;;
         esac
+        if printf '%s\n' "${raw_args[@]}" | grep -qx -- '--complete-authority'; then
+          restore_id="$(grep -oE '"restore_id":"[0-9a-f]{32}"' "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          source="$(grep -oE '"source":"(local|inbox)"' "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          printf '{"state":"done","current_step":"Finishing up","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":"2","error":null,"manual_steps_required":false,"phase":"finalize","restore_id":"%s","source":"%s"}\n' \
+            "$restore_id" "$source" > "$STUB_TRIGGER_DIR/.restore_status.json"
+          exit 0
+        fi
+        if printf '%s\n' "${raw_args[@]}" | grep -qx -- '--run-request' \
+           || printf '%s\n' "${raw_args[@]}" | grep -qx -- '/usr/local/bin/restore.sh'; then
+          [ "${STUB_RESTORE_LEGACY_RC:-0}" = 0 ] || exit "${STUB_RESTORE_LEGACY_RC}"
+          restore_id="$(grep -oE '"restore_id":"[0-9a-f]{32}"' "$STUB_TRIGGER_DIR/.restore_request.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          source="$(grep -oE '"source":"(local|inbox)"' "$STUB_TRIGGER_DIR/.restore_request.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          state="${STUB_RESTORE_STATUS_AFTER_REQUEST:-running}"
+          printf '{"state":"%s","current_step":"Reconstructing database authority","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":null,"error":null,"manual_steps_required":false,"phase":"database_authority","restore_id":"%s","source":"%s"}\n' \
+            "$state" "$restore_id" "$source" > "$STUB_TRIGGER_DIR/.restore_status.json"
+          rm -f "$STUB_TRIGGER_DIR/.restore_request.json"
+          exit 0
+        fi
         if printf '%s\n' "${raw_args[@]}" | grep -qx -- '/usr/local/bin/restore.sh'; then
           exit "${STUB_RESTORE_LEGACY_RC:-0}"
         fi
@@ -770,7 +793,7 @@ new_env() {
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
         STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
         STUB_COMPOSE_PS_FAIL STUB_FREEZE_STATE_DIR \
-        STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC BACKUP_COMPOSE_TIMEOUT_SECONDS \
+        STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC STUB_RESTORE_STATUS_AFTER_REQUEST BACKUP_COMPOSE_TIMEOUT_SECONDS \
         CLI_STDIN_FILE RUN_CLI_PATH \
         JARVIS_UPDATE_GUARD_TIMEOUT JARVIS_UPDATE_GUARD_READY_ATTEMPTS \
         JARVIS_UPDATE_GUARD_READY_INTERVAL RUN_CLI_EXEC 2>/dev/null || true
@@ -838,6 +861,7 @@ run_cli() {
     "STUB_STACK_DOWN=${STUB_STACK_DOWN:-0}"
     "STUB_NO_CONTAINERS=${STUB_NO_CONTAINERS:-0}"
     "STUB_RESTORE_LEGACY_RC=${STUB_RESTORE_LEGACY_RC:-0}"
+    "STUB_RESTORE_STATUS_AFTER_REQUEST=${STUB_RESTORE_STATUS_AFTER_REQUEST:-}"
     "STUB_FREEZE_STATE_DIR=${STUB_FREEZE_STATE_DIR:-}"
     "STUB_SIDECAR_STATE_FILE=$STUB_SIDECAR_STATE_FILE"
     "STUB_QUARANTINE_REPLACE_ON_ACK=${STUB_QUARANTINE_REPLACE_ON_ACK:-}"
@@ -1943,7 +1967,7 @@ USAGE_SITES=(
   "owner bogus@@owner: unknown subcommand 'bogus'.@@Run: jarvis-research owner status   (or: jarvis-research owner set <email>)"
   "restore acknowledge@@restore acknowledge takes exactly one restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
   "restore acknowledge short@@restore acknowledge requires one lowercase 32-hex restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
-  "restore bogus@@restore: unknown subcommand 'bogus'.@@Run: jarvis-research restore status   (or: restore legacy|request <timestamp>, restore acknowledge <restore-id>)"
+  "restore bogus@@restore: unknown subcommand 'bogus'.@@Run: jarvis-research restore status   (or: restore run|legacy|request <timestamp>, restore acknowledge <restore-id>)"
   "restore legacy@@restore legacy takes exactly one backup timestamp.@@Run: jarvis-research restore legacy <timestamp>"
   "restore legacy nonsense@@restore legacy requires one backup timestamp in YYYYMMDD_HHMMSS form.@@Run: jarvis-research restore legacy <timestamp>"
   "restore legacy --bogus@@restore legacy: unknown option '--bogus'.@@Run: jarvis-research restore legacy <timestamp> [--allow-unknown-schema]"
@@ -2075,31 +2099,84 @@ fi
 # =============================================================================
 # Recovery commands: break-glass restore, restore progress, off-host request.
 # =============================================================================
-# The backup service polls the trigger volume every five seconds and consumes a
-# restore request before anything else, so the request may only be written after
-# the service has been stopped. The ordering IS the correctness property here.
+# Scheduled backup never consumes restore requests. The explicit host command
+# starts a no-listener, transient restore job with the exceptional credential.
 new_env; register_repo
-out="$(BACKUP_COMPOSE_TIMEOUT_SECONDS=7 run_cli restore legacy 20260101_010101)"; rc=$?
-legacy_stop="$(grep -n 'compose stop postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_write="$(grep -n 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_run="$(grep -n 'compose-run .*restore\.sh' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_start="$(grep -n 'compose start postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_write_argv="$(grep 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1)"
-legacy_run_argv="$(grep 'compose-run .*restore\.sh' "$STUB_LOG" | head -1)"
-legacy_request="$(cat "$TRIG/.restore_request.json" 2>/dev/null || true)"
+printf '{"source":"local","timestamp":"20260101_010101","restore_id":"0123456789abcdef0123456789abcdef","requested_at":"2026-07-21T20:00:00Z"}\n' \
+  > "$TRIG/.restore_request.json"
+out="$(run_cli restore run)"; rc=$?
+restore_run_argv="$(grep 'compose-run .*postgres-restore' "$STUB_LOG" | head -1)"
 if [ "$rc" -eq 0 ] \
-   && [ -n "$legacy_stop" ] && [ -n "$legacy_write" ] \
-   && [ -n "$legacy_run" ] && [ -n "$legacy_start" ] \
-   && [ "$legacy_stop" -lt "$legacy_write" ] \
-   && [ "$legacy_write" -lt "$legacy_run" ] \
-   && [ "$legacy_run" -lt "$legacy_start" ]; then
-  pass "restore_legacy_stops_the_backup_service_before_it_writes_the_request"
+   && has "$out" 'completed after authority reconstruction and migrations' \
+   && hasF "$restore_run_argv" '--rm' \
+   && hasF "$restore_run_argv" '--no-deps' \
+   && hasF "$restore_run_argv" 'postgres-restore' \
+   && grep -q 'compose-run .*cluster-bootstrap restore-prepare' "$STUB_LOG" \
+   && grep -q 'compose-run .*jarvis-migrator' "$STUB_LOG" \
+   && grep -q 'compose-run .*litellm-migrator' "$STUB_LOG" \
+   && grep -q 'compose-run .*cluster-bootstrap restore-finalize' "$STUB_LOG" \
+   && grep -q 'compose-run .*postgres-restore --complete-authority' "$STUB_LOG"; then
+  pass "restore_run_is_fail_fast_and_completes_authority_in_the_required_order"
 else
-  check_fail "restore legacy ordering: rc=$rc stop=$legacy_stop write=$legacy_write run=$legacy_run start=$legacy_start log=$(cat "$STUB_LOG")"
+  check_fail "restore run: rc=$rc argv=<<<$restore_run_argv>>> out=<<<$out>>>"
 fi
 
-# Both one-offs must skip the dependency chain and override the service's own
-# entrypoint (an infinite poll loop that takes no command arguments).
+new_env; register_repo
+printf '{"state":"running","current_step":"Reconstructing database authority","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":null,"error":null,"manual_steps_required":false,"phase":"database_authority","restore_id":"0123456789abcdef0123456789abcdef","source":"local"}\n' \
+  > "$TRIG/.restore_status.json"
+out="$(run_cli restore run)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'interrupted restore completed after authority reconstruction and migrations' \
+   && ! grep -q 'compose-run .*postgres-restore --run-request' "$STUB_LOG" \
+   && grep -q 'compose-run .*cluster-bootstrap restore-prepare' "$STUB_LOG" \
+   && grep -q 'compose-run .*postgres-restore --complete-authority' "$STUB_LOG"; then
+  pass "restore_run_resumes_pending_authority_without_replaying_the_data_swap"
+else
+  check_fail "restore run authority resume: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+out="$(run_cli restore run)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'No valid restore request is queued' \
+   && ! grep -q 'compose-run .*postgres-restore --run-request' "$STUB_LOG"; then
+  pass "restore_run_refuses_a_missing_request_without_claiming_success"
+else
+  check_fail "restore run missing request: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+printf '{"source":"local","timestamp":"20260101_010101","restore_id":"0123456789abcdef0123456789abcdef","requested_at":"2026-07-21T20:00:00Z"}\n' \
+  > "$TRIG/.restore_request.json"
+STUB_RESTORE_STATUS_AFTER_REQUEST=failed
+out="$(run_cli restore run)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'did not reach database authority reconstruction' \
+   && ! grep -q 'compose-run .*cluster-bootstrap restore-prepare' "$STUB_LOG"; then
+  pass "restore_run_refuses_a_failed_durable_status_without_finalizing"
+else
+  check_fail "restore run failed status: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+out="$(BACKUP_COMPOSE_TIMEOUT_SECONDS=7 run_cli restore legacy 20260101_010101)"; rc=$?
+legacy_write="$(grep -n 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_run="$(grep -n 'compose-run .*restore\.sh' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_write_argv="$(grep 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1)"
+legacy_run_argv="$(grep 'compose-run .*restore\.sh' "$STUB_LOG" | head -1)"
+legacy_request="$(cat "$BK/.captured_restore_request.json" 2>/dev/null || true)"
+if [ "$rc" -eq 0 ] \
+   && [ -n "$legacy_write" ] && [ -n "$legacy_run" ] \
+   && [ "$legacy_write" -lt "$legacy_run" ] \
+   && hasF "$legacy_run_argv" 'postgres-restore' \
+   && ! grep -q 'compose \(stop\|start\) postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_uses_the_transient_restore_job_without_stopping_backups"
+else
+  check_fail "restore legacy ordering: rc=$rc write=$legacy_write run=$legacy_run log=$(cat "$STUB_LOG")"
+fi
+
+# Both one-offs skip dependencies; the direct legacy run overrides the restore
+# job's request-consuming entrypoint so its typed acknowledgement reaches stdin.
 if hasF "$legacy_write_argv" '--no-deps' && hasF "$legacy_write_argv" '--entrypoint sh' \
    && hasF "$legacy_run_argv" '--no-deps' \
    && hasF "$legacy_run_argv" '--entrypoint /usr/local/bin/restore.sh'; then
@@ -2139,7 +2216,7 @@ else
 fi
 new_env; register_repo
 run_cli restore legacy 20260101_010101 --allow-unknown-schema >/dev/null 2>&1
-legacy_ack_request="$(cat "$TRIG/.restore_request.json" 2>/dev/null || true)"
+legacy_ack_request="$(cat "$BK/.captured_restore_request.json" 2>/dev/null || true)"
 if printf '%s' "$legacy_ack_request" | grep -Eq '"allow_unknown_schema":true' \
    && printf '%s' "$legacy_ack_request" | grep -Eq '"timestamp":"20260101_010101"'; then
   pass "restore_legacy_allow_unknown_schema_flag_sets_the_acknowledgement"
@@ -2147,26 +2224,16 @@ else
   check_fail "restore legacy --allow-unknown-schema request: <<<$legacy_ack_request>>>"
 fi
 
-# The service loop must resume even when the restore itself fails, or a failed
-# break-glass attempt leaves the install with no scheduled backups.
+# A failed break-glass restore never changes the scheduled backup service.
 new_env; register_repo
 STUB_RESTORE_LEGACY_RC=1
 out="$(run_cli restore legacy 20260101_010101)"; rc=$?
 if [ "$rc" -eq 1 ] \
    && has "$out" 'restore status' \
-   && grep -q 'compose start postgres-backup' "$STUB_LOG"; then
-  pass "restore_legacy_resumes_the_backup_service_after_a_failed_restore"
+   && ! grep -q 'compose \(stop\|start\) postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_failure_leaves_scheduled_backup_untouched"
 else
-  check_fail "restore legacy failure resume: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
-fi
-
-# ...and clears the request first, so the resumed service cannot consume a
-# request the operator abandoned and report a failure they never started.
-if [ ! -e "$TRIG/.restore_request.json" ] \
-   && grep -q 'rm -f /backup-trigger/.restore_request.json' "$STUB_LOG"; then
-  pass "restore_legacy_clears_an_unconsumed_request_before_resuming_the_service"
-else
-  check_fail "restore legacy request cleanup: log=$(cat "$STUB_LOG")"
+  check_fail "restore legacy failure isolation: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # restore status reads the sidecar's status file through its own one-off.

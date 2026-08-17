@@ -262,10 +262,9 @@ QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
 QDRANT_API_KEYFILE="${QDRANT_API_KEYFILE:-/run/secrets/qdrant_api_key}"
 SECRETS_DIR="${SECRETS_DIR:-/secrets}"
 PDF_STORAGE_DIR="${PDF_STORAGE_DIR:-/pdf-storage}"
-# The sidecar's rw mount of the host ./secrets. It holds the out-of-band marker that
-# tells restore.sh a signed manifest is now mandatory: keeping that marker OUT of
-# BACKUP_DIR means an attacker who can only write BACKUP_DIR cannot remove it to
-# downgrade a later restore back to unsigned.
+# Private durable state holds the out-of-band marker that tells restore.sh a
+# signed manifest is mandatory. Keeping it outside BACKUP_DIR prevents an
+# archive writer from removing it to downgrade a later restore to unsigned.
 HOST_SECRETS_DIR="${HOST_SECRETS_DIR:-/host-secrets}"
 MANIFEST_HMAC_MARKER="${HOST_SECRETS_DIR}/manifest-hmac-required"
 # A durable host state directory outside the checkout, bind-mounted into THIS sidecar
@@ -294,6 +293,7 @@ mkdir -p "$BACKUP_DIR"
 # public path for the next run.
 TRIGGER_DIR="${BACKUP_TRIGGER_DIR:-/backup-trigger}"
 TRIGGER_FILE="${TRIGGER_DIR}/.backup_now"
+INBOX_DIR="${RESTORE_INBOX_DIR:-/restore-inbox}"
 LOCK_DIR="${BACKUP_DIR}/.lifecycle"
 BACKUP_LOCK="${LOCK_DIR}/backup.lock"
 # UPDATE_LOCK is declared here only to keep the update-lock path identical across
@@ -307,6 +307,71 @@ LEGACY_BACKUP_LOCK="${TRIGGER_DIR}/.backup.lock"
 # flag-files remain supported and receive a generated ID after the mutex is held.
 TRIGGER_RUN_ID=""
 CLAIMED_TRIGGER_FILE=""
+
+# write_inbox_manifest inventories operator-uploaded restore sets without ever
+# reading restore credentials or consuming a request. The backup worker owns this
+# producer so uploads become visible before a restore job is started.
+valid_inbox_archive_name() {
+  printf '%s' "$1" | grep -Eq \
+    '^(jarvis|litellm)_[0-9]{8}_[0-9]{6}\.sql\.gz(\.enc)?$|^(pdfs|secrets)_[0-9]{8}_[0-9]{6}\.tar\.gz(\.enc)?$|^manifest_[0-9]{8}_[0-9]{6}\.json(\.hmac)?$|^qdrant_[A-Za-z0-9._-]+_[0-9]{8}_[0-9]{6}\.snapshot(\.enc)?$'
+}
+
+inbox_member_count() {
+  local stem="$1" timestamp="$2" suffix="$3" count=0 candidate
+  for candidate in "${INBOX_DIR}/${stem}_${timestamp}.${suffix}" \
+                   "${INBOX_DIR}/${stem}_${timestamp}.${suffix}.enc"; do
+    [ -f "$candidate" ] && [ ! -L "$candidate" ] && count=$((count + 1))
+  done
+  printf '%s' "$count"
+}
+
+write_inbox_manifest() {
+  local output="${TRIGGER_DIR}/.inbox_manifest.json" temporary
+  local timestamps="" path base timestamp first=1
+  local jarvis litellm pdfs keys manifest complete has_pdfs has_keys has_key
+  temporary="${output}.tmp"
+  shopt -s nullglob
+  for path in "${INBOX_DIR}"/*; do
+    base="$(basename "$path")"
+    valid_inbox_archive_name "$base" || continue
+    timestamp="$(printf '%s' "$base" | sed -nE 's/.*_([0-9]{8}_[0-9]{6})\.(sql\.gz|tar\.gz|snapshot|json)(\.enc|\.hmac)?$/\1/p')"
+    [ -n "$timestamp" ] && timestamps="${timestamps}${timestamp}"$'\n'
+  done
+  shopt -u nullglob
+  timestamps="$(printf '%s' "$timestamps" | sort -u)"
+  has_key=false
+  [ -s "${INBOX_DIR}/operator_key" ] && has_key=true
+
+  {
+    printf '['
+    while IFS= read -r timestamp; do
+      [ -n "$timestamp" ] || continue
+      jarvis="$(inbox_member_count jarvis "$timestamp" sql.gz)"
+      litellm="$(inbox_member_count litellm "$timestamp" sql.gz)"
+      pdfs="$(inbox_member_count pdfs "$timestamp" tar.gz)"
+      keys="$(inbox_member_count secrets "$timestamp" tar.gz)"
+      manifest="${INBOX_DIR}/manifest_${timestamp}.json"
+      has_pdfs=false; [ "$pdfs" -eq 1 ] && has_pdfs=true
+      has_keys=false; [ "$keys" -eq 1 ] && has_keys=true
+      complete=false
+      if [ "$jarvis" -eq 1 ] && [ "$litellm" -eq 1 ] && [ "$pdfs" -eq 1 ] \
+          && [ "$keys" -eq 1 ] && [ -f "$manifest" ] && [ ! -L "$manifest" ]; then
+        complete=true
+      fi
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"timestamp":"%s","complete":%s,"has_pdfs":%s,"legacy_missing_pdfs":false,"has_secrets":%s,"has_key":%s}' \
+        "$timestamp" "$complete" "$has_pdfs" "$has_keys" "$has_key"
+    done <<< "$timestamps"
+    printf ']'
+  } > "$temporary" || return 1
+  mv -f "$temporary" "$output"
+}
+
+if [ "${1:-}" = "--inbox-manifest" ]; then
+  write_inbox_manifest
+  exit $?
+fi
 
 # Move the trigger to a path owned by this process. The rename is atomic within
 # TRIGGER_DIR, so writers can immediately publish the next request at
@@ -652,8 +717,10 @@ dump_db() {
 # about to be dumped, so an unreadable version here is a real failure rather than
 # a restart to wait out.
 capture_schema_version() {
-  SCHEMA_VERSION="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
-    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM ops.schema_migrations' \
+  SCHEMA_VERSION="$(PGOPTIONS='-c search_path=ops,public' \
+    psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
+    -d "${PGDATABASE:-jarvis}" -tAc \
+    'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
     2>/dev/null || true)"
   case "$SCHEMA_VERSION" in
     ''|*[!0-9]*)

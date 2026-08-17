@@ -2061,7 +2061,7 @@ INSERT INTO schema_migrations (version) VALUES
     (81), (82), (83), (84), (85), (86), (87), (88),
     (89), (90), (91), (92), (93), (94), (95), (96),
     (97), (98), (99), (100), (101), (102), (103), (104), (105), (106),
-    (107), (108), (109), (110), (111), (112), (113), (114), (115), (116), (117)
+    (107), (108), (109), (110), (111), (112), (113), (114), (115), (116), (117), (118)
 ON CONFLICT (version) DO NOTHING;
 
 -- The dedicated ``litellm`` admin database is created by the litellm-db-init
@@ -2426,6 +2426,8 @@ BEGIN
             object_name
         );
     END LOOP;
+    ALTER ROLE jarvis_backup_reader WITH BYPASSRLS;
+    ALTER ROLE jarvis_restore_operator WITH BYPASSRLS;
     REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
     FOR domain IN
@@ -3610,4 +3612,112 @@ GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_exec
 RESET ROLE;
 SET LOCAL search_path TO ops, public, pg_catalog;
 UPDATE ops.schema_migrations SET sha256 = 'd8ff5e67cb30eb0ac0efb6be7e25cc0101b3ee18cd1902e91b8a50cd4954117b' WHERE version = 117;
+
+-- 0118: enforce final cross-domain runtime privileges.
+SET LOCAL ROLE jarvis_platform_owner;
+CREATE OR REPLACE FUNCTION platform.audit_readiness_v1()
+RETURNS TABLE(latest_event_at timestamptz, event_count bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN
+        RAISE EXCEPTION 'audit readiness caller is not allowed';
+    END IF;
+    RETURN QUERY SELECT MAX(audit_log."timestamp"), COUNT(*) FROM platform.audit_log;
+END;
+$$;
+REVOKE ALL ON FUNCTION platform.audit_readiness_v1()
+    FROM PUBLIC, jarvis_platform_runtime, jarvis_learning_runtime;
+GRANT EXECUTE ON FUNCTION platform.audit_readiness_v1() TO jarvis_research_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE jarvis_platform_owner IN SCHEMA platform
+    REVOKE EXECUTE ON FUNCTIONS FROM jarvis_platform_runtime;
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
+SET LOCAL ROLE jarvis_research_owner;
+ALTER DEFAULT PRIVILEGES FOR ROLE jarvis_research_owner IN SCHEMA research
+    REVOKE EXECUTE ON FUNCTIONS FROM jarvis_research_runtime;
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
+SET LOCAL ROLE jarvis_learning_owner;
+CREATE OR REPLACE FUNCTION learning.update_scheduled_nudge_v1(
+    p_nudge_id integer, p_set_cron boolean, p_cron_expression text,
+    p_set_enabled boolean, p_enabled boolean, p_set_config boolean, p_config jsonb
+)
+RETURNS SETOF learning.scheduled_nudges
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = learning, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_nudge_id <= 0 THEN
+        RAISE EXCEPTION 'scheduled nudge caller is not allowed';
+    END IF;
+    RETURN QUERY
+    UPDATE learning.scheduled_nudges AS nudge
+    SET cron_expression = CASE WHEN p_set_cron THEN p_cron_expression
+                               ELSE nudge.cron_expression END,
+        enabled = CASE WHEN p_set_enabled THEN p_enabled ELSE nudge.enabled END,
+        config = CASE WHEN p_set_config THEN p_config ELSE nudge.config END
+    WHERE nudge.id = p_nudge_id
+    RETURNING nudge.*;
+END;
+$$;
+REVOKE ALL ON FUNCTION learning.update_scheduled_nudge_v1(
+    integer,boolean,text,boolean,boolean,boolean,jsonb
+) FROM PUBLIC, jarvis_platform_runtime, jarvis_learning_runtime;
+GRANT EXECUTE ON FUNCTION learning.update_scheduled_nudge_v1(
+    integer,boolean,text,boolean,boolean,boolean,jsonb
+) TO jarvis_research_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE jarvis_learning_owner IN SCHEMA learning
+    REVOKE EXECUTE ON FUNCTIONS FROM jarvis_learning_runtime;
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
+SET LOCAL ROLE jarvis_platform_owner;
+REVOKE EXECUTE ON FUNCTION
+    platform.set_research_config_v1(bigint,text,jsonb,text),
+    platform.purge_identity_retention_v1(text), platform.purge_system_events_v1(text),
+    platform.rotate_visibility_checkpoint_v1(text,text,text,text),
+    platform.claim_visibility_lease_v1(text,text,text,integer),
+    platform.advance_visibility_checkpoint_v1(text,text,text,bigint,integer),
+    platform.complete_visibility_checkpoint_v1(text,text,text)
+    FROM jarvis_platform_runtime, jarvis_learning_runtime;
+REVOKE EXECUTE ON FUNCTION platform.finalize_erasure(uuid)
+    FROM jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON
+    platform.audit_log, platform.magic_link_tokens, platform.sessions,
+    platform.system_events, platform.user_config, platform.users,
+    platform.webauthn_challenges FROM jarvis_research_runtime;
+GRANT SELECT ON platform.user_config, platform.users TO jarvis_research_runtime;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON
+    platform.llm_usage_log, platform.user_config, platform.users
+    FROM jarvis_learning_runtime;
+GRANT SELECT ON platform.llm_usage_log, platform.user_config TO jarvis_learning_runtime;
+REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform
+    FROM jarvis_research_runtime, jarvis_learning_runtime;
+
+RESET ROLE;
+SET LOCAL ROLE jarvis_learning_owner;
+REVOKE EXECUTE ON FUNCTION learning.clear_zotero_collection_keys_v1(integer)
+    FROM jarvis_learning_runtime;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON
+    learning.cards, learning.daily_log, learning.decks, learning.journal_entries,
+    learning.milestones, learning.project_papers, learning.projects,
+    learning.review_logs, learning.scheduled_nudges, learning.task_paper_links,
+    learning.tasks FROM jarvis_research_runtime;
+GRANT SELECT ON
+    learning.cards, learning.daily_log, learning.decks, learning.journal_entries,
+    learning.milestones, learning.project_papers, learning.projects,
+    learning.review_logs, learning.scheduled_nudges, learning.task_paper_links,
+    learning.tasks TO jarvis_research_runtime;
+REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA learning FROM jarvis_research_runtime;
+
+RESET ROLE;
+SET LOCAL ROLE jarvis_research_owner;
+REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA research FROM jarvis_learning_runtime;
+
+RESET ROLE;
+SET LOCAL ROLE jarvis_ops_owner;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON ops.job_progress
+    FROM jarvis_research_runtime, jarvis_learning_runtime;
+GRANT SELECT ON ops.schema_migrations TO jarvis_platform_runtime;
+
+RESET ROLE;
+SET LOCAL search_path TO ops, public, pg_catalog;
+UPDATE ops.schema_migrations SET sha256 = 'f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468' WHERE version = 118;
 COMMIT;

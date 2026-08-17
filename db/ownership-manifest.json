@@ -1,7 +1,12 @@
 {
   "format_version": 1,
   "target_release": "v1.2.6",
-  "privilege_enforcement": "specified",
+  "privilege_enforcement": "enforced",
+  "restore_authority": {
+    "path": "db/restore-authority.sql",
+    "sha256": "aa58d47809de0ca7b536817e960dee33fbed3daf4f0d8fa8e61d322a4ad57c6a",
+    "schema_version": 118
+  },
   "compatibility_baseline": {
     "source_release": "v1.2.5",
     "tag_object": "c295d59725445023ffefb70e5d313053ce559ed0",
@@ -76,6 +81,10 @@
       {
         "path": "0117_owner_capabilities.sql",
         "sha256": "d8ff5e67cb30eb0ac0efb6be7e25cc0101b3ee18cd1902e91b8a50cd4954117b"
+      },
+      {
+        "path": "0118_enforce_runtime_privileges.sql",
+        "sha256": "f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468"
       }
     ]
   },
@@ -110,6 +119,14 @@
     "erasure_executor_role": "jarvis_erasure_executor",
     "litellm_runtime_role": "jarvis_litellm_runtime",
     "litellm_migrator_role": "jarvis_litellm_migrator"
+  },
+  "compatibility_role_retirement": {
+    "earliest_date": "2026-09-17",
+    "release_condition": "v1.2.6 is published and its supported rollback window is closed",
+    "required_evidence": [
+      "the exact v1.2.5 rollback path is no longer supported",
+      "a current fresh-host restore has passed without the compatibility role"
+    ]
   },
   "tables": {
     "platform": [
@@ -245,6 +262,7 @@
   "functions": {
     "platform": [
       "platform.advance_visibility_checkpoint_v1",
+      "platform.audit_readiness_v1",
       "platform.append_audit_event",
       "platform.append_system_event_v1",
       "platform.claim_visibility_lease_v1",
@@ -274,7 +292,11 @@
       "research.update_source_health_v1",
       "research.upsert_paper_state_v1"
     ],
-    "learning": ["learning.clear_zotero_collection_keys_v1", "learning.erase_user_data"],
+    "learning": [
+      "learning.clear_zotero_collection_keys_v1",
+      "learning.erase_user_data",
+      "learning.update_scheduled_nudge_v1"
+    ],
     "operations": [
       "procrastinate_cancel_job_v1",
       "procrastinate_defer_jobs_v1",

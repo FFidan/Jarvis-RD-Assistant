@@ -461,7 +461,7 @@ def test_restore_guide_covers_complete_data_and_identity_recovery() -> None:
     assert "PDF archive" in contents
     assert "required" in contents.lower()
     assert "browser upload service" in off_host
-    assert "backup sidecar" in off_host
+    assert "scheduled backup service" in off_host
 
     data_keys = set(
         re.findall(

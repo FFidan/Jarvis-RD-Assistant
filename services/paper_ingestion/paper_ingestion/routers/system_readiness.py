@@ -125,6 +125,14 @@ def _runtime_database_checks(request: Request) -> list[ReadinessCheck]:
     pool_size = pool_metric("get_size")
     pool_idle = pool_metric("get_idle_size")
     pool_max = pool_metric("get_max_size")
+    pool_metrics_available = None not in (pool_size, pool_idle, pool_max)
+    pool_wait_pressure = pool_metrics_available and pool_size == pool_max and pool_idle == 0
+    migration_duration_ms = getattr(request.app.state, "migration_check_duration_ms", None)
+    migration_duration_available = isinstance(migration_duration_ms, int)
+
+    def metric_detail(value: int | None) -> str:
+        return str(value) if value is not None else "unknown"
+
     return [
         ReadinessCheck(
             name="database_schema",
@@ -140,19 +148,31 @@ def _runtime_database_checks(request: Request) -> list[ReadinessCheck]:
         ),
         ReadinessCheck(
             name="migration_check",
-            status="green",
+            status="green" if migration_duration_available else "amber",
             detail=(
                 "outcome=success; duration_ms="
-                f"{getattr(request.app.state, 'migration_check_duration_ms', 'unknown')}"
+                f"{migration_duration_ms if migration_duration_available else 'unknown'}"
+            ),
+            remediation=(
+                "Check migration startup instrumentation and restart paper_ingestion."
+                if not migration_duration_available
+                else ""
             ),
         ),
         ReadinessCheck(
             name="database_pool",
-            status="amber" if pool_size == pool_max and pool_idle == 0 else "green",
-            detail=f"size={pool_size}; idle={pool_idle}; max={pool_max}",
-            remediation="Reduce concurrent work or increase the configured pool maximum."
-            if pool_size == pool_max and pool_idle == 0
-            else "",
+            status="amber" if not pool_metrics_available or pool_wait_pressure else "green",
+            detail=(
+                f"size={metric_detail(pool_size)}; idle={metric_detail(pool_idle)}; "
+                f"max={metric_detail(pool_max)}"
+            ),
+            remediation=(
+                "Check database pool metrics before treating capacity as healthy."
+                if not pool_metrics_available
+                else "Reduce concurrent work or increase the configured pool maximum."
+                if pool_wait_pressure
+                else ""
+            ),
         ),
         ReadinessCheck(
             name="correlation",
@@ -295,11 +315,15 @@ async def _cutover_readiness_checks(request: Request) -> list[ReadinessCheck]:
 
 
 async def _audit_log_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
-    """Report whether the Platform audit log remains queryable from Research."""
+    """Report Platform audit availability through its exact Research capability."""
     try:
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT COUNT(*) AS n FROM platform.audit_log")
-        count = row["n"] if row is not None else 0
+            row = await conn.fetchrow(
+                "SELECT latest_event_at, event_count FROM platform.audit_readiness_v1()"
+            )
+        if row is None:
+            raise RuntimeError("audit readiness capability returned no row")
+        count = int(row["event_count"])
         return ReadinessCheck(name="audit_log", status="green", detail=f"{count} rows")
     except Exception as exc:  # noqa: BLE001 — expose bounded type, never raw DB detail
         return ReadinessCheck(

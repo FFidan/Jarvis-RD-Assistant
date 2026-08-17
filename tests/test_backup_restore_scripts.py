@@ -33,6 +33,7 @@ BACKUP_SH = REPO_ROOT / "scripts" / "backup.sh"
 RESTORE_SH = REPO_ROOT / "scripts" / "restore.sh"
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 LITELLM_ENTRYPOINT = REPO_ROOT / "scripts" / "litellm-entrypoint.sh"
+ROLE_BOOTSTRAP = REPO_ROOT / "scripts" / "postgres-role-bootstrap.sh"
 
 BREAK_GLASS_PHRASE = "I-ACCEPT-UNVERIFIED-BACKUP"
 TS = "20260719_120000"
@@ -49,6 +50,29 @@ def backup_src() -> str:
 @pytest.fixture(scope="module")
 def restore_src() -> str:
     return RESTORE_SH.read_text()
+
+
+@pytest.fixture(scope="module")
+def role_bootstrap_src() -> str:
+    return ROLE_BOOTSTRAP.read_text()
+
+
+def test_schema_113_authority_normalizes_all_public_object_owners(
+    role_bootstrap_src: str,
+) -> None:
+    """Predecessor upgrades must not depend on one historical object owner."""
+    assert (
+        role_bootstrap_src.count(
+            'transfer_schema_objects "$database" public jarvis_legacy_rollback'
+        )
+        == 2
+    )
+    assert 'transfer_owned_objects "$database" jarvis jarvis_legacy_rollback' not in (
+        role_bootstrap_src
+    )
+    assert (
+        'transfer_owned_objects "$database" jarvis_restore_operator jarvis_legacy_rollback'
+    ) not in role_bootstrap_src
 
 
 def _run_bash(body: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -675,6 +699,7 @@ def test_auth_purge_is_transactional_conditional_and_fails_closed(tmp_path: Path
     for table in ephemeral_tables:
         assert table in query
         assert "to_regclass" in query
+    assert "ARRAY['platform', 'public']" in query
     for table in ("users", "webauthn_credentials", "telegram_user_pairings"):
         assert table not in query
 
@@ -706,8 +731,9 @@ def test_vector_visibility_checkpoint_rotation_records_qdrant_outcome(
         "source scripts/restore.sh --functions-only\n"
         f"STEP_QDRANT={step_status}\n"
         f"openssl() {{ printf '{generation}'; }}\n"
-        'psql() { printf \'%s\\n\' "$*" > "$CHECKPOINT_ARGS_LOG"; '
-        'cat > "$CHECKPOINT_SQL_LOG"; }\n'
+        'psql() { case " $* " in *" -c "*) printf platform ;; '
+        '*) printf \'%s\\n\' "$*" > "$CHECKPOINT_ARGS_LOG"; '
+        'cat > "$CHECKPOINT_SQL_LOG" ;; esac; }\n'
         'rotate_vector_visibility_checkpoint "$STEP_QDRANT"\n'
         "printf 'GENERATION=%s\\n' \"$VECTOR_VISIBILITY_GENERATION\"\n"
     )
@@ -724,6 +750,7 @@ def test_vector_visibility_checkpoint_rotation_records_qdrant_outcome(
     assert f"GENERATION={generation}" in result.stdout
     assert f"visibility_generation={generation}" in args_log.read_text()
     assert f"qdrant_recovery={recorded_outcome}" in args_log.read_text()
+    assert "config_schema=platform" in args_log.read_text()
     sql = sql_log.read_text()
     assert "BEGIN" in sql and "COMMIT" in sql
     assert "vector_visibility.checkpoint" in sql
@@ -1141,9 +1168,12 @@ def test_off_host_quarantine_is_written_before_clean_completion(restore_src: str
     quarantine = restore_src.index(
         'write_outbound_quarantine "$RESTORE_ID" "$SOURCE" "$REQUESTED_AT"'
     )
-    clean = restore_src.index("RESTORE_CLEAN=1", quarantine)
+    authority_handoff = restore_src.index("write_authority_state", quarantine)
+    complete = restore_src.index("complete_authority()")
+    clean = restore_src.index("RESTORE_CLEAN=1", complete)
 
-    assert quarantine < clean
+    assert quarantine < authority_handoff
+    assert clean > complete
 
 
 def test_restore_refuses_a_request_while_outbound_review_is_pending(
@@ -1354,6 +1384,48 @@ def _run_inbox_manifest(inbox: Path, trigger: Path) -> list[dict[str, object]]:
     )
     assert result.returncode == 0, result.stderr
     return json.loads((trigger / ".inbox_manifest.json").read_text())
+
+
+def test_scheduled_backup_publishes_uploaded_inbox_inventory_before_restore_job(
+    tmp_path: Path,
+) -> None:
+    """The non-restoring backup worker makes a complete upload API-visible."""
+    inbox = tmp_path / "inbox"
+    trigger = tmp_path / "trigger"
+    inbox.mkdir()
+    trigger.mkdir()
+    _write_current_manifest(inbox, include_pdfs=True)
+    (inbox / "operator_key").write_bytes((inbox / "backup_key").read_bytes())
+    password = tmp_path / "backup-reader-password"
+    password.write_text("fixture-password")
+
+    result = subprocess.run(
+        ["bash", str(BACKUP_SH), "--inbox-manifest"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "RESTORE_INBOX_DIR": str(inbox),
+            "BACKUP_TRIGGER_DIR": str(trigger),
+            "POSTGRES_PASSWORD_FILE": str(password),
+            "BACKUP_DIR": str(tmp_path / "backups"),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads((trigger / ".inbox_manifest.json").read_text()) == [
+        {
+            "timestamp": TS,
+            "complete": True,
+            "has_pdfs": True,
+            "legacy_missing_pdfs": False,
+            "has_secrets": True,
+            "has_key": True,
+        }
+    ]
 
 
 def test_inbox_inventory_marks_only_authenticated_pre_v12_sets_as_legacy_pdf_omissions(

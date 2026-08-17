@@ -233,6 +233,7 @@ services:
       - postgres_legacy_source_password
     volumes:
       - ./scripts/postgres-role-bootstrap.sh:/usr/local/bin/postgres-role-bootstrap.sh:ro
+      - ./db/restore-authority.sql:/app/db/restore-authority.sql:ro
     entrypoint: ["sh", "/usr/local/bin/postgres-role-bootstrap.sh"]
     restart: "no"
     depends_on:
@@ -756,51 +757,46 @@ services:
       # backup.sh also dumps the litellm DB and snapshots Qdrant (best-effort).
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEYFILE: /run/secrets/qdrant_api_key
-      # The on-disk secrets/ source is archived so an encrypted DB backup stays
-      # decryptable; mounted read-only at SECRETS_DIR below.
-      SECRETS_DIR: /secrets
+      # Only the three archive-coupled keys are visible to scheduled backup.
+      # Host service credentials, including restore authority, never enter this
+      # container through a broad secrets bind.
+      SECRETS_DIR: /data-keys
+      # The signed-manifest ratchet belongs in a dedicated non-secret volume.
+      HOST_SECRETS_DIR: /backup-state
       # Stamped into each backup manifest's app_version (so a restore point shows
       # the JARVIS version it was taken on, not a constant "unknown").
       JARVIS_VERSION: ${JARVIS_VERSION:-1.2.6}
     secrets:
       - source: postgres_backup_reader_password
         target: postgres_backup_reader_password
-      - source: postgres_restore_operator_password
-        target: postgres_restore_operator_password
       - backup_encrypt_key
       - qdrant_api_key
     volumes:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
-      - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro
       - ./scripts/prune.sh:/usr/local/bin/prune.sh:ro  # backup DELETE executor (same boundary: the app only writes .delete_request.json; every rm happens here)
-      - ./secrets:/secrets:ro
-      - ./secrets:/host-secrets:rw  # rw: restore installs only the three data-coupled keys; target-host credentials remain unchanged
-      - ${JARVIS_STATE_DIR:-./secrets}:/backup-state:rw  # durable lifecycle state; ./secrets fallback keeps un-migrated installs on the old marker location
+      - ./secrets/jarvis_config_key.txt:/data-keys/jarvis_config_key.txt:ro
+      - ./secrets/jarvis_model_hmac_key.txt:/data-keys/jarvis_model_hmac_key.txt:ro
+      - ./secrets/litellm_salt_key.txt:/data-keys/litellm_salt_key.txt:ro
+      - backup_state:/backup-state:rw
       - ./shared/pdf_storage:/pdf-storage:rw  # stable bind root used for PDF backup and crash-safe in-place restore
       - postgres_backups:/backups
       - backup_trigger:/backup-trigger
-      - restore_staging:/qdrant/snapshots/restore
       - restore_inbox:/restore-inbox
-      - ./db/migrations:/app/db/migrations:ro
-      - ./db/SCHEMA_VERSION:/app/db/SCHEMA_VERSION:ro
-      - postgres_data:/postgres-data:ro
-    # Credential identities are distinct during the compatibility window: normal
-    # iterations use the read-only backup login, while restore invocations select
-    # the exceptional operator explicitly. M5 moves restore into a one-shot job.
+    # Scheduled work is restricted to inventory, backup, and prune. Restore
+    # authority lives only in the transient postgres-restore job below.
     # `sh -uc` deliberately drops -e so ONE failed run cannot kill the loop (a
     # non-zero exit would restart:unless-stopped into a fresh-archive-set-per-restart
     # loop); each branch logs its failure via `|| echo ... rc=$?` and continues. The
-    # inner poll breaks early on ANY of the three sentinels so an on-demand backup,
-    # restore, or delete fires within ~5s rather than after the full interval.
+    # inner poll breaks early on either sentinel owned by this service so an
+    # on-demand backup or delete fires within ~5s rather than after the full interval.
     entrypoint: >
       sh -uc "while true;
-      do PGUSER=jarvis_restore_operator POSTGRES_PASSWORD_FILE=/run/secrets/postgres_restore_operator_password /usr/local/bin/restore.sh --recover || true;
-      PGUSER=jarvis_restore_operator POSTGRES_PASSWORD_FILE=/run/secrets/postgres_restore_operator_password /usr/local/bin/restore.sh --inbox-manifest || true;
-      if [ -f /backup-trigger/.restore_request.json ]; then PGUSER=jarvis_restore_operator POSTGRES_PASSWORD_FILE=/run/secrets/postgres_restore_operator_password /usr/local/bin/restore.sh || echo \"[sidecar] restore failed rc=$$?\" >&2;
-      elif [ -f /backup-trigger/.delete_request.json ]; then /usr/local/bin/prune.sh || echo \"[sidecar] prune failed rc=$$?\" >&2;
+      do /usr/local/bin/backup.sh --inbox-manifest || echo \"[sidecar] inbox inventory failed rc=$$?\" >&2;
+      if [ -f /backup-trigger/.delete_request.json ]; then /usr/local/bin/prune.sh || echo \"[sidecar] prune failed rc=$$?\" >&2;
       else /usr/local/bin/backup.sh || echo \"[sidecar] backup failed rc=$$?\" >&2; fi;
       i=0; while [ \"$$i\" -lt \"$${BACKUP_INTERVAL_SECONDS:-86400}\" ]; do
-      if [ -f /backup-trigger/.backup_now ] || [ -f /backup-trigger/.restore_request.json ] || [ -f /backup-trigger/.delete_request.json ]; then break; fi;
+      /usr/local/bin/backup.sh --inbox-manifest || echo \"[sidecar] inbox inventory failed rc=$$?\" >&2;
+      if [ -f /backup-trigger/.backup_now ] || [ -f /backup-trigger/.delete_request.json ]; then break; fi;
       sleep 5; i=$$((i+5)); done; done"
     depends_on:
       postgres:
@@ -815,6 +811,51 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - jarvis
+
+  # Restore is an explicitly targeted, no-listener job. The host CLI starts it
+  # with `docker compose run --rm --no-deps postgres-restore`, so its exceptional
+  # credential and container disappear when that bounded operation returns.
+  postgres-restore:
+    profiles: ["restore"]
+    image: ${POSTGRES_IMAGE:-postgres:16.8}
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      PGHOST: postgres
+      PGUSER: jarvis_restore_operator
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_restore_operator_password
+      PGDATABASE: ${POSTGRES_DB:-jarvis}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_ENCRYPT_KEYFILE: /run/secrets/backup_encrypt_key
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEYFILE: /run/secrets/qdrant_api_key
+      SECRETS_DIR: /host-secrets
+      JARVIS_VERSION: ${JARVIS_VERSION:-1.2.6}
+    secrets:
+      - source: postgres_restore_operator_password
+        target: postgres_restore_operator_password
+      - backup_encrypt_key
+      - qdrant_api_key
+    volumes:
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro
+      - ./secrets:/host-secrets:rw
+      - backup_state:/backup-state:rw
+      - ./shared/pdf_storage:/pdf-storage:rw
+      - postgres_backups:/backups
+      - backup_trigger:/backup-trigger
+      - restore_staging:/qdrant/snapshots/restore
+      - restore_inbox:/restore-inbox
+      - ./db/migrations:/app/db/migrations:ro
+      - ./db/SCHEMA_VERSION:/app/db/SCHEMA_VERSION:ro
+      - postgres_data:/postgres-data:ro
+    entrypoint: ["/usr/local/bin/restore.sh"]
+    command: ["--run-request"]
     networks:
       - jarvis
 
@@ -1087,6 +1128,7 @@ volumes:
   ollama_data:
   qdrant_data:
   postgres_backups:
+  backup_state:
   backup_trigger:
   restore_staging:  # decrypted Qdrant snapshots staged by restore.sh for file:// recover
   restore_inbox:  # rw cross-host DR drop zone: operator places the off-host archive set + one-time backup key here for an `inbox` restore (never under the RO /secrets)

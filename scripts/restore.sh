@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore one selected backup set from the postgres-backup sidecar. The
+# Restore one selected backup set in the on-demand postgres-restore job. The
 # application receives no database tools or container-control privileges.
 #
 # The admin API writes /backup-trigger/.restore_request.json. The sidecar takes
@@ -30,6 +30,7 @@ LOCK_DIR="${BACKUP_DIR}/.lifecycle"
 # app-writable request/status volume.
 SWAP_STATE_FILE="${LOCK_DIR}/restore-swap-state.json"
 RESTORE_TIMEOUT_FILE="${LOCK_DIR}/restore-timeout"
+AUTHORITY_STATE_FILE="${LOCK_DIR}/restore-authority.json"
 # Inbox restores read the archive set and one-time operator key from this
 # writable volume. It is separate from the read-only service-secret mount and
 # is unused by same-host guided restores.
@@ -103,6 +104,7 @@ STEP_QDRANT="pending"
 STEP_FINISH="pending"
 DROP_STARTED=0
 RESTORE_CLEAN=0
+AUTHORITY_PENDING=0
 HEARTBEAT_PID=""
 MANUAL_STEPS_REQUIRED=0
 # Set only by the --inbox-manifest entrypoint branch: a read-only inventory pass that
@@ -136,7 +138,9 @@ VECTOR_VISIBILITY_GENERATION=""
 
 # --- JSON status writer (atomic .tmp -> mv; matches the RestoreStatus API
 #     shape: state/current_step/steps[].{name,status}/safety_backup_ts/
-#     started_at/finished_at/error). Never aborts the script (|| return 0). -----
+#     started_at/finished_at/error). Status durability is part of the recovery
+#     contract: a failed write must make the host command fail rather than claim
+#     a restore result it cannot inspect. ---------------------------------------
 _json_escape() {
   local s="$1"
   s="${s//\\/\\\\}"
@@ -159,12 +163,13 @@ write_status() {
     printf '{"name":"Restoring API-key store","status":"%s"},' "$STEP_LITELLM"
     printf '{"name":"Restoring search index","status":"%s"},' "$STEP_QDRANT"
     printf '{"name":"Finishing up","status":"%s"}],' "$STEP_FINISH"
-    printf '"safety_backup_ts":%s,"started_at":%s,"finished_at":%s,"error":%s,"drop_started":%s,"manual_steps_required":%s,"phase":%s}' \
+    printf '"safety_backup_ts":%s,"started_at":%s,"finished_at":%s,"error":%s,"drop_started":%s,"manual_steps_required":%s,"phase":%s,"restore_id":%s,"source":%s}' \
       "$(_json_or_null "$SAFETY_BACKUP_TS")" "$(_json_or_null "$STARTED_AT")" \
       "$(_json_or_null "$FINISHED_AT")" "$(_json_or_null "$ERROR")" "$drop_json" \
-      "$manual_json" "$(_json_or_null "$PHASE")"
-  } > "$tmp" 2>/dev/null || return 0
-  mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || return 0
+      "$manual_json" "$(_json_or_null "$PHASE")" "$(_json_or_null "$RESTORE_ID")" \
+      "$(_json_or_null "$SOURCE")"
+  } > "$tmp" 2>/dev/null || return 1
+  mv -f "$tmp" "$STATUS_FILE" 2>/dev/null || return 1
 }
 
 outbound_quarantine_exists() {
@@ -482,6 +487,58 @@ parse_restore_identity_request() {
   printf '%s' "$REQUESTED_AT" \
     | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' \
     || return 1
+}
+
+write_authority_state() {
+  local temporary="${AUTHORITY_STATE_FILE}.tmp"
+  printf '%s' "$RESTORE_ID" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  case "$SOURCE" in local|inbox) ;; *) return 1 ;; esac
+  {
+    printf '{"restore_id":"%s","source":"%s","schema_version":%s}' \
+      "$(_json_escape "$RESTORE_ID")" "$(_json_escape "$SOURCE")" "$CODE_MAX"
+  } > "$temporary" || return 1
+  chmod 600 "$temporary" || return 1
+  mv -f "$temporary" "$AUTHORITY_STATE_FILE"
+}
+
+authority_state_matches_status() {
+  local state phase status_id status_source expected_id expected_source
+  [ -r "$AUTHORITY_STATE_FILE" ] && [ ! -L "$AUTHORITY_STATE_FILE" ] || return 1
+  [ -r "$STATUS_FILE" ] && [ ! -L "$STATUS_FILE" ] || return 1
+  expected_id="$(grep -oE '"restore_id":"[0-9a-f]{32}"' "$AUTHORITY_STATE_FILE" | head -1 | cut -d'"' -f4)"
+  expected_source="$(grep -oE '"source":"(local|inbox)"' "$AUTHORITY_STATE_FILE" | head -1 | cut -d'"' -f4)"
+  state="$(grep -oE '"state":"[^"]+"' "$STATUS_FILE" | head -1 | cut -d'"' -f4)"
+  phase="$(grep -oE '"phase":"[^"]+"' "$STATUS_FILE" | head -1 | cut -d'"' -f4)"
+  status_id="$(grep -oE '"restore_id":"[0-9a-f]{32}"' "$STATUS_FILE" | head -1 | cut -d'"' -f4)"
+  status_source="$(grep -oE '"source":"(local|inbox)"' "$STATUS_FILE" | head -1 | cut -d'"' -f4)"
+  [ "$expected_id" = "$status_id" ] && [ "$expected_source" = "$status_source" ] \
+    && [ "$state" = running ] && [ "$phase" = database_authority ]
+}
+
+complete_authority() {
+  local applied schema_file
+  authority_state_matches_status || return 1
+  [ -r "$POSTGRES_PASSWORD_FILE" ] || return 1
+  if [ -z "${CODE_MAX:-}" ]; then
+    schema_file="${SCHEMA_VERSION_FILE:-/app/db/SCHEMA_VERSION}"
+    CODE_MAX="$(tr -dc '0-9' < "$schema_file" 2>/dev/null || true)"
+  fi
+  printf '%s' "${CODE_MAX:-}" | grep -Eq '^[0-9]+$' || return 1
+  PGPASSWORD="$(cat "$POSTGRES_PASSWORD_FILE")" || return 1
+  export PGPASSWORD
+  applied="$(psql -h "$PGHOST" -U "$PGUSER" -d "$JARVIS_DB" -v ON_ERROR_STOP=1 -tAc \
+    'SELECT COALESCE(MAX(version), 0) FROM ops.schema_migrations' 2>/dev/null || true)"
+  [ "$applied" = "$CODE_MAX" ] || return 1
+  RESTORE_ID="$(grep -oE '"restore_id":"[0-9a-f]{32}"' "$AUTHORITY_STATE_FILE" | head -1 | cut -d'"' -f4)"
+  SOURCE="$(grep -oE '"source":"(local|inbox)"' "$AUTHORITY_STATE_FILE" | head -1 | cut -d'"' -f4)"
+  CURRENT_STEP="Finishing up"
+  PHASE="finalize"
+  STATE="done"
+  STEP_FINISH="done"
+  FINISHED_AT="$(date -Iseconds)"
+  RESTORE_CLEAN=1
+  write_status || return 1
+  rm -f "$AUTHORITY_STATE_FILE"
 }
 
 missing_pdf_restore_is_authorized() {
@@ -1370,19 +1427,23 @@ purge_restored_auth_state() {
   psql -h "$PGHOST" -U "$PGUSER" -d "$db" -v ON_ERROR_STOP=1 -q <<'SQL'
 BEGIN;
 DO $$
+DECLARE
+  auth_schema text;
 BEGIN
-  IF to_regclass('public.sessions') IS NOT NULL THEN
-    DELETE FROM public.sessions;
-  END IF;
-  IF to_regclass('public.magic_link_tokens') IS NOT NULL THEN
-    DELETE FROM public.magic_link_tokens;
-  END IF;
-  IF to_regclass('public.webauthn_challenges') IS NOT NULL THEN
-    DELETE FROM public.webauthn_challenges;
-  END IF;
-  IF to_regclass('public.telegram_pairing_tokens') IS NOT NULL THEN
-    DELETE FROM public.telegram_pairing_tokens;
-  END IF;
+  FOREACH auth_schema IN ARRAY ARRAY['platform', 'public'] LOOP
+    IF to_regclass(format('%I.sessions', auth_schema)) IS NOT NULL THEN
+      EXECUTE format('DELETE FROM %I.sessions', auth_schema);
+    END IF;
+    IF to_regclass(format('%I.magic_link_tokens', auth_schema)) IS NOT NULL THEN
+      EXECUTE format('DELETE FROM %I.magic_link_tokens', auth_schema);
+    END IF;
+    IF to_regclass(format('%I.webauthn_challenges', auth_schema)) IS NOT NULL THEN
+      EXECUTE format('DELETE FROM %I.webauthn_challenges', auth_schema);
+    END IF;
+    IF to_regclass(format('%I.telegram_pairing_tokens', auth_schema)) IS NOT NULL THEN
+      EXECUTE format('DELETE FROM %I.telegram_pairing_tokens', auth_schema);
+    END IF;
+  END LOOP;
 END
 $$;
 COMMIT;
@@ -1399,7 +1460,7 @@ SQL
 # the restore flow itself does not, so shellcheck cannot see the use.
 # shellcheck disable=SC2034
 rotate_vector_visibility_checkpoint() {
-  local step_status="$1" qdrant_recovery generation rotated_at
+  local step_status="$1" qdrant_recovery generation rotated_at config_schema
   case "$step_status" in
     done) qdrant_recovery="succeeded" ;;
     degraded) qdrant_recovery="degraded" ;;
@@ -1409,13 +1470,19 @@ rotate_vector_visibility_checkpoint() {
   generation="$(openssl rand -hex 16 2>/dev/null)" || return 1
   printf '%s' "$generation" | grep -Eq '^[0-9a-f]{32}$' || return 1
   rotated_at="$(date -Iseconds)" || return 1
+  config_schema="$(
+    psql -h "$PGHOST" -U "$PGUSER" -d "$JARVIS_DB" -v ON_ERROR_STOP=1 -Atq \
+      -c "SELECT CASE WHEN to_regclass('platform.user_config') IS NOT NULL THEN 'platform' WHEN to_regclass('public.user_config') IS NOT NULL THEN 'public' END"
+  )" || return 1
+  case "$config_schema" in platform|public) ;; *) return 1 ;; esac
 
   psql -h "$PGHOST" -U "$PGUSER" -d "$JARVIS_DB" -v ON_ERROR_STOP=1 -q \
+    -v "config_schema=${config_schema}" \
     -v "visibility_generation=${generation}" \
     -v "qdrant_recovery=${qdrant_recovery}" \
     -v "rotated_at=${rotated_at}" <<'SQL'
 BEGIN;
-INSERT INTO public.user_config(user_id, key, value)
+INSERT INTO :"config_schema".user_config(user_id, key, value)
 VALUES (
   NULL,
   'vector_visibility.checkpoint',
@@ -1589,12 +1656,13 @@ restore_one_db_swap() {
   return 1
 }
 
-# Terminal failure BEFORE any destruction: record + exit 0 (nothing dropped).
+# Terminal failures must be visible to the host command. The EXIT trap records
+# status and decides maintenance, then preserves this non-zero result.
 fail_before_destruction() {
   STATE="failed"
   ERROR="$1"
   FINISHED_AT="$(date -Iseconds)"
-  exit 0
+  exit 1
 }
 
 # Terminal failure in STEP 5. If the destructive window was entered
@@ -1613,17 +1681,16 @@ step5_fail() {
     ERROR="restore could not start; the database was not modified"
   fi
   FINISHED_AT="$(date -Iseconds)"
-  exit 0
+  exit 1
 }
 
-# Terminal failure after the databases were restored. Record it (exit 0) and
-# let the EXIT trap hold maintenance so the stack stays 503 until the operator
-# retries from the recorded safety backup.
+# Terminal failure after the databases were restored. The EXIT trap holds
+# maintenance and preserves the non-zero result for the host command.
 fail_after_restore() {
   STATE="failed"
   ERROR="$1"
   FINISHED_AT="$(date -Iseconds)"
-  exit 0
+  exit 1
 }
 
 # purge_secrets_staging — shred + remove the cross-host secrets staging (a full
@@ -1752,6 +1819,7 @@ finish_restore_lifecycle_operation() {
 
 # --- EXIT trap: single terminal-status writer + maintenance lift gate ---------
 _cleanup() {
+  local exit_code=$?
   set +e
   # --inbox-manifest is a read-only inventory pass: it must NOT consume the restore
   # request, write .restore_status.json, shred the operator key, or touch maintenance.
@@ -1783,6 +1851,10 @@ _cleanup() {
     if ! read_pdf_swap_state >/dev/null 2>&1; then
       remove_staged_pdf_restore "$PDF_RESTORE_RUN_ID" 2>/dev/null || true
     fi
+  fi
+  if [ "$AUTHORITY_PENDING" = "1" ]; then
+    write_status || exit 1
+    exit "$exit_code"
   fi
   if [ "$STATE" = "running" ]; then
     STATE="failed"
@@ -1819,7 +1891,7 @@ _cleanup() {
   # timeout, abnormal death). A clean restore is STATE="done" here, so it stays false.
   if [ "$STATE" = "failed" ] && [ "$DROP_STARTED" = "1" ]; then MANUAL_STEPS_REQUIRED=1; fi
   [ -n "$FINISHED_AT" ] || FINISHED_AT="$(date -Iseconds)"
-  write_status
+  write_status || exit 1
   # Lift maintenance on ANY clean restore (same-host OR off-host) OR any failure
   # BEFORE the first DROP (DROP_STARTED=0 => nothing was destroyed => safe to serve,
   # true on a fresh host too). A clean restore is safe to lift after its data keys
@@ -1837,8 +1909,7 @@ _cleanup() {
       || echo "[restore] WARNING: could not clear completed lifecycle state" >&2
   fi
   rm -f "$RESTORE_TIMEOUT_FILE" 2>/dev/null || true
-  # Never crash-restart the sidecar: a recorded terminal failure exits 0.
-  exit 0
+  exit "$exit_code"
 }
 # The script's tests source it to exercise the helpers above directly. Everything below
 # this line is trap installation and the restore flow itself; everything above it is
@@ -1853,7 +1924,25 @@ trap _cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-if [ "${1:-}" != "--inbox-manifest" ]; then
+case "${1:-}" in
+  --complete-authority)
+    if ! claim_restore_lifecycle_operation; then
+      exit 1
+    fi
+    complete_authority || fail_after_restore "database authority completion could not verify the restored schema and request identity; maintenance remains active"
+    exit 0
+    ;;
+  --run-request|'') ;;
+  --recover|--inbox-manifest) ;;
+  *)
+    STATE="failed"
+    ERROR="unsupported restore mode: ${1}"
+    FINISHED_AT="$(date -Iseconds)"
+    exit 1
+    ;;
+esac
+
+if [ "${1:-}" != "--inbox-manifest" ] && [ "${1:-}" != "--recover" ]; then
   if ! claim_restore_lifecycle_operation; then
     ADMISSION_REFUSED=1
     exit 0
@@ -1883,7 +1972,7 @@ if [ "${1:-}" = "--recover" ]; then
       ERROR="could not recover the interrupted data-key installation; maintenance remains active and both complete key sets were preserved"
     fi
     FINISHED_AT="$(date -Iseconds)"
-    exit 0
+    exit 1
   fi
   if PDF_RECOVERY_STATE="$(read_pdf_swap_state 2>/dev/null)"; then
     PDF_RESTORE_RUN_ID="${PDF_RECOVERY_STATE%%$'\t'*}"
@@ -1896,20 +1985,23 @@ if [ "${1:-}" = "--recover" ]; then
       ERROR="could not finish the interrupted PDF restore; maintenance remains active and the recovery state was preserved"
     fi
     FINISHED_AT="$(date -Iseconds)"
-    exit 0
+    [ "$STATE" = "done" ] && exit 0
+    exit 1
   fi
   RECOVER_DB="$(read_swap_db)"
   if [ -z "$RECOVER_DB" ]; then
-    STATE="failed"
-    ERROR="restore recovery state is malformed or names an unsupported resource; it was preserved for inspection"
-    FINISHED_AT="$(date -Iseconds)"
+    if [ ! -f "$MAINTENANCE_DESTRUCTIVE" ]; then
+      finish_restore_lifecycle_operation \
+        || echo "[restore] WARNING: could not clear completed lifecycle state" >&2
+    fi
+    MANIFEST_MODE=1
     exit 0
   fi
   if [ ! -r "$POSTGRES_PASSWORD_FILE" ]; then
     STATE="failed"
     ERROR="recovery: cannot read the postgres password secret"
     FINISHED_AT="$(date -Iseconds)"
-    exit 0
+    exit 1
   fi
   PGPASSWORD="$(cat "$POSTGRES_PASSWORD_FILE")"
   export PGPASSWORD
@@ -1920,7 +2012,8 @@ if [ "${1:-}" = "--recover" ]; then
     ERROR="could not finish the interrupted restore of ${RECOVER_DB}; the database is consistent (restored or original) but the stack stays in maintenance — re-run the restore or clear the maintenance sentinels per the runbook"
   fi
   FINISHED_AT="$(date -Iseconds)"
-  exit 0
+  [ "$STATE" = "done" ] && exit 0
+  exit 1
 fi
 
 # === INVENTORY MODE (--inbox-manifest): refresh the sanitized inbox listing, exit ==
@@ -2115,7 +2208,7 @@ if [ -r "$MANIFEST" ]; then
     if [ -z "$CODE_MAX" ]; then
       CODE_MAX="$(tr -dc '0-9' < "${SCHEMA_VERSION_FILE:-${MIG_DIR%/migrations}/SCHEMA_VERSION}" 2>/dev/null || true)"
       [ -n "$CODE_MAX" ] || CODE_MAX="$(tr -dc '0-9' < /app/db/SCHEMA_VERSION 2>/dev/null || true)"
-      [ -n "$CODE_MAX" ] || CODE_MAX=117
+      [ -n "$CODE_MAX" ] || CODE_MAX=118
     fi
     if [ -n "$CODE_MAX" ] && [ "$MANIFEST_SCHEMA" -gt "$CODE_MAX" ]; then
       fail_before_destruction "backup is newer than this deployment (schema ${MANIFEST_SCHEMA} > code ${CODE_MAX}); upgrade JARVIS before restoring"
@@ -2393,14 +2486,12 @@ if ! swap_restored_pdfs "$PDF_RESTORE_RUN_ID"; then
 fi
 PDFS_STAGED=0
 
-# === STEP 9: finishing up ====================================================
-# A clean restore — same-host OR off-host — lifts maintenance via the EXIT trap.
-# When data keys were present, STEP 8 installed them and wrote the rotation
-# marker so dependent services reload the restored keys. The stack returns with no
-# terminal steps. MANUAL_STEPS_REQUIRED stays 0 (reserved for genuinely
-# unrecoverable states) so write_status reports honestly.
-CURRENT_STEP="Finishing up"
-PHASE="finalize"
+# === STEP 9: wait for host-owned database authority reconstruction ===========
+# The data swap deliberately remains in maintenance after the archive payload is
+# restored. `jarvis-research restore run` now invokes the versioned role/grant
+# reconstruction and both migrators; only --complete-authority may mark success.
+CURRENT_STEP="Preparing database authority reconstruction"
+PHASE="database_authority"
 STEP_FINISH="running"
 write_status
 FINISHED_AT="$(date -Iseconds)"
@@ -2408,12 +2499,13 @@ if [ "$SOURCE" = "inbox" ]; then
   write_outbound_quarantine "$RESTORE_ID" "$SOURCE" "$REQUESTED_AT" "$FINISHED_AT" \
     || fail_after_restore "the off-host restore completed, but outbound quarantine could not be recorded; maintenance remains active — use the host recovery command after preserving the restore ID"
 fi
-RESTORE_CLEAN=1
-STATE="done"
-STEP_FINISH="done"
-write_status
+write_authority_state \
+  || fail_after_restore "the databases were restored, but authority reconstruction state could not be recorded; maintenance remains active"
+STATE="running"
+CURRENT_STEP="Reconstructing database authority"
+AUTHORITY_PENDING=1
+write_status || exit 1
 if [ "$SOURCE" = "inbox" ]; then
-  echo "[restore] off-host restore complete: databases, PDFs, vectors, and data keys restored; target-host credentials were preserved." >&2
+  echo "[restore] off-host data restore is waiting for database authority reconstruction." >&2
 fi
-# The EXIT trap clears both .maintenance and .destructive on any clean restore
-# + kills the heartbeat.
+exit 0

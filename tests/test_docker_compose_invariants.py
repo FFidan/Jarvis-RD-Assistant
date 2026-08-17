@@ -190,11 +190,23 @@ def test_dashboard_has_no_tls_material_or_generator(compose):
         for forbidden in ("/host-secrets", "/postgres-data", "/restore-inbox")
     )
 
-    sidecar_mounts = set(services["postgres-backup"]["volumes"])
-    assert "./secrets:/secrets:ro" in sidecar_mounts
-    assert "./secrets:/host-secrets:rw" in sidecar_mounts
-    assert "postgres_data:/postgres-data:ro" in sidecar_mounts
-    assert "restore_inbox:/restore-inbox" in sidecar_mounts
+    backup_mounts = set(services["postgres-backup"]["volumes"])
+    assert {
+        "./secrets/jarvis_config_key.txt:/data-keys/jarvis_config_key.txt:ro",
+        "./secrets/jarvis_model_hmac_key.txt:/data-keys/jarvis_model_hmac_key.txt:ro",
+        "./secrets/litellm_salt_key.txt:/data-keys/litellm_salt_key.txt:ro",
+        "backup_state:/backup-state:rw",
+    }.issubset(backup_mounts)
+    assert all(not mount.startswith("./secrets:") for mount in backup_mounts)
+    assert all("${JARVIS_STATE_DIR:-./secrets}" not in mount for mount in backup_mounts)
+    assert "./secrets:/host-secrets:rw" not in backup_mounts
+    assert "postgres_data:/postgres-data:ro" not in backup_mounts
+    assert "restore_inbox:/restore-inbox" in backup_mounts
+
+    restore_mounts = set(services["postgres-restore"]["volumes"])
+    assert "./secrets:/host-secrets:rw" in restore_mounts
+    assert "postgres_data:/postgres-data:ro" in restore_mounts
+    assert "restore_inbox:/restore-inbox" in restore_mounts
 
     uploader = services["restore-uploader"]
     assert uploader.get("read_only") is True
@@ -238,7 +250,7 @@ def test_service_images_create_the_runtime_user_non_interactively() -> None:
         assert 'adduser --disabled-password --no-create-home --gecos "" appuser' in dockerfile
 
 
-def test_backup_lifecycle_mutex_volume_is_writable_only_by_the_sidecar(compose):
+def test_backup_lifecycle_mutex_volume_is_writable_only_by_recovery_workers(compose):
     """Applications may request work, but cannot replace lifecycle mutex inodes."""
     backup_mounts: dict[str, str] = {}
     for service_name, service in compose["services"].items():
@@ -249,9 +261,9 @@ def test_backup_lifecycle_mutex_volume_is_writable_only_by_the_sidecar(compose):
     assert backup_mounts.get("postgres-backup") == "postgres_backups:/backups"
     assert backup_mounts.get("paper_ingestion") == "postgres_backups:/backups:ro"
     assert all(
-        service_name == "postgres-backup" or mount.endswith(":ro")
+        service_name in {"postgres-backup", "postgres-restore"} or mount.endswith(":ro")
         for service_name, mount in backup_mounts.items()
-    ), f"only postgres-backup may write lifecycle mutexes under /backups: {backup_mounts}"
+    ), f"only backup or restore workers may write lifecycle mutexes under /backups: {backup_mounts}"
 
 
 def test_backup_sidecar_mounts_the_live_pdf_store_for_backup_and_restore(compose):
@@ -475,8 +487,8 @@ def test_app_version_sources_agree():
         (REPO_ROOT / "docker-compose.yml").read_text(),
     )
 
-    assert len(compose_defaults) == 11, (
-        "docker-compose.yml must carry exactly eleven application-version defaults; "
+    assert len(compose_defaults) == 12, (
+        "docker-compose.yml must carry exactly twelve application-version defaults; "
         f"found {len(compose_defaults)}"
     )
     root_packages = [
@@ -865,22 +877,44 @@ def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(com
     }
 
 
-def test_backup_and_restore_use_distinct_database_credentials(compose):
-    """The compatibility sidecar selects a role-scoped credential per operation."""
-    sidecar = compose["services"]["postgres-backup"]
-    assert _secret_sources(sidecar) == {
+def test_backup_and_restore_split_credential_lifetimes(compose):
+    """Scheduled backup lacks restore authority; the restore job is one-shot only."""
+    backup = compose["services"]["postgres-backup"]
+    assert _secret_sources(backup) == {
         "postgres_backup_reader_password",
+        "backup_encrypt_key",
+        "qdrant_api_key",
+    }
+    assert backup["environment"]["PGUSER"] == "jarvis_backup_reader"
+    assert backup["environment"]["POSTGRES_PASSWORD_FILE"].endswith(
+        "postgres_backup_reader_password"
+    )
+    assert "postgres_restore_operator_password" not in str(backup)
+    assert "/usr/local/bin/restore.sh" not in "\n".join(backup["volumes"])
+    assert "/host-secrets" not in "\n".join(backup["volumes"])
+    assert "./secrets:/secrets:ro" not in backup["volumes"]
+    assert "${JARVIS_STATE_DIR:-./secrets}:/backup-state:rw" not in backup["volumes"]
+    assert backup["environment"]["SECRETS_DIR"] == "/data-keys"
+    assert backup["environment"]["HOST_SECRETS_DIR"] == "/backup-state"
+
+    restore = compose["services"]["postgres-restore"]
+    assert restore["profiles"] == ["restore"]
+    assert restore["restart"] == "no"
+    assert _secret_sources(restore) == {
         "postgres_restore_operator_password",
         "backup_encrypt_key",
         "qdrant_api_key",
     }
-    assert sidecar["environment"]["PGUSER"] == "jarvis_backup_reader"
-    assert sidecar["environment"]["POSTGRES_PASSWORD_FILE"].endswith(
-        "postgres_backup_reader_password"
+    assert restore["environment"]["PGUSER"] == "jarvis_restore_operator"
+    assert restore["environment"]["POSTGRES_PASSWORD_FILE"].endswith(
+        "postgres_restore_operator_password"
     )
-    entrypoint = str(sidecar["entrypoint"])
-    assert "PGUSER=jarvis_restore_operator" in entrypoint
-    assert "postgres_restore_operator_password" in entrypoint
+    assert "/usr/local/bin/restore.sh" in "\n".join(restore["volumes"])
+    assert "/host-secrets" in "\n".join(restore["volumes"])
+    assert restore["entrypoint"] == ["/usr/local/bin/restore.sh"]
+    assert restore["command"] == ["--run-request"]
+    bootstrap_mounts = set(compose["services"]["cluster-bootstrap"]["volumes"])
+    assert "./db/restore-authority.sql:/app/db/restore-authority.sql:ro" in bootstrap_mounts
 
 
 def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
@@ -896,7 +930,10 @@ def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
     assert "REVOKE ${owner_role} FROM jarvis_legacy_rollback" in source
     assert "REVOKE ${owner_role} FROM jarvis_migrator" in source
     assert "CREATE ROLE %s LOGIN SUPERUSER NOINHERIT" in source
-    assert 'transfer_v125_objects "$database" jarvis_legacy_rollback' in source
+    assert "prepare|finalize|restore-prepare|restore-finalize" in source
+    assert 'if [ "$mode" = "restore-prepare" ]' in source
+    assert 'if [ "$mode" = "restore-finalize" ]' in source
+    assert 'authority_file="/app/db/restore-authority.sql"' in source
     assert "ALTER ROLE jarvis NOLOGIN" in source
     assert "public.schema_migrations TO jarvis_migrator" in source
     assert "GRANT CREATE ON DATABASE ${database} TO ${owner_role}" in source
@@ -907,7 +944,7 @@ def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
     assert "ALTER ROLE jarvis_restore_operator WITH CREATEDB INHERIT" in source
     assert "GRANT pg_signal_backend TO jarvis_restore_operator" in source
     assert "assert_recovery_roles" in source
-    assert source.count("assert_recovery_roles") == 3
+    assert source.count("assert_recovery_roles") == 4
     assert "backup or restore role authority is invalid" in source
 
 

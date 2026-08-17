@@ -515,15 +515,15 @@ if grep -q 'sh -euc' "$COMPOSE"; then
 else
   pass "the sidecar entrypoint no longer uses sh -euc"
 fi
-# inner poll early-breaks on ALL THREE sentinels (they co-occur on the folded
-# scalar's `.backup_now` line).
+# The scheduled process reacts only to its backup and delete sentinels. Restore
+# requests belong to the transient restore job and must not wake this loop.
 poll="$(grep -F '.backup_now' "$COMPOSE" || true)"
 if printf '%s' "$poll" | grep -q '\.backup_now' \
-   && printf '%s' "$poll" | grep -q '\.restore_request\.json' \
-   && printf '%s' "$poll" | grep -q '\.delete_request\.json'; then
-  pass "inner poll early-breaks on all three sentinels (.backup_now/.restore_request/.delete_request)"
+   && printf '%s' "$poll" | grep -q '\.delete_request\.json' \
+   && ! printf '%s' "$poll" | grep -q '\.restore_request\.json'; then
+  pass "inner poll reacts only to scheduled-backup authority sentinels"
 else
-  printf 'FAIL: inner poll does not early-break on all three sentinels\n' >&2; fail=1
+  printf 'FAIL: inner poll does not preserve the scheduled-backup authority boundary\n' >&2; fail=1
 fi
 
 # Full compose validation when docker is available; otherwise a YAML lint.

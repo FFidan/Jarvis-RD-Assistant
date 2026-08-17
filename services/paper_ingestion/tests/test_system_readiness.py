@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import asyncpg  # noqa: E402
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
@@ -53,7 +54,10 @@ def _app(monkeypatch):
     get_secrets_settings.cache_clear()
 
     mock_pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(n=0)
+    mock_pool.get_size.return_value = 1
+    mock_pool.get_idle_size.return_value = 1
+    mock_pool.get_max_size.return_value = 10
+    conn.fetchrow.return_value = FakeRecord(event_count=0)
     monkeypatch.setattr(
         "paper_ingestion.routers.system_readiness.resolve_owner_identity",
         AsyncMock(return_value=OwnerIdentity("database", "valid", 1)),
@@ -213,6 +217,49 @@ async def test_outbox_diagnostic_reports_lag_retries_and_dead_letters() -> None:
 
     assert check.status == "amber"
     assert check.detail == "pending=4; retries=2; dead_letters=1; lag_seconds=301"
+
+
+def test_runtime_database_checks_do_not_claim_unknown_metrics_are_healthy() -> None:
+    """Missing migration or pool measurements stay actionable amber."""
+    from paper_ingestion.routers.system_readiness import _runtime_database_checks
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                migration_check=SimpleNamespace(
+                    current_user="jarvis_research_runtime",
+                    packaged_version=117,
+                    live_version=117,
+                    integrity="ok",
+                ),
+                db_pool=SimpleNamespace(),
+            )
+        )
+    )
+
+    checks = {check.name: check for check in _runtime_database_checks(request)}
+
+    assert checks["database_schema"].status == "green"
+    assert checks["migration_check"].status == "amber"
+    assert checks["migration_check"].detail == "outcome=success; duration_ms=unknown"
+    assert checks["database_pool"].status == "amber"
+    assert checks["database_pool"].detail == "size=unknown; idle=unknown; max=unknown"
+
+
+@pytest.mark.asyncio
+async def test_audit_log_permission_denial_is_actionable_amber() -> None:
+    """A denied Platform audit read degrades without exposing database detail."""
+    from paper_ingestion.routers.system_readiness import _audit_log_readiness
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = asyncpg.InsufficientPrivilegeError("platform.audit_log denied")
+
+    check = await _audit_log_readiness(pool)
+
+    assert check.status == "amber"
+    assert check.detail == "InsufficientPrivilegeError"
+    assert "grants" in check.remediation
+    assert "platform.audit_log" not in check.detail
 
 
 def test_backup_diagnostic_reports_failed_attempt(monkeypatch: pytest.MonkeyPatch) -> None:

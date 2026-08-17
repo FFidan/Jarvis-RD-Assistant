@@ -285,7 +285,7 @@ def test_live_postgres_jobs_reuse_one_non_skipping_result_validator() -> None:
     assert "--collect-only" not in workflow
 
 
-def test_schema_101_fixture_is_single_sourced_and_collected_by_contract_ci() -> None:
+def test_schema_101_contract_fixture_and_full_recovery_origin_are_collected() -> None:
     fixture = ROOT / "db/testdata/schema-101-seed.sql"
     restore_roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
     contract = _read(
@@ -294,7 +294,10 @@ def test_schema_101_fixture_is_single_sourced_and_collected_by_contract_ci() -> 
     workflow = _read(".github/workflows/ci.yml")
 
     assert fixture.is_file()
-    assert "db/testdata/schema-101-seed.sql" in restore_roundtrip
+    assert "db/testdata/schema-101-seed.sql" in contract
+    assert '"$REPO_ROOT/db/init.sql"' in restore_roundtrip
+    assert "/^-- FRESH-INSTALL OWNERSHIP BOUNDARY$/" in restore_roundtrip
+    assert "DELETE FROM schema_migrations WHERE version > 101" in restore_roundtrip
     assert "CREATE TABLE schema_migrations" not in restore_roundtrip
     assert "pytest.mark.contract" in contract
     assert "pytest.mark.integration" not in contract
@@ -436,7 +439,7 @@ def test_release_version_pins_are_complete_and_consistent() -> None:
     assert re.search(rf"^version: {re.escape(version)}$", citation, re.MULTILINE)
     assert "date-released: 2026-08-16" in citation
     assert f'name = "jarvis-rd-assistant"\nversion = "{version}"' in lock
-    assert compose.count(f"JARVIS_VERSION:-{version}") == 11
+    assert compose.count(f"JARVIS_VERSION:-{version}") == 12
     assert "JARVIS_VERSION:-1.2.4" not in compose
 
 
@@ -700,15 +703,20 @@ def test_restore_release_mode_owns_a_generated_compose_project() -> None:
     assert "_project_resources_owned" in roundtrip
     assert "com.docker.compose.project" in roundtrip
     assert "PROJECT_OWNERSHIP_CONFIRMED" in roundtrip
-    assert "down -v --remove-orphans" in roundtrip
+    assert "down --remove-orphans" in roundtrip
+    assert "down -v" not in roundtrip
+    assert "retained disposable volumes" in roundtrip
     assert "fixture project: %s" in roundtrip
 
 
 def test_restore_release_fixture_contains_current_migration_prerequisites() -> None:
     roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
     seed = _read("db/testdata/schema-101-seed.sql")
+    full_baseline = _read("db/init.sql").split("-- FRESH-INSTALL OWNERSHIP BOUNDARY", maxsplit=1)[0]
 
-    assert "db/testdata/schema-101-seed.sql" in roundtrip
+    assert '"$REPO_ROOT/db/init.sql"' in roundtrip
+    assert "ALTER TABLE magic_link_tokens ALTER COLUMN user_id SET NOT NULL" in roundtrip
+    assert "CREATE TABLE public.llm_usage_log" in full_baseline
     assert "CREATE TABLE papers(" in seed
     assert "source_type text" in seed
     assert "discovery_origin text NOT NULL" in seed
@@ -769,6 +777,22 @@ def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:
     )
     assert "backup_trigger:/backup-trigger:ro" in fixture_compose
     assert "./provider-state:/provider-state:ro" in fixture_compose
+    fixture_litellm = fixture_compose.split("  litellm:\n", 1)[1].split("\n  postgres-backup:", 1)[
+        0
+    ]
+    assert "litellm-migrator:\n        condition: service_completed_successfully" in (
+        fixture_litellm
+    )
+    assert "litellm-db-init:\n        condition: service_completed_successfully" not in (
+        fixture_litellm
+    )
+    fixture_backup = fixture_compose.split("  postgres-backup:\n", 1)[1].split(
+        "\n  postgres-restore:", 1
+    )[0]
+    assert "litellm-migrator:\n        condition: service_completed_successfully" in (
+        fixture_backup
+    )
+    assert "litellm:\n        condition: service_healthy" not in fixture_backup
     assert "provider_hit_count" in roundtrip
     assert "link_host_secret postgres_password" in roundtrip
     assert 'ln -sfn "${name}.txt" "$WORK/host-secrets/$name"' in roundtrip
@@ -783,11 +807,12 @@ def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:
     recreated = roundtrip.index("dc up -d --force-recreate litellm postgres-backup")
     recovery_control = roundtrip.index(
         'wait_for 120 "restore review control after service recreation" \\\n'
-        "        quarantine_recovery_control_available"
+        "    quarantine_recovery_control_available"
     )
     acknowledgement = roundtrip.index('acknowledge_restore_review "$OFF_HOST_RESTORE_ID"')
     resumed = roundtrip.index(
-        'wait_for 120 "direct LiteLLM route after exact review acknowledgement" litellm_chat_works'
+        'wait_for 120 "direct LiteLLM route after exact review acknowledgement" \\\n'
+        '        litellm_chat_works "$TARGET_LITELLM_MASTER"'
     )
 
     assert baseline < quarantined < recreated < recovery_control < acknowledgement < resumed

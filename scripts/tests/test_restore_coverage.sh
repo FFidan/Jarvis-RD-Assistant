@@ -3,7 +3,7 @@
 # one-click restore correctly. restore.sh is the highest-risk DR script: its
 # failure paths must be fail-safe, so the checks below pin the load-bearing
 # invariants (at-most-once consume before destruction, revoke-before-drop,
-# never-re-expose-a-destroyed-DB, exit 0 after a recorded failure) both by
+# never-re-expose-a-destroyed-DB, non-zero host-visible failures) both by
 # static structure AND by running the pure helpers behaviorally.
 #
 # Run: bash scripts/tests/test_restore_coverage.sh   (exit 0 = pass)
@@ -18,7 +18,7 @@ fail=0
 pass() { printf 'PASS: %s\n' "$1"; }
 check() {
   # check <human description> <grep -E pattern>
-  if grep -Eq "$2" "$RESTORE_SCRIPT"; then
+  if grep -Eq -- "$2" "$RESTORE_SCRIPT"; then
     pass "$1"
   else
     printf 'FAIL: %s (pattern: %s)\n' "$1" "$2" >&2
@@ -176,6 +176,17 @@ if printf '%s' "$step2_block" | grep -qE 'psql|schema_migrations'; then
 else
   pass "compat gate does NOT query the live DB (file-based CODE_MAX only)"
 fi
+
+check "records a durable database-authority handoff after swapping data" \
+  'write_authority_state'
+check "keeps the swapped restore running until authority completion" \
+  'PHASE="database_authority"'
+check "requires status and authority identity to match before completion" \
+  'authority_state_matches_status'
+check "requires the packaged schema before completion" \
+  'SELECT COALESCE\(MAX\(version\), 0\) FROM ops\.schema_migrations'
+check "exposes explicit --complete-authority mode" \
+  '--complete-authority'
 
 # 5c2. CODE_MAX guardrail: the CODE_MAX fallback literal (used only when both the
 #      migrations glob AND the db/SCHEMA_VERSION reads come up empty) must
@@ -523,7 +534,7 @@ check "clears a stale private timeout marker at the start of a run" \
 # SECOND (later-in-file) maintenance removal; the first is the EXIT-trap clean
 # lift gate (section 6).
 wd_rm_line="$(grep -nE 'rm -f "\$MAINTENANCE_SENTINEL"' "$RESTORE_SCRIPT" | tail -1 | cut -d: -f1)"
-wd_guard_line="$(line_of '\[ ! -f "\$MAINTENANCE_DESTRUCTIVE" \]')"
+wd_guard_line="$(grep -nE '\[ ! -f "\$MAINTENANCE_DESTRUCTIVE" \]' "$RESTORE_SCRIPT" | tail -1 | cut -d: -f1)"
 if [ -n "$wd_rm_line" ] && [ -n "$wd_guard_line" ] \
    && [ "$wd_guard_line" -lt "$wd_rm_line" ] \
    && [ "$((wd_rm_line - wd_guard_line))" -le 2 ]; then
@@ -572,21 +583,17 @@ else
   fail=1
 fi
 
-# 8. exit 0 after a recorded terminal failure. Non-zero exits are allowed only
-#    inside guarded helper subshells, the embedded Perl parser, and signal traps;
-#    there is no unguarded script-level exit that could crash-loop the sidecar.
-check "fails before destruction with exit 0" 'fail_before_destruction\(\)'
-check "fails during/after the drop with exit 0" 'step5_fail\(\)'
-unexpected_nonzero="$(awk '
-  /^swap_restored_pdfs\(\)|^recover_pdf_swap\(\)|^qdrant_http_body\(\)/ { guarded=1 }
-  guarded && /^}/ { guarded=0; next }
-  /trap '\''exit (130|143)'\''/ { next }
-  /exit[[:space:]]+[1-9]/ && !guarded { print NR ":" $0 }
-' "$RESTORE_SCRIPT")"
-if [ -z "$unexpected_nonzero" ]; then
-  pass "no unguarded bash-level non-zero exit (terminal failures exit 0; sidecar never crash-restarts)"
+# 8. Recorded terminal failures remain durable but now propagate non-zero to
+#    the host command; this one-shot job must never report success on failure.
+failure_fns="$(sed -n '/^fail_before_destruction()/,/^purge_secrets_staging()/p' "$RESTORE_SCRIPT")"
+cleanup_for_exit="$(sed -n '/^_cleanup()/,/^}/p' "$RESTORE_SCRIPT")"
+if printf '%s' "$failure_fns" | grep -A5 '^fail_before_destruction()' | grep -q 'exit 1' \
+   && printf '%s' "$failure_fns" | grep -A12 '^step5_fail()' | grep -q 'exit 1' \
+   && printf '%s' "$failure_fns" | grep -A8 '^fail_after_restore()' | grep -q 'exit 1' \
+   && printf '%s' "$cleanup_for_exit" | grep -q 'exit "\$exit_code"'; then
+  pass "recorded restore failures preserve a non-zero host result"
 else
-  printf 'FAIL: an unguarded bash-level non-zero exit exists: %s\n' "$unexpected_nonzero" >&2
+  printf 'FAIL: a recorded restore failure can be reported as successful\n' >&2
   fail=1
 fi
 
@@ -683,6 +690,7 @@ if command -v python3 >/dev/null 2>&1; then
     STATE="running"; CURRENT_STEP="Restoring database"; ERROR="boom \"q\" \\ x"
     SAFETY_BACKUP_TS="20260626_120000"; STARTED_AT="2026-06-26T12:00:00+00:00"
     FINISHED_AT=""; DROP_STARTED=1; MANUAL_STEPS_REQUIRED=1; PHASE="reload-db"
+    RESTORE_ID=""; SOURCE="local"
     STEP_SAFETY="done"; STEP_DB="running"; STEP_LITELLM="pending"
     STEP_QDRANT="pending"; STEP_FINISH="pending"
     '"$(sed -n '/^_json_escape()/,/^}/p' "$RESTORE_SCRIPT")"'
@@ -1569,28 +1577,26 @@ fi
 # === Compose wiring ==========================================================
 
 cmp_check() {
-  if grep -Eq "$2" "$COMPOSE"; then pass "$1"; else
+  if grep -Eq -- "$2" "$COMPOSE"; then pass "$1"; else
     printf 'FAIL: %s (pattern: %s)\n' "$1" "$2" >&2; fail=1; fi
 }
-cmp_check "sidecar mounts restore.sh" 'restore\.sh:/usr/local/bin/restore\.sh:ro'
-cmp_check "sidecar mounts the durable state dir, falling back to ./secrets when unrecorded" \
-  '\$\{JARVIS_STATE_DIR:-\./secrets\}:/backup-state:rw'
-cmp_check "sidecar env stamps JARVIS_VERSION (manifest app_version)" 'JARVIS_VERSION: \$\{JARVIS_VERSION'
-cmp_check "entrypoint runs restore.sh on a restore request" \
-  'restore_request\.json.*restore\.sh|if \[ -f /backup-trigger/\.restore_request\.json'
+cmp_check "one-shot restore job mounts restore.sh" 'restore\.sh:/usr/local/bin/restore\.sh:ro'
+cmp_check "one-shot restore job mounts the dedicated backup state volume" \
+  'backup_state:/backup-state:rw'
+cmp_check "one-shot restore job env stamps JARVIS_VERSION (manifest app_version)" 'JARVIS_VERSION: \$\{JARVIS_VERSION'
+cmp_check "one-shot restore job defaults to explicit request mode" \
+  'command: \["--run-request"\]'
 cmp_check "named volume restore_staging is declared" '^  restore_staging:'
-cmp_check "sidecar mounts the migrations dir (ro) for the compat code-max read" 'db/migrations:/app/db/migrations:ro'
-cmp_check "sidecar mounts postgres_data (ro) so the disk preflight can size free space" \
+cmp_check "one-shot restore job mounts the migrations dir (ro) for the compat code-max read" 'db/migrations:/app/db/migrations:ro'
+cmp_check "one-shot restore job mounts postgres_data (ro) so the disk preflight can size free space" \
   'postgres_data:/postgres-data:ro'
-cmp_check "entrypoint reconciles private stranded swap state on startup" \
-  'PGUSER=jarvis_restore_operator.*restore\.sh --recover'
-cmp_check "entrypoint refreshes the inbox manifest each loop (restore.sh --inbox-manifest)" \
-  'restore\.sh --inbox-manifest'
+cmp_check "scheduled backup refreshes inbox inventory without restore authority" \
+  'backup\.sh --inbox-manifest'
 
 # Off-host DR drop zone: a rw restore_inbox volume the operator fills with the
 # archive set + one-time key for a cross-host (inbox) restore.
 cmp_check "named volume restore_inbox is declared" '^  restore_inbox:'
-cmp_check "sidecar mounts restore_inbox at /restore-inbox" 'restore_inbox:/restore-inbox'
+cmp_check "restore job mounts restore_inbox at /restore-inbox" 'restore_inbox:/restore-inbox'
 if grep -qE 'restore_inbox:/restore-inbox:ro' "$COMPOSE"; then
   printf 'FAIL: restore_inbox is mounted :ro (must be rw — the operator writes the archive set + key here)\n' >&2
   fail=1
@@ -1598,11 +1604,11 @@ else
   pass "restore_inbox is mounted rw (not :ro)"
 fi
 
-# restore_staging mounted into BOTH the sidecar (rw) and qdrant (ro).
+# restore_staging mounted into BOTH the restore job (rw) and qdrant (ro).
 if [ "$(grep -c 'restore_staging:/qdrant/snapshots/restore' "$COMPOSE")" -ge 2 ]; then
-  pass "restore_staging mounted into both the sidecar and qdrant"
+  pass "restore_staging mounted into both the restore job and qdrant"
 else
-  printf 'FAIL: restore_staging not mounted into both sidecar and qdrant\n' >&2
+  printf 'FAIL: restore_staging not mounted into both restore job and qdrant\n' >&2
   fail=1
 fi
 
