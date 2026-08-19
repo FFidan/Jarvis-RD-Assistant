@@ -16,8 +16,6 @@ land here, 8 deferred to rot-on-touch):
 
 DEFERRED (rot-on-touch — require complex carve-out wiring or non-test infra):
   test_set_config_invalid_cron_returns_400      (scheduler validator setup)
-  test_set_fetch_interval_persists_and_reschedules (scheduler dep mock)
-  test_set_fetch_interval_rejects_invalid_values
   test_set_config_does_not_persist_when_litellm_update_fails (LiteLLM carve-out)
 """
 

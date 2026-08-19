@@ -106,6 +106,9 @@ def _make_app_state(
 
     conn = AsyncMock()
     conn.fetch = AsyncMock(side_effect=lambda *_a, **_kw: next(fetch_results))
+    # No saved automation.fetch_interval_hours row, so these tests reach the
+    # pipeline guard through the environment default they each set.
+    conn.fetchrow = AsyncMock(return_value=None)
 
     pool = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -298,31 +301,68 @@ async def test_scheduler_honors_fractional_auto_fetch_interval() -> None:
         scheduler.shutdown(wait=False)
 
 
+def _make_interval_pool(saved_interval: object | None) -> tuple[MagicMock, AsyncMock]:
+    """Pool whose stubbed read answers the saved ``automation.fetch_interval_hours`` row.
+
+    ``saved_interval`` of None means no row is saved. Each caller stubs
+    ``conn.fetch`` itself to say what the discovery queries should do.
+    """
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        return_value=None if saved_interval is None else {"value": saved_interval}
+    )
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    return pool, conn
+
+
 async def test_auto_pipeline_self_gates_on_zero_interval(monkeypatch: pytest.MonkeyPatch) -> None:
-    """run_auto_pipeline must return early without touching the DB when interval=0."""
+    """With no saved interval and the environment default at 0, no discovery runs.
+
+    The guard now reads the saved interval, so it does acquire a connection.
+    What it must not do is any of the pipeline's own work.
+    """
     from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
 
     monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "0")
 
-    # Track whether the DB pool was accessed
-    pool_acquire_called = False
+    pool, conn = _make_interval_pool(None)
+    conn.fetch = AsyncMock(side_effect=AssertionError("discovery must not query the DB"))
+    fake_app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    class _TrackingPool:
-        def acquire(self):
-            nonlocal pool_acquire_called
-            pool_acquire_called = True
-            raise AssertionError("DB pool must not be acquired when interval=0")
+    await run_auto_pipeline(fake_app)
 
+    # run_auto_pipeline swallows exceptions from its own body, so the await
+    # count -- not the raising side effect -- is what proves the guard held.
+    conn.fetch.assert_not_awaited()
+
+
+async def test_auto_pipeline_runs_on_saved_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A saved interval starts the run even though the environment default is 0.
+
+    This is the path a user takes: Settings writes
+    ``automation.fetch_interval_hours``, and nothing else configures the job.
+    """
+    from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
+
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "0")
+
+    pool, conn = _make_interval_pool(6)
+    conn.fetch = AsyncMock(return_value=[])
     fake_app = SimpleNamespace(
         state=SimpleNamespace(
-            db_pool=_TrackingPool(),
+            db_pool=pool,
+            http_client=MagicMock(),
+            pdf_processor=MagicMock(),
+            embedder=MagicMock(),
         )
     )
 
-    # Should return immediately without any DB calls
     await run_auto_pipeline(fake_app)
 
-    assert not pool_acquire_called, "DB pool must not be acquired when interval_hours=0"
+    assert conn.fetch.await_count >= 1, "the saved interval must let the run proceed"
+    assert "paper_sources" in conn.fetch.await_args_list[0].args[0]
 
 
 # ---------------------------------------------------------------------------
