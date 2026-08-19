@@ -4,7 +4,7 @@
   "privilege_enforcement": "enforced",
   "restore_authority": {
     "path": "db/restore-authority.sql",
-    "sha256": "ff7083b5fc0dda25bf615aedc997337ade6d3fdd11234759503f5629012f3d20",
+    "sha256": "b1d00b7f61cfa92f1857b28bbaa52115fe8a3bcaeaccf0984a7831442069a469",
     "schema_version": 119
   },
   "compatibility_baseline": {
@@ -342,7 +342,9 @@
     ]
   },
   "triggers": {
-    "platform": ["trg_user_config_updated_at"],
+    "platform": [
+      "trg_user_config_updated_at"
+    ],
     "research": [
       "papers_search_vector_trigger",
       "set_updated_at_paper_user_state",
@@ -366,7 +368,10 @@
     ]
   },
   "rules": {
-    "platform": ["no_delete_audit_log", "no_update_audit_log"],
+    "platform": [
+      "no_delete_audit_log",
+      "no_update_audit_log"
+    ],
     "research": [],
     "learning": [],
     "operations": []
@@ -399,7 +404,10 @@
     },
     "learning_engine": {
       "domain": "learning",
-      "job_kinds": ["card.generate", "card.generate_batch"]
+      "job_kinds": [
+        "card.generate",
+        "card.generate_batch"
+      ]
     }
   },
   "reviewed_dynamic_sql": {
@@ -449,7 +457,9 @@
     "services/platform_api/platform_api/routers/auth_passkeys.py": 2,
     "services/platform_api/platform_api/routers/logs.py": 2
   },
-  "reviewed_query_aliases": ["current_contradictions"],
+  "reviewed_query_aliases": [
+    "current_contradictions"
+  ],
   "supported_database_callers": [
     "scripts/_db.py",
     "scripts/backup.sh",
@@ -466,7 +476,9 @@
     {
       "name": "dedicated_migration_metadata",
       "current_writer": "jarvis_common",
-      "relations": ["schema_migrations"],
+      "relations": [
+        "schema_migrations"
+      ],
       "destination": "operations",
       "replacement": "dedicated migrator CLI metadata write"
     }
@@ -484,18 +496,37 @@
       "attention_required"
     ],
     "initial_state": "requested",
-    "terminal_states": ["complete", "attention_required"],
+    "terminal_states": [
+      "complete",
+      "attention_required"
+    ],
     "transitions": {
-      "requested": ["qdrant_pending"],
+      "requested": [
+        "qdrant_pending"
+      ],
       "qdrant_pending": [
         "research_pending",
         "retry_wait",
         "attention_required"
       ],
-      "research_pending": ["learning_pending", "retry_wait", "attention_required"],
-      "learning_pending": ["ready", "retry_wait", "attention_required"],
-      "ready": ["executing"],
-      "executing": ["complete", "retry_wait", "attention_required"],
+      "research_pending": [
+        "learning_pending",
+        "retry_wait",
+        "attention_required"
+      ],
+      "learning_pending": [
+        "ready",
+        "retry_wait",
+        "attention_required"
+      ],
+      "ready": [
+        "executing"
+      ],
+      "executing": [
+        "complete",
+        "retry_wait",
+        "attention_required"
+      ],
       "retry_wait": [
         "qdrant_pending",
         "research_pending",
@@ -512,9 +543,16 @@
     "idempotency": {
       "request_key": "request_id",
       "one_active_request_per_user": true,
-      "acknowledgement_key": ["request_id", "domain"]
+      "acknowledgement_key": [
+        "request_id",
+        "domain"
+      ]
     },
-    "required_acknowledgements": ["qdrant", "research", "learning"],
+    "required_acknowledgements": [
+      "qdrant",
+      "research",
+      "learning"
+    ],
     "qdrant_acknowledgement": [
       "request_id",
       "user_id",
@@ -541,7 +579,12 @@
       "maximum_delay_seconds": 3600,
       "persist_resume_state": true,
       "alert_after_attempt": 3,
-      "alert_on": ["qdrant_unavailable", "residual_points", "domain_cleanup_failure", "retry_exhausted"]
+      "alert_on": [
+        "qdrant_unavailable",
+        "residual_points",
+        "domain_cleanup_failure",
+        "retry_exhausted"
+      ]
     },
     "audit_subject": {
       "schema": "platform",

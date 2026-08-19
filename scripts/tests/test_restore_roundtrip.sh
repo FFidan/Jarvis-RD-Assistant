@@ -1286,6 +1286,30 @@ else
   printf '\nROUND-TRIP: PASS=%s FAIL=%s\n' "$pass" "$fail"
   exit 1
 fi
+
+# Reconstructed authority must match the fresh-install privilege boundary in
+# db/init.sql, not a broader one. These three objects drifted between the two
+# and are the boundary a restore most easily weakens: the job facade is
+# Platform-only, the append-only audit tables take writes solely through the
+# validating capability, and the scheduled-nudge update is the Research-only
+# capability a restore previously dropped.
+restore_boundary_holds() {
+  local reader lister canceller ins upd del subj nudge
+  reader=$(q jarvis "SELECT has_function_privilege('jarvis_research_runtime', 'ops.jarvis_job_read_v1(text)', 'EXECUTE')")
+  lister=$(q jarvis "SELECT has_function_privilege('jarvis_learning_runtime', 'ops.jarvis_job_list_v1(text,text,text,integer)', 'EXECUTE')")
+  canceller=$(q jarvis "SELECT has_function_privilege('jarvis_learning_runtime', 'ops.jarvis_job_cancel_v1(text,text)', 'EXECUTE')")
+  ins=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.audit_log', 'INSERT')")
+  upd=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.audit_log', 'UPDATE')")
+  del=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.audit_subjects', 'DELETE')")
+  subj=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.audit_subjects', 'UPDATE')")
+  nudge=$(q jarvis "SELECT has_function_privilege('jarvis_research_runtime', 'learning.update_scheduled_nudge_v1(integer,boolean,text,boolean,boolean,boolean,jsonb)', 'EXECUTE')")
+  [ "$reader" = f ] && [ "$lister" = f ] && [ "$canceller" = f ]     && [ "$ins" = f ] && [ "$upd" = f ] && [ "$del" = f ] && [ "$subj" = f ]     && [ "$nudge" = t ]
+}
+if restore_boundary_holds; then
+  ok "reconstructed authority matches the fresh-install privilege boundary (job facade Platform-only, audit tables capability-only, nudge update Research-only)"
+else
+  no "reconstructed authority is broader than a fresh install: a restored deployment would be weaker than db/init.sql builds"
+fi
 if ! dc up -d --no-deps litellm postgres-backup >/dev/null 2>&1; then
   no "runtime fixture services failed to start after authority reconstruction"
   dump_diagnostics

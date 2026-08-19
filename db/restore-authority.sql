@@ -262,6 +262,13 @@ TO jarvis_research_runtime;
 REVOKE EXECUTE ON FUNCTION learning.clear_zotero_collection_keys_v1(integer)
 FROM jarvis_learning_runtime;
 
+REVOKE ALL ON FUNCTION learning.update_scheduled_nudge_v1(
+    integer,boolean,text,boolean,boolean,boolean,jsonb
+) FROM PUBLIC, jarvis_platform_runtime, jarvis_learning_runtime;
+GRANT EXECUTE ON FUNCTION learning.update_scheduled_nudge_v1(
+    integer,boolean,text,boolean,boolean,boolean,jsonb
+) TO jarvis_research_runtime;
+
 REVOKE ALL ON FUNCTION
     ops.jarvis_job_read_v1(text),
     ops.jarvis_job_list_v1(text,text,text,integer),
@@ -292,6 +299,18 @@ REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform
 FROM jarvis_research_runtime, jarvis_learning_runtime;
 REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA research FROM jarvis_learning_runtime;
 REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA learning FROM jarvis_research_runtime;
+-- The ALL-FUNCTIONS and ALL-TABLES grants above are broader than the built
+-- system. Narrow them to the fresh-install boundary in db/init.sql so a
+-- restored deployment is never weaker than a fresh one: the job facade is
+-- Platform-only, and the append-only audit tables take writes solely through
+-- platform.append_audit_event, which validates shape and binds the caller.
+REVOKE EXECUTE ON FUNCTION
+    ops.jarvis_job_read_v1(text),
+    ops.jarvis_job_list_v1(text,text,text,integer),
+    ops.jarvis_job_cancel_v1(text,text)
+FROM jarvis_research_runtime, jarvis_learning_runtime;
+REVOKE INSERT, UPDATE, DELETE ON platform.audit_log, platform.audit_subjects
+FROM jarvis_platform_runtime;
 
 ALTER ROLE jarvis_platform_owner SET search_path TO platform, pg_catalog;
 ALTER ROLE jarvis_research_owner SET search_path TO research, pg_catalog;
