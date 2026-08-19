@@ -78,6 +78,14 @@ forward_signal() {
 load_litellm_database_url() {
   secret_dir="${LITELLM_SECRET_DIR:-/run/secrets}"
   postgres_password_file="${POSTGRES_PASSWORD_FILE:-${secret_dir}/litellm_runtime_password}"
+  connection_limit="${LITELLM_DB_CONNECTION_LIMIT:-5}"
+
+  case "$connection_limit" in
+    ''|*[!0-9]*|0|0*)
+      echo "FATAL: LITELLM_DB_CONNECTION_LIMIT must be a positive integer." >&2
+      return 1
+      ;;
+  esac
 
   if [ ! -s "$postgres_password_file" ]; then
     echo "FATAL: ${postgres_password_file} is empty or missing." >&2
@@ -91,7 +99,7 @@ load_litellm_database_url() {
     python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
       "$(cat "$postgres_password_file")"
   )"
-  export DATABASE_URL="postgresql://${postgres_user_encoded}:${postgres_password_encoded}@postgres:5432/litellm"
+  export DATABASE_URL="postgresql://${postgres_user_encoded}:${postgres_password_encoded}@postgres:5432/litellm?connection_limit=${connection_limit}"
 }
 
 load_litellm_configuration() {

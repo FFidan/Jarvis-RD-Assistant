@@ -182,6 +182,9 @@ check: no-tracked-secrets secure-secrets deps-check lint
 observability-up: gen-langfuse-keys
 	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 LOG_FORWARD_ADDRESS=vector:9000 \
 	  $(COMPOSE) --profile observability up -d langfuse vector platform_api paper_ingestion learning_engine dashboard
+	# nginx resolves service names when it starts. Refresh it after profile-driven
+	# application recreation so it cannot retain a replaced container address.
+	$(COMPOSE) restart dashboard
 
 ## Docker shortcuts
 up: gen-langfuse-keys init-secrets

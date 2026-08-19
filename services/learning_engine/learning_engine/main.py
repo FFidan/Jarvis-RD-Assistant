@@ -94,10 +94,10 @@ def _register_tasks(procrastinate_app: Any) -> None:
     register_learning_engine_tasks(procrastinate_app)
 
 
-# B.4 Step 4 — start the procrastinate worker polling learning_engine + builtin
+# Start the Procrastinate worker for Learning-owned jobs only.
 # Hook body is shared via jarvis_common.app_factory. The maintenance watcher must
 # pause/resume the SAME queues, so both hooks read one constant to prevent drift.
-_WORKER_QUEUES = ["learning_engine", "builtin"]
+_WORKER_QUEUES = ["learning_engine"]
 _start_procrastinate_worker = make_procrastinate_worker_hook(_register_tasks, queues=_WORKER_QUEUES)
 _maintenance_watcher = make_maintenance_watcher_hook(queues=_WORKER_QUEUES)
 

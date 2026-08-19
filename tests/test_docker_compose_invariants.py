@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
+LANGFUSE_DOCKERFILE = REPO_ROOT / "langfuse" / "Dockerfile.langfuse"
 
 # Every service that pairs an `image:` tag with a `build:` context (drift guard).
 BUILT_SERVICES = {
@@ -158,6 +159,17 @@ def test_owner_override_reaches_only_the_resolver_service(compose):
             )
 
 
+def test_ask_rate_limit_reaches_only_research(compose):
+    """The documented benchmark override must retain a production-safe default."""
+    services = compose["services"]
+    assert services["paper_ingestion"]["environment"].get("ASK_RATE_LIMIT") == (
+        "${ASK_RATE_LIMIT:-10/minute}"
+    )
+    for name, service in services.items():
+        if name != "paper_ingestion":
+            assert "ASK_RATE_LIMIT" not in _env_keys(service)
+
+
 def test_dashboard_has_no_tls_material_or_generator(compose):
     """TLS belongs to an edge service, never to the plain-HTTP dashboard.
 
@@ -250,6 +262,19 @@ def test_service_images_create_the_runtime_user_non_interactively() -> None:
         assert 'adduser --disabled-password --no-create-home --gecos "" appuser' in dockerfile
 
 
+def test_application_healthchecks_use_unconditional_liveness(compose):
+    """Container restarts must not depend on deep downstream readiness."""
+    expected = {
+        "platform_api": "http://localhost:8003/health/live",
+        "paper_ingestion": "http://localhost:8000/health/live",
+        "learning_engine": "http://localhost:8001/health/live",
+    }
+    for service_name, endpoint in expected.items():
+        probe = " ".join(compose["services"][service_name]["healthcheck"]["test"])
+        assert endpoint in probe
+        assert endpoint.removesuffix("/live") + "'" not in probe
+
+
 def test_backup_lifecycle_mutex_volume_is_writable_only_by_recovery_workers(compose):
     """Applications may request work, but cannot replace lifecycle mutex inodes."""
     backup_mounts: dict[str, str] = {}
@@ -278,12 +303,23 @@ def test_litellm_uses_the_restore_aware_entrypoint(compose):
     )
     assert litellm["entrypoint"] == ["sh", "/usr/local/bin/litellm-entrypoint.sh"]
     assert litellm["command"] == []
+    assert litellm["environment"]["LITELLM_DB_CONNECTION_LIMIT"] == (
+        "${LITELLM_DB_CONNECTION_LIMIT:-5}"
+    )
     assert litellm["healthcheck"]["test"] == [
         "CMD",
         "sh",
         "/usr/local/bin/litellm-entrypoint.sh",
         "--healthcheck",
     ]
+
+
+def test_langfuse_wrapper_preserves_the_pinned_server_command() -> None:
+    """Replacing the upstream entrypoint must retain its default server command."""
+    source = LANGFUSE_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert 'ENTRYPOINT ["/usr/local/bin/langfuse-secrets-entrypoint.sh"]' in source
+    assert 'CMD ["node", "./web/server.js", "--keepAliveTimeout", "110000"]' in source
 
 
 def test_telegram_uses_only_scoped_platform_and_bot_credentials(compose):
@@ -711,10 +747,23 @@ def test_gateway_strips_forged_identity_and_uses_only_platform_assertion() -> No
     assert "auth_request /internal/platform-authorize;" in backend_auth
     assert "include /etc/nginx/nginx-identity-strip.conf;" in backend_auth
     assert "proxy_set_header X-Jarvis-Identity $jarvis_identity;" in backend_auth
+    assert 'proxy_set_header Connection "";' in backend_auth
 
     nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    upstream = _brace_block(nginx, r"upstream jarvis_platform_authorize")
+    assert "server platform_api:8003;" in upstream
+    assert "keepalive 32;" in upstream
+    research_upstream = _brace_block(nginx, r"upstream jarvis_research")
+    assert "server paper_ingestion:8000;" in research_upstream
+    assert "keepalive 32;" in research_upstream
+    learning_upstream = _brace_block(nginx, r"upstream jarvis_learning")
+    assert "server learning_engine:8001;" in learning_upstream
+    assert "keepalive 32;" in learning_upstream
     authorize = _brace_block(nginx, r"location = /internal/platform-authorize")
     assert "internal;" in authorize
+    assert "proxy_pass http://jarvis_platform_authorize/internal/authorize;" in authorize
+    assert "proxy_http_version 1.1;" in authorize
+    assert 'proxy_set_header Connection "";' in authorize
     assert "include /etc/nginx/nginx-identity-strip.conf;" in authorize
 
 
@@ -841,13 +890,14 @@ def test_vector_is_socketless_and_cannot_write_product_logs(compose) -> None:
 
 
 def test_observability_make_target_does_not_enable_telegram() -> None:
-    """Optional telemetry must not activate the separately profiled bot service."""
+    """Optional telemetry excludes Telegram and refreshes gateway routing."""
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
     target = re.search(r"(?ms)^observability-up:.*?(?=^\S|\Z)", makefile)
 
     assert target is not None
     assert "telegram_bot" not in target.group()
     assert "vector platform_api paper_ingestion learning_engine dashboard" in target.group()
+    assert "restart dashboard" in target.group()
 
 
 def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(compose):
@@ -884,6 +934,20 @@ def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(com
         compose["services"]["litellm"]["environment"]["POSTGRES_USER"] == "jarvis_litellm_runtime"
     )
     assert compose["services"]["jarvis-migrator"]["volumes"] == ["./db:/app/db:ro"]
+    assert _secret_sources(compose["services"]["cluster-bootstrap"]) == {
+        "postgres_platform_runtime_password",
+        "postgres_research_runtime_password",
+        "postgres_learning_runtime_password",
+        "postgres_migrator_password",
+        "postgres_cluster_bootstrap_password",
+        "postgres_legacy_rollback_password",
+        "postgres_backup_reader_password",
+        "postgres_restore_operator_password",
+        "postgres_erasure_executor_password",
+        "litellm_runtime_password",
+        "litellm_migrator_password",
+        "postgres_legacy_source_password",
+    }
     finalizer = compose["services"]["migration-authority-finalize"]
     assert finalizer["command"] == ["finalize"]
     assert _secret_sources(finalizer) == {"postgres_cluster_bootstrap_password"}
@@ -962,6 +1026,8 @@ def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
     assert "GRANT CREATE ON DATABASE ${database} TO ${owner_role}" in source
     assert "REVOKE CREATE ON DATABASE ${database} FROM ${owner_role}" in source
     assert "postgres_legacy_source_password" in source
+    assert "transfer_owned_objects litellm jarvis_cluster_bootstrap" in source
+    assert "REASSIGN OWNED BY jarvis_cluster_bootstrap" not in source
     assert 'if [ "$mode" = "finalize" ]' in source
     assert "REVOKE CONNECT, TEMPORARY ON DATABASE ${database} FROM PUBLIC" in source
     assert "ALTER ROLE jarvis_restore_operator WITH CREATEDB INHERIT" in source

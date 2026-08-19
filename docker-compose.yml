@@ -224,6 +224,7 @@ services:
       - postgres_legacy_rollback_password
       - postgres_backup_reader_password
       - postgres_restore_operator_password
+      - postgres_erasure_executor_password
       - litellm_runtime_password
       - litellm_migrator_password
       - postgres_legacy_source_password
@@ -323,6 +324,7 @@ services:
       STORE_MODEL_IN_DB: "true"
       POSTGRES_USER: jarvis_litellm_runtime
       POSTGRES_PASSWORD_FILE: /run/secrets/litellm_runtime_password
+      LITELLM_DB_CONNECTION_LIMIT: ${LITELLM_DB_CONNECTION_LIMIT:-5}
     secrets:
       - litellm_master_key
       - litellm_salt_key
@@ -406,7 +408,7 @@ services:
       - ./db:/app/db:ro
     mem_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8003/health').raise_for_status()\""]
+      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8003/health/live').raise_for_status()\""]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -475,6 +477,7 @@ services:
       # and a hard reranker-score floor (empty = backend-aware default).
       RAG_RELATIVE_SCORE_CUTOFF: ${RAG_RELATIVE_SCORE_CUTOFF:-0.85}
       RAG_MIN_RERANK_SCORE: ${RAG_MIN_RERANK_SCORE:-}
+      ASK_RATE_LIMIT: ${ASK_RATE_LIMIT:-10/minute}
       # Opt-in for bench/multi-user deployments: bypasses the single-tenant
       # session-mint guardrail so API-key sessions can be created without a DB user.
       API_KEY_LOGIN_ENABLED: ${API_KEY_LOGIN_ENABLED:-false}
@@ -527,7 +530,7 @@ services:
     # can `docker compose up`. setup.sh layers docker-compose.gpu.yml when the
     # Docker nvidia runtime is present to re-enable the GPU reservation.
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8000/health', timeout=10).raise_for_status()\""]
+      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8000/health/live', timeout=10).raise_for_status()\""]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -597,7 +600,7 @@ services:
       - backup_trigger:/backup-trigger:ro
     mem_limit: 2g
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8001/health').raise_for_status()\""]
+      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8001/health/live').raise_for_status()\""]
       interval: 10s
       timeout: 5s
       retries: 5
