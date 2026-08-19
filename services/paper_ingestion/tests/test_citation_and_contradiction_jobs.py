@@ -210,12 +210,10 @@ async def test_citation_sync_failure_does_not_modify_stored_edges() -> None:
     await sync_citations_for_paper(conn, source, 7)
 
     conn.fetchval.assert_not_awaited()
-    # The single write is this paper's fetch-time stamp, bound by value — no
-    # edge was inserted and none was deleted.
-    assert conn.execute.await_count == 1
-    stamped_at, stamped_paper_id = conn.execute.await_args.args[1:]
-    assert isinstance(stamped_at, datetime)
-    assert stamped_paper_id == 7
+    # No edge was inserted or deleted, and no freshness was claimed: a stamp
+    # here would hide the paper from the staleness sweep for a refresh
+    # interval on the strength of a fetch that never arrived.
+    conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

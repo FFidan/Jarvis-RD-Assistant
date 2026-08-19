@@ -68,23 +68,23 @@
       },
       {
         "path": "0114_owned_schemas_and_roles.sql",
-        "sha256": "2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24"
+        "sha256": "d05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374"
       },
       {
         "path": "0115_cross_domain_boundaries.sql",
-        "sha256": "852dc3ab061d731179d1cd53714887eca328db436eb6e2a4891d98bb1a1e6bcc"
+        "sha256": "f0bffa08d071b9bcd576f981d3e9db7074f63c1a2e538a5bd8acf4c181c41d46"
       },
       {
         "path": "0116_unified_job_facade.sql",
-        "sha256": "9bbd93a0176f882062a66674cf9897d49473bfdc181c620a4d79131adb99fca6"
+        "sha256": "30852fdba224eca98935cf2011dc112532c40e7c61159c5f43cdc8c565b486e3"
       },
       {
         "path": "0117_owner_capabilities.sql",
-        "sha256": "d8ff5e67cb30eb0ac0efb6be7e25cc0101b3ee18cd1902e91b8a50cd4954117b"
+        "sha256": "73ef094e42223b7c0c75067d2eb3c382fc0e3e6464b8054792539bf743cd7a98"
       },
       {
         "path": "0118_enforce_runtime_privileges.sql",
-        "sha256": "f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468"
+        "sha256": "7f635041cdbc5f267a8d7816d3bdeb9475b5d1a34bc21e0b367d8f51e823ddcf"
       },
       {
         "path": "0119_erasure_executor_capability.sql",
@@ -425,7 +425,7 @@
   "reviewed_dynamic_sql": {
     "libs/jarvis_common/jarvis_common/db_helpers.py": 3,
     "libs/jarvis_common/jarvis_common/jobs.py": 1,
-    "libs/jarvis_common/jarvis_common/migrations.py": 2,
+    "libs/jarvis_common/jarvis_common/migrations.py": 1,
     "services/learning_engine/learning_engine/routers/cards.py": 3,
     "services/learning_engine/learning_engine/routers/decks.py": 1,
     "services/learning_engine/learning_engine/routers/executive.py": 1,
@@ -440,7 +440,8 @@
     "services/paper_ingestion/paper_ingestion/ingestion/search.py": 2,
     "services/paper_ingestion/paper_ingestion/integrations/_zotero_poll.py": 1,
     "services/paper_ingestion/paper_ingestion/papers_service.py": 1,
-    "services/paper_ingestion/paper_ingestion/repos/domain_events.py": 1,
+    "services/learning_engine/learning_engine/generation_service.py": 2,
+    "services/paper_ingestion/paper_ingestion/repos/domain_events.py": 2,
     "services/paper_ingestion/paper_ingestion/pulse/deck.py": 5,
     "services/paper_ingestion/paper_ingestion/pulse/profile.py": 1,
     "services/paper_ingestion/paper_ingestion/rag/streaming.py": 2,

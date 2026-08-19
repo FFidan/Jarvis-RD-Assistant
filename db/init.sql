@@ -2606,7 +2606,7 @@ END $$;
 SET search_path TO ops, public, pg_catalog;
 
 UPDATE ops.schema_migrations
-SET sha256 = '2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24'
+SET sha256 = 'd05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374'
 WHERE version = 114;
 
 -- 0115: owner-local cross-domain commands and Platform erasure coordination.
@@ -2878,7 +2878,7 @@ RESET ROLE;
 SET search_path TO ops, public, pg_catalog;
 
 UPDATE ops.schema_migrations
-SET sha256 = '852dc3ab061d731179d1cd53714887eca328db436eb6e2a4891d98bb1a1e6bcc'
+SET sha256 = 'f0bffa08d071b9bcd576f981d3e9db7074f63c1a2e538a5bd8acf4c181c41d46'
 WHERE version = 115;
 
 -- 0116: Platform-owned unified jobs facade and durable queue ownership.
@@ -2901,6 +2901,9 @@ INSERT INTO ops.job_owner_registry (task_name, queue_name, service_name) VALUES
     ('model.pull','paper_ingestion','research'), ('zotero.push','paper_ingestion','research'),
     ('zotero.resync','paper_ingestion','research'), ('zotero.sync_from_zotero','paper_ingestion','research'),
     ('zotero.sync_annotations','paper_ingestion','research'), ('zotero.push_highlights','paper_ingestion','research'),
+    -- Registered so the test-only kind the public jobs API exposes under
+    -- JARVIS_ENABLE_TEST_JOBS=1 can be deferred like any other job.
+    ('noop.test','paper_ingestion','research'),
     ('card.generate','learning_engine','learning'), ('card.generate_batch','learning_engine','learning');
 ALTER TABLE ops.procrastinate_jobs ADD COLUMN owner_queue text, ADD COLUMN owner_service text;
 CREATE OR REPLACE FUNCTION ops.enforce_job_owner_metadata_v1() RETURNS trigger
@@ -2961,7 +2964,7 @@ GRANT EXECUTE ON FUNCTION ops.jarvis_job_read_v1(text), ops.jarvis_job_list_v1(t
 GRANT SELECT ON ops.jarvis_jobs_rollback_v1 TO jarvis_legacy_rollback;
 RESET ROLE;
 SET search_path TO ops, public, pg_catalog;
-UPDATE ops.schema_migrations SET sha256 = '9bbd93a0176f882062a66674cf9897d49473bfdc181c620a4d79131adb99fca6' WHERE version = 116;
+UPDATE ops.schema_migrations SET sha256 = '30852fdba224eca98935cf2011dc112532c40e7c61159c5f43cdc8c565b486e3' WHERE version = 116;
 
 BEGIN;
 -- Owner-local configuration delivery and exact cross-domain capabilities.
@@ -3612,7 +3615,7 @@ REVOKE ALL ON FUNCTION platform.finalize_erasure(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_executor;
 RESET ROLE;
 SET LOCAL search_path TO ops, public, pg_catalog;
-UPDATE ops.schema_migrations SET sha256 = 'd8ff5e67cb30eb0ac0efb6be7e25cc0101b3ee18cd1902e91b8a50cd4954117b' WHERE version = 117;
+UPDATE ops.schema_migrations SET sha256 = '73ef094e42223b7c0c75067d2eb3c382fc0e3e6464b8054792539bf743cd7a98' WHERE version = 117;
 
 -- 0118: enforce final cross-domain runtime privileges.
 SET LOCAL ROLE jarvis_platform_owner;
@@ -3720,7 +3723,7 @@ GRANT SELECT ON ops.schema_migrations TO jarvis_platform_runtime;
 
 RESET ROLE;
 SET LOCAL search_path TO ops, public, pg_catalog;
-UPDATE ops.schema_migrations SET sha256 = 'f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468' WHERE version = 118;
+UPDATE ops.schema_migrations SET sha256 = '7f635041cdbc5f267a8d7816d3bdeb9475b5d1a34bc21e0b367d8f51e823ddcf' WHERE version = 118;
 
 -- 0119: executor-only due-erasure selection and checkpoint-key correction.
 SET LOCAL ROLE jarvis_platform_owner;

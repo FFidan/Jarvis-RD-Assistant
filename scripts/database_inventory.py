@@ -315,6 +315,7 @@ class _PythonQueryVisitor(ast.NodeVisitor):
         self.root = root
         self.constants = constants
         self.records: list[QueryRecord] = []
+        self.wrapper_sql_parameter: str | None = None
 
     def _record_assigned_sql(self, value: ast.AST) -> None:
         pending = [value]
@@ -352,13 +353,27 @@ class _PythonQueryVisitor(ast.NodeVisitor):
             self._record_assigned_sql(node.value)
         self.generic_visit(node)
 
+    def _visit_possible_wrapper(self, node: ast.AST, name: str) -> None:
+        """Walk a function body, suppressing only a wrapper's pass-through call.
+
+        A wrapper named in :data:`_DB_WRAPPER_SQL_ARGUMENTS` is inventoried at
+        its call sites, where the SQL is known. Skipping the whole body to avoid
+        counting the pass-through twice also hid the wrapper's *own* statements,
+        so a write issued inside one was invisible to every ownership check.
+        Only the pass-through parameter is suppressed now.
+        """
+        previous = self.wrapper_sql_parameter
+        if name in _DB_WRAPPER_SQL_ARGUMENTS:
+            parameter = node.args.args[_DB_WRAPPER_SQL_ARGUMENTS[name]]  # type: ignore[attr-defined]
+            self.wrapper_sql_parameter = parameter.arg
+        self.generic_visit(node)
+        self.wrapper_sql_parameter = previous
+
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802 - ast visitor API
-        if node.name not in _DB_WRAPPER_SQL_ARGUMENTS:
-            self.generic_visit(node)
+        self._visit_possible_wrapper(node, node.name)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802 - ast visitor API
-        if node.name not in _DB_WRAPPER_SQL_ARGUMENTS:
-            self.generic_visit(node)
+        self._visit_possible_wrapper(node, node.name)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 - ast visitor API
         method = node.func.attr if isinstance(node.func, ast.Attribute) else ""
@@ -369,7 +384,11 @@ class _PythonQueryVisitor(ast.NodeVisitor):
         if (method in _DB_METHODS or method in _DB_WRAPPER_SQL_ARGUMENTS) and len(
             node.args
         ) > sql_argument:
-            sql, dynamic = _static_sql(node.args[sql_argument], self.constants)
+            argument = node.args[sql_argument]
+            if isinstance(argument, ast.Name) and argument.id == self.wrapper_sql_parameter:
+                self.generic_visit(node)
+                return
+            sql, dynamic = _static_sql(argument, self.constants)
             operations, relations, write_relations = _query_shape(sql)
             if operations or dynamic:
                 self.records.append(
