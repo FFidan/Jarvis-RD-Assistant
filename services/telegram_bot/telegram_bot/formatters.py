@@ -504,12 +504,24 @@ def _remaining_line(total: int, shown: int) -> list[str]:
     return [f"  … and {remaining} more"] if remaining > 0 else []
 
 
+def _count_line(icon: str, count: int | None, counted: str, unavailable: str) -> str:
+    """Render one briefing count, or say the number could not be read.
+
+    A ``None`` count means the gather behind it failed. Rendering that as a
+    zero would tell the reader there is nothing to do, when the truth is that
+    nothing is known — so the outage is stated instead.
+    """
+    if count is None:
+        return f"{icon} {unavailable}"
+    return f"{icon} <b>{count}</b> {counted}"
+
+
 def format_morning_briefing(
-    new_papers_count: int,
-    inbox_total: int,
-    due_cards: int,
-    open_tasks: list[dict],
-    milestones: list[dict],
+    new_papers_count: int | None,
+    inbox_total: int | None,
+    due_cards: int | None,
+    open_tasks: list[dict] | None,
+    milestones: list[dict] | None,
 ) -> str:
     """Format the combined morning briefing message.
 
@@ -519,12 +531,15 @@ def format_morning_briefing(
 
     Parameters
     ----------
-    new_papers_count : int
-        Papers added to the caller's library since midnight UTC.
-    inbox_total : int
-        Papers currently in the Inbox view, whenever they arrived.
-    due_cards : int
-        Flashcards whose review is due as of now.
+    new_papers_count : int | None
+        Papers added to the caller's library since midnight UTC, or ``None``
+        when that count could not be read.
+    inbox_total : int | None
+        Papers currently in the Inbox view, whenever they arrived, or ``None``
+        when that count could not be read.
+    due_cards : int | None
+        Flashcards whose review is due as of now, or ``None`` when that count
+        could not be read.
     open_tasks : list[dict]
         Tasks that are not done, under the same rule the My Day view applies.
     milestones : list[dict]
@@ -538,11 +553,34 @@ def format_morning_briefing(
     now = datetime.now(UTC)
     lines = [f"☀️ <b>Morning Briefing</b> — {now.strftime('%A, %B %d')}\n"]
 
-    lines.append(f"📄 <b>{new_papers_count}</b> papers added to your library since midnight UTC")
-    lines.append(f"📥 <b>{inbox_total}</b> waiting in your inbox")
-    lines.append(f"📚 <b>{due_cards}</b> cards due for review right now")
+    lines.append(
+        _count_line(
+            "📄",
+            new_papers_count,
+            "papers added to your library since midnight UTC",
+            "Papers added to your library since midnight UTC are unavailable right now",
+        )
+    )
+    lines.append(
+        _count_line(
+            "📥",
+            inbox_total,
+            "waiting in your inbox",
+            "Your inbox count is unavailable right now",
+        )
+    )
+    lines.append(
+        _count_line(
+            "📚",
+            due_cards,
+            "cards due for review right now",
+            "Cards due for review are unavailable right now",
+        )
+    )
 
-    if open_tasks:
+    if open_tasks is None:
+        lines.append("\n📋 Your open tasks are unavailable right now")
+    elif open_tasks:
         lines.append(
             f"\n📋 <b>Open tasks ({len(open_tasks)}):</b> "
             "<i>to do, in progress or blocked — the same rule as My Day</i>"
@@ -553,7 +591,9 @@ def format_morning_briefing(
             lines.append(f"  • {title}" + (f" <i>({project})</i>" if project else ""))
         lines.extend(_remaining_line(len(open_tasks), _LISTED_SECTION_ROWS))
 
-    if milestones:
+    if milestones is None:
+        lines.append("\n🎯 Milestones due in the next 7 days are unavailable right now")
+    elif milestones:
         lines.append(f"\n🎯 <b>Milestones due in the next 7 days ({len(milestones)}):</b>")
         for m in milestones[:_LISTED_SECTION_ROWS]:
             name = escape(m.get("name", ""))

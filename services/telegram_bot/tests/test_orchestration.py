@@ -176,6 +176,42 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
 
 
 @pytest.mark.asyncio
+async def test_daily_briefing_reports_unavailable_counts_rather_than_zero():
+    """The scheduled briefing states a count it could not read instead of sending a zero."""
+    bot = AsyncMock()
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
+    pool = AsyncMock()
+
+    async def _get(url, *_args, **_kwargs):
+        if url.endswith("/api/tasks"):
+            return make_http_response([{"title": "Write paper", "status": "todo"}])
+        if url.endswith("/api/milestones/upcoming"):
+            return make_http_response([])
+        # Both count endpoints — the paper feed and the stats read — are down.
+        return make_http_response(None, status=500)
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.side_effect = _get
+
+    with patch(
+        "telegram_bot.orchestration.daily_briefing.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
+        await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
+
+    bot.send_message.assert_awaited_once()
+    text = bot.send_message.await_args.kwargs["text"]
+    assert "0</b> papers added to your library since midnight UTC" not in text
+    assert "0</b> waiting in your inbox" not in text
+    assert "0</b> cards due for review right now" not in text
+    assert "Papers added to your library since midnight UTC are unavailable right now" in text
+    assert "Your inbox count is unavailable right now" in text
+    assert "Cards due for review are unavailable right now" in text
+    # The sections that were read still render.
+    assert "Write paper" in text
+
+
+@pytest.mark.asyncio
 async def test_daily_briefing_passes_owner_headers_on_every_call():
     """Each briefing REST call carries the canonical owner headers."""
     bot = AsyncMock()
