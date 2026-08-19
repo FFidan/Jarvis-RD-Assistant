@@ -114,6 +114,19 @@ def _paired_auth_patch(jarvis_user_id):
     )
 
 
+def _capture_scheduled(context) -> list:
+    """Collect coroutines the handler schedules instead of awaiting inline.
+
+    A handler must not await minutes of backend work inside the update loop:
+    this application processes updates one at a time, so doing so would stop
+    the bot answering anyone. Capturing the scheduled coroutine lets a test
+    assert both that property and what the detached work eventually does.
+    """
+    scheduled: list = []
+    context.application.create_task = scheduled.append
+    return scheduled
+
+
 # ---------------------------------------------------------------------------
 # Tests: /start
 # ---------------------------------------------------------------------------
@@ -345,8 +358,17 @@ async def test_discover_searches_all_sources_and_states_the_library_write():
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = _multi_source_search_payload()
     mock_http.post.return_value = mock_resp
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
+
+    # The search runs detached: a source-wide search takes minutes, and an
+    # inline await would stop the bot answering every other user meanwhile.
+    assert mock_http.post.await_count == 0, "/discover must not search inside the update loop"
+    ack = update.message.reply_text.await_args.args[0]
+    assert "Searching" in ack, "/discover must say the search started"
+    assert len(scheduled) == 1
+    await scheduled[0]
 
     mock_http.post.assert_awaited_once()
     call = mock_http.post.await_args
@@ -357,8 +379,7 @@ async def test_discover_searches_all_sources_and_states_the_library_write():
     # The backend worst case observed for this call is 70.5 s.
     assert call.kwargs["timeout"] > 70.5
 
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
+    text = update.message.reply_text.await_args.args[0]
     assert "Found 2 papers and saved 2 to your library." in text
     assert "arxiv: 1" in text
     assert "pubmed: 1" in text
@@ -375,10 +396,12 @@ async def test_discover_reports_papers_that_could_not_be_saved():
         failed=[{"external_id": "b1", "error": "conflict"}]
     )
     mock_http.post.return_value = mock_resp
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
+    await scheduled[0]
 
-    text = update.message.reply_text.call_args[0][0]
+    text = update.message.reply_text.await_args.args[0]
     # The headline itself must carry the saved count the backend reported (1 of
     # 2), not the number of results found.
     assert "Found 2 papers and saved 1 to your library." in text
@@ -398,10 +421,12 @@ async def test_discover_does_not_claim_a_library_write_when_nothing_was_saved():
         ]
     )
     mock_http.post.return_value = mock_resp
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
+    await scheduled[0]
 
-    text = update.message.reply_text.call_args[0][0]
+    text = update.message.reply_text.await_args.args[0]
     assert "Found 2 papers, but none could be saved to your library." in text
     assert "saved them to your library" not in text
 
@@ -410,11 +435,13 @@ async def test_discover_does_not_claim_a_library_write_when_nothing_was_saved():
 async def test_discover_without_a_query_shows_usage():
     """/discover needs a query; it must not fire a source-wide search without one."""
     update, context, _, mock_http = _make_update_and_context(args=[])
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
 
     mock_http.post.assert_not_awaited()
-    text = update.message.reply_text.call_args[0][0]
+    assert not scheduled, "the usage reply must not schedule a search either"
+    text = update.message.reply_text.await_args.args[0]
     assert "/discover" in text
 
 
@@ -433,12 +460,15 @@ async def test_discover_with_no_results_suggests_a_different_query():
         "failed": [],
     }
     mock_http.post.return_value = mock_resp
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
+    await scheduled[0]
 
-    text = update.message.reply_text.call_args[0][0]
+    text = update.message.reply_text.await_args.args[0]
     assert "saved" not in text.lower()
     assert "obscure" in text
+    assert "No external source returned a paper" in text
 
 
 @pytest.mark.asyncio
@@ -446,11 +476,13 @@ async def test_discover_api_failure_sends_error():
     """/discover surfaces a backend failure instead of a silent empty result."""
     update, context, _, mock_http = _make_update_and_context(args=["transformer"])
     mock_http.post.side_effect = Exception("Connection failed")
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
+    await scheduled[0]
 
-    text = update.message.reply_text.call_args[0][0]
-    assert "failed" in text.lower()
+    text = update.message.reply_text.await_args.args[0]
+    assert "Discovery failed" in text
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +545,17 @@ async def test_briefing_returns_text():
         ),
         make_http_response([]),  # fetch_upcoming_milestones
     ]
+    scheduled = _capture_scheduled(context)
 
     await briefing_command(update, context)
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
+
+    # The five-section gather runs detached: awaiting it here would stop the
+    # bot answering every other user for as long as the backend takes.
+    assert mock_http.get.await_count == 0, "/briefing must not gather inside the update loop"
+    assert len(scheduled) == 1
+    await scheduled[0]
+
+    text = update.message.reply_text.await_args.args[0]
     assert "Briefing" in text or "briefing" in text.lower()
     # Each count names its window and its view.
     assert "3</b> papers added to your library since midnight UTC" in text
@@ -541,12 +580,14 @@ async def test_briefing_partial_degradation_on_milestones_failure():
         ),
         make_http_response(None, status=500),  # milestones fail → 5xx
     ]
+    scheduled = _capture_scheduled(context)
 
     await briefing_command(update, context)
+    assert mock_http.get.await_count == 0, "/briefing must not gather inside the update loop"
+    await scheduled[0]
 
     # Briefing still sends, with the working sections rendered.
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
+    text = update.message.reply_text.await_args.args[0]
     assert "Briefing" in text or "briefing" in text.lower()
     assert "Task 1" in text
     # Each surviving count carries the value its own gather returned, so a
@@ -572,11 +613,13 @@ async def test_briefing_reports_unavailable_counts_rather_than_zero():
         ),
         make_http_response([]),  # milestones OK
     ]
+    scheduled = _capture_scheduled(context)
 
     await briefing_command(update, context)
+    assert mock_http.get.await_count == 0, "/briefing must not gather inside the update loop"
+    await scheduled[0]
 
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
+    text = update.message.reply_text.await_args.args[0]
     assert "0</b> papers added to your library since midnight UTC" not in text
     assert "0</b> waiting in your inbox" not in text
     assert "0</b> cards due for review right now" not in text
@@ -600,10 +643,12 @@ async def test_briefing_distinguishes_an_unread_list_from_an_empty_one():
         make_http_response(None, status=500),  # tasks unreadable
         make_http_response([]),  # milestones genuinely empty
     ]
+    scheduled = _capture_scheduled(context)
 
     await briefing_command(update, context)
+    await scheduled[0]
 
-    text = update.message.reply_text.call_args[0][0]
+    text = update.message.reply_text.await_args.args[0]
     assert "Your open tasks are unavailable right now" in text
     assert "Open tasks (" not in text
     assert "Milestones due in the next 7 days" not in text
@@ -1048,8 +1093,10 @@ async def test_discover_strips_bidi_chars():
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = _multi_source_search_payload()
     mock_http.post.return_value = mock_resp
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
+    await scheduled[0]
 
     sent_query = mock_http.post.await_args.kwargs["json"]["query"]
     assert sent_query == "neuralnets"
@@ -1072,9 +1119,11 @@ async def test_briefing_scopes_to_user_via_owner_header_when_paired():
         make_http_response([]),  # tasks
         make_http_response([]),  # milestones
     ]
+    scheduled = _capture_scheduled(context)
 
     with _paired_auth_patch(7):
         await briefing_command(update, context)
+    await scheduled[0]
 
     # Every gather carries the owner header scoping the response to user 7.
     assert mock_http.get.await_count == 5
@@ -1088,6 +1137,7 @@ async def test_briefing_unpaired_owner_gets_pairing_message():
     blocked with the /pair guidance reply."""
     update, context, _, mock_http = _make_update_and_context()
     update.message.reply_text = AsyncMock()
+    scheduled = _capture_scheduled(context)
 
     with patch(
         "telegram_bot.handlers.commands._auth.auth_check",
@@ -1099,8 +1149,10 @@ async def test_briefing_unpaired_owner_gets_pairing_message():
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "pair" in text.lower() or "Settings" in text
-    # No backend call for the briefing itself should have been issued
+    # No backend call for the briefing itself should have been issued, inline
+    # or detached: an unpaired chat must not reach the backend at all.
     mock_http.get.assert_not_awaited()
+    assert not scheduled
 
 
 @pytest.mark.asyncio
@@ -1428,19 +1480,6 @@ async def test_next_command_reports_a_deck_the_user_finished():
     assert 'href="https://jarvis.example.test/pulse"' in text
 
 
-def _capture_scheduled(context) -> list:
-    """Collect coroutines the handler schedules instead of awaiting inline.
-
-    /pulse_now must not await a multi-minute job inside the update handler:
-    this application processes updates one at a time, so doing so would stop
-    the bot answering anyone. Capturing the scheduled coroutine lets a test
-    assert both that property and what the detached work eventually does.
-    """
-    scheduled: list = []
-    context.application.create_task = scheduled.append
-    return scheduled
-
-
 @pytest.mark.asyncio
 async def test_pulse_now_command_delivers_the_deck_once_the_job_succeeds(monkeypatch):
     """/pulse_now waits for the job it started, then uses the scheduled delivery path."""
@@ -1506,9 +1545,11 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
         make_http_response([]),  # tasks
         make_http_response([]),  # milestones
     ]
+    scheduled = _capture_scheduled(context)
 
     with _paired_auth_patch(7):
         await briefing_command(update, context)
+    await scheduled[0]
 
     # Locate the /api/stats GET and verify the local assertion marker.
     stats_calls = [c for c in mock_http.get.await_args_list if c.args[0].endswith("/api/stats")]

@@ -16,14 +16,23 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Awaitable, Callable
 
+import httpx
 from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot import services_client
+from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_paper_detail, format_project_status
 from telegram_bot.handlers.commands.system_commands import start_focus_and_reply
-from telegram_bot.handlers.helpers import auth_check, get_config, get_http, get_platform_http
+from telegram_bot.handlers.helpers import (
+    auth_check,
+    get_config,
+    get_http,
+    get_platform_http,
+    run_detached,
+)
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -212,6 +221,50 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer(text="Feedback failed — try again later")
 
 
+async def _send_project_detail(
+    reply: Callable[..., Awaitable[object]],
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    project_id: int,
+) -> None:
+    """Read one project, its tasks and its milestones, and report through *reply*.
+
+    Parameters
+    ----------
+    reply : callable
+        Coroutine function that sends one message, e.g. ``reply_text``.
+    http : httpx.AsyncClient
+        Client carrying the paired-user marker.
+    config : BotConfig
+        Bot configuration.
+    user_id : int
+        Paired JARVIS user the three reads are scoped to.
+    project_id : int
+        Project the "Details" button named.
+
+    Notes
+    -----
+    Runs detached from the callback: the three reads are sequential, and this
+    application processes updates one at a time.
+    """
+    try:
+        project = await services_client.fetch_project(http, config, user_id, project_id)
+        if project is None:
+            await reply("Project not found.", parse_mode="HTML")
+            return
+        tasks = await services_client.fetch_project_tasks(http, config, user_id, project_id)
+        milestones = await services_client.fetch_project_milestones(
+            http, config, user_id, project_id
+        )
+    except Exception:
+        logger.exception("Failed to load project detail for id=%s", project_id)
+        await reply("⚠️ Couldn't load that right now.", parse_mode="HTML")
+        return
+
+    await reply(format_project_status(project, tasks, milestones), parse_mode="HTML")
+
+
 @rate_limit(max_calls=10, window_seconds=60)
 async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``project_detail_{id}`` — query project, tasks, and milestones then reply."""
@@ -236,22 +289,11 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 
     config = get_config(context)
     http = get_http(context)
-    try:
-        project = await services_client.fetch_project(http, config, jarvis_user_id, project_id)
-        if project is None:
-            await query.message.reply_text("Project not found.", parse_mode="HTML")
-            return
-        tasks = await services_client.fetch_project_tasks(http, config, jarvis_user_id, project_id)
-        milestones = await services_client.fetch_project_milestones(
-            http, config, jarvis_user_id, project_id
-        )
-    except Exception:
-        logger.exception("Failed to load project detail for id=%s", project_id)
-        await query.message.reply_text("⚠️ Couldn't load that right now.", parse_mode="HTML")
-        return
-
-    text = format_project_status(project, tasks, milestones)
-    await query.message.reply_text(text, parse_mode="HTML")
+    run_detached(
+        context,
+        _send_project_detail(query.message.reply_text, http, config, jarvis_user_id, project_id),
+        description="project detail",
+    )
 
 
 @rate_limit(max_calls=10, window_seconds=60)

@@ -1,11 +1,14 @@
 """Shared helper functions for Telegram bot handlers.
 
-Provides common utilities for scoped HTTP clients and authorisation checks.
+Provides common utilities for scoped HTTP clients, authorisation checks, and
+running a handler's slow follow-up work outside the update loop.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Coroutine
+from typing import Any
 
 import httpx
 from telegram import Update
@@ -106,3 +109,39 @@ async def auth_check(
     if pairing is None:
         return False, None
     return True, pairing.user_id
+
+
+async def _log_detached_failure(work: Coroutine[Any, Any, None], description: str) -> None:
+    """Await detached work, logging whatever it fails on instead of raising it."""
+    try:
+        await work
+    except Exception:
+        logger.exception("Detached %s failed", description)
+
+
+def run_detached(
+    context: ContextTypes.DEFAULT_TYPE,
+    work: Coroutine[Any, Any, None],
+    *,
+    description: str,
+) -> None:
+    """Run one handler's slow follow-up work outside the update loop.
+
+    The application processes updates one at a time, so a handler that awaits a
+    multi-second backend call stops the bot answering anyone at all — including
+    the user who sent it. Such a handler answers immediately and hands the slow
+    part here, and the work reports its own outcome to the chat when it ends.
+
+    Parameters
+    ----------
+    context : ContextTypes.DEFAULT_TYPE
+        Handler context whose application owns the detached task. The
+        application awaits its outstanding tasks when it stops, so work
+        scheduled here is not dropped by an ordinary shutdown.
+    work : Coroutine
+        The follow-up work, already carrying everything it needs — including
+        the callable it answers the chat through.
+    description : str
+        What the work does, named in the log line if it fails.
+    """
+    context.application.create_task(_log_detached_failure(work, description))
