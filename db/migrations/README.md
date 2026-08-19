@@ -4,7 +4,7 @@ This directory is the ledger for incremental schema migrations applied on top of
 
 The repository's squashed baseline schema version is `101`; it is fully captured
 in `db/init.sql`. A fresh database starts at that baseline and then applies the
-incremental files below. The current schema version is `119`, also recorded in
+incremental files below. The current schema version is `120`, also recorded in
 `db/SCHEMA_VERSION`.
 
 New migrations land here numbered sequentially (`0102_<descriptive>.sql` and up)
@@ -31,6 +31,7 @@ and are applied via `run_migrations`
 | `0117` | `0117_owner_capabilities.sql` | Replace remaining foreign runtime writes with owner-local delivery and exact database capabilities. |
 | `0118` | `0118_enforce_runtime_privileges.sql` | Revoke transitional cross-domain grants and enforce capability-only runtime mutations. |
 | `0119` | `0119_erasure_executor_capability.sql` | Restrict due-erasure selection to the executor capability and align visibility checkpoint guards with the canonical key. |
+| `0120` | `0120_erasure_capability_boundary.sql` | Move erasure state changes and the account deletion clock behind owner-defined capabilities. |
 
 The migration runner serializes application with PostgreSQL advisory lock 42,
 records each applied version in `schema_migrations`, and refuses files newer

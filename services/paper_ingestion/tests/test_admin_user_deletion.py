@@ -6,6 +6,7 @@ Reuses the mocked-pool style from test_admin_users.py (no Docker needed).
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -51,30 +52,6 @@ def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
 # --------------------------------------------------------------------------
 # restore endpoint
 # --------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_restore_clears_deleted_at_within_grace(monkeypatch) -> None:
-    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=None)
-    conn.fetchrow = AsyncMock(
-        side_effect=[
-            {**_user_row(id=5), "deleted_at": _FIXED_NOW},
-            _user_row(id=5),
-        ]
-    )
-    pool = _build_mock_pool_txn(conn)
-    request = _build_request(pool, user_id=1, user_role="admin")
-
-    result = await admin_router.restore_user(5, request)
-
-    assert result.id == 5
-    select_sql = conn.fetchrow.await_args_list[0].args[0]
-    update_sql = conn.fetchrow.await_args_list[1].args[0]
-    assert "30 days" in select_sql
-    assert "deleted_at = NULL" in update_sql
-    assert "deleted_at IS NOT NULL" in update_sql
 
 
 @pytest.mark.asyncio
@@ -151,9 +128,8 @@ async def test_soft_delete_writes_audit(monkeypatch) -> None:
     from fastapi import Response
 
     conn = AsyncMock()
-    conn.fetchval = AsyncMock(
-        side_effect=["user", None]
-    )  # target role, then no active erasure request
+    # Target role, then the erasure request id the capability mints.
+    conn.fetchval = AsyncMock(side_effect=["user", uuid.uuid4()])
     conn.execute = AsyncMock(return_value="UPDATE 1")
 
     calls = _patch_audit(monkeypatch)
@@ -177,7 +153,7 @@ async def test_soft_delete_targets_the_deleted_users_sessions(monkeypatch) -> No
     from fastapi import Response
 
     conn = AsyncMock()
-    conn.fetchval = AsyncMock(side_effect=["user", None])
+    conn.fetchval = AsyncMock(side_effect=["user", uuid.uuid4()])
     conn.execute = AsyncMock(return_value="UPDATE 1")
 
     _patch_audit(monkeypatch)

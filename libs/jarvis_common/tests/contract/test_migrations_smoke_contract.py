@@ -204,8 +204,12 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
             await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 119")
             == "9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296"
         )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 120")
+            == "2a714b13ecd9fd440d33594c3425e6922999d42bd5f8e47754834ae7e1431847"
+        )
         current_version = await bootstrap.fetchval("SELECT max(version) FROM ops.schema_migrations")
-        assert current_version == 119
+        assert current_version == 120
         assert await bootstrap.fetchrow(
             """
             SELECT owner_queue, owner_service FROM ops.procrastinate_jobs
