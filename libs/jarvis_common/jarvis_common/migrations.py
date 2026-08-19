@@ -29,7 +29,6 @@ _SCHEMA_FLOOR_CONTENTION_POLL_SECONDS = 0.1
 # db/init.sql is the full schema baseline through migration 101; db/migrations/
 # holds the required post-baseline migrations. db/SCHEMA_VERSION records the
 # highest version shipped; it is not duplicated here.
-_MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
 
 # Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
 # sync with that file, which is the single source of the baseline floor.
@@ -387,43 +386,6 @@ def _strip_outer_transaction_control(sql: str) -> str:
     return "".join(pieces)
 
 
-async def _repair_false_applied_migrations(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
-) -> None:
-    """Remove known false-applied markers when their schema probe fails."""
-    probe_versions = [version for version, _, _ in _MIGRATION_SCHEMA_PROBES]
-    applied = {
-        row["version"]
-        for row in await conn.fetch(
-            "SELECT version FROM schema_migrations WHERE version = ANY($1::int[])",
-            probe_versions,
-        )
-    }
-
-    for version, description, probe_sql in _MIGRATION_SCHEMA_PROBES:
-        if version not in applied:
-            continue
-
-        try:
-            probe_ok = await conn.fetchval(probe_sql)
-        except (
-            asyncpg.UndefinedColumnError,
-            asyncpg.UndefinedObjectError,
-            asyncpg.UndefinedTableError,
-        ):
-            probe_ok = False
-        if probe_ok:
-            continue
-
-        logger.warning(
-            "schema_migrations marks migration %s as applied but %s is missing; "
-            "removing marker so the migration can replay",
-            version,
-            description,
-        )
-        await conn.execute("DELETE FROM schema_migrations WHERE version = $1", version)
-
-
 async def run_migrations(
     pool: asyncpg.Pool,
     migrations_dir: Path | None = None,
@@ -483,7 +445,6 @@ async def run_migrations(
                     await _wait_for_schema_floor_after_contention(conn)
                     return
                 raise RuntimeError(f"{message}; refusing to start with unverified schema") from None
-            await _repair_false_applied_migrations(conn)
             applied = {
                 r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")
             }

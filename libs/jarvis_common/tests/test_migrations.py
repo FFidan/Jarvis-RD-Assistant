@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import asyncpg
@@ -290,7 +293,7 @@ def test_packaged_migration_hashes_match_the_tracked_files() -> None:
 
     hashes = _verified_migration_hashes()
 
-    assert hashes[114] == "2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24"
+    assert hashes[114] == "d05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374"
 
 
 def test_required_code_schema_absent_file_is_silent(tmp_path, monkeypatch, caplog) -> None:
@@ -331,3 +334,237 @@ def test_schema_version_file_matches_fallback_constant() -> None:
     repo_root = Path(_m.__file__).resolve().parents[3]
     file_value = int((repo_root / "db" / "SCHEMA_VERSION").read_text().strip())
     assert file_value == _m._REQUIRED_CODE_SCHEMA_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# Migration file hygiene and replay safety
+# ---------------------------------------------------------------------------
+
+# A complete ``SET search_path ...;`` statement.  The ``SET search_path`` that
+# follows a ``CREATE FUNCTION`` header is an attribute clause, not a statement:
+# it is never terminated on its own line and it rejects ``LOCAL``.
+_STATEMENT_SEARCH_PATH_RE = re.compile(
+    r"^SET\s+(?P<local>LOCAL\s+)?search_path\b[^;]*;\s*$", re.IGNORECASE
+)
+
+_REPLAYED_MIGRATIONS = (
+    "0115_cross_domain_boundaries.sql",
+    "0116_unified_job_facade.sql",
+    "0117_owner_capabilities.sql",
+)
+
+_REPLAYED_INDEXES = frozenset(
+    {
+        "research_domain_events_pending_idx",
+        "research_domain_events_active_deletion_idx",
+        "learning_domain_commands_pending_idx",
+        "platform_erasure_requests_one_active_user_idx",
+        "audit_log_subject_id_idx",
+        "config_deliveries_due_idx",
+    }
+)
+
+# ``CREATE TABLE IF NOT EXISTS`` accepts a table whose columns differ, so a
+# half-applied revision would replay cleanly and only fail later, in the grants
+# that assume these columns.  Replay must leave the declared shape intact.
+_DECLARED_COLUMNS: dict[tuple[str, str], frozenset[str]] = {
+    ("research", "domain_events"): frozenset(
+        {
+            "id",
+            "event_type",
+            "user_id",
+            "paper_id",
+            "payload",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "delivered_at",
+            "dead_lettered_at",
+            "created_at",
+        }
+    ),
+    ("research", "pending_paper_deletions"): frozenset(
+        {"event_id", "user_id", "paper_id", "created_at"}
+    ),
+    ("research", "zotero_push_claims"): frozenset(
+        {"paper_id", "user_id", "lease_id", "lease_expires_at"}
+    ),
+    ("learning", "domain_commands"): frozenset(
+        {
+            "id",
+            "command_type",
+            "request_id",
+            "user_id",
+            "paper_id",
+            "payload",
+            "received_at",
+            "processed_at",
+            "acknowledgement_at",
+            "last_error",
+        }
+    ),
+    ("platform", "erasure_requests"): frozenset(
+        {
+            "request_id",
+            "user_id",
+            "state",
+            "resume_state",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "requested_at",
+            "eligible_at",
+            "completed_at",
+        }
+    ),
+    ("platform", "erasure_acknowledgements"): frozenset(
+        {"request_id", "domain", "receipt", "acknowledged_at"}
+    ),
+    ("platform", "audit_subjects"): frozenset(
+        {"id", "user_id", "metadata", "created_at", "updated_at"}
+    ),
+    ("platform", "config_deliveries"): frozenset(
+        {
+            "scope_user_id",
+            "actor_user_id",
+            "key",
+            "delivery_id",
+            "user_role",
+            "session_id",
+            "zotero_scope_changed",
+            "state",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "updated_at",
+        }
+    ),
+    ("ops", "job_owner_registry"): frozenset({"task_name", "queue_name", "service_name"}),
+}
+
+_OWNED_SCHEMAS = ("research", "learning", "platform", "ops")
+
+
+def _db_dir() -> Path:
+    """Resolve the tracked db/ directory from this test file."""
+    return Path(__file__).resolve().parents[3] / "db"
+
+
+def test_no_migration_sets_a_session_scoped_search_path() -> None:
+    """A statement-position ``SET search_path`` must be written ``SET LOCAL``.
+
+    ``run_migrations`` applies every file inside one transaction, so a
+    session-scoped statement outlives the migration that ran it and leaves the
+    connection on a search path nothing else chose.
+    """
+    migration_files = sorted((_db_dir() / "migrations").glob("*.sql"))
+    assert migration_files, "no migration files were scanned"
+
+    session_scoped = [
+        f"{path.name}:{number}"
+        for path in migration_files
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if (match := _STATEMENT_SEARCH_PATH_RE.match(line)) and not match.group("local")
+    ]
+    assert session_scoped == []
+
+
+async def _owned_schema_columns(
+    conn: asyncpg.Connection,
+) -> dict[tuple[str, str], frozenset[str]]:
+    """Return the column names of every table in the owned schemas."""
+    shape: dict[tuple[str, str], set[str]] = {}
+    for row in await conn.fetch(
+        """
+        SELECT table_schema, table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema = ANY($1::text[])
+        """,
+        list(_OWNED_SCHEMAS),
+    ):
+        shape.setdefault((row["table_schema"], row["table_name"]), set()).add(row["column_name"])
+    return {table: frozenset(columns) for table, columns in shape.items()}
+
+
+def _assert_declared_columns(shape: dict[tuple[str, str], frozenset[str]]) -> None:
+    """Fail when a replayed migration's table lost a column it declares."""
+    for table, declared in _DECLARED_COLUMNS.items():
+        qualified = ".".join(table)
+        assert table in shape, f"{qualified} does not exist"
+        assert declared <= shape[table], (
+            f"{qualified} is missing declared columns: {sorted(declared - shape[table])}"
+        )
+
+
+async def _insert_job(conn: asyncpg.Connection, task_name: str, status: str, job_id: str) -> None:
+    """Insert one research-owned job carrying a public job id."""
+    await conn.execute(
+        """
+        INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
+        VALUES ('paper_ingestion', $1, $2::jsonb, $3::ops.procrastinate_job_status)
+        """,
+        task_name,
+        json.dumps({"job_id": job_id, "user_id": 71}),
+        status,
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio
+async def test_replayed_migrations_converge_on_the_installed_baseline(live_pg_dsn: str) -> None:
+    """Re-running 0115-0117 over an installed schema succeeds and changes nothing.
+
+    Exercises the migration files themselves rather than ``db/init.sql``: the
+    disposable database is built from ``db/init.sql`` and each file is then
+    executed again, which is what a replay after a lost ``schema_migrations``
+    marker does.  The contract suite cannot cover this — ``db/init.sql`` records
+    every revision as applied, so the runner skips all of them there.
+    """
+    db_dir = _db_dir()
+    conn = await asyncpg.connect(live_pg_dsn)
+    try:
+        await conn.execute((db_dir / "init.sql").read_text(encoding="utf-8"))
+        installed_shape = await _owned_schema_columns(conn)
+
+        for name in _REPLAYED_MIGRATIONS:
+            async with conn.transaction():
+                await conn.execute((db_dir / "migrations" / name).read_text(encoding="utf-8"))
+
+        replayed_shape = await _owned_schema_columns(conn)
+        assert replayed_shape == installed_shape
+        _assert_declared_columns(replayed_shape)
+
+        indexes = {
+            row["indexname"]
+            for row in await conn.fetch(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = ANY($1::text[])",
+                list(_OWNED_SCHEMAS),
+            )
+        }
+        assert _REPLAYED_INDEXES <= indexes
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM pg_constraint WHERE conname = 'audit_log_caller_role_check'"
+            )
+            == 1
+        )
+
+        # The replay installed 0116's job facade over db/init.sql's, so what
+        # follows reads the migration route's registry seed and cancel function.
+        test_job_id = str(uuid.uuid4())
+        await _insert_job(conn, "noop.test", "todo", test_job_id)
+        assert await conn.fetchrow(
+            "SELECT owner_queue, owner_service FROM ops.procrastinate_jobs "
+            "WHERE args->>'job_id' = $1",
+            test_job_id,
+        ) == ("paper_ingestion", "research")
+
+        for status, cancelled in (("succeeded", False), ("aborting", False), ("doing", True)):
+            job_id = str(uuid.uuid4())
+            await _insert_job(conn, "paper.process", status, job_id)
+            assert (
+                await conn.fetchval("SELECT ops.jarvis_job_cancel_v1($1, '71')", job_id)
+                is cancelled
+            ), f"cancelling a {status} job reported the wrong result"
+    finally:
+        await conn.close()

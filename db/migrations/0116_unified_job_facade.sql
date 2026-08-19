@@ -2,7 +2,7 @@
 
 SET LOCAL ROLE jarvis_ops_owner;
 
-CREATE TABLE ops.job_owner_registry (
+CREATE TABLE IF NOT EXISTS ops.job_owner_registry (
     task_name text PRIMARY KEY,
     queue_name text NOT NULL,
     service_name text NOT NULL CHECK (service_name IN ('research', 'learning')),
@@ -33,6 +33,9 @@ INSERT INTO ops.job_owner_registry (task_name, queue_name, service_name) VALUES
     ('zotero.sync_from_zotero', 'paper_ingestion', 'research'),
     ('zotero.sync_annotations', 'paper_ingestion', 'research'),
     ('zotero.push_highlights', 'paper_ingestion', 'research'),
+    -- Registered so the test-only kind the public jobs API exposes under
+    -- JARVIS_ENABLE_TEST_JOBS=1 can be deferred like any other job.
+    ('noop.test', 'paper_ingestion', 'research'),
     ('card.generate', 'learning_engine', 'learning'),
     ('card.generate_batch', 'learning_engine', 'learning')
 ON CONFLICT (task_name) DO UPDATE
@@ -149,23 +152,13 @@ CREATE OR REPLACE FUNCTION ops.jarvis_job_list_v1(
     ORDER BY job.id DESC LIMIT LEAST(GREATEST(p_limit, 1), 500)
 $$;
 
-CREATE OR REPLACE FUNCTION ops.jarvis_job_cancel_v1(p_job_id text, p_user_id text)
-RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
-DECLARE v_id bigint;
+CREATE OR REPLACE FUNCTION ops.jarvis_job_cancel_v1(p_job_id text, p_user_id text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
 BEGIN
-    SELECT id INTO v_id FROM ops.procrastinate_jobs
-    WHERE args->>'job_id' = p_job_id AND args->>'user_id' = p_user_id
-    ORDER BY id DESC LIMIT 1 FOR UPDATE;
-    IF v_id IS NULL THEN
-        RETURN FALSE;
-    END IF;
-    UPDATE ops.procrastinate_jobs
-    SET abort_requested = true,
-        status = CASE status WHEN 'todo' THEN 'cancelled'::ops.procrastinate_job_status ELSE status END
-    WHERE id = v_id AND status IN ('todo', 'doing');
-    RETURN TRUE;
-END;
-$$;
+    UPDATE ops.procrastinate_jobs SET abort_requested = true, status = CASE status WHEN 'todo' THEN 'cancelled'::ops.procrastinate_job_status ELSE status END
+    WHERE args->>'job_id' = p_job_id AND args->>'user_id' = p_user_id AND status IN ('todo','doing');
+    RETURN FOUND;
+END; $$;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA ops FROM jarvis_platform_runtime;
 REVOKE ALL ON FUNCTION ops.jarvis_job_read_v1(text), ops.jarvis_job_list_v1(text, text, text, integer),

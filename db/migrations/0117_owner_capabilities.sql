@@ -2,7 +2,7 @@
 
 SET LOCAL ROLE jarvis_platform_owner;
 
-CREATE TABLE platform.config_deliveries (
+CREATE TABLE IF NOT EXISTS platform.config_deliveries (
     scope_user_id bigint NOT NULL CHECK (scope_user_id >= 0),
     actor_user_id bigint CHECK (actor_user_id IS NULL OR actor_user_id > 0),
     key text NOT NULL CHECK (key ~ '^[a-z][a-z0-9_.-]{0,127}$'),
@@ -18,7 +18,7 @@ CREATE TABLE platform.config_deliveries (
     PRIMARY KEY (scope_user_id, key),
     CHECK (state <> 'pending' OR actor_user_id IS NOT NULL)
 );
-CREATE INDEX config_deliveries_due_idx
+CREATE INDEX IF NOT EXISTS config_deliveries_due_idx
     ON platform.config_deliveries (next_attempt_at, updated_at)
     WHERE state = 'pending';
 REVOKE ALL ON platform.config_deliveries FROM PUBLIC;
@@ -668,4 +668,3 @@ REVOKE ALL ON FUNCTION platform.finalize_erasure(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_executor;
 
 RESET ROLE;
-SET LOCAL search_path TO ops, public, pg_catalog;

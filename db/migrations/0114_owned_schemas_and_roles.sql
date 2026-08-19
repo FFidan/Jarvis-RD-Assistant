@@ -267,7 +267,3 @@ BEGIN
 END $$;
 
 SET LOCAL ROLE jarvis_ops_owner;
-
--- The migration runner records this migration after this statement.  Keep its
--- unqualified compatibility insert resolving to the moved metadata relation.
-SET LOCAL search_path TO ops, public, pg_catalog;

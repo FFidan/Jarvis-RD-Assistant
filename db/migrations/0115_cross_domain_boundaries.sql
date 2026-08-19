@@ -7,7 +7,7 @@ GRANT SELECT, INSERT ON ops.schema_migrations TO jarvis_migrator;
 RESET ROLE;
 
 SET LOCAL ROLE jarvis_research_owner;
-CREATE TABLE research.domain_events (
+CREATE TABLE IF NOT EXISTS research.domain_events (
     id uuid PRIMARY KEY,
     event_type text NOT NULL CHECK (event_type IN ('paper.read', 'paper.deleted')),
     user_id bigint NOT NULL,
@@ -20,20 +20,20 @@ CREATE TABLE research.domain_events (
     dead_lettered_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT NOW()
 );
-CREATE INDEX research_domain_events_pending_idx
+CREATE INDEX IF NOT EXISTS research_domain_events_pending_idx
     ON research.domain_events (next_attempt_at, created_at)
     WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
-CREATE UNIQUE INDEX research_domain_events_active_deletion_idx
+CREATE UNIQUE INDEX IF NOT EXISTS research_domain_events_active_deletion_idx
     ON research.domain_events (event_type, user_id, paper_id)
     WHERE event_type = 'paper.deleted'
       AND delivered_at IS NULL AND dead_lettered_at IS NULL;
-CREATE TABLE research.pending_paper_deletions (
+CREATE TABLE IF NOT EXISTS research.pending_paper_deletions (
     event_id uuid PRIMARY KEY REFERENCES research.domain_events (id) ON DELETE CASCADE,
     user_id bigint NOT NULL,
     paper_id bigint NOT NULL,
     created_at timestamptz NOT NULL DEFAULT NOW()
 );
-CREATE TABLE research.zotero_push_claims (
+CREATE TABLE IF NOT EXISTS research.zotero_push_claims (
     paper_id bigint NOT NULL,
     user_id bigint NOT NULL,
     lease_id uuid NOT NULL,
@@ -78,7 +78,7 @@ REVOKE ALL ON FUNCTION research.erase_user_data(bigint) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION research.erase_user_data(bigint) TO jarvis_research_runtime;
 
 SET LOCAL ROLE jarvis_learning_owner;
-CREATE TABLE learning.domain_commands (
+CREATE TABLE IF NOT EXISTS learning.domain_commands (
     id uuid PRIMARY KEY,
     command_type text NOT NULL CHECK (command_type IN (
         'paper.read', 'paper.deleted', 'project.zotero_collection', 'journal.upsert', 'user.erase'
@@ -93,7 +93,7 @@ CREATE TABLE learning.domain_commands (
     last_error text,
     UNIQUE (command_type, request_id)
 );
-CREATE INDEX learning_domain_commands_pending_idx
+CREATE INDEX IF NOT EXISTS learning_domain_commands_pending_idx
     ON learning.domain_commands (received_at)
     WHERE processed_at IS NULL;
 CREATE OR REPLACE FUNCTION learning.erase_user_data(p_user_id bigint, p_request_id text)
@@ -132,7 +132,7 @@ REVOKE ALL ON FUNCTION learning.erase_user_data(bigint, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION learning.erase_user_data(bigint, text) TO jarvis_learning_runtime;
 
 SET LOCAL ROLE jarvis_platform_owner;
-CREATE TABLE platform.erasure_requests (
+CREATE TABLE IF NOT EXISTS platform.erasure_requests (
     request_id uuid PRIMARY KEY,
     user_id bigint NOT NULL,
     state text NOT NULL CHECK (state IN (
@@ -149,17 +149,17 @@ CREATE TABLE platform.erasure_requests (
     eligible_at timestamptz NOT NULL DEFAULT NOW() + INTERVAL '30 days',
     completed_at timestamptz
 );
-CREATE UNIQUE INDEX platform_erasure_requests_one_active_user_idx
+CREATE UNIQUE INDEX IF NOT EXISTS platform_erasure_requests_one_active_user_idx
     ON platform.erasure_requests (user_id)
     WHERE state NOT IN ('complete', 'attention_required');
-CREATE TABLE platform.erasure_acknowledgements (
+CREATE TABLE IF NOT EXISTS platform.erasure_acknowledgements (
     request_id uuid NOT NULL REFERENCES platform.erasure_requests (request_id) ON DELETE CASCADE,
     domain text NOT NULL CHECK (domain IN ('qdrant', 'research', 'learning')),
     receipt jsonb NOT NULL DEFAULT '{}'::jsonb,
     acknowledged_at timestamptz NOT NULL DEFAULT NOW(),
     PRIMARY KEY (request_id, domain)
 );
-CREATE TABLE platform.audit_subjects (
+CREATE TABLE IF NOT EXISTS platform.audit_subjects (
     id uuid PRIMARY KEY,
     user_id bigint UNIQUE,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -168,7 +168,8 @@ CREATE TABLE platform.audit_subjects (
 );
 ALTER TABLE platform.audit_log ADD COLUMN IF NOT EXISTS subject_id uuid;
 ALTER TABLE platform.audit_log ADD COLUMN IF NOT EXISTS caller_role text;
-CREATE INDEX audit_log_subject_id_idx ON platform.audit_log (subject_id) WHERE subject_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS audit_log_subject_id_idx
+    ON platform.audit_log (subject_id) WHERE subject_id IS NOT NULL;
 
 INSERT INTO platform.audit_subjects (id, user_id)
 SELECT md5('audit-subject:' || user_id)::uuid, user_id::bigint
@@ -197,12 +198,17 @@ SET user_id = NULL,
 WHERE user_id IS NOT NULL;
 ALTER TABLE platform.audit_log ENABLE RULE no_update_audit_log;
 ALTER TABLE platform.audit_log ALTER COLUMN caller_role SET NOT NULL;
-ALTER TABLE platform.audit_log ADD CONSTRAINT audit_log_caller_role_check CHECK (
-    caller_role IN (
-        'jarvis_migrator', 'jarvis_platform_runtime',
-        'jarvis_research_runtime', 'jarvis_learning_runtime'
-    )
-);
+DO $$
+BEGIN
+    ALTER TABLE platform.audit_log ADD CONSTRAINT audit_log_caller_role_check CHECK (
+        caller_role IN (
+            'jarvis_migrator', 'jarvis_platform_runtime',
+            'jarvis_research_runtime', 'jarvis_learning_runtime'
+        )
+    );
+EXCEPTION WHEN duplicate_object THEN
+    NULL;
+END $$;
 
 CREATE OR REPLACE FUNCTION platform.append_audit_event(
     p_user_id text, p_action text, p_resource text, p_metadata jsonb
@@ -298,4 +304,3 @@ GRANT USAGE ON SCHEMA platform TO jarvis_erasure_executor;
 GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_executor;
 
 RESET ROLE;
-SET search_path TO ops, public, pg_catalog;
