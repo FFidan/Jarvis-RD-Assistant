@@ -339,16 +339,6 @@ REVOKE UPDATE, DELETE ON platform.users FROM jarvis_platform_runtime;
 GRANT UPDATE (email, role, display_name, last_login_at)
     ON platform.users TO jarvis_platform_runtime;
 
-ALTER ROLE jarvis_platform_owner SET search_path TO platform, pg_catalog;
-ALTER ROLE jarvis_research_owner SET search_path TO research, pg_catalog;
-ALTER ROLE jarvis_learning_owner SET search_path TO learning, pg_catalog;
-ALTER ROLE jarvis_ops_owner SET search_path TO ops, pg_catalog;
-ALTER ROLE jarvis_platform_runtime SET search_path TO platform, ops, public, pg_catalog;
-ALTER ROLE jarvis_research_runtime SET search_path TO research, platform, learning, ops, public, pg_catalog;
-ALTER ROLE jarvis_learning_runtime SET search_path TO learning, research, platform, ops, public, pg_catalog;
-ALTER ROLE jarvis_migrator SET search_path TO ops, platform, research, learning, public, pg_catalog;
-ALTER ROLE jarvis_legacy_rollback SET search_path TO platform, research, learning, ops, public, pg_catalog;
-
 DO $$
 DECLARE
     domain record;

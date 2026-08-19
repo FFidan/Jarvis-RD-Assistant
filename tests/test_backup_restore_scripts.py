@@ -75,6 +75,40 @@ def test_schema_113_authority_normalizes_all_public_object_owners(
     ) not in role_bootstrap_src
 
 
+def _mode_branch(source: str, mode: str) -> str:
+    """Return the body of the top-level branch guarding one bootstrap mode."""
+    start = source.index(f'if [ "$mode" = "{mode}" ]; then')
+    return source[start : source.index("\nfi\n", start)]
+
+
+def test_both_finalization_modes_install_the_per_role_search_paths(
+    role_bootstrap_src: str,
+) -> None:
+    """Only the bootstrap superuser may set another role's default search path.
+
+    Every relation lives in an owned schema, so a role whose default was never
+    stored resolves unqualified names against an empty ``public``. This pins the
+    wiring; ``scripts/tests/test_restore_roundtrip.sh`` proves it against a cluster.
+    """
+    assert role_bootstrap_src.count("set_role_search_paths() {") == 1
+    for mode in ("finalize", "restore-finalize"):
+        assert "set_role_search_paths" in _mode_branch(role_bootstrap_src, mode), mode
+
+    definition = role_bootstrap_src.split("set_role_search_paths() {", 1)[1].split("\n}\n", 1)[0]
+    for role in (
+        "jarvis_platform_owner",
+        "jarvis_research_owner",
+        "jarvis_learning_owner",
+        "jarvis_ops_owner",
+        "jarvis_platform_runtime",
+        "jarvis_research_runtime",
+        "jarvis_learning_runtime",
+        "jarvis_migrator",
+        "jarvis_legacy_rollback",
+    ):
+        assert f"ALTER ROLE {role} SET search_path TO " in definition, role
+
+
 def _run_bash(body: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run a bash snippet from the repo root with stdin detached (no tty)."""
     return subprocess.run(

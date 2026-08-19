@@ -1691,7 +1691,7 @@ WITH raw_owner AS (
         CASE
             WHEN NULLIF(btrim(:'owner_env'), '') IS NOT NULL THEN 'environment'
             WHEN EXISTS (
-                SELECT 1 FROM user_config
+                SELECT 1 FROM platform.user_config
                 WHERE user_id IS NULL AND key = 'owner.user_id'
             ) THEN 'database'
             ELSE 'none'
@@ -1700,7 +1700,7 @@ WITH raw_owner AS (
             WHEN NULLIF(btrim(:'owner_env'), '') IS NOT NULL THEN btrim(:'owner_env')
             ELSE (
                 SELECT value #>> '{}'
-                FROM user_config
+                FROM platform.user_config
                 WHERE user_id IS NULL AND key = 'owner.user_id'
                 LIMIT 1
             )
@@ -1717,7 +1717,7 @@ WITH raw_owner AS (
     SELECT parsed_owner.source, parsed_owner.user_id,
            users.email, users.role, users.deleted_at
     FROM parsed_owner
-    LEFT JOIN users ON users.id = parsed_owner.user_id
+    LEFT JOIN platform.users AS users ON users.id = parsed_owner.user_id
 )
 SELECT
     source,
@@ -1763,7 +1763,7 @@ BEGIN
 
     SELECT count(*), min(id)
     INTO target_count, target_user_id
-    FROM users
+    FROM platform.users
     WHERE lower(email) = lower(target_email)
       AND role = 'admin'
       AND deleted_at IS NULL;
@@ -1774,12 +1774,12 @@ BEGIN
 
     SELECT
         EXISTS (
-            SELECT 1 FROM user_config
+            SELECT 1 FROM platform.user_config
             WHERE user_id IS NULL AND key = 'owner.user_id'
         ),
         (
             SELECT value #>> '{}'
-            FROM user_config
+            FROM platform.user_config
             WHERE user_id IS NULL AND key = 'owner.user_id'
             LIMIT 1
         )
@@ -1788,7 +1788,7 @@ BEGIN
     IF current_raw ~ '^[1-9][0-9]{0,17}$' THEN
         current_user_id := current_raw::bigint;
         SELECT EXISTS (
-            SELECT 1 FROM users
+            SELECT 1 FROM platform.users
             WHERE id = current_user_id
               AND role = 'admin'
               AND deleted_at IS NULL
@@ -1806,15 +1806,15 @@ BEGIN
     END;
 
     IF owner_row_exists THEN
-        UPDATE user_config
+        UPDATE platform.user_config
         SET value = to_jsonb(target_user_id), updated_at = NOW()
         WHERE user_id IS NULL AND key = 'owner.user_id';
     ELSE
-        INSERT INTO user_config (user_id, key, value)
+        INSERT INTO platform.user_config (user_id, key, value)
         VALUES (NULL, 'owner.user_id', to_jsonb(target_user_id));
     END IF;
 
-    INSERT INTO audit_log (user_id, action, resource, metadata)
+    INSERT INTO platform.audit_log (user_id, action, resource, metadata)
     VALUES (
         NULL,
         'admin.owner.repair',

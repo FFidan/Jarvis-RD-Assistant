@@ -71,6 +71,23 @@ ensure_owner_roles() {
   done
 }
 
+# Every relation lives in an owned schema, so a role without a stored default
+# resolves unqualified names against an empty public schema. Setting another
+# role's default requires the bootstrap superuser, which no migration and no
+# runtime login is, so both finalization modes issue the statements from here.
+set_role_search_paths() {
+  connect_as "$bootstrap_role" "$bootstrap_password_file" -c "
+    ALTER ROLE jarvis_platform_owner SET search_path TO platform, pg_catalog;
+    ALTER ROLE jarvis_research_owner SET search_path TO research, pg_catalog;
+    ALTER ROLE jarvis_learning_owner SET search_path TO learning, pg_catalog;
+    ALTER ROLE jarvis_ops_owner SET search_path TO ops, pg_catalog;
+    ALTER ROLE jarvis_platform_runtime SET search_path TO platform, ops, public, pg_catalog;
+    ALTER ROLE jarvis_research_runtime SET search_path TO research, platform, learning, ops, public, pg_catalog;
+    ALTER ROLE jarvis_learning_runtime SET search_path TO learning, research, platform, ops, public, pg_catalog;
+    ALTER ROLE jarvis_migrator SET search_path TO ops, platform, research, learning, public, pg_catalog;
+    ALTER ROLE jarvis_legacy_rollback SET search_path TO platform, research, learning, ops, public, pg_catalog;"
+}
+
 migration_floor() {
   relation="$(connect_as "$bootstrap_role" "$bootstrap_password_file" -At \
     -c "SELECT to_regclass('ops.schema_migrations')")"
@@ -353,6 +370,7 @@ if [ "$mode" = "restore-finalize" ]; then
     exit 1
   fi
   connect_as "$bootstrap_role" "$bootstrap_password_file" -f "$authority_file"
+  set_role_search_paths
   normalize_memberships
   assert_final_memberships
   assert_recovery_roles
@@ -368,6 +386,7 @@ if [ "$mode" = "finalize" ]; then
       exit 1
       ;;
   esac
+  set_role_search_paths
   normalize_memberships
   assert_final_memberships
   assert_recovery_roles

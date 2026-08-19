@@ -739,6 +739,19 @@ no_swap_dbs() { [ "$(q postgres "SELECT count(*) FROM pg_database WHERE datname 
 max_version()      { q jarvis "SELECT COALESCE(MAX(version),0) FROM ops.schema_migrations"; }
 webauthn_present() { q jarvis "SELECT (to_regclass('platform.webauthn_credentials') IS NOT NULL)"; }
 marker_tags()      { q jarvis "SELECT COALESCE(string_agg(tag, ',' ORDER BY tag), '') FROM public.roundtrip_marker"; }
+# Governed roles carrying a stored search_path default. Every relation lives in
+# an owned schema, so a role without one resolves unqualified names against an
+# empty public schema.
+roles_with_search_path() {
+  q jarvis "SELECT count(*) FROM pg_roles
+    WHERE rolname IN (
+      'jarvis_platform_owner', 'jarvis_research_owner', 'jarvis_learning_owner',
+      'jarvis_ops_owner', 'jarvis_platform_runtime', 'jarvis_research_runtime',
+      'jarvis_learning_runtime', 'jarvis_migrator', 'jarvis_legacy_rollback')
+      AND EXISTS (
+        SELECT 1 FROM unnest(COALESCE(rolconfig, ARRAY[]::text[])) AS stored(setting)
+        WHERE stored.setting LIKE 'search_path=%')"
+}
 manual_step_flagged() { sc 'cat /backup-trigger/.restore_status.json 2>/dev/null' | grep -q '"manual_steps_required":true'; }
 restore_state_done()  { sc 'cat /backup-trigger/.restore_status.json 2>/dev/null' | grep -q '"state":"done"'; }
 restore_failed_before_mutation() {
@@ -1285,6 +1298,16 @@ else
   dump_diagnostics
   printf '\nROUND-TRIP: PASS=%s FAIL=%s\n' "$pass" "$fail"
   exit 1
+fi
+
+# An upgraded deployment must resolve unqualified names exactly as a fresh
+# install does. Only the bootstrap superuser may store another role's default,
+# so the upgrade sequence itself has to issue them.
+governed_search_paths="$(roles_with_search_path)"
+if [ "$governed_search_paths" = "9" ]; then
+  ok "the upgrade sequence stored a search_path default for every governed role"
+else
+  no "the upgrade sequence left governed roles without a search_path default (${governed_search_paths} of 9)"
 fi
 
 # Reconstructed authority must match the fresh-install privilege boundary in
