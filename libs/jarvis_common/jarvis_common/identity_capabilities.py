@@ -145,6 +145,7 @@ SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
     _telegram_capability("research", "POST", r"/api/search", "research:search:write"),
     _telegram_capability("research", "GET", r"/api/pulse/today", "research:pulse:read"),
     _telegram_capability("research", "POST", r"/api/pulse/generate", "research:pulse:write"),
+    _telegram_capability("research", "GET", r"/api/pulse/generate/[^/]+", "research:pulse:read"),
     _telegram_capability("research", "GET", r"/api/digest/weekly", "research:digest:read"),
 )
 

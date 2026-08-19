@@ -48,6 +48,13 @@ class PulseGenerateResponse(BaseModel):
     status: str
 
 
+class PulseGenerateStatusResponse(BaseModel):
+    """Progress of one Pulse generation job for GET /api/pulse/generate/{job_id}."""
+
+    job_id: str
+    status: str
+
+
 class PulseStatsResponse(BaseModel):
     """Aggregate Pulse pipeline stats over a sliding window of past runs."""
 

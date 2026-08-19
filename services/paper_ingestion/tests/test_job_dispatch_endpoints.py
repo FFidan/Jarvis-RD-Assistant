@@ -515,3 +515,84 @@ async def test_enqueue_gate_leaves_the_run_lock_free_for_the_worker(app_with_poo
     assert pool.locks_held_at_defer == [{(_ENQUEUE_LOCK, _PULSE_UID)}], (
         "the deferred job must be able to take pulse.generate immediately"
     )
+
+
+async def _get_generate_status(app, job_id: str):
+    """Read the job-status route through a signed Research identity.
+
+    The route requires an identity scope, and the verifier is normally loaded
+    by the application's startup hook, which an in-process ASGI transport never
+    runs. ``SignedIdentityMiddleware`` installs an ephemeral signer/verifier
+    pair so the request reaches the handler.
+    """
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
+
+    signed = SignedIdentityMiddleware(app, audience="research", user_id=_PULSE_UID)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=signed), base_url="http://test"
+    ) as client:
+        return await client.get(f"/api/pulse/generate/{job_id}")
+
+
+def _patch_job_lookup(row):
+    """Patch the router's job-store read with a fixed row or exception."""
+    from paper_ingestion.routers import pulse as pulse_router
+
+    if isinstance(row, Exception):
+        return patch.object(pulse_router, "get_unified", AsyncMock(side_effect=row))
+    return patch.object(pulse_router, "get_unified", AsyncMock(return_value=row))
+
+
+async def test_pulse_generate_status_reports_the_callers_own_job(app_with_pool, pulse_app):
+    """The caller can follow the generation job they started."""
+    app, _ = app_with_pool
+    pulse_app()
+    row = {"id": "job-1", "kind": "pulse.generate", "user_id": _PULSE_UID, "status": "running"}
+
+    with _patch_job_lookup(row):
+        resp = await _get_generate_status(app, "job-1")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"job_id": "job-1", "status": "running"}
+
+
+@pytest.mark.parametrize(
+    ("row", "reason"),
+    [
+        (None, "no such job"),
+        (
+            {"id": "job-1", "kind": "pulse.generate", "user_id": _PULSE_UID + 1, "status": "done"},
+            "another user's job",
+        ),
+        (
+            {"id": "job-1", "kind": "papers.process_library", "user_id": _PULSE_UID, "status": "x"},
+            "a job of another kind",
+        ),
+    ],
+)
+async def test_pulse_generate_status_hides_every_job_that_is_not_the_callers(
+    app_with_pool, pulse_app, row, reason
+):
+    """Unknown, foreign, and unrelated jobs are indistinguishable from outside."""
+    app, _ = app_with_pool
+    pulse_app()
+
+    with _patch_job_lookup(row):
+        resp = await _get_generate_status(app, "job-1")
+
+    assert resp.status_code == 404, f"{reason} must read as 404; got {resp.status_code}"
+
+
+async def test_pulse_generate_status_reports_an_unreadable_job_store_as_unavailable(
+    app_with_pool, pulse_app
+):
+    """A job-store outage must not be reported as a missing job."""
+    from jarvis_common.jobs import JobLookupUnavailable
+
+    app, _ = app_with_pool
+    pulse_app()
+
+    with _patch_job_lookup(JobLookupUnavailable("store down")):
+        resp = await _get_generate_status(app, "job-1")
+
+    assert resp.status_code == 503, resp.text

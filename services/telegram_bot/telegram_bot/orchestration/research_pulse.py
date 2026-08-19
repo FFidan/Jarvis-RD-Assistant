@@ -14,7 +14,12 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
-from telegram_bot.formatters import format_pulse_card, format_pulse_deck_status, truncate
+from telegram_bot.formatters import (
+    format_pulse_card,
+    format_pulse_deck_scope,
+    format_pulse_deck_status,
+    truncate,
+)
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
 from telegram_bot.platform_client import list_user_pairings
 
@@ -60,7 +65,7 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> None:
         logger.exception("Failed to send Pulse message")
 
 
-async def _deliver_pulse_to_chat(
+async def deliver_pulse_to_chat(
     http_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
@@ -124,8 +129,10 @@ async def _deliver_pulse_to_chat(
             )
         return
 
-    await _send(bot, chat_id, f"<b>{format_pulse_deck_status(deck)}</b>")
-    for card in deck.cards[:PULSE_TELEGRAM_TOP_N]:
+    delivered = deck.cards[:PULSE_TELEGRAM_TOP_N]
+    scope = format_pulse_deck_scope(deck, len(delivered), config.jarvis_base_url)
+    await _send(bot, chat_id, f"<b>{format_pulse_deck_status(deck)}</b>\n{scope}")
+    for card in delivered:
         await _send(
             bot,
             chat_id,
@@ -171,4 +178,4 @@ async def run_research_pulse(
             pairing.user_id, "research_pulse"
         ):
             continue
-        await _deliver_pulse_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)
+        await deliver_pulse_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)

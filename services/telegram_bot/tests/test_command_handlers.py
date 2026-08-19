@@ -1111,6 +1111,7 @@ async def test_newproject_passes_user_id_via_owner_header():
 # ---------------------------------------------------------------------------
 
 
+from telegram_bot.handlers.commands import system_commands  # noqa: E402
 from telegram_bot.handlers.commands.paper_commands import (  # noqa: E402
     inbox_command,
     next_command,
@@ -1257,6 +1258,114 @@ async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
     assert headers.get("X-Jarvis-Paired-User-Id") == "7"
+
+
+def _pulse_deck_payload(states: list[str | None]) -> dict:
+    """Build a deck payload whose cards carry the given per-user states."""
+    return {
+        "deck_id": 7,
+        "deck_date": "2026-08-07",
+        "card_count": len(states),
+        "generated_at": "2026-08-07T06:00:00+00:00",
+        "cards": [
+            {
+                "card_id": 100 + index,
+                "paper_id": 200 + index,
+                "paper_title": f"Paper {index}",
+                "paper_authors": ["A researcher"],
+                "paper_url": "https://example.org/paper",
+                "rank": index + 1,
+                "score": 0.9 - 0.1 * index,
+                "llm_relevance": 8,
+                "llm_novelty": 7,
+                "reasoning": "Relevant to the configured topic.",
+                "signals": {"recency": 0.5},
+                "user_state": state,
+            }
+            for index, state in enumerate(states)
+        ],
+        "stats": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_next_command_skips_cards_the_user_already_acted_on():
+    """/next advances past acted cards to the highest-ranked untouched one."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    # Rank 1 is saved and rank 2 has no state row at all, so rank 2 is next.
+    mock_http.get.return_value = make_http_response(_pulse_deck_payload(["to_read", None, "done"]))
+
+    with _paired_auth_patch(7):
+        await next_command(update, context)
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "Paper 1" in text
+    assert "Paper 0" not in text
+    keyboard = update.message.reply_text.await_args.kwargs["reply_markup"]
+    callbacks = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+    assert all("201" in data for data in callbacks)
+
+
+@pytest.mark.asyncio
+async def test_next_command_reports_a_deck_the_user_finished():
+    """/next says the deck is exhausted instead of resurfacing an acted card."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    context.application.bot_data["config"] = make_bot_config(
+        BotConfig, jarvis_base_url="https://jarvis.example.test"
+    )
+    mock_http.get.return_value = make_http_response(_pulse_deck_payload(["to_read", "trash"]))
+
+    with _paired_auth_patch(7):
+        await next_command(update, context)
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "acted on all 2 Pulse cards" in text
+    assert 'href="https://jarvis.example.test/pulse"' in text
+
+
+@pytest.mark.asyncio
+async def test_pulse_now_command_delivers_the_deck_once_the_job_succeeds(monkeypatch):
+    """/pulse_now waits for the job it started, then uses the scheduled delivery path."""
+    monkeypatch.setattr(system_commands, "_PULSE_POLL_INTERVAL_SECONDS", 0.0)
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.post.return_value = make_http_response({"job_id": "job-1", "status": "queued"})
+    mock_http.get.side_effect = [
+        make_http_response({"job_id": "job-1", "status": "running"}),
+        make_http_response({"job_id": "job-1", "status": "succeeded"}),
+    ]
+    deliver = AsyncMock()
+    monkeypatch.setattr(system_commands, "deliver_pulse_to_chat", deliver)
+
+    with _paired_auth_patch(7):
+        await pulse_now_command(update, context)
+
+    assert mock_http.get.await_count == 2
+    deliver.assert_awaited_once()
+    assert deliver.await_args.args[3] == 99999
+    assert deliver.await_args.args[4] == 7
+
+
+@pytest.mark.asyncio
+async def test_pulse_now_command_reports_a_job_that_outlives_the_wait(monkeypatch):
+    """/pulse_now stops waiting at its budget and says so instead of delivering."""
+    monkeypatch.setattr(system_commands, "_PULSE_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(system_commands, "_PULSE_POLL_BUDGET_SECONDS", 0.0)
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.post.return_value = make_http_response({"job_id": "job-1", "status": "queued"})
+    mock_http.get.return_value = make_http_response({"job_id": "job-1", "status": "running"})
+    deliver = AsyncMock()
+    monkeypatch.setattr(system_commands, "deliver_pulse_to_chat", deliver)
+
+    with _paired_auth_patch(7):
+        await pulse_now_command(update, context)
+
+    deliver.assert_not_awaited()
+    replies = [call.args[0] for call in update.message.reply_text.await_args_list]
+    assert "still generating" in replies[-1]
 
 
 @pytest.mark.asyncio

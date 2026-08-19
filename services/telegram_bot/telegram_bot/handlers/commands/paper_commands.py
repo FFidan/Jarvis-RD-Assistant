@@ -15,6 +15,7 @@ from telegram_bot.formatters import (
     format_morning_briefing,
     format_paper_card,
     format_pulse_card,
+    format_pulse_deck_link,
     format_pulse_deck_status,
     format_review_stats,
     sanitize_user_input,
@@ -28,6 +29,11 @@ from telegram_bot.handlers.helpers import (
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
+
+#: Backend lifecycle states meaning the user has not yet acted on a Pulse card.
+#: A card with no state row reads as ``None``, which the backend treats as the
+#: ``inbox`` default; trashed and saved papers carry a state and drop out.
+_UNACTED_CARD_STATES = frozenset({None, "inbox"})
 
 
 def _feed_papers(data: object) -> list[dict[str, Any]]:
@@ -289,7 +295,13 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 @rate_limit(max_calls=5, window_seconds=60)
 @auth_required
 async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/next`` — surface the top Pulse card as the next paper to read."""
+    """Handle ``/next`` — surface the next Pulse card the user has not acted on.
+
+    Cards arrive ranked, and each carries the backend's own lifecycle state for
+    this user, so the command advances by skipping the cards already saved,
+    read, or otherwise acted on. Nothing is remembered between calls: rating or
+    saving a card through the web deck advances ``/next`` just the same.
+    """
     if update.message is None:
         return
     http = get_http(context)
@@ -297,7 +309,7 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     jarvis_user_id = get_jarvis_user_id(context)
     assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        data = await services_client.fetch_pulse_today(http, config, jarvis_user_id, limit=1)
+        data = await services_client.fetch_pulse_today(http, config, jarvis_user_id)
     except Exception:
         logger.exception("Failed to fetch pulse deck for /next")
         await update.message.reply_text(
@@ -323,7 +335,16 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(message, parse_mode="HTML")
         return
 
-    card = data.cards[0]
+    # Cards arrive ranked, so the first unacted one is the highest-ranked one.
+    card = next((c for c in data.cards if c.user_state in _UNACTED_CARD_STATES), None)
+    if card is None:
+        await update.message.reply_text(
+            f"You have acted on all {data.card_count} Pulse cards for today.\n"
+            f"{format_pulse_deck_link(config.jarvis_base_url)}".rstrip(),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        return
     paper_id = card.paper_id
 
     text = f"<b>{format_pulse_deck_status(data)}</b>\n\n{format_pulse_card(card.model_dump())}"

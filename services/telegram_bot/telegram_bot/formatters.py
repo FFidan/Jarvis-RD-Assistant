@@ -320,6 +320,50 @@ def format_pulse_deck_status(deck: PulseDeck) -> str:
     return status
 
 
+def format_pulse_deck_scope(deck: PulseDeck, shown: int, base_url: str | None) -> str:
+    """Say how much of the deck this message carries and where the rest lives.
+
+    Parameters
+    ----------
+    deck : PulseDeck
+        Deck being delivered. ``card_count`` is the authoritative total.
+    shown : int
+        Number of cards this message actually delivers.
+    base_url : str or None
+        Public dashboard base URL, or ``None`` when none is configured.
+        Telegram cannot render a relative href, so the deck link is omitted
+        rather than emitted as a dead relative link.
+
+    Returns
+    -------
+    str
+        One line naming the delivered slice and, when possible, linking the
+        full deck.
+    """
+    line = f"Top {shown} of {deck.card_count}"
+    link = format_pulse_deck_link(base_url)
+    return f"{line} — {link}" if link else line
+
+
+def format_pulse_deck_link(base_url: str | None) -> str:
+    """Link to the web deck, or an empty string when no public URL is configured.
+
+    Parameters
+    ----------
+    base_url : str or None
+        Public dashboard base URL. Telegram cannot render a relative href, so
+        an unset base URL yields no link rather than a dead one.
+
+    Returns
+    -------
+    str
+        An anchor element, or ``''``.
+    """
+    if not base_url:
+        return ""
+    return f'<a href="{safe_url(f"{base_url}/pulse")}">See the full deck</a>'
+
+
 def format_paper_detail(paper: dict, summary: dict | None = None) -> str:
     """Format a detailed paper view with summary and findings.
 
