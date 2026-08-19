@@ -50,7 +50,7 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
         "review",
         include_in_menu=False,
     ),
-    CommandSpec("projects", "projects", "List active projects", "Projects and tasks", "standard"),
+    CommandSpec("projects", "projects", "List your projects", "Projects and tasks", "standard"),
     CommandSpec(
         "newproject",
         "newproject <name>",

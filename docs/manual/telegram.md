@@ -84,7 +84,7 @@ required.
 | `/review` | Start a flashcard review |
 | `/stats` | Show learning statistics |
 | `/cancel` | Cancel the active flashcard review; this conversation-only command is intentionally absent from Telegram's global menu |
-| `/projects` | List active projects |
+| `/projects` | List your projects, except archived ones |
 | `/newproject <name>` | Create a project |
 | `/tasks` | List in-progress tasks |
 | `/done <id>` | Mark a task complete |

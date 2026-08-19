@@ -27,6 +27,7 @@ from telegram_bot.handlers.helpers import (
     get_jarvis_user_id,
 )
 from telegram_bot.handlers.rate_limit import rate_limit
+from telegram_bot.vocabulary import is_not_done
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +53,60 @@ def _feed_papers(data: object) -> list[dict[str, Any]]:
     return rows
 
 
+def _feed_total(data: object) -> int | None:
+    """Return the whole-view total carried by a feed envelope, or ``None`` if absent.
+
+    The feed's ``total`` counts the view, not the requested page, so a header
+    can say how many papers the stage holds. A missing total is reported as
+    ``None`` so the header drops the claim rather than printing a zero.
+    """
+    if isinstance(data, dict) and isinstance(data.get("total"), int):
+        total: int = data["total"]
+        return total
+    return None
+
+
+def _stage_header(title: str, shown: int, total: int | None, described: str) -> str:
+    """Build the one-line header naming a paper stage, what it holds, and how much.
+
+    Parameters
+    ----------
+    title : str
+        Stage name as the user knows it, e.g. ``"📥 <b>Inbox</b>"``.
+    shown : int
+        Number of papers this message actually lists.
+    total : int | None
+        Papers in the whole stage, or ``None`` when the backend did not say.
+    described : str
+        What membership of the stage means, e.g. ``"papers waiting for triage"``.
+
+    Returns
+    -------
+    str
+        HTML-formatted single-line header.
+    """
+    counted = f"{shown} of {total}" if total is not None else str(shown)
+    return f"{title} — showing {counted} {described}"
+
+
+# One verb per action, spelled the same on every row that offers it. "Save"
+# moves a paper into the library; "Star" flags one wherever it already lives —
+# the same split the web app's lifecycle actions use, so an inbox paper offers
+# both rather than making Save and Star look like two names for one thing.
+_SAVE_VERB = "💾 Save"
+_STAR_VERB = "⭐ Star"
+_TRASH_VERB = "🗑 Trash"
+_READ_MORE_VERB = "📖 Read more"
+
+
 def _library_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
     """/papers Library row buttons."""
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("⭐ Star", callback_data=f"paper:star:{paper_id}"),
-                InlineKeyboardButton("🗑 Trash", callback_data=f"paper:trash:{paper_id}"),
-                InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}"),
+                InlineKeyboardButton(_STAR_VERB, callback_data=f"paper:star:{paper_id}"),
+                InlineKeyboardButton(_TRASH_VERB, callback_data=f"paper:trash:{paper_id}"),
+                InlineKeyboardButton(_READ_MORE_VERB, callback_data=f"paper_detail_{paper_id}"),
             ]
         ]
     )
@@ -113,6 +160,7 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 http, config, jarvis_user_id, view="library", limit=10
             )
         papers = _feed_papers(data)
+        total = _feed_total(data)
     except Exception:
         logger.exception("Failed to fetch library feed")
         await update.message.reply_text(
@@ -135,7 +183,24 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(message, parse_mode="HTML")
         return
 
-    for paper in papers[:10]:
+    listed = papers[:10]
+    if query:
+        header = _stage_header(
+            "🔎 <b>Library search</b>",
+            len(listed),
+            total,
+            f'papers in your library matching "{escape(query)}"',
+        )
+    else:
+        header = _stage_header(
+            "📚 <b>Library</b>",
+            len(listed),
+            total,
+            "papers you saved, are reading, or finished",
+        )
+    await update.message.reply_text(header, parse_mode="HTML")
+
+    for paper in listed:
         paper_id = paper.get("id")
         if not paper_id:
             continue
@@ -256,12 +321,19 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Each section degrades independently: a transient failure on one gather
     # leaves that section empty/zero rather than aborting the whole briefing.
 
-    # New papers in last 24 hours.
+    # Papers added to the library since midnight UTC.
     new_papers_count = 0
     try:
         new_papers_count = await services_client.fetch_new_paper_count(http, config, user_id)
     except (httpx.HTTPError, ValueError, KeyError):
         logger.exception("Failed to fetch new-paper count for briefing")
+
+    # Papers currently sitting in the Inbox view.
+    inbox_total = 0
+    try:
+        inbox_total = await services_client.fetch_inbox_count(http, config, user_id)
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to fetch inbox count for briefing")
 
     # Due cards from learning engine.
     due_cards = 0
@@ -270,12 +342,14 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except (httpx.HTTPError, ValueError, KeyError):
         logger.exception("Failed to fetch due-card count for briefing")
 
-    # In-progress tasks.
-    tasks: list[dict] = []
+    # Outstanding tasks. The endpoint filters on a single status, so the
+    # not-done set is applied here — one request, then My Day's own rule.
+    open_tasks: list[dict] = []
     try:
-        tasks = await services_client.fetch_tasks(
-            http, config, user_id, status="in_progress", limit=10
+        all_tasks = await services_client.fetch_tasks(
+            http, config, user_id, limit=services_client.MAX_TASK_PAGE_SIZE
         )
+        open_tasks = [task for task in all_tasks if is_not_done(task)]
     except (httpx.HTTPError, ValueError, KeyError):
         logger.exception("Failed to fetch tasks for briefing")
 
@@ -288,7 +362,7 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except (httpx.HTTPError, ValueError, KeyError):
         logger.exception("Failed to fetch milestones for briefing")
 
-    text = format_morning_briefing(new_papers_count, due_cards, tasks, milestones)
+    text = format_morning_briefing(new_papers_count, inbox_total, due_cards, open_tasks, milestones)
     await update.message.reply_text(text, parse_mode="HTML")
 
 
@@ -361,14 +435,15 @@ def _inbox_keyboard(
 ) -> InlineKeyboardMarkup:
     """Inbox row buttons (origin-conditional feedback)."""
     primary = [
-        InlineKeyboardButton("💾 Save", callback_data=f"paper:save:{paper_id}"),
-        InlineKeyboardButton("🗑 Trash", callback_data=f"paper:trash:{paper_id}"),
+        InlineKeyboardButton(_SAVE_VERB, callback_data=f"paper:save:{paper_id}"),
+        InlineKeyboardButton(_STAR_VERB, callback_data=f"paper:star:{paper_id}"),
+        InlineKeyboardButton(_TRASH_VERB, callback_data=f"paper:trash:{paper_id}"),
     ]
     if discovery_origin != "user_initiated":
         primary.append(
             InlineKeyboardButton("🗑+👎", callback_data=f"paper:trash_reject:{paper_id}"),
         )
-    secondary = [InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}")]
+    secondary = [InlineKeyboardButton(_READ_MORE_VERB, callback_data=f"paper_detail_{paper_id}")]
     if discovery_origin != "user_initiated":
         secondary = [
             InlineKeyboardButton("👍", callback_data=f"paper:feedback_pos:{paper_id}:feed_thumbs"),
@@ -392,6 +467,7 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             http, config, jarvis_user_id, view="inbox", limit=10
         )
         papers = _feed_papers(data)
+        total = _feed_total(data)
     except Exception:
         logger.exception("Failed to fetch inbox feed")
         await update.message.reply_text(
@@ -404,7 +480,13 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("📭 Inbox is empty — nothing to triage.", parse_mode="HTML")
         return
 
-    for paper in papers[:10]:
+    listed = papers[:10]
+    await update.message.reply_text(
+        _stage_header("📥 <b>Inbox</b>", len(listed), total, "papers waiting for triage"),
+        parse_mode="HTML",
+    )
+
+    for paper in listed:
         paper_id = paper.get("id")
         if not paper_id:
             continue

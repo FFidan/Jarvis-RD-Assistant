@@ -14,6 +14,11 @@ from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import get_config, get_http, get_jarvis_user_id
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.types import ProjectRow
+from telegram_bot.vocabulary import (
+    ARCHIVED_PROJECT_STATUS,
+    project_status_emoji,
+    project_status_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +37,13 @@ def _project_keyboard(project_id: int | str) -> InlineKeyboardMarkup:
 @rate_limit(max_calls=5, window_seconds=60)
 @auth_required
 async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/projects`` — list all active projects with status and description."""
+    """Handle ``/projects`` — list every non-archived project with its status label.
+
+    The list is not narrowed to ``active``: a paused or completed project is
+    still one the user is working with, and hiding it made the command
+    disagree with the project list on the web. Only archived projects — the
+    ones deliberately put away — are left out.
+    """
     if update.message is None:
         return
     http = get_http(context)
@@ -40,14 +51,20 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = get_jarvis_user_id(context)
     assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        rows = await services_client.fetch_projects(http, config, user_id, status="active")
+        all_rows = await services_client.fetch_projects(http, config, user_id)
     except (httpx.HTTPError, ValueError, KeyError):
         logger.exception("Failed to fetch projects")
         await update.message.reply_text("⚠️ Couldn't reach JARVIS, try again.", parse_mode="HTML")
         return
 
+    # The REST filter takes a single status, so the non-archived set is
+    # selected here rather than with one request per remaining status.
+    rows = [row for row in all_rows if row.get("status") != ARCHIVED_PROJECT_STATUS]
+
     if not rows:
-        await update.message.reply_text("No active projects.", parse_mode="HTML")
+        await update.message.reply_text(
+            "No projects yet — archived ones are not listed.", parse_mode="HTML"
+        )
         return
 
     for row in rows:
@@ -60,10 +77,10 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         }
         name = escape(project.get("name", ""))
         desc = escape((project.get("description") or "")[:200])
-        status_emoji = {"active": "🟢", "paused": "⏸️", "completed": "✅"}.get(
-            project.get("status", ""), ""
-        )
-        text = f"{status_emoji} <b>{name}</b>"
+        status = project.get("status", "")
+        badge = f"{project_status_emoji(status)} ".lstrip()
+        label = escape(project_status_label(status))
+        text = f"{badge}<b>{name}</b>" + (f" — {label}" if label else "")
         if desc:
             text += f"\n{desc}"
         await update.message.reply_text(

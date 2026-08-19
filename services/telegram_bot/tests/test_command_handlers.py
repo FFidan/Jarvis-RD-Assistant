@@ -194,7 +194,10 @@ async def test_papers_no_args_lists_library_via_api():
     call = mock_http.get.await_args
     assert "/api/papers/feed" in call.args[0]
     assert call.kwargs.get("params", {}).get("view") == "library"
-    text = update.message.reply_text.call_args_list[0][0][0]
+    header = update.message.reply_text.call_args_list[0][0][0]
+    assert "Library" in header
+    assert "showing 1 of 1" in header
+    text = update.message.reply_text.call_args_list[1][0][0]
     assert "Paper A" in text
 
 
@@ -496,8 +499,14 @@ async def test_briefing_returns_text():
     # tasks, upcoming milestones.
     mock_http.get.side_effect = [
         make_http_response({"total": 3}),  # fetch_new_paper_count → feed
+        make_http_response({"total": 42}),  # fetch_inbox_count → feed?view=inbox
         make_http_response({"due_now": 5}),  # fetch_due_card_count → stats
-        make_http_response([{"title": "Task 1", "project_name": "Proj"}]),  # fetch_tasks
+        make_http_response(  # fetch_tasks
+            [
+                {"title": "Task 1", "project_name": "Proj", "status": "blocked"},
+                {"title": "Task 2", "project_name": "Proj", "status": "done"},
+            ]
+        ),
         make_http_response([]),  # fetch_upcoming_milestones
     ]
 
@@ -505,7 +514,14 @@ async def test_briefing_returns_text():
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "Briefing" in text or "briefing" in text.lower()
+    # Each count names its window and its view.
+    assert "3</b> papers added to your library since midnight UTC" in text
+    assert "42</b> waiting in your inbox" in text
+    assert "5</b> cards due for review right now" in text
+    # A blocked task is not done; a done one is excluded, as in My Day.
+    assert "Open tasks (1)" in text
     assert "Task 1" in text
+    assert "Task 2" not in text
 
 
 @pytest.mark.asyncio
@@ -514,8 +530,11 @@ async def test_briefing_partial_degradation_on_milestones_failure():
     update, context, _, mock_http = _make_update_and_context()
     mock_http.get.side_effect = [
         make_http_response({"total": 1}),  # new-paper count OK
+        make_http_response({"total": 4}),  # inbox count OK
         make_http_response({"due_now": 2}),  # due cards OK
-        make_http_response([{"title": "Task 1", "project_name": "Proj"}]),  # tasks OK
+        make_http_response(  # tasks OK
+            [{"title": "Task 1", "project_name": "Proj", "status": "in_progress"}]
+        ),
         make_http_response(None, status=500),  # milestones fail → 5xx
     ]
 
@@ -535,18 +554,19 @@ async def test_briefing_partial_degradation_on_milestones_failure():
 
 @pytest.mark.asyncio
 async def test_projects_empty():
-    """/projects with no active projects sends 'No active projects'."""
+    """/projects with nothing to list says so and names the one exclusion."""
     update, context, _, mock_http = _make_update_and_context()
     mock_http.get.return_value = make_http_response([])
     await projects_command(update, context)
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
-    assert "No active" in text
+    assert "No projects yet" in text
+    assert "archived" in text
 
 
 @pytest.mark.asyncio
-async def test_projects_with_data():
-    """/projects with active projects lists them via GET /api/projects?status=active."""
+async def test_projects_lists_every_non_archived_project_with_its_label():
+    """/projects lists paused and completed projects too, hiding only archived ones."""
     update, context, _, mock_http = _make_update_and_context()
     mock_http.get.return_value = make_http_response(
         [
@@ -557,6 +577,20 @@ async def test_projects_with_data():
                 "description": "A research project",
                 "deadline": None,
             },
+            {
+                "id": 2,
+                "name": "Project Beta",
+                "status": "paused",
+                "description": None,
+                "deadline": None,
+            },
+            {
+                "id": 3,
+                "name": "Project Gamma",
+                "status": "archived",
+                "description": None,
+                "deadline": None,
+            },
         ]
     )
     await projects_command(update, context)
@@ -564,9 +598,14 @@ async def test_projects_with_data():
     mock_http.get.assert_awaited_once()
     call = mock_http.get.await_args
     assert "/api/projects" in call.args[0]
-    assert call.kwargs["params"] == {"status": "active"}
-    text = update.message.reply_text.call_args_list[0][0][0]
-    assert "Project Alpha" in text
+    assert call.kwargs["params"] is None
+    texts = [c[0][0] for c in update.message.reply_text.call_args_list]
+    assert len(texts) == 2
+    # The stored status never reaches the user; the shared label does.
+    assert "Project Alpha" in texts[0] and "In progress" in texts[0]
+    assert "Project Beta" in texts[1] and "Draft" in texts[1]
+    assert "paused" not in texts[1]
+    assert not any("Project Gamma" in text for text in texts)
 
 
 @pytest.mark.asyncio
@@ -965,6 +1004,7 @@ async def test_briefing_scopes_to_user_via_owner_header_when_paired():
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.side_effect = [
         make_http_response({"total": 0}),  # new papers
+        make_http_response({"total": 0}),  # inbox count
         make_http_response({"due_now": 0}),  # due cards
         make_http_response([]),  # tasks
         make_http_response([]),  # milestones
@@ -973,8 +1013,8 @@ async def test_briefing_scopes_to_user_via_owner_header_when_paired():
     with _paired_auth_patch(7):
         await briefing_command(update, context)
 
-    # All four gathers carry the owner header scoping the response to user 7.
-    assert mock_http.get.await_count == 4
+    # Every gather carries the owner header scoping the response to user 7.
+    assert mock_http.get.await_count == 5
     for call in mock_http.get.await_args_list:
         assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
 
@@ -1053,7 +1093,7 @@ async def test_done_passes_user_id_via_owner_header():
 
 @pytest.mark.asyncio
 async def test_projects_scopes_listing_to_paired_user():
-    """A13: /projects stages paired identity and the active filter."""
+    """A13: /projects stages paired identity on an unfiltered project listing."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.return_value = make_http_response([])
@@ -1064,7 +1104,7 @@ async def test_projects_scopes_listing_to_paired_user():
     call = mock_http.get.await_args
     assert "/api/projects" in call.args[0]
     assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
-    assert call.kwargs["params"] == {"status": "active"}
+    assert call.kwargs["params"] is None
 
 
 @pytest.mark.asyncio
@@ -1375,6 +1415,7 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.side_effect = [
         make_http_response({"total": 0}),  # new papers
+        make_http_response({"total": 0}),  # inbox count
         make_http_response({"due_now": 0}),  # due cards → /api/stats
         make_http_response([]),  # tasks
         make_http_response([]),  # milestones
