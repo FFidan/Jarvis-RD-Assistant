@@ -167,6 +167,9 @@ async def reading_paper(
         settings = get_paper_ingestion_settings()
         try:
             token = settings.research_service_token_file.read_text(encoding="utf-8").strip()
+            # Scoped to this reader's own oldest pending event: every delivery
+            # costs an authorization call plus a delivery call, and none of that
+            # belongs in another user's request. The scheduler drains the rest.
             await deliver_pending_events(
                 db_pool,
                 request.app.state.http_client,
@@ -175,6 +178,8 @@ async def reading_paper(
                     learning_url=settings.learning_engine_url,
                     service_token=token,
                 ),
+                limit=1,
+                user_id=user_id,
             )
         except (OSError, RuntimeError):
             logger.warning("paper.read projection is pending", exc_info=True)

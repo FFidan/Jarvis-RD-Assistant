@@ -18,6 +18,15 @@ from opentelemetry.trace import SpanKind
 
 EventType = Literal["paper.read", "paper.deleted"]
 
+# Delivery is retried with exponential backoff before an event is dead-lettered.
+# The series below — 30 seconds, doubling, capped at six hours — spans about
+# fourteen hours across the attempts that precede the last one, so an ordinary
+# maintenance window cannot exhaust an event's retries and turn a planned
+# outage into permanently retained rows.
+RETRY_BACKOFF_BASE_SECONDS = 30
+RETRY_BACKOFF_CEILING = "6 hours"
+MAX_DELIVERY_ATTEMPTS = 12
+
 
 @dataclass(frozen=True, slots=True)
 class DomainDeliverySettings:
@@ -105,18 +114,27 @@ async def deliver_pending_events(
     *,
     settings: DomainDeliverySettings,
     limit: int = 20,
+    user_id: int | None = None,
 ) -> int:
-    """Deliver pending events without retaining a database connection over HTTP."""
+    """Deliver pending events without retaining a database connection over HTTP.
+
+    Each event costs an authorization call plus a delivery call, so a caller
+    that runs inside a request handler passes ``user_id`` (and a small ``limit``)
+    to stay within its own owner's work. The scheduler leaves both at their
+    defaults and drains the whole outbox.
+    """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT id, event_type, user_id, paper_id, payload
             FROM domain_events
             WHERE delivered_at IS NULL AND dead_lettered_at IS NULL AND next_attempt_at <= NOW()
+              AND ($2::bigint IS NULL OR user_id = $2)
             ORDER BY created_at
             LIMIT $1
             """,
             limit,
+            user_id,
         )
     delivered = 0
     for row in rows:
@@ -190,18 +208,62 @@ async def _mark_failure(pool: asyncpg.Pool, event_id: uuid.UUID) -> None:
     """Persist bounded retry state without leaking downstream error details."""
     async with pool.acquire() as conn:
         await conn.execute(
-            """
+            f"""
             UPDATE domain_events
             SET attempts = attempts + 1,
                 last_error = 'learning command unavailable',
                 next_attempt_at = NOW() + LEAST(
-                    INTERVAL '1 hour', (POWER(2, attempts) * INTERVAL '30 seconds')
+                    INTERVAL '{RETRY_BACKOFF_CEILING}',
+                    (POWER(2, attempts) * INTERVAL '{RETRY_BACKOFF_BASE_SECONDS} seconds')
                 ),
-                dead_lettered_at = CASE WHEN attempts + 1 >= 8 THEN NOW() END
+                dead_lettered_at = CASE
+                    WHEN attempts + 1 >= {MAX_DELIVERY_ATTEMPTS} THEN NOW()
+                END
             WHERE id = $1 AND delivered_at IS NULL AND dead_lettered_at IS NULL
             """,
             event_id,
         )
+
+
+async def requeue_dead_lettered_events(pool: asyncpg.Pool, *, user_id: int | None = None) -> int:
+    """Return dead-lettered events to the delivery queue and report how many moved.
+
+    Dead-lettering is otherwise terminal, and an undelivered ``paper.deleted``
+    keeps a deleted paper's Research-private rows retained, so an operator needs
+    a way to replay events once the cause of the outage is fixed. ``user_id``
+    narrows the replay to one owner.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE domain_events AS stalled
+            SET dead_lettered_at = NULL,
+                attempts = 0,
+                next_attempt_at = NOW(),
+                last_error = NULL
+            WHERE stalled.dead_lettered_at IS NOT NULL
+              AND stalled.delivered_at IS NULL
+              AND ($1::bigint IS NULL OR stalled.user_id = $1)
+              -- Undelivered deletions are unique per owner and paper. Requeueing
+              -- one that has any undelivered sibling would break that
+              -- uniqueness, so such rows stay put and are resolved by hand.
+              AND (
+                  stalled.event_type <> 'paper.deleted'
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM domain_events AS sibling
+                      WHERE sibling.event_type = 'paper.deleted'
+                        AND sibling.user_id = stalled.user_id
+                        AND sibling.paper_id = stalled.paper_id
+                        AND sibling.delivered_at IS NULL
+                        AND sibling.id <> stalled.id
+                  )
+              )
+            RETURNING stalled.id
+            """,
+            user_id,
+        )
+    return len(rows)
 
 
 async def _purge_acknowledged_deletion(
@@ -220,4 +282,12 @@ async def _purge_acknowledged_deletion(
         await conn.execute(statement, paper_id, user_id)
 
 
-__all__ = ["DomainDeliverySettings", "deliver_pending_events", "record_event"]
+__all__ = [
+    "MAX_DELIVERY_ATTEMPTS",
+    "RETRY_BACKOFF_BASE_SECONDS",
+    "RETRY_BACKOFF_CEILING",
+    "DomainDeliverySettings",
+    "deliver_pending_events",
+    "record_event",
+    "requeue_dead_lettered_events",
+]
