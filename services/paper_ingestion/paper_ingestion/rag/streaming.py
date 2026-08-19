@@ -22,6 +22,7 @@ from jarvis_common.llm_client import (
     detect_visible_work_notes,
     get_litellm_config,
     observe,
+    record_generation_observation,
     strip_think_streaming,
 )
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
@@ -922,6 +923,7 @@ async def stream_rag_events(
     answer_budget: RagAnswerBudget = _DEFAULT_ANSWER_BUDGET,
 ):
     """Stream LLM response as SSE events (token → sources → done → confidence → [DONE])."""
+    record_generation_observation(input_value=messages, model=model)
     answer_parts: list[str] = []
     model_used: str | None = None
     try:
@@ -947,6 +949,7 @@ async def stream_rag_events(
         return
 
     full_answer = "".join(answer_parts)
+    record_generation_observation(output_value=full_answer, model=model_used)
     yield sse_event({"type": "sources", "sources": sources_list})
     yield sse_event({"type": "done", "full_answer": full_answer, "model_used": model_used})
     # Sentence-level verification runs only against the validated answer the user saw.

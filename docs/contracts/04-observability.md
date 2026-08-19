@@ -149,6 +149,10 @@ must fail review.
    truncated (with an explicit `..._truncated` marker) before being sent
    to Langfuse. (Langfuse stores prompts as full text; very long prompts
    bloat the dashboard and storage.)
+   JARVIS disables the SDK decorator's implicit argument and return-value
+   capture at every trace boundary. Actual generation helpers attach only the
+   explicitly bounded prompt and response, so database pools, HTTP clients,
+   retrieval objects, and unbounded embedding response graphs are never serialized.
 3. **Redact API keys in error stacks.** When an exception is captured to
    a span, its stack trace MUST be filtered for known secret patterns
    (`Bearer`, `x-api-key`, `Authorization`). Use a centralized scrubber
@@ -192,7 +196,10 @@ and endpoint are configured, and its exporter accepts only spans from the
 
 Research and Learning initialize Langfuse 4 through
 `_langfuse_lifespan_hook`. Langfuse attaches its processor to the existing
-provider and retains its explicit generation-span contract. Missing
+provider and retains its explicit generation-span contract. The exporter
+translates only Langfuse-decorated spans to the pinned self-hosted server's
+bounded `/api/public/ingestion` batches; generic request spans are not copied
+into the LLM trace store. Missing
 configuration, quarantine, or exporter failure is non-fatal. Application
 lifecycles perform a bounded provider flush but never shut down the shared
 provider; the SDK owns final shutdown at process exit.

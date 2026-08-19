@@ -1,16 +1,16 @@
 """Shared LiteLLM request helpers for paper-ingestion modules and scripts."""
 
 import functools
+import json
 import logging
 import os
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar, cast, overload
 
 import httpx
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel
 
 from jarvis_common.config import get_jarvis_common_settings
@@ -18,7 +18,6 @@ from jarvis_common.litellm_observer import record_serve
 from jarvis_common.maintenance import (
     OutboundEgressBlockedError,
     ensure_outbound_egress_allowed,
-    outbound_quarantine_active,
 )
 from jarvis_common.settings import get_secrets_settings
 
@@ -28,20 +27,22 @@ if TYPE_CHECKING:
 _ObservedFn = TypeVar("_ObservedFn", bound=Callable[..., Any])
 
 try:
-    from langfuse.decorators import observe  # type: ignore[import-not-found]
+    from langfuse.decorators import observe as _langfuse_observe  # type: ignore[import-not-found]
 except ImportError:
     try:
         # langfuse 3.x / 4.x — observe re-exported at the package root.
-        from langfuse import observe  # type: ignore[no-redef]
+        from langfuse import observe as _langfuse_observe
     except ImportError:
 
         @overload
-        def observe(fn: _ObservedFn, /) -> _ObservedFn: ...
+        def _langfuse_observe(fn: _ObservedFn, /) -> _ObservedFn: ...
 
         @overload
-        def observe(*args: Any, **kwargs: Any) -> Callable[[_ObservedFn], _ObservedFn]: ...
+        def _langfuse_observe(
+            *args: Any, **kwargs: Any
+        ) -> Callable[[_ObservedFn], _ObservedFn]: ...
 
-        def observe(*args: Any, **kwargs: Any) -> Any:
+        def _langfuse_observe(*args: Any, **kwargs: Any) -> Any:
             """No-op fallback when langfuse is not installed.
 
             Uses ``functools.wraps`` so callers (and tests) can still rely on
@@ -69,6 +70,41 @@ except ImportError:
             return decorator
 
 
+@overload
+def observe(fn: _ObservedFn, /) -> _ObservedFn: ...
+
+
+@overload
+def observe(*args: Any, **kwargs: Any) -> Callable[[_ObservedFn], _ObservedFn]: ...
+
+
+def observe(*args: Any, **kwargs: Any) -> Any:
+    """Create a Langfuse span without implicitly serializing call objects.
+
+    The SDK decorator captures every positional argument and return value by
+    default. JARVIS trace boundaries routinely receive database pools, HTTP
+    clients, and full retrieval objects, so automatic capture is both unsafe
+    and unbounded. Generation call sites add explicitly bounded content with
+    :func:`record_generation_observation`.
+
+    Parameters
+    ----------
+    *args : Any
+        Positional arguments accepted by the installed Langfuse decorator.
+    **kwargs : Any
+        Keyword arguments accepted by the installed Langfuse decorator.
+
+    Returns
+    -------
+    Any
+        The decorated callable or decorator returned by Langfuse.
+    """
+    safe_kwargs = dict(kwargs)
+    safe_kwargs.setdefault("capture_input", False)
+    safe_kwargs.setdefault("capture_output", False)
+    return _langfuse_observe(*args, **safe_kwargs)
+
+
 T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
@@ -77,6 +113,8 @@ DEFAULT_LITELLM_BASE_URL = "http://litellm:4000"
 LLM_TIMEOUT_SHORT = 30.0
 LLM_TIMEOUT_DEFAULT = 120.0
 LLM_TIMEOUT_LONG = 300.0
+_LANGFUSE_CONTENT_LIMIT = 20_000
+_OBSERVATION_UNSET = object()
 
 _WORK_NOTE_MARKER_RE = re.compile(
     r"^\s*(?:"
@@ -532,6 +570,78 @@ async def request_chat_completion_content(
     return visible
 
 
+def _bounded_observation_value(value: object) -> str:
+    """Serialize one observation value without retaining an unbounded graph."""
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        serialized = f"<{type(value).__name__}>"
+    if len(serialized) <= _LANGFUSE_CONTENT_LIMIT:
+        return serialized
+    suffix = "..._truncated"
+    return serialized[: _LANGFUSE_CONTENT_LIMIT - len(suffix)] + suffix
+
+
+def record_generation_observation(
+    *,
+    input_value: object = _OBSERVATION_UNSET,
+    output_value: object = _OBSERVATION_UNSET,
+    model: str | None = None,
+) -> None:
+    """Attach explicitly bounded content to the active Langfuse generation.
+
+    Parameters
+    ----------
+    input_value : object
+        Prompt or embedding input to serialize, capped at 20,000 characters.
+        Omit it when only recording a response.
+    output_value : object
+        Response to serialize under the same cap. Omit it when only recording
+        a prompt.
+    model : str or None
+        LiteLLM alias or resolved model name for the generation.
+
+    Notes
+    -----
+    The helper is a no-op when the opt-in observability profile or Langfuse
+    credentials are absent. It never raises into the product request path.
+    """
+    settings = get_jarvis_common_settings()
+    if not settings.observability_enabled or not settings.langfuse_host:
+        return
+    secrets = get_secrets_settings()
+    if not secrets.langfuse_public_key or not secrets.langfuse_secret_key:
+        return
+    has_input = input_value is not _OBSERVATION_UNSET
+    has_output = output_value is not _OBSERVATION_UNSET
+    if not has_input and not has_output and model is None:
+        return
+    try:
+        from langfuse import get_client  # noqa: PLC0415
+
+        client = get_client()
+        if has_input and has_output:
+            client.update_current_generation(
+                input=_bounded_observation_value(input_value),
+                output=_bounded_observation_value(output_value),
+                model=model,
+            )
+        elif has_input:
+            client.update_current_generation(
+                input=_bounded_observation_value(input_value), model=model
+            )
+        elif has_output:
+            client.update_current_generation(
+                output=_bounded_observation_value(output_value), model=model
+            )
+        else:
+            client.update_current_generation(model=model)
+    except Exception as exc:  # noqa: BLE001 -- telemetry must remain optional
+        logger.debug("Langfuse generation update skipped: %s", type(exc).__name__)
+
+
 @observe(as_type="generation")
 async def call_llm_structured(
     openai_client: "openai.AsyncOpenAI",
@@ -597,6 +707,8 @@ async def call_llm_structured(
             "(e.g. 'smart' / 'fast'); got an empty value"
         )
 
+    record_generation_observation(input_value=_messages, model=_options.model)
+
     # openai_client is already instructor-patched (wrapped in the service lifespan).
     # Do NOT call instructor.from_openai() again — double-wrapping returns None on
     # some instructor versions, causing 'NoneType has no attribute chat'.
@@ -610,6 +722,7 @@ async def call_llm_structured(
         timeout=_options.timeout,
         max_retries=max_retries,
     )
+    record_generation_observation(output_value=result)
     if _options.model == "smart":
         # Instructor attaches the raw ChatCompletion as _raw_response on the result.
         raw_resp = getattr(result, "_raw_response", None)
@@ -618,53 +731,15 @@ async def call_llm_structured(
     return result
 
 
-class _QuarantineAwareSpanExporter(SpanExporter):
-    """Drop Langfuse span batches while outbound quarantine is active."""
+def _build_langfuse_span_exporter(base_url: str, public_key: str, secret_key: str) -> SpanExporter:
+    """Build the bounded exporter supported by the pinned Langfuse server."""
+    from jarvis_common.langfuse_v2_exporter import LangfuseV2SpanExporter  # noqa: PLC0415
 
-    def __init__(self, delegate: SpanExporter) -> None:
-        self._delegate = delegate
-
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        if outbound_quarantine_active():
-            return SpanExportResult.SUCCESS
-        return self._delegate.export(spans)
-
-    def shutdown(self) -> None:
-        self._delegate.shutdown()
-
-    def force_flush(self, timeout_millis: int = 30_000) -> bool:
-        if outbound_quarantine_active():
-            return True
-        return self._delegate.force_flush(timeout_millis=timeout_millis)
-
-
-def _build_langfuse_span_exporter(
-    base_url: str, public_key: str, secret_key: str
-) -> _QuarantineAwareSpanExporter:
-    """Build the authenticated exporter with a final quarantine check."""
-    import base64  # noqa: PLC0415
-
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # noqa: PLC0415
-        OTLPSpanExporter,
+    return LangfuseV2SpanExporter(
+        base_url=base_url,
+        public_key=public_key,
+        secret_key=secret_key,
     )
-
-    from langfuse import __version__ as langfuse_version  # noqa: PLC0415
-
-    export_path = os.environ.get(
-        "LANGFUSE_OTEL_TRACES_EXPORT_PATH", "api/public/otel/v1/traces"
-    ).lstrip("/")
-    endpoint = f"{base_url.rstrip('/')}/{export_path}"
-    authorization = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
-    delegate = OTLPSpanExporter(
-        endpoint=endpoint,
-        headers={
-            "Authorization": f"Basic {authorization}",
-            "x-langfuse-sdk-name": "python",
-            "x-langfuse-sdk-version": langfuse_version,
-            "x-langfuse-public-key": public_key,
-        },
-    )
-    return _QuarantineAwareSpanExporter(delegate)
 
 
 def _langfuse_lifespan_hook() -> None:
@@ -764,6 +839,7 @@ async def embed_texts(
         return []
 
     litellm = config or get_litellm_config()
+    record_generation_observation(input_value=texts, model=model)
     try:
         ensure_outbound_egress_allowed("LiteLLM embeddings")
         response = await http_client.post(
@@ -787,6 +863,8 @@ async def embed_texts(
             enumerate(payload["data"]),
             key=lambda pair: pair[1].get("index", pair[0]),
         )
-        return [item["embedding"] for _, item in data]
+        embeddings = [item["embedding"] for _, item in data]
+        record_generation_observation(output_value=embeddings)
+        return embeddings
     except (KeyError, TypeError, IndexError) as exc:
         raise RuntimeError(f"Unexpected embedding response format: {exc}") from exc

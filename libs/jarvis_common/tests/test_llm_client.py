@@ -36,6 +36,39 @@ def test_build_litellm_headers_returns_empty_when_key_unset(monkeypatch):
     assert llm_client.build_litellm_headers(config) == {}
 
 
+def test_observe_disables_implicit_object_capture(monkeypatch):
+    """Trace decorators must not serialize clients, pools, or retrieval objects."""
+    captured: dict[str, object] = {}
+
+    def fake_observe(*args, **kwargs):
+        captured.update(kwargs)
+
+        def decorator(function):
+            return function
+
+        return decorator
+
+    monkeypatch.setattr(llm_client, "_langfuse_observe", fake_observe)
+
+    @llm_client.observe(as_type="generation")
+    def traced_boundary() -> None:
+        return None
+
+    traced_boundary()
+
+    assert captured["capture_input"] is False
+    assert captured["capture_output"] is False
+
+
+def test_observation_values_are_bounded_without_object_repr():
+    """Exported content is capped and unsupported objects reveal only their type."""
+    bounded = llm_client._bounded_observation_value("x" * 25_000)
+
+    assert len(bounded) == 20_000
+    assert bounded.endswith("..._truncated")
+    assert llm_client._bounded_observation_value(object()) == "<object>"
+
+
 def test_build_litellm_headers_returns_bearer_when_key_set(monkeypatch):
     """build_litellm_headers returns Authorization: Bearer <key> when LITELLM_MASTER_KEY is set."""
     monkeypatch.delenv("LITELLM_MASTER_KEY_FILE", raising=False)
@@ -370,6 +403,34 @@ async def test_call_llm_structured_passes_timeout_through():
 
 
 @pytest.mark.asyncio
+async def test_call_llm_structured_records_only_explicit_generation_content(monkeypatch):
+    """The generation trace receives bounded prompt/output values, never the client."""
+    recorded_call: dict = {}
+    observations: list[dict[str, object]] = []
+    fake_client, _ = _make_instructor_recorder(recorded_call)
+
+    monkeypatch.setattr(
+        llm_client,
+        "record_generation_observation",
+        lambda **values: observations.append(values),
+    )
+
+    await llm_client.call_llm_structured(
+        fake_client,
+        response_model=type("_X", (), {}),  # type: ignore[arg-type]
+        prompt="bounded prompt",
+        options=llm_client.ChatCompletionOptions(model="smart"),
+    )
+
+    assert observations[0] == {
+        "input_value": [{"role": "user", "content": "bounded prompt"}],
+        "model": "smart",
+    }
+    assert set(observations[1]) == {"output_value"}
+    assert fake_client not in observations[0].values()
+
+
+@pytest.mark.asyncio
 async def test_structured_llm_sink_refuses_quarantine_before_sdk_call(monkeypatch, tmp_path):
     from jarvis_common.maintenance import OutboundEgressBlockedError
     from pydantic import BaseModel
@@ -531,64 +592,192 @@ def test_boundary_functions_are_observed():
 
 def test_langfuse_export_rechecks_quarantine_after_initialization(monkeypatch, tmp_path):
     """A quarantine transition must stop queued spans before transport export."""
-    import types  # noqa: PLC0415
-
-    from opentelemetry.exporter.otlp.proto.http import trace_exporter  # noqa: PLC0415
+    from jarvis_common import langfuse_v2_exporter as exporter_module  # noqa: PLC0415
     from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
-    from pydantic import SecretStr  # noqa: PLC0415
 
-    import langfuse  # noqa: PLC0415
+    class Response:
+        status_code = 207
 
-    class RecordingExporter:
-        def __init__(self) -> None:
+        @staticmethod
+        def json() -> dict[str, list[object]]:
+            return {"errors": []}
+
+    class RecordingClient:
+        def __init__(self, **_kwargs) -> None:
             self.batches: list[object] = []
 
-        def export(self, spans):
-            self.batches.append(spans)
-            return SpanExportResult.SUCCESS
+        def post(self, _endpoint: str, *, json: object) -> Response:
+            self.batches.append(json)
+            return Response()
 
-        def shutdown(self) -> None:
+        def close(self) -> None:
             return None
 
-        def force_flush(self, timeout_millis: int = 30_000) -> bool:
-            return True
-
-    delegate = RecordingExporter()
-    captured: dict[str, object] = {}
-
-    class FakeLangfuse:
-        def __init__(self, **kwargs) -> None:
-            captured.update(kwargs)
-
+    client = RecordingClient()
+    monkeypatch.setattr(exporter_module.httpx, "Client", lambda **_kwargs: client)
     monkeypatch.setattr(
-        llm_client,
-        "get_jarvis_common_settings",
-        lambda: types.SimpleNamespace(
-            observability_enabled=True,
-            langfuse_host="https://langfuse.test",
+        exporter_module,
+        "_span_payload",
+        lambda _span: (
+            {"body": {"id": "trace"}},
+            {"body": {"traceId": "trace"}},
         ),
     )
-    monkeypatch.setattr(
-        llm_client,
-        "get_secrets_settings",
-        lambda: types.SimpleNamespace(
-            langfuse_public_key=SecretStr("public-key"),
-            langfuse_secret_key=SecretStr("secret-key"),
-        ),
+    exporter = exporter_module.LangfuseV2SpanExporter(
+        base_url="https://langfuse.test",
+        public_key="public-key",
+        secret_key="secret-key",
     )
-    monkeypatch.setattr(langfuse, "Langfuse", FakeLangfuse)
-    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", lambda **_kwargs: delegate)
+
     quarantine = tmp_path / ".outbound-quarantine.json"
     monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
 
-    llm_client._langfuse_lifespan_hook()
-    exporter = captured["span_exporter"]
     assert exporter.export(["before"]) is SpanExportResult.SUCCESS
-    assert delegate.batches == [["before"]]
+    assert len(client.batches) == 1
 
     quarantine.touch()
     assert exporter.export(["after"]) is SpanExportResult.SUCCESS
-    assert delegate.batches == [["before"]]
+    assert len(client.batches) == 1
+
+
+def test_legacy_langfuse_export_translates_only_decorated_spans():
+    """The compatibility exporter must exclude generic request telemetry."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from jarvis_common.langfuse_v2_exporter import _span_payload
+    from opentelemetry.sdk.trace import ReadableSpan
+    from opentelemetry.trace import SpanContext, TraceFlags, TraceState
+
+    context = SpanContext(
+        trace_id=1,
+        span_id=2,
+        is_remote=False,
+        trace_flags=TraceFlags(1),
+        trace_state=TraceState(),
+    )
+    generic = SimpleNamespace(
+        attributes={"service": "research"},
+        context=context,
+        parent=None,
+        start_time=1_000_000_000,
+        end_time=2_000_000_000,
+        name="http.request",
+    )
+    generation = SimpleNamespace(
+        attributes={
+            "langfuse.observation.type": "generation",
+            "langfuse.observation.input": '"bounded prompt"',
+            "langfuse.observation.output": '"bounded response"',
+            "langfuse.observation.model.name": "smart",
+        },
+        context=context,
+        parent=None,
+        start_time=1_000_000_000,
+        end_time=2_000_000_000,
+        name="call_llm_structured",
+    )
+
+    assert _span_payload(cast(ReadableSpan, generic)) is None
+    translated = _span_payload(cast(ReadableSpan, generation))
+    assert translated is not None
+    _, event = translated
+    assert event["type"] == "generation-create"
+    assert event["body"] == {
+        "id": "0000000000000002",
+        "traceId": "00000000000000000000000000000001",
+        "name": "call_llm_structured",
+        "startTime": "1970-01-01T00:00:01+00:00",
+        "endTime": "1970-01-01T00:00:02+00:00",
+        "input": "bounded prompt",
+        "output": "bounded response",
+        "model": "smart",
+    }
+
+
+def test_legacy_langfuse_export_removes_unexported_parent(monkeypatch):
+    """An exported observation must not reference a filtered request span."""
+    from jarvis_common import langfuse_v2_exporter as exporter_module  # noqa: PLC0415
+    from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
+
+    class Response:
+        status_code = 200
+
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.batch: dict[str, object] | None = None
+
+        def post(self, _endpoint: str, *, json: dict[str, object]) -> Response:
+            self.batch = json
+            return Response()
+
+        def close(self) -> None:
+            return None
+
+    client = RecordingClient()
+    monkeypatch.setattr(exporter_module.httpx, "Client", lambda **_kwargs: client)
+    monkeypatch.setattr(
+        exporter_module,
+        "_span_payload",
+        lambda _span: (
+            {"body": {"id": "trace"}},
+            {
+                "body": {
+                    "id": "generation",
+                    "traceId": "trace",
+                    "parentObservationId": "filtered-request",
+                }
+            },
+        ),
+    )
+    exporter = exporter_module.LangfuseV2SpanExporter(
+        base_url="https://langfuse.test",
+        public_key="public-key",
+        secret_key="secret-key",
+    )
+
+    assert exporter.export([object()]) is SpanExportResult.SUCCESS
+    assert client.batch == {
+        "batch": [
+            {"body": {"id": "trace"}},
+            {"body": {"id": "generation", "traceId": "trace"}},
+        ]
+    }
+
+
+def test_legacy_langfuse_export_rejects_partial_ingestion_errors(monkeypatch):
+    """A 207 response containing an event error must fail the export batch."""
+    from jarvis_common import langfuse_v2_exporter as exporter_module  # noqa: PLC0415
+    from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
+
+    class Response:
+        status_code = 207
+
+        @staticmethod
+        def json() -> dict[str, list[dict[str, str]]]:
+            return {"errors": [{"message": "rejected"}]}
+
+    class RejectingClient:
+        def post(self, _endpoint: str, *, json: object) -> Response:
+            del json
+            return Response()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(exporter_module.httpx, "Client", lambda **_kwargs: RejectingClient())
+    monkeypatch.setattr(
+        exporter_module,
+        "_span_payload",
+        lambda _span: ({"body": {"id": "trace"}}, {"body": {"id": "observation"}}),
+    )
+    exporter = exporter_module.LangfuseV2SpanExporter(
+        base_url="https://langfuse.test",
+        public_key="public-key",
+        secret_key="secret-key",
+    )
+
+    assert exporter.export([object()]) is SpanExportResult.FAILURE
 
 
 # ---------------------------------------------------------------------------

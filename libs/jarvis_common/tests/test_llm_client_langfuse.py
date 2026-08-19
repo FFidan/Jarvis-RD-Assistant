@@ -124,7 +124,9 @@ def test_constructs_when_enabled_and_keys_present(monkeypatch: pytest.MonkeyPatc
     assert seen.get("base_url") == "http://langfuse.test"
     assert seen.get("public_key") == "pk-real"
     assert seen.get("secret_key") == "sk-real"
-    assert isinstance(seen.get("span_exporter"), lc._QuarantineAwareSpanExporter)
+    from jarvis_common.langfuse_v2_exporter import LangfuseV2SpanExporter
+
+    assert isinstance(seen.get("span_exporter"), LangfuseV2SpanExporter)
 
 
 def test_no_per_call_warning_flood_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:

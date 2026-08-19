@@ -77,7 +77,14 @@ def _valid_context(headers: Mapping[str, str]) -> context.Context:
 
 
 def trace_headers() -> dict[str, str]:
-    """Return the active valid W3C headers, or an empty mapping."""
+    """Return the active W3C propagation headers.
+
+    Returns
+    -------
+    dict[str, str]
+        The valid ``traceparent`` and optional ``tracestate`` carrier. The
+        mapping is empty when no valid span is active.
+    """
     carrier: dict[str, str] = {}
     if trace.get_current_span().get_span_context().is_valid:
         _PROPAGATOR.inject(carrier)
@@ -85,13 +92,27 @@ def trace_headers() -> dict[str, str]:
 
 
 def trace_id() -> str | None:
-    """Return the active trace ID without exposing span metadata."""
+    """Return the active trace identifier without span metadata.
+
+    Returns
+    -------
+    str | None
+        A 32-character lowercase hexadecimal trace identifier, or ``None``
+        when no valid span is active.
+    """
     span_context = trace.get_current_span().get_span_context()
     return f"{span_context.trace_id:032x}" if span_context.is_valid else None
 
 
 def correlation_id() -> str | None:
-    """Return the active stable correlation identifier."""
+    """Return the active stable correlation identifier.
+
+    Returns
+    -------
+    str | None
+        The request or worker correlation identifier, or ``None`` when the
+        current context has none.
+    """
     value = correlation_id_var.get()
     return str(value) if value is not None else None
 
@@ -103,7 +124,23 @@ def request_span(
     service: str,
     method: str,
 ) -> Iterator[None]:
-    """Activate a server span, replacing malformed caller trace state."""
+    """Activate a bounded server span for one request.
+
+    Parameters
+    ----------
+    headers
+        Incoming propagation headers. Malformed or invalid trace state is
+        discarded rather than trusted.
+    service
+        Low-cardinality service name attached to the span.
+    method
+        HTTP method attached to the span.
+
+    Yields
+    ------
+    None
+        Control while the request span is active.
+    """
     tracer = trace.get_tracer(_TELEMETRY_SCOPE)
     with tracer.start_as_current_span(
         "http.request",
@@ -122,7 +159,24 @@ def restored_span(
     name: str,
     kind: SpanKind,
 ) -> Iterator[None]:
-    """Restore queued W3C context and make one bounded processing span."""
+    """Restore queued W3C context for one processing span.
+
+    Parameters
+    ----------
+    carrier
+        Persisted propagation fields. Invalid trace state starts a new trace.
+    service
+        Low-cardinality service name attached to the span.
+    name
+        Stable processing span name.
+    kind
+        OpenTelemetry span kind for the processing boundary.
+
+    Yields
+    ------
+    None
+        Control while the restored processing span is active.
+    """
     tracer = trace.get_tracer(_TELEMETRY_SCOPE)
     with tracer.start_as_current_span(
         name,
@@ -134,7 +188,19 @@ def restored_span(
 
 
 def capture_task_context(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Copy payload and attach only trace and correlation propagation fields."""
+    """Copy a task payload and attach bounded propagation fields.
+
+    Parameters
+    ----------
+    payload
+        Application task payload. The input mapping is never mutated.
+
+    Returns
+    -------
+    dict[str, Any]
+        A shallow payload copy containing only correlation and W3C fields in
+        the reserved telemetry entry. User content is not added to telemetry.
+    """
     copied = dict(payload)
     copied[_TASK_CONTEXT_KEY] = {
         "correlation_id": correlation_id(),
@@ -144,7 +210,20 @@ def capture_task_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def pop_task_context(payload: MutableMapping[str, Any]) -> tuple[dict[str, str], uuid.UUID]:
-    """Remove reserved task fields and return safe context for worker execution."""
+    """Remove and validate reserved worker propagation fields.
+
+    Parameters
+    ----------
+    payload
+        Mutable task payload from which the reserved telemetry entry is
+        removed before application dispatch.
+
+    Returns
+    -------
+    tuple[dict[str, str], uuid.UUID]
+        Valid W3C carrier fields and a correlation identifier. Invalid or
+        missing correlation state is replaced with a fresh UUID.
+    """
     raw = payload.pop(_TASK_CONTEXT_KEY, None)
     raw_context = raw if isinstance(raw, dict) else {}
     carrier = {
@@ -160,13 +239,32 @@ def pop_task_context(payload: MutableMapping[str, Any]) -> tuple[dict[str, str],
 
 
 def event_context() -> dict[str, str]:
-    """Return the bounded context persisted with an outbox event."""
+    """Build bounded propagation metadata for an outbox event.
+
+    Returns
+    -------
+    dict[str, str]
+        A correlation identifier plus any active valid W3C fields. The result
+        contains no domain payload or user content.
+    """
     return {"correlation_id": correlation_id() or str(uuid.uuid4()), **trace_headers()}
 
 
 @contextmanager
 def restored_correlation(value: object) -> Iterator[None]:
-    """Activate a persisted correlation ID only when it remains a valid UUID."""
+    """Activate a validated persisted correlation identifier.
+
+    Parameters
+    ----------
+    value
+        Persisted correlation value. Invalid input is replaced with a fresh
+        UUID rather than propagated.
+
+    Yields
+    ------
+    None
+        Control while the validated correlation context is active.
+    """
     try:
         corr = uuid.UUID(str(value))
     except (TypeError, ValueError, AttributeError):
@@ -179,7 +277,20 @@ def restored_correlation(value: object) -> Iterator[None]:
 
 
 def record_request(*, service: str, status_code: int, duration_s: float, route: str) -> None:
-    """Record an in-process low-cardinality request RED summary."""
+    """Record one low-cardinality request RED observation.
+
+    Parameters
+    ----------
+    service
+        Stable service name used for aggregate counters.
+    status_code
+        HTTP response status used to classify server errors.
+    duration_s
+        Non-negative request duration in seconds.
+    route
+        Normalized route template. Caller-supplied URLs and parameters must
+        not be passed here.
+    """
     metrics = _service_metrics(service)
     with _METRICS_LOCK:
         metrics.requests += 1
@@ -192,7 +303,20 @@ def record_request(*, service: str, status_code: int, duration_s: float, route: 
 
 
 def record_worker(*, service: str, outcome: str, duration_s: float, task_kind: str) -> None:
-    """Record a low-cardinality worker outcome without task payload data."""
+    """Record one low-cardinality worker observation.
+
+    Parameters
+    ----------
+    service
+        Stable service name used for aggregate counters.
+    outcome
+        Bounded outcome label; values other than ``success`` count as errors.
+    duration_s
+        Non-negative worker duration in seconds.
+    task_kind
+        Registered task kind. Task arguments and user content must not be
+        passed here.
+    """
     metrics = _service_metrics(service)
     with _METRICS_LOCK:
         metrics.workers += 1
@@ -204,7 +328,19 @@ def record_worker(*, service: str, outcome: str, duration_s: float, task_kind: s
 
 
 def metrics_snapshot(service: str) -> dict[str, int]:
-    """Return bounded aggregate RED counters for authenticated diagnostics."""
+    """Return bounded RED counters for authenticated diagnostics.
+
+    Parameters
+    ----------
+    service
+        Service whose request and worker aggregates should be returned.
+
+    Returns
+    -------
+    dict[str, int]
+        Request and worker counts, error counts, and cumulative durations.
+        The snapshot contains no routes, task arguments, or user data.
+    """
     metrics = _service_metrics(service)
     with _METRICS_LOCK:
         workers = _METRICS.get("worker", _ServiceMetrics())
@@ -221,7 +357,30 @@ def metrics_snapshot(service: str) -> dict[str, int]:
 def configure_telemetry(
     *, service: str, enabled: bool, otlp_endpoint: str | None, timeout_ms: int
 ) -> bool:
-    """Install one process provider and an optional bounded generic OTLP exporter."""
+    """Configure the process tracing provider and optional OTLP export.
+
+    Parameters
+    ----------
+    service
+        Service name applied when this call creates the process provider.
+    enabled
+        Whether generic OTLP export is enabled.
+    otlp_endpoint
+        Collector endpoint, or ``None`` to retain in-process telemetry only.
+    timeout_ms
+        Export timeout in milliseconds for the bounded batch processor.
+
+    Returns
+    -------
+    bool
+        ``True`` after the provider is available. Repeated calls for the same
+        endpoint are idempotent and do not add duplicate exporters.
+
+    Notes
+    -----
+    The generic exporter receives only spans created by this module's bounded
+    scope; generation spans and application payloads are not forwarded.
+    """
     provider = trace.get_tracer_provider()
     if not isinstance(provider, TracerProvider):
         provider = TracerProvider(resource=Resource.create({"service.name": service}))
@@ -239,7 +398,19 @@ def configure_telemetry(
 
 
 def flush_telemetry(*, timeout_ms: int = 5_000) -> None:
-    """Boundedly flush the process provider without shutting it down per lifecycle."""
+    """Flush the process provider without shutting it down.
+
+    Parameters
+    ----------
+    timeout_ms
+        Maximum flush duration in milliseconds. Negative values are clamped
+        to zero.
+
+    Notes
+    -----
+    Exporter failures are intentionally contained so application shutdown and
+    failed-startup cleanup cannot be blocked by optional telemetry transport.
+    """
     provider = trace.get_tracer_provider()
     if isinstance(provider, TracerProvider):
         try:

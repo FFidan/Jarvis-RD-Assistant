@@ -41,7 +41,9 @@ COPY entrypoint.sh /usr/local/bin/langfuse-secrets-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/langfuse-secrets-entrypoint.sh
 
 # Replace the upstream entrypoint (`dumb-init -- ./web/entrypoint.sh`) with our
-# shim. The shim re-execs the upstream chain under su-exec after exporting
-# secrets, so the final process tree and signal-handling are identical.
+# shim. Docker clears an inherited CMD when a child image sets ENTRYPOINT, so
+# repeat the pinned image's server command explicitly. The shim re-execs the
+# upstream chain under su-exec after exporting secrets, preserving the final
+# process tree and signal handling.
 ENTRYPOINT ["/usr/local/bin/langfuse-secrets-entrypoint.sh"]
-# CMD is inherited from the base image (node ./web/server.js ...).
+CMD ["node", "./web/server.js", "--keepAliveTimeout", "110000"]
