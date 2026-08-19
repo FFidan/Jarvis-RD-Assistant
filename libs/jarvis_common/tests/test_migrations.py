@@ -497,8 +497,12 @@ def _assert_declared_columns(shape: dict[tuple[str, str], frozenset[str]]) -> No
 
 
 async def _insert_job(conn: asyncpg.Connection, task_name: str, status: str, job_id: str) -> None:
-    """Insert one research-owned job carrying a public job id."""
-    await conn.execute(
+    """Insert one research-owned job carrying a public job id.
+
+    The replay fixture connects with a bare ``asyncpg.connect``, which registers
+    no JSONB codec, so this argument really does have to arrive already encoded.
+    """
+    await conn.execute(  # nolint:jsonb-double-encode
         """
         INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
         VALUES ('paper_ingestion', $1, $2::jsonb, $3::ops.procrastinate_job_status)

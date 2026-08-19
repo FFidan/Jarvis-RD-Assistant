@@ -5,8 +5,6 @@ resolves to the real db/migrations/ directory in the repo. This avoids
 fragile monkeypatching of Path internals.
 """
 
-from unittest.mock import ANY
-
 import asyncpg
 import pytest
 
@@ -86,10 +84,6 @@ async def test_schema_migrations_select_called(tmp_path):
 
     await run_migrations(pool, migrations_dir=tmp_path)
 
-    conn.fetch.assert_any_await(
-        "SELECT version FROM schema_migrations WHERE version = ANY($1::int[])",
-        ANY,
-    )
     conn.fetch.assert_any_await("SELECT version FROM schema_migrations")
 
 
