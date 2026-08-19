@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from jarvis_common.identity_assertions import IdentityAssertionSigner
 from jarvis_common.identity_capabilities import (
     IdentityAudience,
@@ -15,6 +15,7 @@ from jarvis_common.identity_capabilities import (
 from pydantic import BaseModel, Field
 
 from platform_api.deps import authenticate_service_principal, get_db_pool, get_identity_signer
+from platform_api.repos.config_delivery import apply_research_config_effects
 
 router = APIRouter(prefix="/internal/services", tags=["internal", "services"])
 type Principal = Annotated[ServicePrincipal, Depends(authenticate_service_principal)]
@@ -37,6 +38,27 @@ class ServiceAuthorizationResponse(BaseModel):
 
     assertion: str
     scopes: tuple[str, ...]
+
+
+class ResearchConfigEffectsRequest(BaseModel):
+    """Typed Platform-owned state observed by Research delivery.
+
+    Parameters
+    ----------
+    roles : list[{"smart", "fast", "embed"}]
+        LiteLLM roles whose pending state changed.
+    pending : bool or None
+        New pending state, or ``None`` when no pending state is reported.
+    effective_num_ctx_role : {"smart", "fast", "embed"} or None
+        Role whose effective context budget changed.
+    effective_num_ctx_value : int or None
+        Positive effective context budget paired with its role.
+    """
+
+    roles: list[Literal["smart", "fast", "embed"]] = Field(default_factory=list)
+    pending: bool | None = None
+    effective_num_ctx_role: Literal["smart", "fast", "embed"] | None = None
+    effective_num_ctx_value: int | None = Field(default=None, gt=0)
 
 
 @router.post("/authorize", response_model=ServiceAuthorizationResponse)
@@ -71,6 +93,49 @@ async def authorize_service_command(
         ),
         scopes=scopes,
     )
+
+
+@router.post("/research-config-effects", status_code=status.HTTP_204_NO_CONTENT)
+async def report_research_config_effects(
+    body: ResearchConfigEffectsRequest,
+    principal: Principal,
+    db_pool: DatabasePool,
+) -> Response:
+    """Persist an exact Research effect through Platform's database authority.
+
+    Parameters
+    ----------
+    body : ResearchConfigEffectsRequest
+        Bounded delivery state observed by Research.
+    principal : {"learning", "research", "telegram"}
+        Authenticated service principal.
+    db_pool : asyncpg.Pool
+        Platform runtime pool owning configuration state.
+
+    Returns
+    -------
+    Response
+        Empty response after the effect is committed.
+
+    Raises
+    ------
+    HTTPException
+        With status 403 unless the Research principal called the command, or
+        400 when paired effect fields are incomplete.
+    """
+    if principal != "research":
+        raise HTTPException(status_code=403, detail="Service command is not allowed")
+    try:
+        await apply_research_config_effects(
+            db_pool,
+            roles=list(body.roles),
+            pending=body.pending,
+            effective_num_ctx_role=body.effective_num_ctx_role,
+            effective_num_ctx_value=body.effective_num_ctx_value,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Research config effects are invalid") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 __all__ = ["router"]

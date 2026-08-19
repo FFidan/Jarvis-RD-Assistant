@@ -5,6 +5,8 @@ Covers:
 - GET /api/system/models — installed Ollama models + config assignments
 """
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models /
@@ -273,6 +275,73 @@ async def test_system_models_full_response(_app):
 
     # Delivery state (additive field): no llm.delivery_pending row → all applied
     assert body.delivery == {"smart": "applied", "fast": "applied", "embed": "applied"}
+
+
+@pytest.mark.asyncio
+async def test_system_models_starts_independent_sources_together(_app, monkeypatch):
+    """The snapshot does not serialize independent database and service reads."""
+    app, _, mock_http = _app
+    from paper_ingestion.services import system_models_view
+
+    request = _make_request(app.state.db_pool, mock_http)
+    source_names = {
+        "current",
+        "delivery",
+        "cloud_keys",
+        "installed",
+        "runtime",
+        "hardware",
+    }
+    entered: set[str] = set()
+    release = asyncio.Event()
+
+    def source(name: str, result: object) -> Callable[..., Awaitable[object]]:
+        async def load(*_args: object, **_kwargs: object) -> object:
+            entered.add(name)
+            if entered == source_names:
+                release.set()
+            await release.wait()
+            if name == "current":
+                raise RuntimeError("first source wave complete")
+            return result
+
+        return load
+
+    monkeypatch.setattr(
+        system_models_view,
+        "_load_current_model_assignments",
+        source("current", ({}, None)),
+    )
+    monkeypatch.setattr(
+        system_models_view,
+        "_load_model_delivery_state",
+        source("delivery", {}),
+    )
+    monkeypatch.setattr(
+        system_models_view,
+        "_cloud_key_presence",
+        source("cloud_keys", {}),
+    )
+    monkeypatch.setattr(
+        system_models_view,
+        "_load_installed_ollama_models",
+        source("installed", ([], None)),
+    )
+    monkeypatch.setattr(
+        system_models_view,
+        "_load_ollama_runtime_count",
+        source("runtime", (0, None)),
+    )
+    monkeypatch.setattr(
+        system_models_view,
+        "async_get_cached_hardware",
+        source("hardware", MagicMock()),
+    )
+
+    with pytest.raises(RuntimeError, match="first source wave complete"):
+        await asyncio.wait_for(system_models_view._get_system_models_data(request), timeout=1)
+
+    assert entered == source_names
 
 
 def test_reviewed_choices_exclude_deprecated_models() -> None:

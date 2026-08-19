@@ -27,7 +27,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 
 from jarvis_common.config_metadata import ROLE_TO_ALIAS
 from jarvis_common.crypto import resolve_secret_row
@@ -61,6 +61,17 @@ logger = logging.getLogger(__name__)
 # /model/delete pairs (an interleave could delete a deployment another request
 # just created).
 _config_lock = asyncio.Lock()  # pyright: ignore[reportUnusedVariable]  # imported from routers/settings.py
+
+
+class _ConfigEffectReporter(Protocol):
+    async def __call__(
+        self,
+        *,
+        roles: list[str],
+        pending: bool | None,
+        effective_num_ctx_role: str | None,
+        effective_num_ctx_value: int | None,
+    ) -> None: ...
 
 
 class ThinkingPreferenceState(Enum):
@@ -750,26 +761,23 @@ def _local_is_noop(
 
 async def _mirror_num_ctx_budget(
     delivered: bool,
-    db_pool: Any,
     alias: str,
     effective_num_ctx: int | None,
     new_model: str,
+    config_effect_reporter: _ConfigEffectReporter | None,
 ) -> None:
-    """Mirror a delivered per-machine num_ctx into the system prompt-budget row."""
-    # Keeps prompt-budget readers in lock-step with the window just delivered to
-    # the proxy; a stale budget row would silently overflow the new context.
-    if not (
-        delivered
-        and db_pool is not None
-        and effective_num_ctx is not None
-        and is_local_ollama(new_model)
-    ):
+    """Report a local context budget through Platform's ownership boundary."""
+    if effective_num_ctx is None or not is_local_ollama(new_model):
         return
-    from jarvis_common.config_store import _upsert_system_num_ctx  # noqa: PLC0415
-
-    async with db_pool.acquire() as conn:
-        await _upsert_system_num_ctx(conn, alias, effective_num_ctx)
-    invalidate_effective_num_ctx_cache()
+    if config_effect_reporter is not None:
+        await config_effect_reporter(
+            roles=[],
+            pending=None,
+            effective_num_ctx_role=alias,
+            effective_num_ctx_value=effective_num_ctx,
+        )
+    if delivered:
+        invalidate_effective_num_ctx_cache()
 
 
 async def _deliver_local(
@@ -782,6 +790,7 @@ async def _deliver_local(
     db_pool: Any,
     effective_num_ctx: int | None,
     effective_thinking_preference: ThinkingPreferenceState | None,
+    config_effect_reporter: _ConfigEffectReporter | None,
 ) -> bool:
     """Deliver a local/Ollama deployment.
 
@@ -799,10 +808,23 @@ async def _deliver_local(
         effective_thinking_preference,
     )
     if _local_is_noop(alias, new_params, db_entries, yaml_entries):
+        await _mirror_num_ctx_budget(
+            False,
+            alias,
+            effective_num_ctx,
+            new_model,
+            config_effect_reporter,
+        )
         return False
 
     delivered = await _replace_alias_deployment(alias, new_params, db_entries)
-    await _mirror_num_ctx_budget(delivered, db_pool, alias, effective_num_ctx, new_model)
+    await _mirror_num_ctx_budget(
+        delivered,
+        alias,
+        effective_num_ctx,
+        new_model,
+        config_effect_reporter,
+    )
     return delivered
 
 
@@ -813,25 +835,44 @@ async def update_litellm_model(
     machine_id: str = "",
     num_ctx: int | None = None,
     thinking_disabled: bool | None = None,
+    config_effect_reporter: _ConfigEffectReporter | None = None,
 ) -> bool:
     """Route an alias to a new model via LiteLLM's admin DB.
 
-    Resolves the alias's current deployments (``GET /v1/model/info``), creates
-    the replacement (``POST /model/new`` — carrying merged num_ctx / think /
-    temperature / api_base, and the Fernet-decrypted provider key for cloud
-    models), then deletes the superseded DB deployments (``POST
-    /model/delete``). Deployments are deployment-global: the last writer wins
-    across machines; per-machine num_ctx / thinking preferences are read from
-    user_config for the *delivering* machine.
+    Parameters
+    ----------
+    config_key : str
+        Configuration key or model-role alias to update.
+    model_name : str
+        Validated local or provider-qualified model identifier.
+    db_pool : Any, optional
+        Research pool used to resolve effective per-machine overrides.
+    machine_id : str, default=""
+        Machine identifier used for per-machine context preferences.
+    num_ctx : int or None, optional
+        Pending context-window override for this delivery.
+    thinking_disabled : bool or None, optional
+        Pending thinking-mode override for this delivery.
+    config_effect_reporter : _ConfigEffectReporter or None, optional
+        Platform owner-command callback used by the background reconciler.
 
-    ``num_ctx`` and ``thinking_disabled`` are pending per-machine settings
-    overrides and win over persisted DB state. ``num_ctx`` is local/Ollama-only.
+    Returns
+    -------
+    bool
+        ``True`` when routing changed, or ``False`` when the alias already
+        matched the requested deployment.
 
-    Returns True when a delivery happened, False when nothing needed changing
-    (the alias already routes the requested model with the same effective
-    params). Raises ``RuntimeError`` when delivery fails — including the
-    "No DB Connected" degraded state, which callers map to the
-    ``llm.delivery_pending`` bookkeeping.
+    Raises
+    ------
+    ValueError
+        If the model identifier, provider, or override is invalid.
+    RuntimeError
+        If LiteLLM cannot inspect or replace the deployment.
+
+    Notes
+    -----
+    Deployments are global across machines. Pending overrides win over stored
+    values, and context-window overrides apply only to local Ollama models.
     """
     # Stage 1 — resolve config_key -> alias (accept either format for convenience).
     alias = _resolve_alias(config_key)
@@ -880,6 +921,7 @@ async def update_litellm_model(
         db_pool,
         effective_num_ctx,
         effective_thinking_preference,
+        config_effect_reporter,
     )
 
 

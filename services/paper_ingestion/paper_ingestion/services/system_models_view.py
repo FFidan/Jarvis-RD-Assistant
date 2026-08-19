@@ -5,6 +5,7 @@ the installed/current/routing/recommendation snapshot served by
 ``GET /api/system/models``.
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -28,7 +29,6 @@ from paper_ingestion.models import SystemModelsResponse
 from paper_ingestion.services.model_assignment import provider_access_configured
 from paper_ingestion.services.model_lifecycle import (
     MODEL_CATALOG,
-    HardwareInfo,
     async_get_cached_hardware,
     build_model_statuses,
     recommendations_for_role,
@@ -552,24 +552,31 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
         },
     }
 
-    cloud_api_keys: dict[str, bool] = {"anthropic": False, "openai": False, "google": False}
-    result["current"], current_issue = await _load_current_model_assignments(
-        request.app.state.db_pool
+    (
+        current_result,
+        delivery,
+        cloud_api_keys,
+        installed_result,
+        runtime_result,
+        hardware,
+    ) = await asyncio.gather(
+        _load_current_model_assignments(request.app.state.db_pool),
+        _load_model_delivery_state(request.app.state.db_pool),
+        _cloud_key_presence(request.app.state.db_pool),
+        _load_installed_ollama_models(http, ollama_url),
+        _load_ollama_runtime_count(http, ollama_url),
+        async_get_cached_hardware(request.app.state),
     )
+    result["current"], current_issue = current_result
+    result["delivery"] = delivery
     if current_issue:
         result["issues"]["current"] = current_issue
 
-    result["delivery"] = await _load_model_delivery_state(request.app.state.db_pool)
-
-    result["routing"], result["consistent"] = await _load_routing_truth(result["current"])
-
-    cloud_api_keys = await _cloud_key_presence(request.app.state.db_pool)
-
-    result["installed"], installed_issue = await _load_installed_ollama_models(http, ollama_url)
+    result["installed"], installed_issue = installed_result
     if installed_issue:
         result["issues"]["installed"] = installed_issue
 
-    ollama_running, runtime_issue = await _load_ollama_runtime_count(http, ollama_url)
+    ollama_running, runtime_issue = runtime_result
     if ollama_running is not None:
         result["hardware"]["ollama_running"] = ollama_running
     if runtime_issue:
@@ -583,16 +590,18 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
     except RuntimeError as exc:
         result["issues"]["embedding_config"] = str(exc)
 
-    hardware: HardwareInfo = await async_get_cached_hardware(request.app.state)
     result["hardware"].update(hardware.to_dict())
 
-    num_ctx_per_role = await _load_num_ctx_overrides(request.app.state.db_pool, hardware.machine_id)
-
-    provider_lists = await fetch_all_provider_models(
-        [provider.id for provider in PROVIDER_REGISTRY if cloud_api_keys.get(provider.id)],
-        db_pool=request.app.state.db_pool,
-        http_client=http,
+    routing_result, num_ctx_per_role, provider_lists = await asyncio.gather(
+        _load_routing_truth(result["current"]),
+        _load_num_ctx_overrides(request.app.state.db_pool, hardware.machine_id),
+        fetch_all_provider_models(
+            [provider.id for provider in PROVIDER_REGISTRY if cloud_api_keys.get(provider.id)],
+            db_pool=request.app.state.db_pool,
+            http_client=http,
+        ),
     )
+    result["routing"], result["consistent"] = routing_result
     extra_entries = tuple(entry for listing in provider_lists.values() for entry in listing.entries)
     result["provider_lists"] = {
         provider_id: listing.summary() for provider_id, listing in provider_lists.items()

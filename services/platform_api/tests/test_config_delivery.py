@@ -8,9 +8,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from jarvis_common.testing import make_pool_and_conn
 from platform_api.repos import config_delivery as repository
+from platform_api.routers.internal_services import (
+    ResearchConfigEffectsRequest,
+    report_research_config_effects,
+)
 from platform_api.services import config_delivery as service
 
 
@@ -29,6 +33,40 @@ def _record(delivery_id: uuid.UUID) -> repository.ConfigDelivery:
         attempts=0,
         next_attempt_at=datetime.now(UTC),
     )
+
+
+@pytest.mark.asyncio
+async def test_research_effect_command_persists_only_through_platform_pool() -> None:
+    """The authenticated Research report uses Platform's owning transaction."""
+    pool, conn = make_pool_and_conn(fetchrow_return=None, execute_return="INSERT 0 1")
+
+    response = await report_research_config_effects(
+        ResearchConfigEffectsRequest(
+            roles=["smart"],
+            pending=False,
+            effective_num_ctx_role="smart",
+            effective_num_ctx_value=4096,
+        ),
+        "research",
+        pool,
+    )
+
+    assert response.status_code == 204
+    assert conn.transaction.call_count == 1
+    assert conn.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_research_effect_command_rejects_other_service_principals() -> None:
+    """Learning and Telegram cannot mutate Platform configuration state."""
+    for principal in ("learning", "telegram"):
+        with pytest.raises(HTTPException) as denied:
+            await report_research_config_effects(
+                ResearchConfigEffectsRequest(roles=["smart"], pending=True),
+                principal,
+                object(),
+            )
+        assert denied.value.status_code == 403
 
 
 @pytest.mark.asyncio

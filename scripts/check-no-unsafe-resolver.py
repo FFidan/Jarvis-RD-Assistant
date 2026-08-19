@@ -87,6 +87,7 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     # rather than caller-ID dependencies.
     "services/platform_api/platform_api/routers/internal_auth.py::GET /authorize": "internal: trusted gateway peer plus session or operations-key authorization",  # noqa: E501
     "services/platform_api/platform_api/routers/internal_services.py::POST /authorize": "internal: service bootstrap token authorizes an exact signed command",  # noqa: E501
+    "services/platform_api/platform_api/routers/internal_services.py::POST /research-config-effects": "internal: authenticated Research principal reports bounded configuration effects to the Platform owner",  # noqa: E501
     "services/platform_api/platform_api/routers/setup.py::GET /status": "public: fail-closed setup-state probe required before authentication",  # noqa: E501
     "services/platform_api/platform_api/routers/setup.py::POST /admin": "bootstrap: setup-token-gated first-admin creation under a database lock",  # noqa: E501
     # Restore status requires an admin session, operations key, or restore token.

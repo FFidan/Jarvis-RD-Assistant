@@ -10,13 +10,16 @@ import contextlib
 import logging
 import os
 import socket
+from functools import partial
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 from jarvis_common.config_metadata import ROLE_TO_ALIAS
 from jarvis_common.db_helpers import _ALIAS_MODELS
 from jarvis_common.maintenance import skip_for_maintenance
 
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
 from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL_NAME
 
@@ -99,20 +102,60 @@ def _log_reconcile_failure(target: str) -> None:
     _RECONCILE_FAILURE_STREAKS[target] = streak + 1
 
 
-async def _mark_role_pending(pool: Any, role: str, pending: bool) -> None:
-    """Best-effort llm.delivery_pending bookkeeping — never raises."""
-    from paper_ingestion.services.config_write import (  # noqa: PLC0415
-        _update_delivery_pending_roles,
+async def _report_config_effects(
+    client: httpx.AsyncClient,
+    *,
+    roles: list[str],
+    pending: bool | None,
+    effective_num_ctx_role: str | None,
+    effective_num_ctx_value: int | None,
+) -> None:
+    """Send one bounded configuration effect to Platform without a DB resource."""
+    settings = get_paper_ingestion_settings()
+    token = settings.research_service_token_file.read_text(encoding="utf-8").strip()
+    if not token:
+        raise RuntimeError("Research service credential is unavailable")
+    response = await client.post(
+        f"{settings.platform_api_url.rstrip('/')}/internal/services/research-config-effects",
+        headers={
+            "X-Jarvis-Service-Principal": "research",
+            "X-Jarvis-Service-Token": token,
+        },
+        json={
+            "roles": roles,
+            "pending": pending,
+            "effective_num_ctx_role": effective_num_ctx_role,
+            "effective_num_ctx_value": effective_num_ctx_value,
+        },
+        timeout=10.0,
     )
+    response.raise_for_status()
 
+
+async def _mark_role_pending(
+    client: httpx.AsyncClient | None,
+    role: str,
+    pending: bool,
+) -> bool:
+    """Report a role's pending state and return whether Platform committed it."""
+    if client is None:
+        return True
     try:
-        await _update_delivery_pending_roles(pool, roles={role}, pending=pending)
-    except Exception:
+        await _report_config_effects(
+            client,
+            roles=[role],
+            pending=pending,
+            effective_num_ctx_role=None,
+            effective_num_ctx_value=None,
+        )
+    except (httpx.HTTPError, OSError, RuntimeError):
         logger.warning(
-            "Could not update llm.delivery_pending for role %s during reconcile",
+            "Could not report llm.delivery_pending for role %s during reconcile",
             role,
             exc_info=True,
         )
+        return False
+    return True
 
 
 async def _desired_model_for_role(pool: Any, config_key: str) -> str:
@@ -140,7 +183,10 @@ async def _desired_model_for_role(pool: Any, config_key: str) -> str:
     return os.environ.get(env_name, "").strip() or static_default
 
 
-async def _reconcile_litellm_models_once(pool: Any) -> bool:
+async def _reconcile_litellm_models_once(
+    pool: Any,
+    effects_client: httpx.AsyncClient | None = None,
+) -> bool:
     """One reconcile pass. Returns True when every delivery is verified.
 
     Per-role failures are caught, logged, and marked pending — a pass never
@@ -167,16 +213,27 @@ async def _reconcile_litellm_models_once(pool: Any) -> bool:
             async with _config_lock:
                 desired = await _desired_model_for_role(pool, config_key)
                 desired_by_key[config_key] = desired
-                await update_litellm_model(config_key, desired, db_pool=pool, machine_id=machine_id)
+                await update_litellm_model(
+                    config_key,
+                    desired,
+                    db_pool=pool,
+                    machine_id=machine_id,
+                    config_effect_reporter=(
+                        None
+                        if effects_client is None
+                        else partial(_report_config_effects, effects_client)
+                    ),
+                )
         except Exception:
             _log_reconcile_failure(config_key)
-            await _mark_role_pending(pool, role, True)
+            await _mark_role_pending(effects_client, role, True)
             all_ok = False
             continue
         _RECONCILE_FAILURE_STREAKS.pop(config_key, None)
         # Delivered (True) or already routing the committed model (False) —
         # either way LiteLLM routes the desired model: clear any stale marker.
-        await _mark_role_pending(pool, role, False)
+        if not await _mark_role_pending(effects_client, role, False):
+            all_ok = False
 
     # smart-fallback: the real deployment group behind router_settings'
     # smart → ["smart-fallback"] mapping (fast-tier model, timeout 120). Not a
@@ -220,7 +277,10 @@ async def _reconcile_litellm_models_once(pool: Any) -> bool:
     return all_ok
 
 
-async def _litellm_model_reconciler_loop(pool: Any) -> None:
+async def _litellm_model_reconciler_loop(
+    pool: Any,
+    effects_client: httpx.AsyncClient | None = None,
+) -> None:
     """Persistent reconcile loop: one pass ~every 30 s for the process lifetime.
 
     WHY persistent (not stop-on-first-success): a LiteLLM that later restarts
@@ -243,7 +303,7 @@ async def _litellm_model_reconciler_loop(pool: Any) -> None:
             # DB; the next post-restore tick reconciles the forward-migrated rows.
             if skip_for_maintenance("litellm reconciler"):
                 reconciled_logged = False
-            elif await _reconcile_litellm_models_once(pool):
+            elif await _reconcile_litellm_models_once(pool, effects_client):
                 if not reconciled_logged:
                     logger.info("LiteLLM model reconciler: all deployments reconciled")
                     reconciled_logged = True
@@ -269,7 +329,7 @@ async def _start_litellm_reconciler(app: FastAPI) -> None:
         logger.info("LiteLLM model reconciler disabled by JARVIS_LITELLM_RECONCILER_ENABLED")
         return
     app.state.litellm_reconciler_task = asyncio.create_task(
-        _litellm_model_reconciler_loop(app.state.db_pool),
+        _litellm_model_reconciler_loop(app.state.db_pool, app.state.http_client),
         name="litellm_model_reconciler",
     )
 

@@ -376,11 +376,8 @@ async def test_update_pending_num_ctx_override_wins():
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_local_delivery_syncs_system_num_ctx_row_and_invalidates_cache(monkeypatch):
-    """A successful Ollama delivery that carried a num_ctx writes the system
-    ``llm.{role}_num_ctx`` row (the prompt-budget source of truth) AND drops the
-    effective-context cache — so a reconciler / model-change delivery cannot
-    leave the budget reading a stale window across a fleet."""
+async def test_local_delivery_reports_num_ctx_to_platform_and_invalidates_cache(monkeypatch):
+    """A delivered local context budget uses Platform's owner command."""
     from tests.conftest import _make_pool_and_conn
 
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -391,6 +388,7 @@ async def test_local_delivery_syncs_system_num_ctx_row_and_invalidates_cache(mon
     respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
 
     pool, conn = _make_pool_and_conn(fetchrow_return=None)
+    report_effect = AsyncMock()
     invalidated: list[bool] = []
     monkeypatch.setattr(
         litellm_config_module,
@@ -399,15 +397,22 @@ async def test_local_delivery_syncs_system_num_ctx_row_and_invalidates_cache(mon
     )
 
     result = await update_litellm_model(
-        "llm.smart_model", "qwen3:8b", db_pool=pool, machine_id="host-a", num_ctx=4096
+        "llm.smart_model",
+        "qwen3:8b",
+        db_pool=pool,
+        machine_id="host-a",
+        num_ctx=4096,
+        config_effect_reporter=report_effect,
     )
 
     assert result is True
-    # The system row was upserted with the DELIVERED value (4096), not the
-    # carried 8192, keyed by role (smart).
-    upserts = [c for c in conn.execute.await_args_list if "llm.smart_num_ctx" in c.args]
-    assert len(upserts) == 1
-    assert upserts[0].args[1:] == (None, "llm.smart_num_ctx", 4096)
+    report_effect.assert_awaited_once_with(
+        roles=[],
+        pending=None,
+        effective_num_ctx_role="smart",
+        effective_num_ctx_value=4096,
+    )
+    assert not [c for c in conn.execute.await_args_list if "user_config" in c.args[0]]
     assert invalidated == [True]
 
 
@@ -454,6 +459,7 @@ async def test_legacy_thinking_route_converges_once_then_is_noop(monkeypatch):
 
     # No persisted preference means the product default is explicitly off.
     pool, conn = _make_pool_and_conn(fetchrow_return=None)
+    report_effect = AsyncMock()
     invalidated: list[bool] = []
     monkeypatch.setattr(
         litellm_config_module,
@@ -462,10 +468,20 @@ async def test_legacy_thinking_route_converges_once_then_is_noop(monkeypatch):
     )
 
     first = await update_litellm_model(
-        "llm.smart_model", "qwen3:8b", db_pool=pool, machine_id="host-a", num_ctx=4096
+        "llm.smart_model",
+        "qwen3:8b",
+        db_pool=pool,
+        machine_id="host-a",
+        num_ctx=4096,
+        config_effect_reporter=report_effect,
     )
     second = await update_litellm_model(
-        "llm.smart_model", "qwen3:8b", db_pool=pool, machine_id="host-a", num_ctx=4096
+        "llm.smart_model",
+        "qwen3:8b",
+        db_pool=pool,
+        machine_id="host-a",
+        num_ctx=4096,
+        config_effect_reporter=report_effect,
     )
 
     assert first is True
@@ -474,8 +490,8 @@ async def test_legacy_thinking_route_converges_once_then_is_noop(monkeypatch):
     assert new_route.call_count == 1
     assert _last_payload(new_route)["litellm_params"]["think"] is False
     assert delete_route.call_count == 1
-    upserts = [c for c in conn.execute.await_args_list if "llm.smart_num_ctx" in c.args]
-    assert len(upserts) == 1
+    assert report_effect.await_count == 2
+    assert not [c for c in conn.execute.await_args_list if "user_config" in c.args[0]]
     assert invalidated == [True]
 
 
