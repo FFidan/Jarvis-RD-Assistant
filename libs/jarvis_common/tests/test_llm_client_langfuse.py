@@ -189,3 +189,30 @@ def test_no_per_call_warning_flood_when_unconfigured(monkeypatch: pytest.MonkeyP
         f"Expected at most 1 warning from langfuse logger after hook, "
         f"got {len(warnings_after_hook)}: {warnings_after_hook}"
     )
+
+
+def test_langfuse_exporter_resolves_through_the_pinned_transport() -> None:
+    """Span export is a credential-bearing sink and must not reach an arbitrary host.
+
+    Spans carry model inputs and outputs. Without a pinned transport the
+    exporter resolves whatever host configuration names and honours a proxy
+    from the environment, so the wiring is asserted rather than assumed.
+    """
+    from jarvis_common.langfuse_v2_exporter import LangfuseV2SpanExporter
+    from jarvis_common.pinned_transport import LANGFUSE_EXPORT_POLICY, PinnedBlockingTransport
+
+    exporter = LangfuseV2SpanExporter(
+        base_url="http://langfuse:3000",
+        public_key="pk-test",
+        secret_key="sk-test",
+    )
+    try:
+        transport = exporter._client._transport
+        assert isinstance(transport, PinnedBlockingTransport)
+        # The policy is the half that matters: the default one rejects the
+        # Compose service name LANGFUSE_HOST documents, so a pinned transport
+        # carrying it would block every export instead of allowing just this one.
+        assert transport._pool._network_backend._policy is LANGFUSE_EXPORT_POLICY
+        assert exporter._client.trust_env is False
+    finally:
+        exporter._client.close()

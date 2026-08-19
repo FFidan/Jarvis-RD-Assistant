@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from jarvis_common.maintenance import outbound_quarantine_active
+from jarvis_common.pinned_transport import LANGFUSE_EXPORT_POLICY, PinnedBlockingTransport
 
 _OBSERVATION_TYPE = "langfuse.observation.type"
 _OBSERVATION_INPUT = "langfuse.observation.input"
@@ -167,9 +168,14 @@ class LangfuseV2SpanExporter(SpanExporter):
 
         """
         self._endpoint = f"{base_url.rstrip('/')}/api/public/ingestion"
+        # Spans carry model inputs and outputs, so this export is a credential-
+        # bearing sink like every other outbound client: it resolves through the
+        # pinned transport and never inherits a proxy from the environment.
         self._client = httpx.Client(
+            transport=PinnedBlockingTransport(LANGFUSE_EXPORT_POLICY),
             auth=(public_key, secret_key),
             timeout=timeout_seconds,
+            trust_env=False,
             headers={"Content-Type": "application/json"},
         )
 

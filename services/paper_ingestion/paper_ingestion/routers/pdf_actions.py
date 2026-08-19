@@ -21,6 +21,7 @@ from fastapi import (
 from jarvis_common import JobCreateResponse, assert_paper_ownership, current_user_id_strict
 from jarvis_common.auth import require_admin
 from jarvis_common.library import DbLike, add_to_library, is_in_library
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from jarvis_common.settings import get_core_settings
 
 from paper_ingestion.converters import row_to_paper_response
@@ -187,6 +188,11 @@ async def download_pdf(
         raise HTTPException(
             status_code=503,
             detail="A restore is in progress. Try downloading the PDF again shortly.",
+        ) from exc
+    except OutboundEgressBlockedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Downloads are paused until the restored credentials are reviewed.",
         ) from exc
     except ValueError as e:
         request_id = getattr(request.state, "request_id", None) or str(paper_id)
