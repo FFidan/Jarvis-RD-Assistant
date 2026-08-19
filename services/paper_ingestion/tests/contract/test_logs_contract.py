@@ -356,3 +356,54 @@ async def test_a56_stream_tails_a_dispatched_job_and_ends_when_it_finishes(
     assert f'"status": "{reported_status}"' in frames[-1], (
         f"Closing frame reports the wrong outcome: {frames[-1]!r}"
     )
+
+
+async def test_a56_stream_delivers_the_closing_event_written_while_it_polls(
+    contract_conn,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The last lines of a finished job reach the tail that was watching it.
+
+    A handler commits its closing event before it returns, so the queue cannot
+    report the job terminal until that event is durable. This drives the one
+    interleaving that matters: the event lands while the poll cycle is already
+    in flight. Reading the events before the status drops it and closes the
+    stream, which loses exactly the lines an operator opened the tail to read.
+    """
+    from jarvis_common.testing_db import SharedConnPool
+    from platform_api.routers import logs as logs_module
+
+    correlation_id = uuid.uuid4()
+    await _seed_dispatched_job(contract_conn, correlation_id, "succeeded")
+    runtime_pool = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
+
+    real_status = logs_module._get_associated_job_status
+
+    async def status_after_the_handler_commits(db_pool, jarvis_job_id):
+        await contract_conn.execute(
+            """INSERT INTO system_events (level, category, source, message, context,
+                                          correlation_id)
+               VALUES ('info', 'job', 'paper.process', 'finished', $1::jsonb, $2)""",
+            {"job_id": jarvis_job_id, "task_kind": "paper.process"},
+            correlation_id,
+        )
+        return await real_status(db_pool, jarvis_job_id)
+
+    monkeypatch.setattr(logs_module, "_get_associated_job_status", status_after_the_handler_commits)
+
+    async def collect() -> list[str]:
+        return [
+            frame
+            async for frame in logs_module._stream_correlation_events(
+                runtime_pool, correlation_id, 0
+            )
+        ]
+
+    frames = await asyncio.wait_for(collect(), timeout=30)
+
+    data_frames = [f for f in frames if f.startswith("data: ")]
+    assert any('"message": "finished"' in frame for frame in data_frames), (
+        "the stream closed without delivering the closing event the job had already "
+        f"committed: {data_frames}"
+    )
+    assert frames[-1].startswith("event: done\n")

@@ -357,6 +357,16 @@ async def _stream_correlation_events(
         await asyncio.sleep(_STREAM_POLL_INTERVAL)
 
         async with db_pool.acquire() as conn:
+            jarvis_job_id = await _get_correlated_job_id(conn, correlation_id)
+
+        # Status is read before the events, and outside the borrowed connection
+        # because the job capability acquires its own. A handler writes its
+        # closing event before it returns, so the queue cannot report a job
+        # terminal until that event is committed: reading status first means the
+        # fetch below always sees the final lines the tail exists to show.
+        job_status = await _get_associated_job_status(db_pool, jarvis_job_id)
+
+        async with db_pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, created_at, level, category, source, message, context, correlation_id
@@ -368,13 +378,6 @@ async def _stream_correlation_events(
                 correlation_id,
                 last_id,
             )
-
-            jarvis_job_id = await _get_correlated_job_id(conn, correlation_id)
-
-        # Resolved after the borrowed connection is returned: the job capability
-        # acquires its own, and nesting would hold two connections per open
-        # stream for as long as the client is tailing.
-        job_status = await _get_associated_job_status(db_pool, jarvis_job_id)
 
         if rows:
             idle_since = time.monotonic()

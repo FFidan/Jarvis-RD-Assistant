@@ -16,6 +16,7 @@ import io
 import json
 import os
 import pty
+import re
 import socket
 import subprocess
 import tarfile
@@ -34,6 +35,8 @@ RESTORE_SH = REPO_ROOT / "scripts" / "restore.sh"
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 LITELLM_ENTRYPOINT = REPO_ROOT / "scripts" / "litellm-entrypoint.sh"
 ROLE_BOOTSTRAP = REPO_ROOT / "scripts" / "postgres-role-bootstrap.sh"
+INIT_SQL = REPO_ROOT / "db" / "init.sql"
+_ROLE_SEARCH_PATH = re.compile(r"ALTER ROLE (\w+) SET search_path TO ([^;]+);")
 
 BREAK_GLASS_PHRASE = "I-ACCEPT-UNVERIFIED-BACKUP"
 TS = "20260719_120000"
@@ -89,24 +92,23 @@ def test_both_finalization_modes_install_the_per_role_search_paths(
     Every relation lives in an owned schema, so a role whose default was never
     stored resolves unqualified names against an empty ``public``. This pins the
     wiring; ``scripts/tests/test_restore_roundtrip.sh`` proves it against a cluster.
+
+    The schema lists are compared against ``db/init.sql`` rather than restated
+    here. Presence alone would still pass if a role's default named the wrong
+    schemas, which resolves unqualified names exactly as badly as no default at
+    all — and an upgraded deployment has to resolve them as a fresh install does.
     """
     assert role_bootstrap_src.count("set_role_search_paths() {") == 1
     for mode in ("finalize", "restore-finalize"):
         assert "set_role_search_paths" in _mode_branch(role_bootstrap_src, mode), mode
 
     definition = role_bootstrap_src.split("set_role_search_paths() {", 1)[1].split("\n}\n", 1)[0]
-    for role in (
-        "jarvis_platform_owner",
-        "jarvis_research_owner",
-        "jarvis_learning_owner",
-        "jarvis_ops_owner",
-        "jarvis_platform_runtime",
-        "jarvis_research_runtime",
-        "jarvis_learning_runtime",
-        "jarvis_migrator",
-        "jarvis_legacy_rollback",
-    ):
-        assert f"ALTER ROLE {role} SET search_path TO " in definition, role
+    fresh_install = _ROLE_SEARCH_PATH.findall(INIT_SQL.read_text())
+    assert len(fresh_install) == 9, fresh_install
+    upgrade = _ROLE_SEARCH_PATH.findall(definition)
+    assert [(role, " ".join(path.split())) for role, path in upgrade] == [
+        (role, " ".join(path.split())) for role, path in fresh_install
+    ]
 
 
 def _run_bash(body: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
