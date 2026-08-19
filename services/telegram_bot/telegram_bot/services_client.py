@@ -52,7 +52,6 @@ __all__ = [
     "resume_focus_session",
     "complete_focus_session",
     "acknowledge_telegram_focus_completion",
-    "log_focus_session",
     "fetch_new_paper_count",
     "fetch_inbox_count",
     "check_authors",
@@ -432,28 +431,6 @@ async def submit_review_rating(
     resp.raise_for_status()
     result: dict[str, Any] = resp.json()
     return result
-
-
-async def log_focus_session(
-    http: httpx.AsyncClient,
-    config: BotConfig,
-    user_id: int | None,
-    duration_hours: float,
-) -> None:
-    """POST {learning_engine}/api/executive/focus/log body {"duration_hours": ...}.
-
-    Fire-and-forget (best-effort scheduled-job callback); the caller only
-    needs success/failure, never the response body.  Unlike other functions
-    here, *user_id* accepts ``None`` — the scheduled job's stored data may not
-    carry an owner id.
-    """
-    resp = await http.post(
-        f"{config.learning_engine_url}/api/executive/focus/log",
-        json={"duration_hours": duration_hours},
-        headers=_owner_headers(config, user_id),
-        timeout=10.0,
-    )
-    resp.raise_for_status()
 
 
 class MyDayFocusSummary(BaseModel):
