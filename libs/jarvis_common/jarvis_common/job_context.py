@@ -20,9 +20,9 @@ directly to persist interrupted outcomes.
   payload into the same table, best-effort.
 - ``is_cancelled``: bridges to procrastinate's ``should_abort()`` so
   abort-requested propagates to handler bodies.
-- ``job_id``: prefers the JARVIS UUID stored in ``task_kwargs['job_id']``
-  (set by every enqueue path) and falls back to ``str(procrastinate.job.id)``
-  (the bigint id) only when the kwarg is missing.
+- ``job_id``: the JARVIS UUID stored in ``task_kwargs['job_id']``, which every
+  enqueue path sets. It is empty when the kwarg is missing, because the
+  procrastinate bigint id is not a JARVIS job id and nothing can look it up.
 """
 
 from __future__ import annotations
@@ -188,9 +188,8 @@ def make_ctx_shim(
         that exercise the shim directly.
     job_id:
         Explicit override for the JARVIS job UUID.  When omitted, derived from
-        ``procrastinate_ctx.job.task_kwargs['job_id']`` (the JARVIS UUID),
-        falling back to ``str(procrastinate_ctx.job.id)`` (the procrastinate
-        bigint id), and finally to ``""``.
+        ``procrastinate_ctx.job.task_kwargs['job_id']`` (the JARVIS UUID), and
+        ``""`` when that kwarg is absent.
     pool:
         asyncpg pool used by :meth:`ProcrastinateJobContextShim.update_progress`
         to UPSERT into ``job_progress``.  When ``None``, progress reporting is
@@ -207,10 +206,7 @@ def make_ctx_shim(
             try:
                 kwargs = procrastinate_ctx.job.task_kwargs or {}
                 kwarg_id = kwargs.get("job_id")
-                if kwarg_id:
-                    job_id = str(kwarg_id)
-                else:
-                    job_id = str(procrastinate_ctx.job.id)
+                job_id = str(kwarg_id) if kwarg_id else ""
             except AttributeError:
                 job_id = ""
         else:

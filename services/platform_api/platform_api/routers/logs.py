@@ -18,6 +18,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import require_admin_or_api_key, verify_api_key
 from jarvis_common.db_helpers import escape_like
+from jarvis_common.jobs import TERMINAL_STATUSES, get_unified
 from jarvis_common.sse import sse_event, sse_keepalive, sse_named_event
 from starlette.responses import StreamingResponse
 
@@ -307,34 +308,40 @@ _STREAM_POLL_INTERVAL: float = 1.0  # seconds between DB polls
 _STREAM_MAX_IDLE_SECONDS: float = 1800.0  # 30-minute idle timeout
 
 
-async def _get_associated_job_status(
+async def _get_correlated_job_id(
     conn: Any,
     correlation_id: uuid_mod.UUID,
 ) -> str | None:
-    """Return the procrastinate job status for the job linked to this correlation_id.
+    """Return the JARVIS job id recorded when this correlation_id started.
 
-    Returns None if no associated job is found.
+    Returns None until the job's ``started`` event has been written.
     """
-    row = await conn.fetchrow(
+    return await conn.fetchval(
         """
-        SELECT pj.status
-        FROM procrastinate_jobs pj
-        WHERE pj.id = (
-            SELECT (context->>'job_id')::int
-            FROM system_events
-            WHERE correlation_id = $1
-              AND message = 'started'
-            LIMIT 1
-        )
+        SELECT context->>'job_id'
+        FROM system_events
+        WHERE correlation_id = $1
+          AND message = 'started'
+        LIMIT 1
         """,
         correlation_id,
     )
-    if row is None:
+
+
+async def _get_associated_job_status(
+    db_pool: asyncpg.Pool,
+    jarvis_job_id: str | None,
+) -> str | None:
+    """Return the JARVIS status of the job the correlation_id belongs to.
+
+    Reads through the Operations job capability, the only job surface the
+    Platform runtime is granted. Returns None when the correlation_id has no
+    recorded job id yet, or the job is no longer in the queue's history.
+    """
+    if not jarvis_job_id:
         return None
-    return row["status"]
-
-
-_TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+    row = await get_unified(db_pool, jarvis_job_id)
+    return None if row is None else row["status"]
 
 
 async def _stream_correlation_events(
@@ -362,8 +369,12 @@ async def _stream_correlation_events(
                 last_id,
             )
 
-            # Check associated job terminal status
-            job_status = await _get_associated_job_status(conn, correlation_id)
+            jarvis_job_id = await _get_correlated_job_id(conn, correlation_id)
+
+        # Resolved after the borrowed connection is returned: the job capability
+        # acquires its own, and nesting would hold two connections per open
+        # stream for as long as the client is tailing.
+        job_status = await _get_associated_job_status(db_pool, jarvis_job_id)
 
         if rows:
             idle_since = time.monotonic()
@@ -373,7 +384,7 @@ async def _stream_correlation_events(
                 last_id = row["id"]
 
         # Terminate if job is in a terminal state
-        if job_status in _TERMINAL_JOB_STATUSES:
+        if job_status in TERMINAL_STATUSES:
             yield sse_named_event("done", {"reason": "job_terminal", "status": job_status})
             return
 

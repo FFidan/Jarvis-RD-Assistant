@@ -1,10 +1,6 @@
 """Logs domain contract tests — target rows A51-A56.
 
 Survivor-of: (all NONE — no prior contract coverage).
-Carve-out: SSE stream (A56) is IDIOMATIC-MOCK-ONLY — the generator polls
-DB in an infinite loop; testing it without a real procrastinate job that
-transitions to terminal state would require mocking time or the job table,
-making it no stronger than the mock-unit test. Skipped per YAGNI.
 
 Rows covered:
   A51 GET /api/logs/events          — admin gate + events returned from DB
@@ -12,13 +8,19 @@ Rows covered:
   A53 GET /api/logs/summary         — aggregated counts non-negative
   A54 GET /api/logs/correlation/{id} — correlated events from DB match inserted id
   A55 GET /api/logs/sources         — distinct source names returned
+  A56 GET /api/logs/stream/{id}     — SSE stream over a really dispatched job
 
-Row deferred:
-  A56 GET /api/logs/stream/{id}     — SSE stream; IDIOMATIC-MOCK-ONLY (infinite loop)
+A56 drives the stream generator directly rather than the route: the route
+returns a StreamingResponse that never completes on its own, while the
+generator is the whole behaviour under test. It runs under the Platform
+runtime identity because the job lookup is a privilege boundary — the
+administrative contract identity would pass regardless of which job surface
+the stream reads, and so could not observe a regression there.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -279,4 +281,78 @@ async def test_a55_list_sources_returns_distinct_sources(
     assert isinstance(sources, list), f"Expected list, got {type(sources)}"
     assert unique_source in sources, (
         f"Inserted source {unique_source!r} not found in /api/logs/sources: {sources}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A56: GET /api/logs/stream/{id} — live tail of a dispatched job
+# ---------------------------------------------------------------------------
+
+
+async def _seed_dispatched_job(conn, correlation_id: uuid.UUID, status: str) -> None:
+    """Record a started job for *correlation_id* and park it in *status*.
+
+    Mirrors a real dispatch: the task wrapper writes the ``started`` event
+    carrying the JARVIS job UUID, and the queue row carries the same UUID in
+    ``args->>'job_id'``.
+    """
+    jarvis_job_id = str(uuid.uuid4())
+    await conn.execute(
+        """INSERT INTO system_events (level, category, source, message, context, correlation_id)
+           VALUES ('info', 'job', 'paper.process', 'started', $1::jsonb, $2)""",
+        {"job_id": jarvis_job_id, "task_kind": "paper.process"},
+        correlation_id,
+    )
+    await conn.execute(
+        """INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
+           VALUES ('paper_ingestion', 'paper.process', $1::jsonb,
+                   $2::procrastinate_job_status)""",
+        {"job_id": jarvis_job_id, "user_id": "1"},
+        status,
+    )
+
+
+@pytest.mark.parametrize(
+    ("queue_status", "reported_status"),
+    [("succeeded", "succeeded"), ("aborted", "cancelled")],
+)
+async def test_a56_stream_tails_a_dispatched_job_and_ends_when_it_finishes(
+    contract_conn,
+    queue_status: str,
+    reported_status: str,
+):
+    """Covers map row A56: the stream reaches a dispatched job and closes on its outcome.
+
+    The job id minted at dispatch is a UUID, and the Platform runtime may read
+    jobs only through the Operations capability, so a stream that goes to the
+    queue table directly yields nothing at all for a job a user really started.
+    ``aborted`` is included because a handler that acknowledged a cancellation
+    is finished, and a stream that does not recognise that hangs until the
+    idle timeout.
+    """
+    from jarvis_common.testing_db import SharedConnPool
+    from platform_api.routers.logs import _stream_correlation_events
+
+    correlation_id = uuid.uuid4()
+    await _seed_dispatched_job(contract_conn, correlation_id, queue_status)
+
+    runtime_pool = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
+
+    async def collect() -> list[str]:
+        return [
+            frame async for frame in _stream_correlation_events(runtime_pool, correlation_id, 0)
+        ]
+
+    frames = await asyncio.wait_for(collect(), timeout=30)
+
+    data_frames = [f for f in frames if f.startswith("data: ")]
+    assert data_frames, f"Stream yielded no event frame for a dispatched job: {frames}"
+    assert '"message": "started"' in data_frames[0], (
+        f"First frame is not the job's started event: {data_frames[0]}"
+    )
+    assert frames[-1].startswith("event: done\n"), (
+        f"Stream did not close on the job's outcome: {frames[-1]!r}"
+    )
+    assert f'"status": "{reported_status}"' in frames[-1], (
+        f"Closing frame reports the wrong outcome: {frames[-1]!r}"
     )
