@@ -126,6 +126,19 @@ def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_C
     return update, context, mock_platform, mock_http
 
 
+def _capture_scheduled(context) -> list:
+    """Collect coroutines a callback schedules instead of awaiting inline.
+
+    A callback must not await minutes of backend work inside the update loop:
+    this application processes updates one at a time, so doing so would stop
+    the bot answering anyone. Capturing the scheduled coroutine lets a test
+    assert both that property and what the detached work eventually does.
+    """
+    scheduled: list = []
+    context.application.create_task = scheduled.append
+    return scheduled
+
+
 # ---------------------------------------------------------------------------
 # Tests: paper_detail
 # ---------------------------------------------------------------------------
@@ -642,6 +655,7 @@ async def test_project_detail_success():
             [{"id": 1, "name": "Milestone 1", "deadline": None, "completed": False}]
         ),  # milestones
     ]
+    scheduled = _capture_scheduled(context)
 
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
@@ -650,7 +664,13 @@ async def test_project_detail_success():
     ):
         await project_detail_callback(update, context)
 
+    # The three reads run detached: awaiting them here would stop the bot
+    # answering every other user for as long as the backend takes.
+    assert mock_http.get.await_count == 0, "the callback must not read inside the update loop"
     update.callback_query.answer.assert_awaited_once()
+    assert len(scheduled) == 1
+    await scheduled[0]
+
     update.callback_query.message.reply_text.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "My Project" in text
@@ -670,6 +690,7 @@ async def test_project_detail_not_found():
     """project_detail callback sends 'not found' when project does not exist (404)."""
     update, context, _, mock_http = _make_callback_update_and_context("project_detail_999")
     mock_http.get.return_value = make_http_response(None, status=404)  # fetch_project → None
+    scheduled = _capture_scheduled(context)
 
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
@@ -677,6 +698,7 @@ async def test_project_detail_not_found():
         return_value=(True, _PAIRED_USER_ID),
     ):
         await project_detail_callback(update, context)
+    await scheduled[0]
 
     update.callback_query.answer.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
@@ -689,6 +711,7 @@ async def test_project_detail_service_error_replies_gracefully():
     update, context, _, mock_http = _make_callback_update_and_context("project_detail_3")
     # First call (fetch_project) raises → graceful handling kicks in.
     mock_http.get.side_effect = httpx.ReadTimeout("timed out")
+    scheduled = _capture_scheduled(context)
 
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
@@ -696,6 +719,7 @@ async def test_project_detail_service_error_replies_gracefully():
         return_value=(True, _PAIRED_USER_ID),
     ):
         await project_detail_callback(update, context)
+    await scheduled[0]
 
     update.callback_query.answer.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
@@ -926,11 +950,14 @@ async def test_paper_detail_unauthed_acks_before_returning():
 async def test_project_detail_unauthed_acks_before_returning():
     """project_detail_callback acks the query even when auth fails."""
     update, context, _ = _make_unauthed_callback("project_detail_3")
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
 
     assert update.callback_query.answer.call_count == 1
     update.callback_query.message.reply_text.assert_not_awaited()
+    # The rejection path must not detach the reads either.
+    assert not scheduled
 
 
 @pytest.mark.asyncio
@@ -1088,8 +1115,10 @@ async def test_project_detail_with_user_id_scopes_project_fetch() -> None:
     """TG-N2: the project GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
+    await scheduled[0]
 
     project_call = mock_http.get.await_args_list[0]
     assert project_call.args[0].endswith("/api/projects/3")
@@ -1101,8 +1130,10 @@ async def test_project_detail_with_user_id_scopes_task_fetch() -> None:
     """TG-N2: the tasks GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
+    await scheduled[0]
 
     task_call = mock_http.get.await_args_list[1]
     assert task_call.args[0].endswith("/api/projects/3/tasks")
@@ -1114,8 +1145,10 @@ async def test_project_detail_with_user_id_scopes_milestone_fetch() -> None:
     """TG-N2: the milestones GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
+    await scheduled[0]
 
     milestone_call = mock_http.get.await_args_list[2]
     assert milestone_call.args[0].endswith("/api/projects/3/milestones")

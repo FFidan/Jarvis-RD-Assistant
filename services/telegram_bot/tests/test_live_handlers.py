@@ -308,6 +308,29 @@ def _live_update_and_context(
     return update, context
 
 
+def _capture_scheduled(context: MagicMock) -> list:
+    """Collect coroutines a handler schedules instead of awaiting inline.
+
+    The slower handlers answer immediately and hand their backend work to
+    ``Application.create_task``, because this application processes updates one
+    at a time. A live test drives the captured coroutine so the real requests
+    the detached work issues are still exercised.
+
+    Parameters
+    ----------
+    context : MagicMock
+        Callback context whose application would own the detached task.
+
+    Returns
+    -------
+    list
+        The scheduled coroutines, in schedule order.
+    """
+    scheduled: list = []
+    context.application.create_task = scheduled.append
+    return scheduled
+
+
 def _replies(update: MagicMock) -> list[str]:
     """Return the text of every reply the handler sent.
 
@@ -404,14 +427,17 @@ async def test_live_papers_command_lists_library_shape(live_backend: LiveBackend
 
 async def test_live_discover_command_reports_a_real_search(live_backend: LiveBackend) -> None:
     """``/discover <query>`` reports a live multi-source search or a clean degraded state."""
-    # discover_command searches, then formats: "Found ..." when sources
-    # answered, otherwise the no-source line.
+    # discover_command answers, then searches detached and formats:
+    # "Found ..." when sources answered, otherwise the no-source line.
     update, context = _live_update_and_context(live_backend, args=["protein", "folding"])
+    scheduled = _capture_scheduled(context)
 
     await discover_command(update, context)
+    assert len(scheduled) == 1, "/discover must hand the live search to a detached task"
+    await scheduled[0]
 
-    update.message.reply_text.assert_awaited_once()
-    text = _replies(update)[0]
+    assert update.message.reply_text.await_count == 2
+    text = _replies(update)[-1]
     _assert_no_raw_error(text)
     assert "Discovery failed" not in text, (
         "the live discovery endpoint did not answer the shape the handler parses"
@@ -452,26 +478,32 @@ async def test_live_briefing_command_composes_without_degrading(
 ) -> None:
     """``/briefing`` renders every section and degrades none of its gathers.
 
-    ``briefing_command`` swallows a failed section and renders a zero, so the
-    reply text alone cannot distinguish a live backend from a dead one. The
-    handler's own error logs are therefore part of the assertion.
+    A section whose read failed renders as unavailable rather than as a zero,
+    so the reply text alone cannot say which sections were actually read. The
+    gather's own warnings are therefore part of the assertion.
     """
-    # briefing_command logs "Failed to fetch ..." and continues per section, so
-    # a silently degraded section still renders a briefing: assert on the logs too.
+    # gather_briefing_sections logs "briefing: ... failed" and continues per
+    # section, so a degraded section still renders a briefing: assert on the
+    # warnings too.
     update, context = _live_update_and_context(live_backend)
+    scheduled = _capture_scheduled(context)
 
-    with caplog.at_level(logging.ERROR, logger="telegram_bot.handlers.commands.paper_commands"):
+    with caplog.at_level(logging.WARNING, logger="telegram_bot.orchestration.daily_briefing"):
         await briefing_command(update, context)
+        assert len(scheduled) == 1, "/briefing must hand the live gather to a detached task"
+        await scheduled[0]
 
-    update.message.reply_text.assert_awaited_once()
-    text = _replies(update)[0]
+    assert update.message.reply_text.await_count == 2
+    text = _replies(update)[-1]
     _assert_no_raw_error(text)
     assert "<b>Morning Briefing</b>" in text
     assert "papers added to your library since midnight UTC" in text
     assert "waiting in your inbox" in text
     assert "cards due for review right now" in text
 
-    degraded = [record.message for record in caplog.records if "Failed to fetch" in record.message]
+    degraded = [
+        record.message for record in caplog.records if record.message.startswith("briefing:")
+    ]
     assert not degraded, f"live briefing sections degraded: {degraded}"
 
 

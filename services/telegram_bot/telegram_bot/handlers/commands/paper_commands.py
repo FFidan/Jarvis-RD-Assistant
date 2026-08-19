@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
+import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot import services_client
+from telegram_bot.config import BotConfig
 from telegram_bot.formatters import (
     escape,
     format_morning_briefing,
@@ -24,6 +27,7 @@ from telegram_bot.handlers.helpers import (
     get_config,
     get_http,
     get_jarvis_user_id,
+    run_detached,
 )
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.orchestration.daily_briefing import gather_briefing_sections
@@ -252,6 +256,43 @@ def _format_discovery_result(query: str, response: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+async def _send_discovery_results(
+    reply: Callable[..., Awaitable[object]],
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    query: str,
+) -> None:
+    """Run one external discovery search and report its outcome through *reply*.
+
+    Parameters
+    ----------
+    reply : callable
+        Coroutine function that sends one message, e.g. ``reply_text``.
+    http : httpx.AsyncClient
+        Client carrying the paired-user marker.
+    config : BotConfig
+        Bot configuration.
+    user_id : int
+        Paired JARVIS user the search is saved for.
+    query : str
+        Sanitized search terms as the user sent them.
+
+    Notes
+    -----
+    Runs detached from ``/discover``: a source-wide search takes minutes, and
+    this application processes updates one at a time.
+    """
+    try:
+        response = await services_client.search_papers(http, config, user_id, query)
+    except Exception:
+        logger.exception("External paper discovery failed")
+        await reply("Discovery failed. Please try again later.", parse_mode="HTML")
+        return
+
+    await reply(_format_discovery_result(query, response), parse_mode="HTML")
+
+
 @rate_limit(max_calls=3, window_seconds=60)
 @auth_required
 async def discover_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,17 +314,16 @@ async def discover_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     jarvis_user_id = get_jarvis_user_id(context)
     assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
 
-    try:
-        response = await services_client.search_papers(http, config, jarvis_user_id, query)
-    except Exception:
-        logger.exception("External paper discovery failed")
-        await update.message.reply_text(
-            "Discovery failed. Please try again later.",
-            parse_mode="HTML",
-        )
-        return
-
-    await update.message.reply_text(_format_discovery_result(query, response), parse_mode="HTML")
+    await update.message.reply_text(
+        f'Searching arXiv, Semantic Scholar, OpenAlex and PubMed for "{escape(query)}". '
+        "I'll send the results here.",
+        parse_mode="HTML",
+    )
+    run_detached(
+        context,
+        _send_discovery_results(update.message.reply_text, http, config, jarvis_user_id, query),
+        description="paper discovery",
+    )
 
 
 @rate_limit(max_calls=5, window_seconds=60)
@@ -306,6 +346,41 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(format_review_stats(stats), parse_mode="HTML")
 
 
+async def _send_briefing(
+    reply: Callable[..., Awaitable[object]],
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> None:
+    """Gather every briefing section and send the composed briefing through *reply*.
+
+    Parameters
+    ----------
+    reply : callable
+        Coroutine function that sends one message, e.g. ``reply_text``.
+    http : httpx.AsyncClient
+        Client carrying the paired-user marker.
+    config : BotConfig
+        Bot configuration.
+    user_id : int
+        Paired JARVIS user the briefing is composed for.
+
+    Notes
+    -----
+    Runs detached from ``/briefing``: the gather is five backend reads, and
+    this application processes updates one at a time.
+    """
+    sections = await gather_briefing_sections(http, config, user_id)
+    text = format_morning_briefing(
+        sections.new_papers_count,
+        sections.inbox_total,
+        sections.due_cards,
+        sections.open_tasks,
+        sections.milestones,
+    )
+    await reply(text, parse_mode="HTML")
+
+
 @rate_limit(max_calls=3, window_seconds=60)
 @auth_required
 async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -317,15 +392,15 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = get_jarvis_user_id(context)
     assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
 
-    sections = await gather_briefing_sections(http, config, user_id)
-    text = format_morning_briefing(
-        sections.new_papers_count,
-        sections.inbox_total,
-        sections.due_cards,
-        sections.open_tasks,
-        sections.milestones,
+    await update.message.reply_text(
+        "Putting your briefing together. I'll send it here in a moment.",
+        parse_mode="HTML",
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+    run_detached(
+        context,
+        _send_briefing(update.message.reply_text, http, config, user_id),
+        description="briefing",
+    )
 
 
 @rate_limit(max_calls=5, window_seconds=60)
