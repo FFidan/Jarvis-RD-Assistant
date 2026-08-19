@@ -344,6 +344,10 @@ def test_service_principal_manifest_is_exact_and_deny_by_default() -> None:
     assert service_principal_scopes("telegram", "learning", "POST", "/api/review/42") == (
         "learning:review:write",
     )
+    assert service_principal_scopes("telegram", "learning", "GET", "/api/executive/my-day") == (
+        "learning:executive:read",
+    )
+    assert service_principal_scopes("telegram", "learning", "POST", "/api/executive/my-day") is None
     assert service_principal_scopes("telegram", "research", "GET", "/api/admin/users") is None
     assert (
         service_principal_scopes("telegram", "learning", _HTTP_DELETE, "/api/projects/42") is None
@@ -531,6 +535,48 @@ def test_platform_application_auth_accepts_only_dedicated_internal_credentials()
     assert missing.status_code == 401
     assert foreign.status_code == 403
     assert unlisted.status_code in {401, 403}
+
+
+def test_internal_telegram_timer_preferences_returns_the_saved_values() -> None:
+    """The bot reads the same focus length and daily target the web app stores."""
+    client, _, _ = _build_internal_telegram_client(
+        fetchval_return={
+            "workMinutes": 45,
+            "shortBreakMinutes": 5,
+            "longBreakMinutes": 15,
+            "targetCycles": 6,
+        }
+    )
+
+    response = client.get("/internal/telegram/preferences/7/timer")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"work_minutes": 45, "target_cycles": 6}
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [None, {"workMinutes": 5, "targetCycles": 99}, {"workMinutes": "45"}, "not-a-mapping"],
+    ids=["absent", "out-of-range", "wrong-type", "unparsable"],
+)
+def test_internal_telegram_timer_preferences_falls_back_to_web_defaults(stored: object) -> None:
+    """An absent or unusable preference resolves to the values the web timer would use."""
+    client, _, _ = _build_internal_telegram_client(fetchval_return=stored)
+
+    response = client.get("/internal/telegram/preferences/7/timer")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"work_minutes": 25, "target_cycles": 4}
+
+
+def test_internal_telegram_timer_preferences_reject_another_service() -> None:
+    """Only the Telegram principal may read a user's saved timer preference."""
+    client, _, conn = _build_internal_telegram_client(principal="research", fetchval_return=None)
+
+    response = client.get("/internal/telegram/preferences/7/timer")
+
+    assert response.status_code == 403
+    conn.fetchval.assert_not_awaited()
 
 
 def test_internal_telegram_pairing_reports_invalid_code_without_mutation() -> None:

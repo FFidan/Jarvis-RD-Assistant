@@ -10,10 +10,12 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from jarvis_common.testing import PTBContextOptions, make_bot_config, make_ptb_context
 from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
+from telegram_bot.focus_contract import FocusSession, FocusTransition
 from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
     done_command,
@@ -27,6 +29,8 @@ from telegram_bot.handlers.commands import (  # noqa: E402
 )
 from telegram_bot.handlers.commands.paper_commands import _inbox_keyboard, discover_command
 from telegram_bot.handlers.commands.system_commands import focus_command
+from telegram_bot.platform_client import TimerPreferences
+from telegram_bot.services_client import MyDayFocusSummary
 
 pytestmark = pytest.mark.usefixtures("_clear_rate_limit_state")
 
@@ -194,7 +198,10 @@ async def test_papers_no_args_lists_library_via_api():
     call = mock_http.get.await_args
     assert "/api/papers/feed" in call.args[0]
     assert call.kwargs.get("params", {}).get("view") == "library"
-    text = update.message.reply_text.call_args_list[0][0][0]
+    header = update.message.reply_text.call_args_list[0][0][0]
+    assert "Library" in header
+    assert "showing 1 of 1" in header
+    text = update.message.reply_text.call_args_list[1][0][0]
     assert "Paper A" in text
 
 
@@ -496,8 +503,14 @@ async def test_briefing_returns_text():
     # tasks, upcoming milestones.
     mock_http.get.side_effect = [
         make_http_response({"total": 3}),  # fetch_new_paper_count → feed
+        make_http_response({"total": 42}),  # fetch_inbox_count → feed?view=inbox
         make_http_response({"due_now": 5}),  # fetch_due_card_count → stats
-        make_http_response([{"title": "Task 1", "project_name": "Proj"}]),  # fetch_tasks
+        make_http_response(  # fetch_tasks
+            [
+                {"title": "Task 1", "project_name": "Proj", "status": "blocked"},
+                {"title": "Task 2", "project_name": "Proj", "status": "done"},
+            ]
+        ),
         make_http_response([]),  # fetch_upcoming_milestones
     ]
 
@@ -505,7 +518,14 @@ async def test_briefing_returns_text():
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "Briefing" in text or "briefing" in text.lower()
+    # Each count names its window and its view.
+    assert "3</b> papers added to your library since midnight UTC" in text
+    assert "42</b> waiting in your inbox" in text
+    assert "5</b> cards due for review right now" in text
+    # A blocked task is not done; a done one is excluded, as in My Day.
+    assert "Open tasks (1)" in text
     assert "Task 1" in text
+    assert "Task 2" not in text
 
 
 @pytest.mark.asyncio
@@ -514,8 +534,11 @@ async def test_briefing_partial_degradation_on_milestones_failure():
     update, context, _, mock_http = _make_update_and_context()
     mock_http.get.side_effect = [
         make_http_response({"total": 1}),  # new-paper count OK
+        make_http_response({"total": 4}),  # inbox count OK
         make_http_response({"due_now": 2}),  # due cards OK
-        make_http_response([{"title": "Task 1", "project_name": "Proj"}]),  # tasks OK
+        make_http_response(  # tasks OK
+            [{"title": "Task 1", "project_name": "Proj", "status": "in_progress"}]
+        ),
         make_http_response(None, status=500),  # milestones fail → 5xx
     ]
 
@@ -535,18 +558,19 @@ async def test_briefing_partial_degradation_on_milestones_failure():
 
 @pytest.mark.asyncio
 async def test_projects_empty():
-    """/projects with no active projects sends 'No active projects'."""
+    """/projects with nothing to list says so and names the one exclusion."""
     update, context, _, mock_http = _make_update_and_context()
     mock_http.get.return_value = make_http_response([])
     await projects_command(update, context)
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
-    assert "No active" in text
+    assert "No projects yet" in text
+    assert "archived" in text
 
 
 @pytest.mark.asyncio
-async def test_projects_with_data():
-    """/projects with active projects lists them via GET /api/projects?status=active."""
+async def test_projects_lists_every_non_archived_project_with_its_label():
+    """/projects lists paused and completed projects too, hiding only archived ones."""
     update, context, _, mock_http = _make_update_and_context()
     mock_http.get.return_value = make_http_response(
         [
@@ -557,6 +581,20 @@ async def test_projects_with_data():
                 "description": "A research project",
                 "deadline": None,
             },
+            {
+                "id": 2,
+                "name": "Project Beta",
+                "status": "paused",
+                "description": None,
+                "deadline": None,
+            },
+            {
+                "id": 3,
+                "name": "Project Gamma",
+                "status": "archived",
+                "description": None,
+                "deadline": None,
+            },
         ]
     )
     await projects_command(update, context)
@@ -564,9 +602,14 @@ async def test_projects_with_data():
     mock_http.get.assert_awaited_once()
     call = mock_http.get.await_args
     assert "/api/projects" in call.args[0]
-    assert call.kwargs["params"] == {"status": "active"}
-    text = update.message.reply_text.call_args_list[0][0][0]
-    assert "Project Alpha" in text
+    assert call.kwargs["params"] is None
+    texts = [c[0][0] for c in update.message.reply_text.call_args_list]
+    assert len(texts) == 2
+    # The stored status never reaches the user; the shared label does.
+    assert "Project Alpha" in texts[0] and "In progress" in texts[0]
+    assert "Project Beta" in texts[1] and "Draft" in texts[1]
+    assert "paused" not in texts[1]
+    assert not any("Project Gamma" in text for text in texts)
 
 
 @pytest.mark.asyncio
@@ -647,11 +690,12 @@ async def test_tasks_backend_failure_sends_graceful_reply():
 
 @pytest.mark.asyncio
 async def test_done_no_args_prompts():
-    """/done without args prompts for usage."""
+    """/done without args prompts for usage and points at the command that lists ids."""
     update, context, _, _ = _make_update_and_context(args=[])
     await done_command(update, context)
     text = update.message.reply_text.call_args[0][0]
     assert "Usage" in text or "task_id" in text
+    assert "/tasks" in text
 
 
 @pytest.mark.asyncio
@@ -965,6 +1009,7 @@ async def test_briefing_scopes_to_user_via_owner_header_when_paired():
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.side_effect = [
         make_http_response({"total": 0}),  # new papers
+        make_http_response({"total": 0}),  # inbox count
         make_http_response({"due_now": 0}),  # due cards
         make_http_response([]),  # tasks
         make_http_response([]),  # milestones
@@ -973,8 +1018,8 @@ async def test_briefing_scopes_to_user_via_owner_header_when_paired():
     with _paired_auth_patch(7):
         await briefing_command(update, context)
 
-    # All four gathers carry the owner header scoping the response to user 7.
-    assert mock_http.get.await_count == 4
+    # Every gather carries the owner header scoping the response to user 7.
+    assert mock_http.get.await_count == 5
     for call in mock_http.get.await_args_list:
         assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
 
@@ -1053,7 +1098,7 @@ async def test_done_passes_user_id_via_owner_header():
 
 @pytest.mark.asyncio
 async def test_projects_scopes_listing_to_paired_user():
-    """A13: /projects stages paired identity and the active filter."""
+    """A13: /projects stages paired identity on an unfiltered project listing."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.return_value = make_http_response([])
@@ -1064,7 +1109,7 @@ async def test_projects_scopes_listing_to_paired_user():
     call = mock_http.get.await_args
     assert "/api/projects" in call.args[0]
     assert call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == "7"
-    assert call.kwargs["params"] == {"status": "active"}
+    assert call.kwargs["params"] is None
 
 
 @pytest.mark.asyncio
@@ -1375,6 +1420,7 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
     context.user_data["jarvis_user_id"] = 7
     mock_http.get.side_effect = [
         make_http_response({"total": 0}),  # new papers
+        make_http_response({"total": 0}),  # inbox count
         make_http_response({"due_now": 0}),  # due cards → /api/stats
         make_http_response([]),  # tasks
         make_http_response([]),  # milestones
@@ -1461,3 +1507,205 @@ async def test_auth_required_blocks_unpaired_owner_with_pairing_message():
     # No backend HTTP call must have been made
     mock_http.get.assert_not_awaited()
     mock_http.post.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Tests: /focus — status, saved duration, and sub-commands
+# ---------------------------------------------------------------------------
+
+_FOCUS_MODULE = "telegram_bot.handlers.commands.system_commands"
+_PREFERENCES = f"{_FOCUS_MODULE}.platform_client.get_timer_preferences"
+_ACTIVE_SESSION = f"{_FOCUS_MODULE}.services_client.fetch_active_focus_session"
+_MY_DAY = f"{_FOCUS_MODULE}.services_client.fetch_my_day_focus"
+_START_SESSION = f"{_FOCUS_MODULE}.services_client.start_focus_session"
+
+
+def _focus_session(**overrides) -> FocusSession:
+    """Build a server-shaped focus session, overriding only what a test cares about."""
+    fields = {
+        "id": 5,
+        "state": "active",
+        "source": "telegram",
+        "duration_seconds": 1500,
+        "remaining_seconds": 600,
+        "started_at": "2026-08-19T10:00:00+00:00",
+        "paused_at": None,
+        "paused_seconds": 0.0,
+        "completed_at": None,
+        "recorded_seconds": 0.0,
+        "task_id": None,
+        "paper_id": None,
+    }
+    fields.update(overrides)
+    return FocusSession(**fields)
+
+
+@pytest.mark.asyncio
+async def test_focus_without_args_reports_status_instead_of_starting():
+    """/focus reports state, the day's total against the target, streak, and sub-commands."""
+    update, context, _, _ = _make_focus_update_and_context(args=[])
+
+    with (
+        patch(_ACTIVE_SESSION, new_callable=AsyncMock, return_value=_focus_session()),
+        patch(_PREFERENCES, new_callable=AsyncMock, return_value=TimerPreferences(45, 4)),
+        patch(
+            _MY_DAY,
+            new_callable=AsyncMock,
+            return_value=MyDayFocusSummary(today_focus_hours=1.5, focus_streak_days=3),
+        ),
+        patch(_START_SESSION, new_callable=AsyncMock) as start_focus,
+    ):
+        await focus_command(update, context)
+
+    start_focus.assert_not_awaited()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Focus running — 10 min left." in text
+    assert "90 of 180 target minutes" in text
+    assert "Streak: 3 days" in text
+    assert "/focus pause" in text
+
+
+@pytest.mark.asyncio
+async def test_focus_start_without_minutes_uses_the_saved_duration():
+    """/focus start takes its length from the user's saved preference, not a fixed 25."""
+    update, context, _, _ = _make_focus_update_and_context(args=["start"])
+
+    with (
+        patch(_PREFERENCES, new_callable=AsyncMock, return_value=TimerPreferences(45, 4)),
+        patch(_START_SESSION, new_callable=AsyncMock) as start_focus,
+    ):
+        await focus_command(update, context)
+
+    assert start_focus.await_args.args[2:] == (1, 2700)
+    assert "45" in update.message.reply_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_focus_start_says_when_the_saved_duration_was_unreachable():
+    """An unreadable preference falls back to 25 minutes and the reply admits it."""
+    update, context, _, _ = _make_focus_update_and_context(args=["start"])
+
+    with (
+        patch(
+            _PREFERENCES,
+            new_callable=AsyncMock,
+            side_effect=httpx.ConnectError("platform unreachable"),
+        ),
+        patch(_START_SESSION, new_callable=AsyncMock) as start_focus,
+    ):
+        await focus_command(update, context)
+
+    assert start_focus.await_args.args[2:] == (1, 1500)
+    assert "unreachable" in update.message.reply_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_focus_pause_without_a_session_says_so():
+    """/focus pause with nothing running says so instead of reporting a pause."""
+    update, context, _, _ = _make_focus_update_and_context(args=["pause"])
+
+    with (
+        patch(_ACTIVE_SESSION, new_callable=AsyncMock, return_value=None),
+        patch(f"{_FOCUS_MODULE}.services_client.pause_focus_session", new_callable=AsyncMock) as p,
+    ):
+        await focus_command(update, context)
+
+    p.assert_not_awaited()
+    assert "No focus session is running." in update.message.reply_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_focus_stop_completes_the_active_session():
+    """/focus stop completes the open interval and reports the recorded time."""
+    update, context, _, _ = _make_focus_update_and_context(args=["stop"])
+    stopped = _focus_session(
+        state="completed",
+        remaining_seconds=0,
+        completed_at="2026-08-19T10:25:00+00:00",
+        recorded_seconds=1500.0,
+    )
+
+    with (
+        patch(_ACTIVE_SESSION, new_callable=AsyncMock, return_value=_focus_session()),
+        patch(
+            f"{_FOCUS_MODULE}.services_client.complete_focus_session",
+            new_callable=AsyncMock,
+            return_value=FocusTransition(session=stopped, changed=True),
+        ) as complete,
+    ):
+        await focus_command(update, context)
+
+    assert complete.await_args.args[2:] == (1, 5, "stop")
+    assert "Focus stopped — 25 minutes recorded." in update.message.reply_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_focus_start_conflict_points_at_the_bot_not_the_web_timer():
+    """A 409 sends the user to /focus, which can now show and end the session."""
+    update, context, _, _ = _make_focus_update_and_context(args=["30"])
+    request = httpx.Request("POST", "http://learn:8001/api/executive/focus/start")
+    conflict = httpx.HTTPStatusError(
+        "conflict", request=request, response=httpx.Response(409, request=request)
+    )
+
+    with patch(_START_SESSION, new_callable=AsyncMock, side_effect=conflict):
+        await focus_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "/focus stop" in text
+    assert "Web timer" not in text
+
+
+@pytest.mark.asyncio
+async def test_tasks_rows_offer_a_mark_done_button_each():
+    """Every listed task carries the registered task_done_<id> button."""
+    update, context, _, mock_http = _make_update_and_context(args=[])
+    mock_http.get.return_value = make_http_response(
+        [
+            {"id": 1, "title": "Fix bug", "status": "in_progress", "project_name": None},
+            {"id": 7, "title": "Write tests", "status": "in_progress", "project_name": None},
+        ]
+    )
+
+    await tasks_command(update, context)
+
+    markup = update.message.reply_text.call_args.kwargs["reply_markup"]
+    assert [row[0].callback_data for row in markup.inline_keyboard] == [
+        "task_done_1",
+        "task_done_7",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plain_text_gets_an_answer_rather_than_silence():
+    """A non-command message is answered with the one thing the bot understands."""
+    from telegram_bot.main import _unrecognized_text
+
+    update, context, _, _ = _make_update_and_context()
+
+    await _unrecognized_text(update, context)
+
+    assert update.message.reply_text.call_args[0][0] == "I only understand commands — try /help"
+
+
+def test_main_registers_the_text_catch_all_after_every_other_handler():
+    """The catch-all is last in the default group, so it never pre-empts a real handler."""
+    from telegram.ext import MessageHandler
+
+    with (
+        patch("telegram_bot.main.BotConfig.from_env", return_value=MagicMock()),
+        patch("telegram_bot.main.Application.builder") as builder,
+    ):
+        app = MagicMock()
+        for step in ("request", "get_updates_request", "token", "post_init", "post_shutdown"):
+            getattr(builder.return_value, step).return_value = builder.return_value
+        builder.return_value.build.return_value = app
+
+        from telegram_bot.main import _unrecognized_text, main
+
+        main()
+
+    default_group = [c for c in app.add_handler.call_args_list if "group" not in c.kwargs]
+    last = default_group[-1].args[0]
+    assert isinstance(last, MessageHandler)
+    assert last.callback is _unrecognized_text

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -28,6 +29,15 @@ from platform_api.deps import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal/telegram", tags=["internal", "telegram"])
+
+#: Accepted range for the saved focus length, matching the shared ``ui.timer``
+#: validator so Platform never hands Telegram a value the web app would reject.
+_WORK_MINUTES_RANGE = (15, 60)
+_TARGET_CYCLES_RANGE = (2, 8)
+
+#: Values the web app applies when a user has never saved a timer preference.
+_DEFAULT_WORK_MINUTES = 25
+_DEFAULT_TARGET_CYCLES = 4
 
 type TelegramPrincipal = Annotated[
     ServicePrincipal,
@@ -99,6 +109,13 @@ class TelegramRuntimeResponse(BaseModel):
     owner_user_id: int | None = None
     owner_chat_id: int | None = None
     timezone: str = "UTC"
+
+
+class TelegramTimerPreferences(BaseModel):
+    """One user's saved focus-timer preference, resolved by Platform."""
+
+    work_minutes: int = Field(ge=_WORK_MINUTES_RANGE[0], le=_WORK_MINUTES_RANGE[1])
+    target_cycles: int = Field(ge=_TARGET_CYCLES_RANGE[0], le=_TARGET_CYCLES_RANGE[1])
 
 
 class TelegramEventRequest(BaseModel):
@@ -483,6 +500,46 @@ async def get_telegram_runtime(
     )
 
 
+@router.get("/preferences/{user_id}/timer", response_model=TelegramTimerPreferences)
+async def get_timer_preferences(
+    user_id: int,
+    principal: TelegramPrincipal,
+    db_pool: DatabasePool,
+) -> TelegramTimerPreferences:
+    """Return one user's saved focus-timer length and daily cycle target.
+
+    Parameters
+    ----------
+    user_id : int
+        JARVIS user whose personal ``ui.timer`` preference is read.
+    principal : {"learning", "research", "telegram"}
+        Authenticated caller; only Telegram is accepted.
+    db_pool : asyncpg.Pool
+        Platform-owned database pool.
+
+    Returns
+    -------
+    TelegramTimerPreferences
+        The saved values, or the web app's defaults when no preference is
+        stored or the stored one is unusable. A user without a preference is
+        not an error: the bot has to answer with the same length the web timer
+        would have used.
+    """
+    _require_telegram(principal)
+    stored = await db_pool.fetchval(
+        "SELECT value FROM user_config WHERE key = 'ui.timer' AND user_id = $1",
+        user_id,
+    )
+    return TelegramTimerPreferences(
+        work_minutes=_timer_field(
+            stored, "workMinutes", _DEFAULT_WORK_MINUTES, _WORK_MINUTES_RANGE
+        ),
+        target_cycles=_timer_field(
+            stored, "targetCycles", _DEFAULT_TARGET_CYCLES, _TARGET_CYCLES_RANGE
+        ),
+    )
+
+
 @router.post("/events", status_code=status.HTTP_204_NO_CONTENT)
 async def record_telegram_event(
     body: TelegramEventRequest,
@@ -512,6 +569,34 @@ async def record_telegram_event(
     )
 
 
+def _timer_field(
+    stored: object,
+    field: str,
+    default: int,
+    bounds: tuple[int, int],
+) -> int:
+    """Read one integer out of a stored ``ui.timer`` value, or fall back.
+
+    The row is written by the web app and is only validated on that write path,
+    so an out-of-range or wrongly typed field is treated as absent rather than
+    surfaced as an error to the bot.
+    """
+    if isinstance(stored, str):
+        try:
+            stored = json.loads(stored)
+        except ValueError:
+            logger.warning("Ignoring unparsable ui.timer preference")
+            return default
+    if not isinstance(stored, dict):
+        return default
+    value = stored.get(field)
+    minimum, maximum = bounds
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        logger.warning("Ignoring invalid ui.timer.%s preference", field)
+        return default
+    return value
+
+
 def _require_telegram(principal: ServicePrincipal) -> None:
     if principal != "telegram":
         raise HTTPException(status_code=403, detail="Telegram service capability is required")
@@ -526,10 +611,12 @@ __all__ = [
     "TelegramConfigResponse",
     "TelegramEventRequest",
     "TelegramRuntimeResponse",
+    "TelegramTimerPreferences",
     "UnpairResult",
     "authorize_downstream_request",
     "get_telegram_config",
     "get_telegram_runtime",
+    "get_timer_preferences",
     "list_pairings",
     "pair_chat",
     "record_telegram_event",

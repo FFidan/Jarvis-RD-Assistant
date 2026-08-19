@@ -13,7 +13,7 @@ Callers are responsible for:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -24,7 +24,13 @@ from telegram_bot.config import BotConfig, _owner_headers
 from telegram_bot.focus_contract import FocusSession, FocusTransition
 from telegram_bot.pulse_contract import PulseDeck, PulseGenerateJob, PulseGenerateStatus
 
+#: Largest page ``GET /api/tasks`` accepts. Used when a caller has to filter
+#: the rows itself, because the endpoint takes only one status at a time.
+MAX_TASK_PAGE_SIZE = 200
+
 __all__ = [
+    "MAX_TASK_PAGE_SIZE",
+    "MyDayFocusSummary",
     "PulsePayloadError",
     "fetch_projects",
     "fetch_project",
@@ -39,6 +45,7 @@ __all__ = [
     "fetch_next_review_card",
     "submit_review_rating",
     "fetch_active_focus_session",
+    "fetch_my_day_focus",
     "fetch_pending_telegram_focus_completion",
     "start_focus_session",
     "pause_focus_session",
@@ -47,6 +54,7 @@ __all__ = [
     "acknowledge_telegram_focus_completion",
     "log_focus_session",
     "fetch_new_paper_count",
+    "fetch_inbox_count",
     "check_authors",
     "search_papers",
     "fetch_papers_feed",
@@ -448,6 +456,35 @@ async def log_focus_session(
     resp.raise_for_status()
 
 
+class MyDayFocusSummary(BaseModel):
+    """The focus totals the executive My Day view reports for today."""
+
+    today_focus_hours: float
+    focus_streak_days: int
+
+
+async def fetch_my_day_focus(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> MyDayFocusSummary:
+    """GET {learning_engine}/api/executive/my-day → today's focus totals.
+
+    Only the two focus fields are parsed; the rest of the My Day payload
+    belongs to the web dashboard and is deliberately ignored here.
+    """
+    resp = await http.get(
+        f"{config.learning_engine_url}/api/executive/my-day",
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    try:
+        return MyDayFocusSummary.model_validate(resp.json())
+    except ValidationError as exc:
+        raise ValueError("Learning Engine returned an invalid my-day payload") from exc
+
+
 def _parse_focus_session(payload: object) -> FocusSession:
     """Validate one focus payload without exposing malformed values."""
     try:
@@ -588,27 +625,48 @@ async def fetch_new_paper_count(
     http: httpx.AsyncClient,
     config: BotConfig,
     user_id: int,
-    *,
-    hours: int = 24,
 ) -> int:
-    """GET {paper_ingestion}/api/papers/feed?date_from=<ISO date>&limit=1 → resp["total"].
+    """GET {paper_ingestion}/api/papers/feed?date_from=<today, UTC>&limit=1 → resp["total"].
 
-    **R6 — day-granularity note:** the cutoff is computed as a datetime
-    (UTC now − *hours*) but sent as an ISO **date** (the endpoint's
-    ``date_from`` is a DATE param), so the effective window is day-granular.
-    This is acceptable for a briefing stat.
+    The endpoint's ``date_from`` is a DATE param, so the window is a whole UTC
+    day and the cutoff is today's UTC date — exactly the "since midnight UTC"
+    the briefing tells the user, and the same UTC day boundary the My Day view
+    counts against.
 
     Returns
     -------
     int
-        Total count of new papers found since ``now - hours``.
+        Papers added to the caller's library since midnight UTC today.
     """
-    since = datetime.now(UTC) - timedelta(hours=hours)
     resp = await http.get(
         f"{config.paper_ingestion_url}/api/papers/feed",
-        # /api/papers/feed's date_from is a DATE param — send a date string
-        # (day granularity); a full datetime ISO string is rejected with 422.
-        params={"date_from": since.date().isoformat(), "limit": 1},
+        # A full datetime ISO string is rejected with 422; send a date string.
+        params={"date_from": datetime.now(UTC).date().isoformat(), "limit": 1},
+        headers=_owner_headers(config, user_id),
+    )
+    resp.raise_for_status()
+    data: dict[str, Any] = resp.json()
+    return int(data["total"])
+
+
+async def fetch_inbox_count(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> int:
+    """GET {paper_ingestion}/api/papers/feed?view=inbox&limit=1 → resp["total"].
+
+    ``total`` counts the whole view rather than the requested page, so the
+    one-row page is only there to keep the response small.
+
+    Returns
+    -------
+    int
+        Papers currently in the caller's Inbox view, whenever they arrived.
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/papers/feed",
+        params={"view": "inbox", "limit": 1},
         headers=_owner_headers(config, user_id),
     )
     resp.raise_for_status()

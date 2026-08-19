@@ -107,11 +107,17 @@ async def test_author_alerts_skips_when_no_owner():
 # ---------------------------------------------------------------------------
 
 
-def _briefing_get_router(*, due_now, total, tasks, milestones):
-    """Route briefing GETs by URL: feed→total, stats→due_now, tasks, milestones/upcoming."""
+def _briefing_get_router(*, due_now, total, tasks, milestones, inbox_total=0):
+    """Route briefing GETs by URL: feed→total, stats→due_now, tasks, milestones/upcoming.
 
-    async def _get(url, *_args, **_kwargs):
+    The briefing reads the feed twice — once for papers added today, once for
+    the inbox view — so the feed branch splits on the ``view`` parameter.
+    """
+
+    async def _get(url, *_args, **kwargs):
         if url.endswith("/api/papers/feed"):
+            if kwargs.get("params", {}).get("view") == "inbox":
+                return make_http_response({"total": inbox_total})
             return make_http_response({"total": total})
         if url.endswith("/api/stats"):
             return make_http_response({"due_now": due_now})
@@ -140,7 +146,8 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
     http_client.get.side_effect = _briefing_get_router(
         due_now=5,
         total=2,
-        tasks=[{"title": "Write paper", "project_name": "ResearchX"}],
+        inbox_total=11,
+        tasks=[{"title": "Write paper", "project_name": "ResearchX", "status": "todo"}],
         milestones=[
             {
                 "name": "Submit draft",
@@ -162,8 +169,10 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
     assert kwargs["parse_mode"] == "HTML"
     # Message should reference paper count and cards
     text = kwargs["text"]
-    assert "2" in text  # new_papers_count
-    assert "5" in text  # due cards
+    assert "2</b> papers added to your library since midnight UTC" in text
+    assert "11</b> waiting in your inbox" in text
+    assert "5</b> cards due for review right now" in text
+    assert "Write paper" in text
 
 
 @pytest.mark.asyncio
@@ -182,8 +191,8 @@ async def test_daily_briefing_passes_owner_headers_on_every_call():
     ):
         await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
 
-    # Four gathers: feed, stats, tasks, milestones/upcoming — all owner-scoped.
-    assert http_client.get.await_count == 4
+    # Five gathers: feed, inbox feed, stats, tasks, milestones/upcoming.
+    assert http_client.get.await_count == 5
     for call in http_client.get.await_args_list:
         headers = call.kwargs["headers"]
         assert "X-API-Key" not in headers

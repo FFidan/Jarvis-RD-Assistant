@@ -13,10 +13,11 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from jarvis_common.maintenance import skip_for_maintenance
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from telegram_bot import formatters, services_client
 from telegram_bot.config import BotConfig
+from telegram_bot.handlers.callback_handler import FOCUS_RESTART_CALLBACK
 from telegram_bot.notification_policy import (
     SCHEDULED_NOTIFICATION_KINDS,
     ScheduledNotificationPolicy,
@@ -38,6 +39,21 @@ JOB_REGISTRY: dict[str, str] = {
 
 if frozenset(JOB_REGISTRY) != SCHEDULED_NOTIFICATION_KINDS:
     raise RuntimeError("Every scheduled Telegram notification must have a focus delivery policy")
+
+
+def _focus_completion_keyboard(task_id: int | None) -> InlineKeyboardMarkup:
+    """Build the buttons offered when a focus session finishes.
+
+    The completion message states what happened and offers the two actions the
+    bot can actually carry out, instead of asking questions it cannot receive
+    an answer to. The task button appears only when the session was attached to
+    a task, because otherwise there is nothing to mark done.
+    """
+    rows = []
+    if task_id is not None:
+        rows.append([InlineKeyboardButton("Mark task done", callback_data=f"task_done_{task_id}")])
+    rows.append([InlineKeyboardButton("Start another", callback_data=FOCUS_RESTART_CALLBACK)])
+    return InlineKeyboardMarkup(rows)
 
 
 class JarvisScheduler:
@@ -289,10 +305,8 @@ class JarvisScheduler:
             try:
                 await self.bot.send_message(
                     chat_id=pairing.chat_id,
-                    text=(
-                        f"Focus session complete ({duration} minutes). "
-                        "Did you finish your task? Want to add any notes?"
-                    ),
+                    text=f"Focus session complete — {duration} minutes recorded.",
+                    reply_markup=_focus_completion_keyboard(session.task_id),
                 )
                 await services_client.acknowledge_telegram_focus_completion(
                     self.http_client,

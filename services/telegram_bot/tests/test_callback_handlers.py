@@ -22,7 +22,9 @@ from telegram import Message, Update
 from telegram.ext import ContextTypes
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.callback_handler import (
+    FOCUS_RESTART_CALLBACK,
     _callback_auth,
+    focus_restart_callback,
     paper_action_callback,
     paper_detail_callback,
     paper_feedback_callback,
@@ -1174,3 +1176,33 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
 
     mock_review_start.assert_not_awaited()
     query.answer.assert_awaited_once_with("This message is no longer accessible", show_alert=True)
+
+
+# ---------------------------------------------------------------------------
+# Tests: focus_restart
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_focus_restart_starts_a_session_at_the_saved_duration():
+    """The "Start another" button reuses the /focus start path and its saved length."""
+    from telegram_bot.platform_client import TimerPreferences
+
+    update, context, _, _ = _make_callback_update_and_context(FOCUS_RESTART_CALLBACK)
+
+    with (
+        patch(
+            "telegram_bot.handlers.commands.system_commands.platform_client.get_timer_preferences",
+            new_callable=AsyncMock,
+            return_value=TimerPreferences(45, 4),
+        ),
+        patch(
+            "telegram_bot.handlers.commands.system_commands.services_client.start_focus_session",
+            new_callable=AsyncMock,
+        ) as start_focus,
+    ):
+        await focus_restart_callback(update, context)
+
+    update.callback_query.answer.assert_awaited_once()
+    assert start_focus.await_args.args[2:] == (1, 2700)
+    assert "45" in update.callback_query.message.reply_text.call_args[0][0]

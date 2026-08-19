@@ -22,10 +22,14 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot import services_client
 from telegram_bot.formatters import format_paper_detail, format_project_status
+from telegram_bot.handlers.commands.system_commands import start_focus_and_reply
 from telegram_bot.handlers.helpers import auth_check, get_config, get_http, get_platform_http
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
+
+#: Callback data of the "Start another" button on a focus-completion message.
+FOCUS_RESTART_CALLBACK = "focus_restart"
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +300,32 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+@rate_limit(max_calls=5, window_seconds=60)
+async def focus_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``focus_restart`` — start another session at the user's saved length.
+
+    Shares the ``/focus start`` code path, so the length, the already-active
+    conflict, and the failure copy stay identical to the command.
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    if not isinstance(query.message, Message):
+        await query.answer()
+        return
+
+    authorized, jarvis_user_id = await _callback_auth(update, context)
+    if not authorized:
+        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
+        return
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
+    if context.user_data is not None:
+        context.user_data["jarvis_user_id"] = jarvis_user_id
+
+    await query.answer()
+    await start_focus_and_reply(query.message.reply_text, context, jarvis_user_id, None)
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -318,6 +348,9 @@ def register_callback_handlers(app: Application) -> None:
     )
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
+    app.add_handler(
+        CallbackQueryHandler(focus_restart_callback, pattern=f"^{FOCUS_RESTART_CALLBACK}$")
+    )
     # TG-003: start_review is intentionally NOT registered here.
     # review_handler.ConversationHandler owns the /review flow; a duplicate
     # registration would cause dual-dispatch.

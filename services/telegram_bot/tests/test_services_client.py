@@ -7,7 +7,7 @@ Verifies:
 - Parsed return values
 - 404 → None for fetch_project and complete_task
 - 5xx → raise_for_status raises httpx.HTTPStatusError that propagates
-- fetch_new_paper_count sends an ISO date_from ≈ now-hours and returns total
+- fetch_new_paper_count sends today's UTC date as date_from and returns total
 - fetch_upcoming_milestones returns each deadline as a datetime
 - fetch_due_card_count returns the due_now int
 - check_authors returns the dict with matches/new_papers/authors_checked
@@ -16,7 +16,7 @@ Verifies:
 from __future__ import annotations
 
 import ast
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -32,6 +32,7 @@ from telegram_bot.services_client import (
     create_project,
     fetch_active_focus_session,
     fetch_due_card_count,
+    fetch_inbox_count,
     fetch_new_paper_count,
     fetch_next_review_card,
     fetch_papers_feed,
@@ -506,14 +507,14 @@ async def test_fetch_new_paper_count_correct_url_and_returns_total(config: BotCo
 
 
 @pytest.mark.asyncio
-async def test_fetch_new_paper_count_date_from_is_iso_approx_now_minus_hours(
+async def test_fetch_new_paper_count_date_from_is_today_utc(
     config: BotConfig,
 ) -> None:
-    """date_from sent to the API is the DATE of now - hours (day granularity)."""
+    """date_from is today's UTC date, so the briefing's "since midnight UTC" is literal."""
     http = _make_http(make_http_response({"total": 0}))
 
     before = datetime.now(UTC)
-    await fetch_new_paper_count(http, config, USER_ID, hours=24)
+    await fetch_new_paper_count(http, config, USER_ID)
     after = datetime.now(UTC)
 
     _, call_kwargs = http.get.call_args
@@ -525,15 +526,26 @@ async def test_fetch_new_paper_count_date_from_is_iso_approx_now_minus_hours(
     # datetime ISO string is rejected with 422. Must be a pure date (no time).
     assert "T" not in date_from_str, f"date_from must be a date (no time), got {date_from_str!r}"
 
-    # It is the calendar date of (now - hours). before/after differ only across
-    # a midnight boundary, so accept either.
-    expected_dates = {
-        (before - timedelta(hours=24)).date().isoformat(),
-        (after - timedelta(hours=24)).date().isoformat(),
-    }
+    # before/after differ only across a midnight boundary, so accept either.
+    expected_dates = {before.date().isoformat(), after.date().isoformat()}
     assert date_from_str in expected_dates, (
-        f"date_from {date_from_str!r} is not the date of now-24h ({expected_dates})"
+        f"date_from {date_from_str!r} is not today's UTC date ({expected_dates})"
     )
+
+
+@pytest.mark.asyncio
+async def test_fetch_inbox_count_reads_the_inbox_view_total(config: BotConfig) -> None:
+    """The inbox count comes from the inbox view's whole-view total, not a page length."""
+    http = _make_http(make_http_response({"total": 473, "papers": []}))
+
+    result = await fetch_inbox_count(http, config, USER_ID)
+
+    call_args, call_kwargs = http.get.call_args
+    url = call_args[0] if call_args else call_kwargs["url"]
+    assert url == "http://paper:8000/api/papers/feed"
+    _assert_owner_headers(call_kwargs)
+    assert call_kwargs["params"] == {"view": "inbox", "limit": 1}
+    assert result == 473
 
 
 @pytest.mark.asyncio

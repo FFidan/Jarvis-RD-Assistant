@@ -10,6 +10,7 @@ from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_morning_briefing
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
 from telegram_bot.platform_client import list_user_pairings
+from telegram_bot.vocabulary import is_not_done
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +48,25 @@ async def _run_briefing_for_chat(
         logger.warning("daily briefing: new-papers count failed for user_id=%s", user_id)
         new_papers_count = 0
     try:
+        inbox_total = await services_client.fetch_inbox_count(http_client, config, user_id)
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.warning("daily briefing: inbox count failed for user_id=%s", user_id)
+        inbox_total = 0
+    try:
         due_cards = await services_client.fetch_due_card_count(http_client, config, user_id)
     except (httpx.HTTPError, ValueError, KeyError):
         logger.warning("daily briefing: due-cards count failed for user_id=%s", user_id)
         due_cards = 0
     try:
-        tasks = await services_client.fetch_tasks(
-            http_client, config, user_id, status="in_progress", limit=10
+        # One page, then the same not-done rule the /briefing command applies:
+        # the endpoint filters on a single status, so it cannot express the set.
+        all_tasks = await services_client.fetch_tasks(
+            http_client, config, user_id, limit=services_client.MAX_TASK_PAGE_SIZE
         )
+        open_tasks = [task for task in all_tasks if is_not_done(task)]
     except (httpx.HTTPError, ValueError, KeyError):
         logger.warning("daily briefing: tasks fetch failed for user_id=%s", user_id)
-        tasks = []
+        open_tasks = []
     try:
         milestones = await services_client.fetch_upcoming_milestones(
             http_client, config, user_id, within_days=7
@@ -66,7 +75,9 @@ async def _run_briefing_for_chat(
         logger.warning("daily briefing: milestones fetch failed for user_id=%s", user_id)
         milestones = []
 
-    message = format_morning_briefing(new_papers_count, due_cards, tasks, milestones)
+    message = format_morning_briefing(
+        new_papers_count, inbox_total, due_cards, open_tasks, milestones
+    )
 
     try:
         await bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")

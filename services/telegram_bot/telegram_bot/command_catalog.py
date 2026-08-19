@@ -50,7 +50,7 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
         "review",
         include_in_menu=False,
     ),
-    CommandSpec("projects", "projects", "List active projects", "Projects and tasks", "standard"),
+    CommandSpec("projects", "projects", "List your projects", "Projects and tasks", "standard"),
     CommandSpec(
         "newproject",
         "newproject <name>",
@@ -62,8 +62,8 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("done", "done <id>", "Mark a task complete", "Projects and tasks", "standard"),
     CommandSpec(
         "focus",
-        "focus [minutes]",
-        "Start a focus session",
+        "focus [start [minutes] / pause / resume / stop]",
+        "Show the focus timer, or start, pause, resume, or stop it",
         "Projects and tasks",
         "standard",
     ),

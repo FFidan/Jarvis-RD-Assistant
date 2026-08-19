@@ -390,8 +390,10 @@ async def test_live_papers_command_lists_library_shape(live_backend: LiveBackend
     ):
         return
 
-    assert len(replies) <= 10, "/papers must cap the live feed at ten cards"
-    for call in update.message.reply_text.await_args_list:
+    # The first reply is the stage header naming the view; the cards follow it.
+    assert "Library search" in replies[0], "/papers must open with its stage header"
+    assert len(replies) <= 11, "/papers must cap the live feed at ten cards after its header"
+    for call in update.message.reply_text.await_args_list[1:]:
         assert "📄" in call.args[0], "a library card must carry the paper header marker"
         # _library_keyboard renders one row of star / trash / detail actions.
         _assert_keyboard_rows(
@@ -448,7 +450,7 @@ async def test_live_briefing_command_composes_without_degrading(
     live_backend: LiveBackend,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """``/briefing`` renders every section and degrades none of its four gathers.
+    """``/briefing`` renders every section and degrades none of its gathers.
 
     ``briefing_command`` swallows a failed section and renders a zero, so the
     reply text alone cannot distinguish a live backend from a dead one. The
@@ -465,8 +467,9 @@ async def test_live_briefing_command_composes_without_degrading(
     text = _replies(update)[0]
     _assert_no_raw_error(text)
     assert "<b>Morning Briefing</b>" in text
-    assert "new papers today" in text
-    assert "cards due for review" in text
+    assert "papers added to your library since midnight UTC" in text
+    assert "waiting in your inbox" in text
+    assert "cards due for review right now" in text
 
     degraded = [record.message for record in caplog.records if "Failed to fetch" in record.message]
     assert not degraded, f"live briefing sections degraded: {degraded}"

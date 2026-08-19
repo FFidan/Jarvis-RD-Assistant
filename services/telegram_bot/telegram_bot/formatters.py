@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from telegram_bot.command_catalog import COMMAND_CATALOG
 from telegram_bot.pulse_contract import PulseDeck
+from telegram_bot.vocabulary import is_not_done, project_status_emoji, project_status_label
 
 MAX_MESSAGE_LENGTH = 4096
 TRUNCATION_HEADROOM = 100
@@ -493,24 +494,41 @@ def format_review_stats(stats: dict) -> str:
     )
 
 
+#: How many rows a listed section shows before it summarizes the remainder.
+_LISTED_SECTION_ROWS = 5
+
+
+def _remaining_line(total: int, shown: int) -> list[str]:
+    """Return a single "and N more" line when a section listed only part of its rows."""
+    remaining = total - shown
+    return [f"  … and {remaining} more"] if remaining > 0 else []
+
+
 def format_morning_briefing(
     new_papers_count: int,
+    inbox_total: int,
     due_cards: int,
-    tasks: list[dict],
+    open_tasks: list[dict],
     milestones: list[dict],
 ) -> str:
     """Format the combined morning briefing message.
 
+    Every count names the window it was measured over and the view it was
+    measured on, so a number in the briefing means the same thing as the
+    matching number on the web.
+
     Parameters
     ----------
     new_papers_count : int
-        Number of new papers in last 24h.
+        Papers added to the caller's library since midnight UTC.
+    inbox_total : int
+        Papers currently in the Inbox view, whenever they arrived.
     due_cards : int
-        Number of flashcards due for review.
-    tasks : list[dict]
-        In-progress tasks.
+        Flashcards whose review is due as of now.
+    open_tasks : list[dict]
+        Tasks that are not done, under the same rule the My Day view applies.
     milestones : list[dict]
-        Upcoming milestones (next 7 days).
+        Milestones with a deadline in the next 7 days.
 
     Returns
     -------
@@ -520,19 +538,24 @@ def format_morning_briefing(
     now = datetime.now(UTC)
     lines = [f"☀️ <b>Morning Briefing</b> — {now.strftime('%A, %B %d')}\n"]
 
-    lines.append(f"📄 <b>{new_papers_count}</b> new papers today")
-    lines.append(f"📚 <b>{due_cards}</b> cards due for review")
+    lines.append(f"📄 <b>{new_papers_count}</b> papers added to your library since midnight UTC")
+    lines.append(f"📥 <b>{inbox_total}</b> waiting in your inbox")
+    lines.append(f"📚 <b>{due_cards}</b> cards due for review right now")
 
-    if tasks:
-        lines.append(f"\n📋 <b>In Progress ({len(tasks)}):</b>")
-        for t in tasks[:5]:
+    if open_tasks:
+        lines.append(
+            f"\n📋 <b>Open tasks ({len(open_tasks)}):</b> "
+            "<i>to do, in progress or blocked — the same rule as My Day</i>"
+        )
+        for t in open_tasks[:_LISTED_SECTION_ROWS]:
             title = escape(t.get("title", ""))
             project = escape(t.get("project_name", ""))
             lines.append(f"  • {title}" + (f" <i>({project})</i>" if project else ""))
+        lines.extend(_remaining_line(len(open_tasks), _LISTED_SECTION_ROWS))
 
     if milestones:
-        lines.append(f"\n🎯 <b>Upcoming Milestones ({len(milestones)}):</b>")
-        for m in milestones[:5]:
+        lines.append(f"\n🎯 <b>Milestones due in the next 7 days ({len(milestones)}):</b>")
+        for m in milestones[:_LISTED_SECTION_ROWS]:
             name = escape(m.get("name", ""))
             deadline = m.get("deadline", "")
             project = escape(m.get("project_name", ""))
@@ -542,6 +565,7 @@ def format_morning_briefing(
             else:
                 deadline_str = escape(str(deadline))
             lines.append(f"  • {name} ({deadline_str}) <i>{project}</i>")
+        lines.extend(_remaining_line(len(milestones), _LISTED_SECTION_ROWS))
 
     return truncate("\n".join(lines))
 
@@ -552,7 +576,8 @@ def format_project_status(project: dict, tasks: list[dict], milestones: list[dic
     Parameters
     ----------
     project : dict
-        Project record.
+        Project record, as returned by ``GET /api/projects/{id}``: it carries
+        ``paper_count`` and ``open_question_count`` alongside the row columns.
     tasks : list[dict]
         Tasks for this project.
     milestones : list[dict]
@@ -565,36 +590,37 @@ def format_project_status(project: dict, tasks: list[dict], milestones: list[dic
     """
     name = escape(project.get("name", ""))
     status = project.get("status", "active")
-    status_emoji = {"active": "🟢", "paused": "⏸️", "completed": "✅", "archived": "📦"}.get(
-        status, ""
-    )
     description = project.get("description", "") or ""
 
     done_count = sum(1 for t in tasks if t.get("status") == "done")
     total_tasks = len(tasks)
-    progress = f"{done_count}/{total_tasks}" if total_tasks else "No tasks"
+    progress = f"{done_count} of {total_tasks} done" if total_tasks else "No tasks"
 
-    lines = [
-        f"{status_emoji} <b>{name}</b> [{escape(status)}]",
-    ]
+    badge = f"{project_status_emoji(status)} ".lstrip()
+    label = escape(project_status_label(status))
+    lines = [f"{badge}<b>{name}</b>" + (f" — {label}" if label else "")]
     if description:
         lines.append(f"{escape(description[:200])}")
     lines.append(f"\n📋 Tasks: {progress}")
+    lines.append(f"📄 Linked papers: {int(project.get('paper_count') or 0)}")
+    lines.append(f"❓ Open questions: {int(project.get('open_question_count') or 0)}")
 
     if project.get("deadline"):
         lines.append(f"📅 Deadline: {escape(str(project['deadline']))}")
 
     if milestones:
         lines.append(f"\n🎯 <b>Milestones ({len(milestones)}):</b>")
-        for m in milestones[:5]:
+        for m in milestones[:_LISTED_SECTION_ROWS]:
             done = "✅" if m.get("completed") else "⬜"
             lines.append(f"  {done} {escape(m.get('name', ''))}")
 
-    in_progress = [t for t in tasks if t.get("status") == "in_progress"]
-    if in_progress:
-        lines.append("\n🔨 <b>In Progress:</b>")
-        for t in in_progress[:5]:
+    # Same not-done rule as My Day and the briefing, rather than in-progress only.
+    open_tasks = [t for t in tasks if is_not_done(t)]
+    if open_tasks:
+        lines.append(f"\n🔨 <b>Open tasks ({len(open_tasks)}):</b>")
+        for t in open_tasks[:_LISTED_SECTION_ROWS]:
             lines.append(f"  • {escape(t.get('title', ''))}")
+        lines.extend(_remaining_line(len(open_tasks), _LISTED_SECTION_ROWS))
 
     return truncate("\n".join(lines))
 
