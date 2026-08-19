@@ -48,7 +48,6 @@ from telegram_bot.services_client import (
     fetch_upcoming_milestones,
     fetch_weekly_digest,
     get_paper,
-    log_focus_session,
     pause_focus_session,
     record_paper_feedback,
     search_papers,
@@ -703,7 +702,7 @@ async def test_submit_review_rating_5xx_propagates(config: BotConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# log_focus_session
+# focus sessions
 # ---------------------------------------------------------------------------
 
 
@@ -751,40 +750,6 @@ async def test_focus_session_client_rejects_malformed_payload(config: BotConfig)
 
     with pytest.raises(ValueError, match="invalid focus session"):
         await fetch_active_focus_session(http, config, USER_ID)
-
-
-@pytest.mark.asyncio
-async def test_log_focus_session_correct_url_and_body(config: BotConfig) -> None:
-    http = _make_http(make_http_response({}))
-
-    await log_focus_session(http, config, USER_ID, 0.5)
-
-    http.post.assert_called_once()
-    call_args, call_kwargs = http.post.call_args
-    url = call_args[0] if call_args else call_kwargs["url"]
-    assert url == "http://learn:8001/api/executive/focus/log"
-    assert call_kwargs.get("json") == {"duration_hours": 0.5}
-    _assert_owner_headers(call_kwargs)
-
-
-@pytest.mark.asyncio
-async def test_log_focus_session_none_user_id_omits_owner_header(config: BotConfig) -> None:
-    """The scheduled-job callback may not carry an owner id (job.data fallback)."""
-    http = _make_http(make_http_response({}))
-
-    await log_focus_session(http, config, None, 0.25)
-
-    _, call_kwargs = http.post.call_args
-    headers = call_kwargs.get("headers", {})
-    assert "X-Jarvis-Paired-User-Id" not in headers
-
-
-@pytest.mark.asyncio
-async def test_log_focus_session_5xx_propagates(config: BotConfig) -> None:
-    http = _make_http(make_http_response({}, status=500))
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await log_focus_session(http, config, USER_ID, 1.0)
 
 
 # ---------------------------------------------------------------------------

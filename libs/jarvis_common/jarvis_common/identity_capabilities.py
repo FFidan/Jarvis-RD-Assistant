@@ -112,7 +112,6 @@ SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
     _telegram_capability("learning", "GET", r"/api/review/next", "learning:review:read"),
     _telegram_capability("learning", "POST", r"/api/review/[^/]+", "learning:review:write"),
     _telegram_capability("learning", "GET", r"/api/executive/my-day", "learning:executive:read"),
-    _telegram_capability("learning", "POST", r"/api/executive/focus/log", "learning:focus:write"),
     _telegram_capability("learning", "GET", r"/api/executive/focus/active", "learning:focus:read"),
     _telegram_capability(
         "learning",
@@ -135,8 +134,8 @@ SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
     _telegram_capability("research", "GET", r"/api/papers/[^/]+", "research:papers:read"),
     _telegram_capability(
         "research",
-        "POST",
-        r"/api/papers/[^/]+/(?:save|unsave|skip|reading|done|star|unstar|trash|restore)",
+        "PUT",
+        r"/api/papers/[^/]+/(?:save|skip|reading|done|star|unstar|trash|trash_and_reject|restore)",
         "research:papers:write",
     ),
     _telegram_capability(
