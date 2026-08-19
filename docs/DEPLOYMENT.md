@@ -407,7 +407,7 @@ All ongoing configuration goes through the web wizard and Settings — no `.env`
 |---|---|---|
 | SMTP relay | Settings → System → Email / SMTP / onboarding wizard | No |
 | Cloud LLM providers and routing | Settings → Models → Providers & Routing | No |
-| Telegram bot token | Settings → Integrations → Bot Token | Yes — `docker compose restart telegram_bot` |
+| Telegram bot token | Settings → Integrations → Telegram (admin block) | Yes — `docker compose restart telegram_bot` |
 | Sign-in method (single ↔ multi-user) | Settings → System → Sign-in Method | No |
 | Auto-fetch interval | Settings → Automation | No |
 

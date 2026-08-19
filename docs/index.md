@@ -25,7 +25,7 @@ relying on verification badges, consensus views, or extracted evidence.
 
 ## Explore
 
-- **[Research Feed & Library](manual/research-feed.md)** — discover, save, and
+- **[Papers & Discover](manual/research-feed.md)** — discover, save, and
   triage papers.
 - **[Ask — Cross-paper RAG](manual/ask.md)** — question your whole library at
   once.

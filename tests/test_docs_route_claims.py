@@ -540,7 +540,7 @@ def test_telegram_docs_cover_personal_pairing_profile_and_restart_limits() -> No
     """Telegram setup must distinguish per-user pairing from server-level activation."""
     telegram = _read(_TELEGRAM_DOC)
     admin_token = _section(
-        telegram, "Admin: configuring the bot token — Settings → Integrations → Bot Token"
+        telegram, "Admin: the instance bot token — Settings → Integrations → Telegram"
     )
 
     assert "Each user pairs" in telegram

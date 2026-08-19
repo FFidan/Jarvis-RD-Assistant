@@ -152,8 +152,8 @@ Observability variables (Langfuse): [docs/contracts/04-observability.md](https:/
 | Dependency | Service | Purpose |
 |------------|---------|---------|
 | `lxml>=6.1.0` | paper_ingestion | PubMed XML parsing + hardened XML in `cached_transport.py` |
-| `qdrant-client>=1.14.3,<1.15.0` | paper_ingestion | Client API used with the tested Qdrant 1.13.2 service, including filtered vector maintenance |
-| `scikit-learn>=1.6.0` | paper_ingestion (optional) | Per-user logistic regression on recommendation feedback |
+| `qdrant-client>=1.14.3,<1.20.0` | paper_ingestion | Client API used with the tested Qdrant 1.13.2 service, including filtered vector maintenance |
+| `scikit-learn>=1.6.0` | paper_ingestion | Per-user logistic regression on recommendation feedback |
 
 ## Secrets & Database
 

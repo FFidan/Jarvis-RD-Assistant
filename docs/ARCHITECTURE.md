@@ -159,8 +159,8 @@ default; product APIs do not accept a generic downstream owner override.
 
 The dashboard issues short-lived pairing tokens in `telegram_pairing_tokens`;
 the bot stores durable chat ownership in `telegram_user_pairings` (see
-`db/init.sql`). A chat is authenticated **exclusively** via the `/pair <token>`
-flow — the token is generated in Settings → Integrations → Telegram and
+`db/init.sql`). A chat is authenticated **exclusively** via the `/pair <code>`
+flow — the code is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
 `/pair`. The legacy dashboard-code pairing path is no longer active. Pairing

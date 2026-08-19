@@ -81,4 +81,4 @@ A condensed preview of today's Pulse deck also appears on the [My Day](home-my-d
 
 - [My Day & Home](home-my-day.md) — today's Pulse preview and research focus.
 - [Settings](settings.md) — configure the Pulse schedule and automation (§IV System).
-- [Research Feed & Library](research-feed.md) — papers saved via Pulse appear in your Library.
+- [Papers & Discover](research-feed.md) — papers saved via Pulse appear in your saved papers.
