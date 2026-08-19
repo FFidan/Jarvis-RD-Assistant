@@ -28,6 +28,29 @@ from learning_engine.models import (
 
 logger = logging.getLogger(__name__)
 
+# Papers one batch-generation run may process. Each one costs a model call, so
+# a large deck is covered over several runs rather than in a single job.
+_BATCH_PAPER_LIMIT = 50
+
+# A paper is eligible when it has chunks, has no current card in the deck, and —
+# when the job belongs to a user — is in that user's library. The predicate is
+# shared so the page and its count can never drift apart.
+_ELIGIBLE_PAPERS_FROM = """
+    FROM papers p
+    WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM cards c
+        WHERE c.paper_id = p.id AND c.deck_id = $1
+          AND c.content_generation = p.content_generation
+      )
+      AND ($2::bigint IS NULL OR EXISTS (
+        SELECT 1 FROM user_library ul
+        WHERE ul.paper_id = p.id AND ul.user_id IS NOT DISTINCT FROM $2
+      ))
+"""
+_ELIGIBLE_PAPERS_SQL = f"SELECT p.id {_ELIGIBLE_PAPERS_FROM} LIMIT {_BATCH_PAPER_LIMIT}"
+_ELIGIBLE_PAPERS_COUNT_SQL = f"SELECT count(*)::int {_ELIGIBLE_PAPERS_FROM}"
+
 
 # ---------------------------------------------------------------------------
 # Core generation helper (used by both job handlers and direct endpoint)
@@ -259,47 +282,27 @@ async def _card_generate_batch_job(
     payload: dict[str, Any],
     ctx: ProgressContext,
 ) -> dict[str, Any]:
-    """Job handler for batch card generation across all unprocessed papers in a deck."""
+    """Job handler for batch card generation across unprocessed papers in a deck.
+
+    One run covers at most :data:`_BATCH_PAPER_LIMIT` papers. The result reports
+    the deck's whole eligible count and what this run left behind, so a deck
+    larger than one run never reads as finished.
+    """
     deck_id: int = payload["deck_id"]
     max_per_paper: int = payload.get("max_per_paper", 5)
     user_id: int | None = payload.get("user_id")
 
     async with pool.acquire() as conn:
-        if user_id is not None:
-            paper_rows = await conn.fetch(
-                """
-                SELECT p.id FROM papers p
-                WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
-                  AND NOT EXISTS (
-                    SELECT 1 FROM cards c
-                    WHERE c.paper_id = p.id AND c.deck_id = $1
-                      AND c.content_generation = p.content_generation
-                  )
-                  AND EXISTS (
-                    SELECT 1 FROM user_library ul
-                    WHERE ul.paper_id = p.id AND ul.user_id IS NOT DISTINCT FROM $2
-                  )
-                LIMIT 50
-                """,
-                deck_id,
-                user_id,
-            )
-        else:
-            paper_rows = await conn.fetch(
-                """
-                SELECT p.id FROM papers p
-                WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
-                  AND NOT EXISTS (
-                    SELECT 1 FROM cards c
-                    WHERE c.paper_id = p.id AND c.deck_id = $1
-                      AND c.content_generation = p.content_generation
-                  )
-                LIMIT 50
-                """,
-                deck_id,
-            )
+        paper_rows = await conn.fetch(_ELIGIBLE_PAPERS_SQL, deck_id, user_id)
+        # A short page is the whole eligible set, so only a full one needs
+        # counting to tell the user how much of the deck is still waiting.
+        eligible_total = (
+            int(await conn.fetchval(_ELIGIBLE_PAPERS_COUNT_SQL, deck_id, user_id))
+            if len(paper_rows) == _BATCH_PAPER_LIMIT
+            else len(paper_rows)
+        )
 
-    total = len(paper_rows)
+    batch_size = len(paper_rows)
     papers_processed = 0
     cards_created = 0
     errors: list[str] = []
@@ -311,7 +314,7 @@ async def _card_generate_batch_job(
             cancelled = True
             break
 
-        await ctx.update_progress(i / max(total, 1), f"Paper {i + 1}/{total}")
+        await ctx.update_progress(i / max(batch_size, 1), f"Paper {i + 1}/{batch_size}")
 
         try:
             result = await generate_cards_core(
@@ -334,22 +337,24 @@ async def _card_generate_batch_job(
             logger.exception("Batch generate failed for paper %s", paper_id)
             errors.append(f"Paper {paper_id}: card generation failed")
 
-    status = batch_terminal_status(cancelled=cancelled, incomplete=bool(errors))
+    remaining = max(eligible_total - papers_processed - len(errors), 0)
+    status = batch_terminal_status(cancelled=cancelled, incomplete=bool(errors) or remaining > 0)
     headline = "Done" if status == "ok" else status.title()
     await ctx.update_progress(
-        1.0, f"{headline}: {papers_processed}/{total} processed, {cards_created} cards created"
+        1.0,
+        f"{headline}: {papers_processed}/{eligible_total} processed, {cards_created} cards created",
     )
 
-    # Status and total describe this run, not the cards it produced, so they
-    # are layered onto the result dict instead of onto _BatchGenerateResult:
-    # that model is shared with the single-paper path, which has no batch to
-    # be cancelled part-way through.
+    # Status, deck total, and what is left describe the run and the deck rather
+    # than the cards produced, so they are layered onto the result dict instead
+    # of onto _BatchGenerateResult: that model is shared with the single-paper
+    # path, which has no batch to be cancelled part-way through.
     batch_result = _BatchGenerateResult(
         papers_processed=papers_processed,
         cards_created=cards_created,
         errors=errors,
     ).model_dump()
     batch_result["status"] = status
-    batch_result["total"] = total
-    batch_result["remaining"] = max(total - papers_processed - len(errors), 0)
+    batch_result["total"] = eligible_total
+    batch_result["remaining"] = remaining
     return batch_result

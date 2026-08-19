@@ -27,8 +27,11 @@ from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSourc
 
 logger = logging.getLogger(__name__)
 
-# How long a successful citation fetch stays authoritative. Semantic Scholar is
-# rate limited, so every automatic path re-reads this rather than re-fetching.
+# How long a citation fetch stays authoritative. Semantic Scholar is rate
+# limited, so every automatic path re-reads the stored graph for this long
+# rather than re-fetching. Only a fetch that reached Semantic Scholar in both
+# directions starts the interval, so an outage cannot silence a paper for a
+# month.
 CITATION_REFRESH_INTERVAL = timedelta(days=30)
 
 
@@ -39,10 +42,12 @@ async def _refresh_stale_citations(
     *,
     now: datetime | None = None,
 ) -> None:
-    """Refresh citation data whose last successful fetch has aged out.
+    """Refresh citation data whose last complete fetch has aged out.
 
     Shared by every automatic caller so a paper is never re-fetched on two
-    different schedules. A failure here leaves the stored graph as it was.
+    different schedules. A failed fetch keeps whatever edges are already
+    stored and leaves the freshness stamp untouched, so the next run retries
+    the paper instead of waiting out the refresh interval.
 
     Parameters
     ----------
@@ -281,8 +286,10 @@ async def sync_citations_for_paper(
       instead of raising; only the missing-paper precondition still raises
       ``ValueError``.
 
-    After all edges are stored the paper's ``citations_fetched_at`` timestamp
-    is set so the caller can avoid redundant fetches.
+    The paper's ``citations_fetched_at`` timestamp is set only when both
+    directions were fetched, so a caller can avoid redundant fetches without a
+    failed one passing for fresh data. A paper with no Semantic Scholar
+    identifier returns zeroes without touching the timestamp.
 
     Raises
     ------
@@ -315,17 +322,20 @@ async def sync_citations_for_paper(
         return CitationFetchResponse(citations_added=0, references_added=0, stubs_created=0)
 
     # --- S2 API calls (no DB connection held) ---
+    fetch_complete = True
     try:
         citations_data = await s2_source.fetch_citations(s2_id)
     except Exception:
         logger.exception("Failed to fetch citations for paper %d (s2:%s)", paper_id, s2_id)
         citations_data = []
+        fetch_complete = False
 
     try:
         references_data = await s2_source.fetch_references(s2_id)
     except Exception:
         logger.exception("Failed to fetch references for paper %d (s2:%s)", paper_id, s2_id)
         references_data = []
+        fetch_complete = False
 
     # --- DB writes with fetched data (connection held, no HTTP) ---
     citations_added = 0
@@ -359,11 +369,15 @@ async def sync_citations_for_paper(
             logger.warning("paper_citations table not found, skipping citation sync")
             return 0, 0, 0
 
-        await conn.execute(
-            "UPDATE papers SET citations_fetched_at = $1 WHERE id = $2",
-            datetime.now(UTC),
-            paper_id,
-        )
+        # Freshness is claimed only for a fetch that reached Semantic Scholar in
+        # both directions. Stamping a failed fetch would hide the paper from the
+        # staleness sweep for a full refresh interval.
+        if fetch_complete:
+            await conn.execute(
+                "UPDATE papers SET citations_fetched_at = $1 WHERE id = $2",
+                datetime.now(UTC),
+                paper_id,
+            )
         return citations_added, references_added, stubs_created
 
     if is_pool:
