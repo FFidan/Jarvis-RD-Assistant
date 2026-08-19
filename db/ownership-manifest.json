@@ -4,7 +4,7 @@
   "privilege_enforcement": "enforced",
   "restore_authority": {
     "path": "db/restore-authority.sql",
-    "sha256": "cf863d946a88c22c15096c147dc2cf6350930deeb17e6267d44c511af7593710",
+    "sha256": "12e0be3402161fc3fb7b25c33e857abefce2eef3f70dbc03db5952f3001d7493",
     "schema_version": 120
   },
   "compatibility_baseline": {
