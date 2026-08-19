@@ -42,3 +42,24 @@ Owner/ACL-free backups deliberately omit role-bound database authority. The
 on-demand recovery workflow reapplies the manifest-pinned `db/restore-authority.sql`
 only after forward migration reaches the packaged schema; it is not a migration
 and must not be invoked independently.
+
+## Adding a migration
+
+The schema version is recorded in several places on purpose: a running
+deployment, a fresh install, and a restore each reach it by a different route.
+All of them must move together, and each is guarded by a test that fails when
+one is forgotten.
+
+1. `db/migrations/NNNN_<descriptive>.sql` — the forward step itself.
+2. `db/SCHEMA_VERSION` — the packaged version.
+3. This file — the current-version sentence above and a row in the table.
+4. `db/init.sql` — embody the step for fresh installs, add the version to the
+   `schema_migrations` seed list, and record the file's SHA-256.
+5. `db/ownership-manifest.json` — the migration's hash, and the restore
+   authority's hash and schema version if that file changed.
+6. `db/restore-authority.sql` — its packaged-schema pin, and any grant the step
+   introduced, so a restored deployment matches a fresh one.
+7. `libs/jarvis_common/jarvis_common/migrations.py` — the in-code fallback used
+   where the version file is unavailable.
+8. `scripts/restore.sh` — the last-resort ceiling used when neither the
+   migrations directory nor the version file can be read.
