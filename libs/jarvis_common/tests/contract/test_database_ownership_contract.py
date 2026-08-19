@@ -648,6 +648,14 @@ async def test_job_cancel_reports_no_cancellation_for_finished_or_aborting_jobs(
 ) -> None:
     """Cancelling a job that is no longer running reports that nothing was cancelled.
 
+    This pins the fresh-install definition and is green at the base commit,
+    because the contract fixture builds from ``db/init.sql``, which already
+    returned ``FOUND``, and then skips every migration as applied. The
+    failing-first evidence for the upgraded route is in
+    ``libs/jarvis_common/tests/test_migrations.py``, which executes 0116's own
+    body, and the two definitions are held equal by
+    ``test_both_schema_routes_define_every_function_identically``.
+
     Exercises ``ops.jarvis_job_cancel_v1`` as installed by ``db/init.sql``.  The
     public jobs API turns the returned boolean into 404-or-ok, so a job that was
     already finished must not be reported as cancelled.  ``aborting`` is

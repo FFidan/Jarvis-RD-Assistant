@@ -128,3 +128,60 @@ async def test_research_erasure_capability_clears_every_user_attributable_table(
             user_id,
         )
         assert residual == 0, f"Research erasure left rows in {table_name}"
+
+
+async def test_dead_lettered_outbox_events_return_to_the_queue(
+    research_erasure_connections,
+) -> None:
+    """An operator can replay dead letters, except where replay would collide.
+
+    Dead-lettering is otherwise terminal, and an undelivered ``paper.deleted``
+    keeps a deleted paper's Research-private rows retained. Undelivered
+    deletions are unique per owner and paper, so a dead letter with a live
+    sibling must stay put rather than fail the whole replay.
+    """
+    from jarvis_common.testing import SharedConnPool
+
+    from paper_ingestion.repos.domain_events import requeue_dead_lettered_events
+
+    bootstrap, runtime = research_erasure_connections
+    user_id = uuid.uuid4().int % 1_000_000_000 + 1
+    replayable, collides, sibling = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+    await bootstrap.execute(
+        """INSERT INTO research.domain_events (id, event_type, user_id, paper_id, dead_lettered_at)
+           VALUES ($1, 'paper.read', $2, 1, NOW())""",
+        replayable,
+        user_id,
+    )
+    await bootstrap.execute(
+        """INSERT INTO research.domain_events (id, event_type, user_id, paper_id, dead_lettered_at)
+           VALUES ($1, 'paper.deleted', $2, 2, NOW())""",
+        collides,
+        user_id,
+    )
+    await bootstrap.execute(
+        """INSERT INTO research.domain_events (id, event_type, user_id, paper_id)
+           VALUES ($1, 'paper.deleted', $2, 2)""",
+        sibling,
+        user_id,
+    )
+
+    # Through the runtime identity, as the service does: the statement is
+    # unqualified and resolves on that role's stored search path.
+    requeued = await requeue_dead_lettered_events(SharedConnPool(runtime), user_id=user_id)
+
+    still_dead = {
+        row["id"]
+        for row in await bootstrap.fetch(
+            "SELECT id FROM research.domain_events WHERE user_id = $1 AND dead_lettered_at IS NOT NULL",
+            user_id,
+        )
+    }
+
+    assert requeued == 1, "exactly the replayable dead letter should have moved"
+    assert replayable not in still_dead, "the replayable event was not returned to the queue"
+    assert collides in still_dead, (
+        "a deletion whose owner and paper already have an undelivered sibling must stay "
+        "dead-lettered; replaying it would break the per-owner uniqueness of undelivered deletions"
+    )

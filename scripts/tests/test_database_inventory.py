@@ -173,3 +173,36 @@ def test_erasure_contract_is_closed_and_bounded() -> None:
     assert 0 < retry["alert_after_attempt"] < retry["max_attempts"]
     assert retry["initial_delay_seconds"] <= retry["maximum_delay_seconds"]
     assert retry["persist_resume_state"] is True
+
+
+def test_writes_inside_a_sql_wrapper_are_inventoried() -> None:
+    """A statement issued inside a helper the inventory follows is still seen.
+
+    Helpers named in ``_DB_WRAPPER_SQL_ARGUMENTS`` are inventoried at their call
+    sites, where the caller's SQL is known. Skipping the whole body to avoid
+    counting that pass-through twice also hid the helper's *own* statements, so
+    the migration recorder's two ``INSERT INTO schema_migrations`` were
+    invisible and the declared transition seam looked stale enough to delete.
+    """
+    records = inventory_queries(_REPO_ROOT)
+    recorder_writes = {
+        record.line
+        for record in records
+        if record.path == "libs/jarvis_common/jarvis_common/migrations.py"
+        and "schema_migrations" in record.write_relations
+    }
+
+    assert len(recorder_writes) == 2, (
+        "the migration recorder writes schema_migrations twice; the inventory "
+        f"reports {len(recorder_writes)}"
+    )
+    # The pass-through the helper executes on its caller's behalf stays the
+    # caller's, so following the body must not also attribute it here.
+    wrapper_dynamic = [
+        record
+        for record in records
+        if record.path == "libs/jarvis_common/jarvis_common/migrations.py" and record.dynamic
+    ]
+    assert len(wrapper_dynamic) == 1, (
+        f"expected one dynamic site outside the wrapper, got {len(wrapper_dynamic)}"
+    )

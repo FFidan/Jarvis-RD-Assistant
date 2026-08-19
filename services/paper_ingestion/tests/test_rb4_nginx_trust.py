@@ -500,9 +500,6 @@ def test_nginx_rendered_config_passes_the_syntax_check():
     start-up. Only nginx itself can tell whether the rendered result -- includes
     resolved, upstreams present -- is a configuration it will load.
     """
-    if shutil.which("docker") is None:
-        pytest.skip("docker CLI not installed")
-
     runtime_image = re.search(
         r"^ARG NGINX_RUNTIME_IMAGE=(\S+)$", FRONTEND_DOCKERFILE.read_text(), flags=re.MULTILINE
     )
@@ -511,7 +508,12 @@ def test_nginx_rendered_config_passes_the_syntax_check():
     rendered = _nginx_text()
     for name, value in RENDER_ENVIRONMENT.items():
         rendered = rendered.replace(f"${{{name}}}", value)
+    # Asserted before the skip: substitution coverage needs no container, and a
+    # machine without docker would otherwise lose this check silently too.
     assert "${" not in rendered, "an envsubst placeholder is missing from RENDER_ENVIRONMENT"
+
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI not installed")
 
     with _rendered_config_tree(rendered) as tree:
         command = ["docker", "run", "--rm"]

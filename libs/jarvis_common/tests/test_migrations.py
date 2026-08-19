@@ -572,3 +572,72 @@ async def test_replayed_migrations_converge_on_the_installed_baseline(live_pg_ds
             ), f"cancelling a {status} job reported the wrong result"
     finally:
         await conn.close()
+
+
+_FUNCTION_DEFINITION_RE = re.compile(
+    r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\((.*?)\)\s*(.*?)\$\$;",
+    re.S | re.I,
+)
+_SQL_COMMENT_RE = re.compile(r"--[^\n]*")
+_SQL_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+_SQL_PUNCTUATION_RE = re.compile(r"\s*([(),;])\s*")
+_SQL_OPTIONAL_ALIAS_RE = re.compile(r"\bas\s+(?=[a-z_][a-z0-9_]*\b)(?!select)")
+
+
+def _canonical_sql(definition: str) -> str:
+    """Reduce one definition to what PostgreSQL would actually execute.
+
+    Formatting is not drift. A raw comparison reports five divergent functions
+    here, four of which differ only by an optional ``AS`` alias or a space after
+    a comma; a gate that reports those as drift is a gate people learn to skip.
+    """
+    without_comments = _SQL_BLOCK_COMMENT_RE.sub(" ", _SQL_COMMENT_RE.sub(" ", definition))
+    collapsed = " ".join(without_comments.lower().split())
+    return _SQL_OPTIONAL_ALIAS_RE.sub("", _SQL_PUNCTUATION_RE.sub(r"\1", collapsed))
+
+
+def _function_definitions(sql: str) -> dict[str, str]:
+    """Canonical body per function name; a later definition supersedes an earlier one."""
+    return {
+        match.group(1).lower(): _canonical_sql(match.group(0))
+        for match in _FUNCTION_DEFINITION_RE.finditer(sql)
+    }
+
+
+def test_both_schema_routes_define_every_function_identically() -> None:
+    """A fresh install and an upgraded one must run the same function bodies.
+
+    ``db/init.sql`` is a hand-maintained mirror of the migration ledger, and the
+    recorded hashes bind each file to itself and never to the other, so the two
+    can drift silently. They already did: ``ops.jarvis_job_cancel_v1`` reported
+    success for a job it had not cancelled on upgraded installs while fresh ones
+    were correct, and no gate could see it. Contract tests build from
+    ``db/init.sql`` and never execute a migration file, so this comparison is
+    the only thing standing between the two representations.
+    """
+    db_dir = _db_dir()
+    fresh_install = _function_definitions((db_dir / "init.sql").read_text(encoding="utf-8"))
+
+    upgraded: dict[str, tuple[str, str]] = {}
+    for migration in sorted((db_dir / "migrations").glob("*.sql")):
+        for name, body in _function_definitions(migration.read_text(encoding="utf-8")).items():
+            upgraded[name] = (body, migration.name)
+
+    shared = sorted(set(fresh_install) & set(upgraded))
+    assert len(shared) > 40, f"the comparison read almost nothing: {len(shared)} shared functions"
+
+    diverged = {
+        name: upgraded[name][1] for name in shared if fresh_install[name] != upgraded[name][0]
+    }
+    assert not diverged, (
+        f"these functions behave differently on a fresh install than on an upgraded one: {diverged}"
+    )
+
+    # The more dangerous direction: an object an upgrade creates that a fresh
+    # install never gets, so the defect appears only on new deployments.
+    missing_from_fresh_install = {
+        name: upgraded[name][1] for name in sorted(set(upgraded) - set(fresh_install))
+    }
+    assert not missing_from_fresh_install, (
+        f"migrations define functions db/init.sql never creates: {missing_from_fresh_install}"
+    )

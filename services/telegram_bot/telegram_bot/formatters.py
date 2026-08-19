@@ -540,10 +540,14 @@ def format_morning_briefing(
     due_cards : int | None
         Flashcards whose review is due as of now, or ``None`` when that count
         could not be read.
-    open_tasks : list[dict]
-        Tasks that are not done, under the same rule the My Day view applies.
-    milestones : list[dict]
-        Milestones with a deadline in the next 7 days.
+    open_tasks : list[dict] | None
+        Tasks that are not done, under the same rule the My Day view applies,
+        or ``None`` when the list could not be read. An empty list renders as
+        no section; ``None`` says so, because an absent section reads as
+        "nothing outstanding".
+    milestones : list[dict] | None
+        Milestones with a deadline in the next 7 days, or ``None`` when the
+        list could not be read.
 
     Returns
     -------

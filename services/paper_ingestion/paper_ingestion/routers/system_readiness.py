@@ -1,4 +1,4 @@
-"""System release-readiness endpoint: GET /api/system/readiness."""
+"""System release-readiness endpoints: readiness reporting and outbox recovery."""
 
 from datetime import UTC, datetime
 from typing import Literal
@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.payload_schema import visibility_checkpoint_progress
+from paper_ingestion.repos.domain_events import requeue_dead_lettered_events
 from paper_ingestion.services.backup_archive import (
     _last_run_succeeded,
     _list_entries,
@@ -385,6 +386,12 @@ async def _vector_visibility_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
         )
 
 
+class OutboxRequeueResponse(BaseModel):
+    """How many dead-lettered events were returned to the delivery queue."""
+
+    requeued: int
+
+
 @router.get(
     "/readiness",
     response_model=ReadinessResponse,
@@ -572,3 +579,21 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
 
     aggregate = max(checks, key=lambda c: _STATUS_RANK[c.status]).status
     return ReadinessResponse(status=aggregate, checks=checks)
+
+
+@router.post(
+    "/outbox/requeue",
+    response_model=OutboxRequeueResponse,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
+@limiter.limit("6/minute")
+async def requeue_outbox_dead_letters(request: Request) -> OutboxRequeueResponse:
+    """Return dead-lettered outbox events to the delivery queue.
+
+    Dead-lettering is otherwise terminal, and an undelivered ``paper.deleted``
+    keeps a deleted paper's Research-private rows retained indefinitely. The
+    readiness report counts these events; without this an operator can see the
+    backlog but has no way to clear it once the outage behind it is fixed.
+    """
+    requeued = await requeue_dead_lettered_events(request.app.state.db_pool)
+    return OutboxRequeueResponse(requeued=requeued)
