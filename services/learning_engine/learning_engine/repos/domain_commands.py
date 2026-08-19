@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Any, Literal
 
 import asyncpg
@@ -105,6 +106,8 @@ async def apply_command(
                 if updated != "UPDATE 1":
                     raise RuntimeError("Learning project is unavailable for this user")
             elif command_type == "journal.upsert":
+                # The payload stays JSON-primitive so the inbox row encodes and a
+                # duplicate delivery compares equal; the day is rebuilt at the bind.
                 await conn.execute(
                     """
                     INSERT INTO journal_entries (user_id, date, prompts, updated_at)
@@ -113,7 +116,7 @@ async def apply_command(
                     DO UPDATE SET prompts = EXCLUDED.prompts, updated_at = NOW()
                     """,
                     user_id,
-                    payload["date"],
+                    date.fromisoformat(payload["date"]),
                     payload["prompts"],
                 )
             else:
