@@ -114,6 +114,9 @@ _SYSTEM_RELATIONS = frozenset(
         "pg_type",
     }
 )
+# Schemas a qualified relation may name: the domain schemas declared in
+# db/ownership-manifest.json plus the pre-migration default.
+_RELATION_SCHEMAS = frozenset({"public", "platform", "research", "learning", "ops"})
 _DATABASE_HELPER_SCRIPTS = frozenset({"scripts/_db.py"})
 _SHELL_DATABASE_CALL_RE = re.compile(
     r"\b(?:createdb|dropdb|pg_dump|pg_restore|psql)\b|"
@@ -267,12 +270,15 @@ def _normalize_relation(name: str) -> str | None:
         return None
     if normalized.startswith(_SYSTEM_RELATION_PREFIXES) or normalized in _SYSTEM_RELATIONS:
         return None
-    if normalized.startswith("public."):
-        normalized = normalized.removeprefix("public.")
-    elif "." in normalized:
-        # The current schema is public-only. Other dotted matches are aliases
-        # such as ``p.published_date`` or ``excluded.column``.
-        return None
+    schema, separator, basename = normalized.partition(".")
+    if separator:
+        if schema not in _RELATION_SCHEMAS:
+            # Remaining dotted matches are query aliases such as
+            # ``p.published_date`` or ``excluded.column``.
+            return None
+        # Ownership stays keyed by the stable relation basename; the manifest's
+        # domain supplies the physical schema.
+        normalized = basename
     return normalized
 
 

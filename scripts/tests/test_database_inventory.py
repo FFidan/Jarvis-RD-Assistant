@@ -10,6 +10,8 @@ from typing import Any
 from jarvis_common.jobs import JOB_HANDLER_OWNER
 
 from scripts.database_inventory import (
+    _RELATION_SCHEMAS,
+    _normalize_relation,
     cross_domain_writes,
     database_caller_scripts,
     inventory_queries,
@@ -50,6 +52,27 @@ def test_schema_qualified_owner_functions_remain_distinct() -> None:
     assert "research.erase_user_data" in functions
     assert "learning.erase_user_data" in functions
     assert "erase_user_data" not in functions
+
+
+def test_schema_qualified_relations_reach_ownership_lookup() -> None:
+    """Relations named with their domain schema are classified; row aliases are not."""
+    manifest = load_manifest(_MANIFEST_PATH)
+
+    assert {domain["schema"] for domain in manifest["domains"].values()} <= _RELATION_SCHEMAS
+    assert _normalize_relation("ops.procrastinate_jobs") == "procrastinate_jobs"
+    assert _normalize_relation("research.papers") == "papers"
+    assert _normalize_relation("public.users") == "users"
+    assert _normalize_relation("excluded.status") is None
+    assert _normalize_relation("p.published_date") is None
+
+    queue_depth_reads = [
+        record
+        for record in inventory_queries(_REPO_ROOT)
+        if record.path.endswith("paper_ingestion/routers/system_readiness.py")
+        and "procrastinate_jobs" in record.relations
+    ]
+    assert queue_depth_reads
+    assert all("procrastinate_events" in record.relations for record in queue_depth_reads)
 
 
 def test_retained_migration_fingerprints_match_files() -> None:
