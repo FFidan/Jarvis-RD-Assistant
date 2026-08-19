@@ -117,8 +117,8 @@ def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("💾 Save", callback_data=f"paper:save:{paper_id}"),
-                InlineKeyboardButton("🗑 Trash", callback_data=f"paper:trash:{paper_id}"),
+                InlineKeyboardButton(_SAVE_VERB, callback_data=f"paper:save:{paper_id}"),
+                InlineKeyboardButton(_TRASH_VERB, callback_data=f"paper:trash:{paper_id}"),
                 InlineKeyboardButton("🗑+👎", callback_data=f"paper:trash_reject:{paper_id}"),
             ],
             [
@@ -128,7 +128,7 @@ def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "👎", callback_data=f"paper:feedback_neg:{paper_id}:pulse_thumbs"
                 ),
-                InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}"),
+                InlineKeyboardButton(_READ_MORE_VERB, callback_data=f"paper_detail_{paper_id}"),
             ],
         ]
     )

@@ -1370,6 +1370,19 @@ async def test_next_command_reports_a_deck_the_user_finished():
     assert 'href="https://jarvis.example.test/pulse"' in text
 
 
+def _capture_scheduled(context) -> list:
+    """Collect coroutines the handler schedules instead of awaiting inline.
+
+    /pulse_now must not await a multi-minute job inside the update handler:
+    this application processes updates one at a time, so doing so would stop
+    the bot answering anyone. Capturing the scheduled coroutine lets a test
+    assert both that property and what the detached work eventually does.
+    """
+    scheduled: list = []
+    context.application.create_task = scheduled.append
+    return scheduled
+
+
 @pytest.mark.asyncio
 async def test_pulse_now_command_delivers_the_deck_once_the_job_succeeds(monkeypatch):
     """/pulse_now waits for the job it started, then uses the scheduled delivery path."""
@@ -1383,9 +1396,14 @@ async def test_pulse_now_command_delivers_the_deck_once_the_job_succeeds(monkeyp
     ]
     deliver = AsyncMock()
     monkeypatch.setattr(system_commands, "deliver_pulse_to_chat", deliver)
+    scheduled = _capture_scheduled(context)
 
     with _paired_auth_patch(7):
         await pulse_now_command(update, context)
+
+    assert mock_http.get.await_count == 0, "the handler must not poll the job inline"
+    assert len(scheduled) == 1
+    await scheduled[0]
 
     assert mock_http.get.await_count == 2
     deliver.assert_awaited_once()
@@ -1404,13 +1422,18 @@ async def test_pulse_now_command_reports_a_job_that_outlives_the_wait(monkeypatc
     mock_http.get.return_value = make_http_response({"job_id": "job-1", "status": "running"})
     deliver = AsyncMock()
     monkeypatch.setattr(system_commands, "deliver_pulse_to_chat", deliver)
+    context.bot.send_message = AsyncMock()
+    scheduled = _capture_scheduled(context)
 
     with _paired_auth_patch(7):
         await pulse_now_command(update, context)
 
+    assert len(scheduled) == 1
+    await scheduled[0]
+
     deliver.assert_not_awaited()
-    replies = [call.args[0] for call in update.message.reply_text.await_args_list]
-    assert "still generating" in replies[-1]
+    sent = [call.kwargs["text"] for call in context.bot.send_message.await_args_list]
+    assert "still generating" in sent[-1]
 
 
 @pytest.mark.asyncio

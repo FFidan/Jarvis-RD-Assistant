@@ -305,7 +305,9 @@ async def _resolve_session(pool: Any, session_id: str) -> _ResolvedSession | Non
                 renewed=renewed,
             )
     except Exception:  # noqa: BLE001 — middleware must never raise
-        logger.debug("session lookup failed (non-fatal)", exc_info=True)
+        # Every signed-in caller degrades to anonymous when this fires, so it is
+        # reported at a level an operator sees rather than left to debug logs.
+        logger.warning("session lookup failed; requests degrade to anonymous", exc_info=True)
         return None
 
 

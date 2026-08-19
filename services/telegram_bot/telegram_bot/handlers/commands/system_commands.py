@@ -8,7 +8,8 @@ import math
 from collections.abc import Awaitable, Callable
 
 import httpx
-from telegram import Update
+from jarvis_common.config_validators import TIMER_DEFAULTS
+from telegram import Bot, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot import platform_client, services_client
@@ -32,8 +33,9 @@ logger = logging.getLogger(__name__)
 _MAX_FOCUS_MINUTES = 480  # 8 hours — prevents resource exhaustion
 
 #: Focus length used when the user's saved preference cannot be read. It is the
-#: web app's own default, and the reply always says the substitution happened.
-_FALLBACK_FOCUS_MINUTES = 25
+#: shared default the web app also starts from, and the reply always says the
+#: substitution happened.
+_FALLBACK_FOCUS_MINUTES: int = TIMER_DEFAULTS["workMinutes"]
 
 #: Sub-commands that act on an already-open focus interval.
 _FOCUS_TRANSITIONS = frozenset({"pause", "resume", "stop"})
@@ -143,24 +145,63 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parse_mode="HTML",
     )
 
-    status = await _await_pulse_job(http, config, jarvis_user_id, job.job_id)
-    if status is None:
-        await update.message.reply_text(
-            "Pulse is still generating. Run /next in a few minutes to read the new deck.",
-            parse_mode="HTML",
-        )
-        return
-    if status.status != "succeeded":
-        await update.message.reply_text(
-            "Pulse generation did not finish. Try /pulse_now again later.",
-            parse_mode="HTML",
-        )
-        return
-
     chat = update.effective_chat
     if chat is None:
         return
-    await deliver_pulse_to_chat(http, context.bot, config, chat.id, jarvis_user_id)
+    # The wait runs detached: this application processes updates one at a time,
+    # so awaiting a multi-minute job here would stop the bot answering anyone.
+    context.application.create_task(
+        _deliver_pulse_when_ready(http, context.bot, config, chat.id, jarvis_user_id, job.job_id)
+    )
+
+
+async def _deliver_pulse_when_ready(
+    http: httpx.AsyncClient,
+    bot: Bot,
+    config: BotConfig,
+    chat_id: int,
+    user_id: int,
+    job_id: str,
+) -> None:
+    """Follow one generation job to its end and deliver or explain the outcome.
+
+    Parameters
+    ----------
+    http : httpx.AsyncClient
+        Client carrying the paired-user marker.
+    bot : Bot
+        Bot used to send the follow-up, since the originating update is done.
+    config : BotConfig
+        Bot configuration.
+    chat_id : int
+        Chat that asked for the deck.
+    user_id : int
+        Paired JARVIS user the job belongs to.
+    job_id : str
+        Identifier the generation request returned.
+
+    Notes
+    -----
+    Runs detached from the command handler, so every failure is reported to the
+    chat rather than raised into the update loop.
+    """
+    try:
+        status = await _await_pulse_job(http, config, user_id, job_id)
+        if status is None:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Pulse is still generating. Run /next in a few minutes to read the new deck.",
+            )
+            return
+        if status.status != "succeeded":
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Pulse generation did not finish. Try /pulse_now again later.",
+            )
+            return
+        await deliver_pulse_to_chat(http, bot, config, chat_id, user_id)
+    except Exception:
+        logger.exception("Failed to deliver a generated Pulse deck")
 
 
 async def _await_pulse_job(

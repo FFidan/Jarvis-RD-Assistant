@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, status
+from jarvis_common.config_validators import TIMER_DEFAULTS, TIMER_RANGES
 from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.event_log import log_event
 from jarvis_common.identity_assertions import IdentityAssertionSigner
@@ -30,14 +31,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal/telegram", tags=["internal", "telegram"])
 
-#: Accepted range for the saved focus length, matching the shared ``ui.timer``
-#: validator so Platform never hands Telegram a value the web app would reject.
-_WORK_MINUTES_RANGE = (15, 60)
-_TARGET_CYCLES_RANGE = (2, 8)
-
-#: Values the web app applies when a user has never saved a timer preference.
-_DEFAULT_WORK_MINUTES = 25
-_DEFAULT_TARGET_CYCLES = 4
+#: The focus-timer contract comes from the shared validator, so Platform can
+#: never hand Telegram a value the web app would reject.
+_WORK_MINUTES_RANGE = TIMER_RANGES["workMinutes"]
+_TARGET_CYCLES_RANGE = TIMER_RANGES["targetCycles"]
+_DEFAULT_WORK_MINUTES = TIMER_DEFAULTS["workMinutes"]
+_DEFAULT_TARGET_CYCLES = TIMER_DEFAULTS["targetCycles"]
 
 type TelegramPrincipal = Annotated[
     ServicePrincipal,

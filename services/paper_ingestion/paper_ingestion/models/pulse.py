@@ -49,10 +49,14 @@ class PulseGenerateResponse(BaseModel):
 
 
 class PulseGenerateStatusResponse(BaseModel):
-    """Progress of one Pulse generation job for GET /api/pulse/generate/{job_id}."""
+    """Progress of one Pulse generation job for GET /api/pulse/generate/{job_id}.
+
+    ``status`` carries the normalized job vocabulary, not the raw queue state:
+    every queue status maps into these five before it leaves the job store.
+    """
 
     job_id: str
-    status: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
 
 class PulseStatsResponse(BaseModel):

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
 import asyncpg
+
+logger = logging.getLogger(__name__)
 
 
 class ErasureState(StrEnum):
@@ -88,6 +91,8 @@ async def create_or_get_request(conn: asyncpg.Connection, user_id: int) -> uuid.
         "SELECT platform.request_erasure_v1($1)",
         user_id,
     )
+    if request_id is None:
+        raise LookupError(f"user {user_id} is not disabled, so erasure cannot be requested")
     return uuid.UUID(str(request_id))
 
 
@@ -128,6 +133,10 @@ async def begin_destructive_phases(pool: asyncpg.Pool, request_id: uuid.UUID) ->
                 raise LookupError(f"erasure request {request_id} does not exist") from exc
             if "restore grace" in message:
                 raise ValueError("account erasure is still inside the restore grace") from exc
+            # Anything else is the capability refusing for a reason this caller
+            # does not model — a denied role, say. Record what it said before
+            # narrowing it, or the operator sees only the fallback wording.
+            logger.warning("erasure phase change was refused: %s", message)
             raise RuntimeError("erasure account is no longer disabled") from exc
         return ErasureRequest(
             request_id=request_id,

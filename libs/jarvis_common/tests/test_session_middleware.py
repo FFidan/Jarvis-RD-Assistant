@@ -418,3 +418,45 @@ def test_session_cookie_kwargs_expires_matches_max_age():
 
 
 __all__ = []
+
+
+def _signing_out_test_client(pool: AsyncMock) -> TestClient:
+    """Return a client whose route clears the session cookie, as sign-out does."""
+    app = FastAPI()
+    app.state.db_pool = pool
+    app.add_middleware(SessionMiddleware)
+
+    @app.post("/sign-out")
+    async def sign_out() -> Response:
+        response = Response(status_code=204)
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return response
+
+    return TestClient(app)
+
+
+def test_middleware_does_not_renew_a_session_the_handler_cleared(mock_pool):
+    """Signing out ends the session even when the request was renewal-eligible.
+
+    The rolling refresh is attached to responses that arrived with a live
+    session, which is exactly the state a sign-out request is in. If it were
+    appended here it would be the last Set-Cookie the browser saw, and the
+    session would survive the sign-out.
+    """
+    pool, _ = mock_pool
+    future = datetime.now(UTC) + timedelta(days=20)
+    _wire_conn(pool, row=_row(future), renewed="session-id")
+
+    client = _signing_out_test_client(pool)
+    client.cookies.set(SESSION_COOKIE_NAME, "session-id")
+    result = client.post("/sign-out")
+
+    session_cookies = [
+        value
+        for key, value in result.headers.items()
+        if key.lower() == "set-cookie" and value.startswith(f"{SESSION_COOKIE_NAME}=")
+    ]
+    assert session_cookies, "sign-out must emit a session cookie header"
+    assert not any("Max-Age=2592000" in cookie for cookie in session_cookies), (
+        f"sign-out must not be handed a renewed session cookie; got {session_cookies}"
+    )

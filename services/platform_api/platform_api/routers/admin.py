@@ -713,6 +713,12 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
                     user_id,
                 )
             except asyncpg.RaiseError as exc:
+                if "erasure has already started" not in str(exc):
+                    logger.warning("account restore was refused: %s", exc)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="The account could not be restored; check the service logs",
+                    ) from exc
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Account erasure has already started and cannot be restored",

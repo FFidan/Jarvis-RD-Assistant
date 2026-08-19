@@ -362,12 +362,28 @@ _APPEARANCE_VALUES = {
     "type": frozenset({"serif-calm", "sans-modern", "editorial", "legacy"}),
     "density": frozenset({"comfortable", "default", "compact"}),
 }
-_TIMER_RANGES = {
+#: Accepted range for each ``ui.timer`` field. This is the one definition of the
+#: focus-timer contract: the web app writes these preferences, the validator
+#: below rejects anything outside them, and Platform serves them to the Telegram
+#: bot, so all three agree by construction.
+TIMER_RANGES: dict[str, tuple[int, int]] = {
     "workMinutes": (15, 60),
     "shortBreakMinutes": (3, 15),
     "longBreakMinutes": (10, 30),
     "targetCycles": (2, 8),
 }
+
+#: Values applied when a reader has never saved a timer preference. They mirror
+#: the web app's initial store state, so a session started from any surface is
+#: the same length.
+TIMER_DEFAULTS: dict[str, int] = {
+    "workMinutes": 25,
+    "shortBreakMinutes": 5,
+    "longBreakMinutes": 15,
+    "targetCycles": 4,
+}
+
+_TIMER_RANGES = TIMER_RANGES
 
 
 def _validate_ui_appearance(value: Any) -> None:
