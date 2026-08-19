@@ -13,7 +13,7 @@ import asyncpg
 import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
 from jarvis_common.identity_assertions import (
@@ -39,12 +39,19 @@ from platform_api.auth_cookie_relay import AuthCookieRelayMiddleware
 from platform_api.config import PlatformSettings
 from platform_api.deps import (
     authenticate_service_principal,
-    get_configured_api_key,
     get_db_pool,
     get_identity_signer,
     get_service_principal_tokens,
+    verify_platform_request,
 )
-from platform_api.routers import configuration, internal_auth, internal_telegram, providers, system
+from platform_api.routers import (
+    configuration,
+    internal_auth,
+    internal_services,
+    internal_telegram,
+    providers,
+    system,
+)
 from platform_api.service_principals import ServicePrincipalTokens
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -109,9 +116,14 @@ def _build_client(
     def settings_override() -> PlatformSettings:
         return PlatformSettings()
 
-    app.dependency_overrides[get_identity_signer] = signer_override
-    app.dependency_overrides[get_configured_api_key] = api_key_override
-    app.dependency_overrides[internal_auth.get_platform_settings] = settings_override
+    async def runtime_override() -> internal_auth._AuthorizationRuntime:
+        return internal_auth._AuthorizationRuntime(
+            signer=signer_override(),
+            configured_api_key=api_key_override(),
+            settings=settings_override(),
+        )
+
+    app.dependency_overrides[internal_auth._authorization_runtime] = runtime_override
 
     app.add_middleware(
         _IdentityStateMiddleware,
@@ -251,6 +263,43 @@ def test_api_key_subrequest_has_no_user_identity() -> None:
     assert claims.principal == "api-key"
     assert claims.user_id is None
     assert claims.session_id is None
+
+
+def test_application_auth_defers_only_to_gateway_route_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gateway route replaces, rather than duplicates, the app-wide check."""
+    general_auth = AsyncMock()
+    monkeypatch.setattr("platform_api.deps.verify_api_key", general_auth)
+    private_key = Ed25519PrivateKey.generate()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="current",
+        signing_key=private_key,
+    )
+    app = FastAPI(dependencies=[Depends(verify_platform_request)])
+    app.include_router(internal_auth.router)
+    app.dependency_overrides[internal_auth._authorization_runtime] = lambda: (
+        internal_auth._AuthorizationRuntime(
+            signer=signer,
+            configured_api_key="operator-key",
+            settings=PlatformSettings(),
+        )
+    )
+    app.add_middleware(
+        _IdentityStateMiddleware,
+        raw_peer="127.0.0.1",
+        include_session=False,
+    )
+
+    response = TestClient(app).get(
+        "/internal/authorize",
+        headers={**_authorization_headers(), "X-API-Key": "operator-key"},
+    )
+
+    assert response.status_code == 204
+    assert "X-Jarvis-Identity" in response.headers
+    general_auth.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -432,6 +481,56 @@ def test_internal_telegram_service_credentials_are_scoped(
     )
 
     assert response.status_code == expected_status
+
+
+def test_platform_application_auth_accepts_only_dedicated_internal_credentials() -> None:
+    """The app-level dependency defers exact internal routes to service auth."""
+    pool, _ = make_pool_and_conn(fetchrow_return=None, direct_methods=True)
+    app = FastAPI(dependencies=[Depends(verify_platform_request)])
+    app.include_router(internal_services.router)
+    app.state.service_principal_tokens = ServicePrincipalTokens(
+        telegram="telegram-token",
+        research="research-token",
+        learning="learning-token",
+    )
+    app.dependency_overrides[get_db_pool] = lambda: cast(asyncpg.Pool, pool)
+
+    @app.get("/internal/services/unlisted")
+    async def unlisted_internal_route() -> dict[str, bool]:
+        return {"accepted": True}
+
+    client = TestClient(app)
+    body = {"roles": ["smart"], "pending": False}
+
+    accepted = client.post(
+        "/internal/services/research-config-effects",
+        headers={
+            "X-Jarvis-Service-Principal": "research",
+            "X-Jarvis-Service-Token": "research-token",
+        },
+        json=body,
+    )
+    missing = client.post("/internal/services/research-config-effects", json=body)
+    foreign = client.post(
+        "/internal/services/research-config-effects",
+        headers={
+            "X-Jarvis-Service-Principal": "learning",
+            "X-Jarvis-Service-Token": "learning-token",
+        },
+        json=body,
+    )
+    unlisted = client.get(
+        "/internal/services/unlisted",
+        headers={
+            "X-Jarvis-Service-Principal": "research",
+            "X-Jarvis-Service-Token": "research-token",
+        },
+    )
+
+    assert accepted.status_code == 204
+    assert missing.status_code == 401
+    assert foreign.status_code == 403
+    assert unlisted.status_code in {401, 403}
 
 
 def test_internal_telegram_pairing_reports_invalid_code_without_mutation() -> None:

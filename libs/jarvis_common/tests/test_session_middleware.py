@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from jarvis_common.session_middleware import (
     SESSION_COOKIE_NAME,
     SESSION_TTL,
@@ -235,7 +238,7 @@ def _wire_conn(pool, *, row, renewed=None):
 
 @pytest.mark.asyncio
 async def test_active_session_renews_and_marks_state(mock_pool):
-    """An active, renewable session runs the UPDATE and flags session_renewed."""
+    """An active session resolves and renews through one acquired connection."""
     pool, request = mock_pool
     future = datetime.now(UTC) + timedelta(days=20)
     conn = _wire_conn(pool, row=_row(future), renewed="session-id")
@@ -243,34 +246,64 @@ async def test_active_session_renews_and_marks_state(mock_pool):
     await _populate_state_from_cookie(request, "session-id")
 
     assert request.state.user_id == 42
+    assert pool.acquire.call_count == 1
     conn.fetchval.assert_awaited_once()
     assert request.state.session_renewed == "session-id"
 
 
 @pytest.mark.asyncio
+async def test_concurrent_requests_share_only_the_overlapping_session_lookup(mock_pool):
+    """Concurrent requests share one lookup without retaining a completed result."""
+    pool, request = mock_pool
+    near_full = datetime.now(UTC) + timedelta(days=30) - timedelta(hours=1)
+    conn = _wire_conn(pool, row=_row(near_full), renewed=None)
+    requests = [request]
+    for _ in range(9):
+        peer = MagicMock()
+        peer.state = MockState()
+        peer.cookies = {}
+        peer.app.state.db_pool = pool
+        requests.append(peer)
+
+    await asyncio.gather(*(_populate_state_from_cookie(peer, "session-id") for peer in requests))
+
+    assert pool.acquire.call_count == 1
+    conn.fetchrow.assert_awaited_once()
+    assert all(peer.state.user_id == 42 for peer in requests)
+
+    later = MagicMock()
+    later.state = MockState()
+    later.cookies = {}
+    later.app.state.db_pool = pool
+    await _populate_state_from_cookie(later, "session-id")
+    assert pool.acquire.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_grace_expired_resolves_but_does_not_renew(mock_pool):
-    """A grace-expired session resolves identity but the predicate blocks renewal."""
+    """A grace-expired session resolves identity without a renewal query."""
     pool, request = mock_pool
     expired = datetime.now(UTC) - timedelta(hours=12)  # within SESSION_GRACE
-    _wire_conn(pool, row=_row(expired), renewed=None)  # predicate matches no row
+    conn = _wire_conn(pool, row=_row(expired), renewed=None)
 
     await _populate_state_from_cookie(request, "session-id")
 
     assert request.state.user_id == 42
+    conn.fetchval.assert_not_awaited()
     assert not hasattr(request.state, "session_renewed")
 
 
 @pytest.mark.asyncio
 async def test_recently_renewed_session_is_throttled(mock_pool):
-    """A session already close to full TTL (renewed today) is not written again."""
+    """A recently renewed session skips the database renewal query."""
     pool, request = mock_pool
     near_full = datetime.now(UTC) + timedelta(days=30) - timedelta(hours=1)
-    conn = _wire_conn(pool, row=_row(near_full), renewed=None)  # throttle → no row
+    conn = _wire_conn(pool, row=_row(near_full), renewed=None)
 
     await _populate_state_from_cookie(request, "session-id")
 
     assert request.state.user_id == 42
-    conn.fetchval.assert_awaited_once()
+    conn.fetchval.assert_not_awaited()
     assert not hasattr(request.state, "session_renewed")
 
 
@@ -288,19 +321,28 @@ async def test_revoked_session_never_resolves_or_renews(mock_pool):
     assert not hasattr(request.state, "session_renewed")
 
 
-@pytest.mark.asyncio
-async def test_dispatch_refreshes_cookie_when_session_renewed(mock_pool):
-    """dispatch re-issues the session cookie (same id, 30-day Max-Age) after renewal."""
-    pool, request = mock_pool
-    request.cookies = {SESSION_COOKIE_NAME: "session-id"}
+def _session_test_client(pool: AsyncMock) -> TestClient:
+    """Return a real ASGI client backed by the supplied session pool."""
+    app = FastAPI()
+    app.state.db_pool = pool
+    app.add_middleware(SessionMiddleware)
+
+    @app.get("/ping")
+    async def ping() -> Response:
+        return Response(status_code=204)
+
+    return TestClient(app)
+
+
+def test_middleware_refreshes_cookie_when_session_renewed(mock_pool):
+    """The ASGI middleware reissues a renewed session cookie."""
+    pool, _ = mock_pool
     future = datetime.now(UTC) + timedelta(days=20)
     _wire_conn(pool, row=_row(future), renewed="session-id")
 
-    response = Response()
-    call_next = AsyncMock(return_value=response)
-    middleware = SessionMiddleware(MagicMock())
-
-    result = await middleware.dispatch(request, call_next)
+    client = _session_test_client(pool)
+    client.cookies.set(SESSION_COOKIE_NAME, "session-id")
+    result = client.get("/ping")
 
     set_cookie = result.headers.get("set-cookie")
     assert set_cookie is not None
@@ -323,19 +365,15 @@ async def test_dispatch_refreshes_cookie_when_session_renewed(mock_pool):
     )
 
 
-@pytest.mark.asyncio
-async def test_dispatch_leaves_cookie_untouched_when_not_renewed(mock_pool):
-    """dispatch sets no cookie when the session was resolved but not renewed."""
-    pool, request = mock_pool
-    request.cookies = {SESSION_COOKIE_NAME: "session-id"}
+def test_middleware_leaves_cookie_untouched_when_not_renewed(mock_pool):
+    """The ASGI middleware sets no cookie for a recently renewed session."""
+    pool, _ = mock_pool
     near_full = datetime.now(UTC) + timedelta(days=30) - timedelta(hours=1)
     _wire_conn(pool, row=_row(near_full), renewed=None)
 
-    response = Response()
-    call_next = AsyncMock(return_value=response)
-    middleware = SessionMiddleware(MagicMock())
-
-    result = await middleware.dispatch(request, call_next)
+    client = _session_test_client(pool)
+    client.cookies.set(SESSION_COOKIE_NAME, "session-id")
+    result = client.get("/ping")
 
     assert result.headers.get("set-cookie") is None
 

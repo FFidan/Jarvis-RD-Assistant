@@ -40,7 +40,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
+from slowapi.middleware import SlowAPIASGIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -588,7 +588,7 @@ def configure_middleware_and_errors(
     # 2. SlowAPIMiddleware -- pre-auth global cap.
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]
-    app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(SlowAPIASGIMiddleware)
 
     # 3. CORSMiddleware
     if cors_origins is None:

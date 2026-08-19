@@ -12,7 +12,6 @@ from jarvis_common import (
     configure_middleware_and_errors,
     maybe_init_sentry,
     register_health_routes,
-    verify_api_key,
 )
 from jarvis_common.health import make_postgres_probe
 from jarvis_common.identity_keys import load_identity_signer
@@ -22,7 +21,7 @@ from jarvis_common.version import app_version
 
 from platform_api.auth_cookie_relay import AuthCookieRelayMiddleware
 from platform_api.config import get_platform_settings
-from platform_api.deps import limiter
+from platform_api.deps import limiter, verify_platform_request
 from platform_api.routers import (
     account,
     admin,
@@ -110,7 +109,7 @@ app = FastAPI(
     description="Identity, configuration, pairing, and operator controls",
     version=app_version(),
     lifespan=configure_lifespan(_lifespan_config),
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_platform_request)],
 )
 
 configure_middleware_and_errors(
@@ -121,22 +120,25 @@ configure_middleware_and_errors(
 app.add_middleware(SessionMiddleware)
 app.add_middleware(AuthCookieRelayMiddleware)
 
-app.include_router(internal_auth.router)
-app.include_router(internal_services.router)
-app.include_router(erasure.router)
-app.include_router(internal_telegram.router)
-app.include_router(jobs.router)
-app.include_router(configuration.router)
-app.include_router(logs.router)
-app.include_router(providers.router)
-app.include_router(auth.router)
-app.include_router(auth_passkeys.router)
-app.include_router(admin.router)
-app.include_router(audit_admin.router)
-app.include_router(setup.router)
-app.include_router(system.router)
-app.include_router(telegram.router)
-app.include_router(account.router)
+for platform_router in (
+    internal_auth.router,
+    internal_services.router,
+    erasure.router,
+    internal_telegram.router,
+    jobs.router,
+    configuration.router,
+    logs.router,
+    providers.router,
+    auth.router,
+    auth_passkeys.router,
+    admin.router,
+    audit_admin.router,
+    setup.router,
+    system.router,
+    telegram.router,
+    account.router,
+):
+    app.include_router(platform_router)
 
 register_health_routes(
     app,

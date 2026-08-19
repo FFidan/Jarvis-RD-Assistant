@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -16,6 +17,46 @@ from platform_api.deps import get_configured_api_key, get_identity_signer
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
+async def _platform_settings_dependency() -> PlatformSettings:
+    """Return cached Platform settings without a thread-pool handoff.
+
+    Returns
+    -------
+    PlatformSettings
+        Process-wide gateway and identity configuration.
+    """
+    return get_platform_settings()
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthorizationRuntime:
+    """Cached process dependencies required to mint one assertion."""
+
+    signer: IdentityAssertionSigner
+    configured_api_key: str
+    settings: PlatformSettings
+
+
+async def _authorization_runtime(request: Request) -> _AuthorizationRuntime:
+    """Resolve non-blocking authorization dependencies in one task.
+
+    Parameters
+    ----------
+    request : Request
+        Request whose application state owns the signing key.
+
+    Returns
+    -------
+    _AuthorizationRuntime
+        Signer, operations key, and cached gateway settings.
+    """
+    return _AuthorizationRuntime(
+        signer=await get_identity_signer(request),
+        configured_api_key=await get_configured_api_key(),
+        settings=await _platform_settings_dependency(),
+    )
+
+
 @router.get("/authorize", status_code=status.HTTP_204_NO_CONTENT)
 async def authorize_backend_request(  # noqa: PLR0913 - exact gateway headers and dependencies
     request: Request,
@@ -23,10 +64,8 @@ async def authorize_backend_request(  # noqa: PLR0913 - exact gateway headers an
     original_method: Annotated[str, Header(alias="X-Jarvis-Original-Method")],
     original_path: Annotated[str, Header(alias="X-Jarvis-Original-Path")],
     request_id: Annotated[str, Header(alias="X-Request-Id")],
+    runtime: Annotated[_AuthorizationRuntime, Depends(_authorization_runtime)],
     api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
-    signer: IdentityAssertionSigner = Depends(get_identity_signer),
-    configured_api_key: str = Depends(get_configured_api_key),
-    settings: PlatformSettings = Depends(get_platform_settings),
 ) -> Response:
     """Authorize one gateway request and return a signed backend identity.
 
@@ -45,12 +84,8 @@ async def authorize_backend_request(  # noqa: PLR0913 - exact gateway headers an
         Gateway request identifier to bind into the assertion.
     api_key : str or None, optional
         Operations API key when the request does not carry a browser session.
-    signer : IdentityAssertionSigner
-        Platform-only signing dependency.
-    configured_api_key : str
-        Deployment API key used for constant-time comparison.
-    settings : PlatformSettings
-        Gateway peer and issuer configuration.
+    runtime : _AuthorizationRuntime
+        Cached signer, operations key, and gateway configuration.
 
     Returns
     -------
@@ -63,7 +98,7 @@ async def authorize_backend_request(  # noqa: PLR0913 - exact gateway headers an
         With status 400 for an unsupported backend route, 401 when no accepted
         identity is present, or 403 when the raw caller is not the gateway.
     """
-    if not _gateway_peer_allowed(request, settings):
+    if not _gateway_peer_allowed(request, runtime.settings):
         raise HTTPException(status_code=403, detail="Gateway authorization is forbidden")
 
     method = original_method
@@ -82,7 +117,7 @@ async def authorize_backend_request(  # noqa: PLR0913 - exact gateway headers an
     if isinstance(user_id, int) and not isinstance(user_id, bool) and isinstance(session_id, str):
         principal = "browser"
         subject = f"user:{user_id}"
-    elif configured_api_key and api_key_matches(api_key, configured_api_key):
+    elif runtime.configured_api_key and api_key_matches(api_key, runtime.configured_api_key):
         principal = "api-key"
         subject = "operator-api-key"
         user_id = None
@@ -91,7 +126,7 @@ async def authorize_backend_request(  # noqa: PLR0913 - exact gateway headers an
     else:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    assertion = signer.issue(
+    assertion = runtime.signer.issue(
         audience=audience,
         subject=subject,
         principal=principal,
