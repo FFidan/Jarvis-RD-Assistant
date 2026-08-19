@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import httpx
 from jarvis_common.config_validators import TIMER_DEFAULTS
@@ -151,34 +152,38 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # The wait runs detached: this application processes updates one at a time,
     # so awaiting a multi-minute job here would stop the bot answering anyone.
     context.application.create_task(
-        _deliver_pulse_when_ready(http, context.bot, config, chat.id, jarvis_user_id, job.job_id)
+        _deliver_pulse_when_ready(
+            _PulseDelivery(
+                http=http,
+                bot=context.bot,
+                config=config,
+                chat_id=chat.id,
+                user_id=jarvis_user_id,
+                job_id=job.job_id,
+            )
+        )
     )
 
 
-async def _deliver_pulse_when_ready(
-    http: httpx.AsyncClient,
-    bot: Bot,
-    config: BotConfig,
-    chat_id: int,
-    user_id: int,
-    job_id: str,
-) -> None:
+@dataclass(frozen=True, slots=True)
+class _PulseDelivery:
+    """Everything the detached deck delivery needs after its command returned."""
+
+    http: httpx.AsyncClient
+    bot: Bot
+    config: BotConfig
+    chat_id: int
+    user_id: int
+    job_id: str
+
+
+async def _deliver_pulse_when_ready(delivery: _PulseDelivery) -> None:
     """Follow one generation job to its end and deliver or explain the outcome.
 
     Parameters
     ----------
-    http : httpx.AsyncClient
-        Client carrying the paired-user marker.
-    bot : Bot
-        Bot used to send the follow-up, since the originating update is done.
-    config : BotConfig
-        Bot configuration.
-    chat_id : int
-        Chat that asked for the deck.
-    user_id : int
-        Paired JARVIS user the job belongs to.
-    job_id : str
-        Identifier the generation request returned.
+    delivery : _PulseDelivery
+        Client, bot, chat, reader and job this delivery belongs to.
 
     Notes
     -----
@@ -186,20 +191,24 @@ async def _deliver_pulse_when_ready(
     chat rather than raised into the update loop.
     """
     try:
-        status = await _await_pulse_job(http, config, user_id, job_id)
+        status = await _await_pulse_job(
+            delivery.http, delivery.config, delivery.user_id, delivery.job_id
+        )
         if status is None:
-            await bot.send_message(
-                chat_id=chat_id,
+            await delivery.bot.send_message(
+                chat_id=delivery.chat_id,
                 text="Pulse is still generating. Run /next in a few minutes to read the new deck.",
             )
             return
         if status.status != "succeeded":
-            await bot.send_message(
-                chat_id=chat_id,
+            await delivery.bot.send_message(
+                chat_id=delivery.chat_id,
                 text="Pulse generation did not finish. Try /pulse_now again later.",
             )
             return
-        await deliver_pulse_to_chat(http, bot, config, chat_id, user_id)
+        await deliver_pulse_to_chat(
+            delivery.http, delivery.bot, delivery.config, delivery.chat_id, delivery.user_id
+        )
     except Exception:
         logger.exception("Failed to deliver a generated Pulse deck")
 
