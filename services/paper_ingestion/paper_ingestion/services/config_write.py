@@ -397,7 +397,7 @@ async def _apply_schedules(
 
     if key == "automation.fetch_interval_hours":
         try:
-            apply_fetch_interval(scheduler=runtime.scheduler, hours=max(int(value), 1))
+            apply_fetch_interval(scheduler=runtime.scheduler, hours=value)
         except Exception as exc:
             logger.warning(
                 "fetch_interval scheduler apply failed (value saved): %s", exc, exc_info=True

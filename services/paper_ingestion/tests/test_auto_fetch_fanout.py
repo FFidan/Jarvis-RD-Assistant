@@ -55,6 +55,8 @@ async def test_run_auto_pipeline_fans_out_per_topic(monkeypatch):
             [],  # to_process
         ]
     )
+    # No saved interval row -- the guard falls back to the env default above.
+    conn.fetchrow = AsyncMock(return_value=None)
 
     pool = MagicMock()
     ctx = MagicMock()
@@ -127,6 +129,8 @@ async def test_run_auto_pipeline_threads_configured_query_terms(monkeypatch):
             [],  # to_process
         ]
     )
+    # No saved interval row -- the guard falls back to the env default above.
+    conn.fetchrow = AsyncMock(return_value=None)
 
     pool = MagicMock()
     ctx = MagicMock()
@@ -201,6 +205,8 @@ async def test_run_auto_pipeline_end_to_end_with_subscriber(monkeypatch):
             [],  # to_process
         ]
     )
+    # No saved interval row -- the guard falls back to the env default above.
+    conn.fetchrow = AsyncMock(return_value=None)
 
     pool = MagicMock()
     ctx = MagicMock()
@@ -272,6 +278,8 @@ async def test_discover_and_save_polls_fetch_new_since_per_topic(monkeypatch):
             [],  # to_process
         ]
     )
+    # No saved interval row -- the guard falls back to the env default above.
+    conn.fetchrow = AsyncMock(return_value=None)
 
     pool = MagicMock()
     ctx = MagicMock()

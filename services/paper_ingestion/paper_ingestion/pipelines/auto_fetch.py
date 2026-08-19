@@ -53,6 +53,12 @@ _DISCOVERY_TOPICS_SQL = "SELECT id, name, query_terms FROM topics"
 # down is lost; this stamp is what lets the next boot notice and catch up.
 AUTO_PIPELINE_LAST_RUN_KEY = "scheduler.auto_pipeline.last_run"
 
+# System-scoped ``user_config`` key holding the auto-fetch interval in hours.
+# This is the row the Settings UI writes, and it is what decides whether the
+# pipeline runs; AUTO_FETCH_INTERVAL_HOURS only seeds a deployment that has
+# never saved one.
+AUTO_FETCH_INTERVAL_KEY = "automation.fetch_interval_hours"
+
 _LAST_RUN_UPSERT_SQL = "SELECT platform.set_research_config_v1(NULL, $1, $2::jsonb, 'upsert')"
 
 
@@ -348,20 +354,46 @@ async def _process_pending_papers(app, db_pool, sem) -> None:
                 logger.warning("auto_pipeline: process task failed: %s", r, exc_info=r)
 
 
+async def resolve_auto_fetch_interval_hours(db_pool: Any) -> float:
+    """Return the effective auto-fetch interval in hours; ``0`` disables fetching.
+
+    The saved ``user_config`` row wins, so a value entered in Settings takes
+    effect without an environment variable. ``AUTO_FETCH_INTERVAL_HOURS`` is
+    the bootstrap default and applies only while no row exists: a missing row,
+    an unreadable database, or a value that is not a number all fall back to
+    it, so a damaged row cannot silently change a configured cadence.
+    """
+    env_hours = get_paper_ingestion_settings().auto_fetch_interval_hours
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+                AUTO_FETCH_INTERVAL_KEY,
+            )
+    except Exception:
+        logger.exception("auto_pipeline: failed to read the saved fetch interval")
+        return env_hours
+    # asyncpg JSONB auto-decodes (init_pg_connection), so a saved 6 arrives as int.
+    value = row["value"] if row is not None else None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return env_hours
+    return float(value)
+
+
 async def run_auto_pipeline(app) -> None:
     """Fetch new papers from enabled sources, download PDFs, and process them.
 
-    Self-gates when ``AUTO_FETCH_INTERVAL_HOURS`` is 0 (or unset), which
-    happens when the scheduler is running but the user has disabled auto-fetch.
+    Self-gates when the effective interval is 0, which is what a deployment
+    whose users have never enabled automatic fetching looks like.
     """
     if skip_for_maintenance("auto pipeline"):
         return
-    _interval = get_paper_ingestion_settings().auto_fetch_interval_hours
-    if _interval <= 0:
-        logger.debug("auto_pipeline: interval_hours=0, skipping run")
-        return
 
     db_pool = app.state.db_pool
+    if await resolve_auto_fetch_interval_hours(db_pool) <= 0:
+        logger.debug("auto_pipeline: no fetch interval configured, skipping run")
+        return
+
     sem = asyncio.Semaphore(
         _AUTO_PROCESS_CONCURRENCY
     )  # leaves headroom for interactive HTTP requests

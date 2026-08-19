@@ -408,9 +408,12 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
 
 async def _start_scheduler_hook(app: FastAPI) -> None:
     """Always start the scheduler so live toggles take effect without restart."""
-    interval = get_paper_ingestion_settings().auto_fetch_interval_hours
+    from .pipelines.auto_fetch import resolve_auto_fetch_interval_hours  # noqa: PLC0415
     from .scheduler import start_scheduler  # noqa: PLC0415
 
+    # Boot on the saved interval, so a value entered in Settings survives a
+    # restart instead of reverting to the environment default.
+    interval = await resolve_auto_fetch_interval_hours(app.state.db_pool)
     app.state.scheduler = await start_scheduler(app, interval_hours=interval)
 
 
