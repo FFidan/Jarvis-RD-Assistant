@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 import asyncpg
 import pytest
@@ -95,6 +96,51 @@ async def test_paper_read_inbox_applies_once_for_duplicate_request_id(
             user_id=user_id,
             payload={"paper_id": 42, "unexpected": True},
         )
+
+
+async def test_journal_upsert_writes_one_row_per_user_day(
+    learning_runtime_pool,
+) -> None:
+    """A saved journal day lands once and a later save replaces it in place."""
+    bootstrap, pool = learning_runtime_pool
+    user_id = await bootstrap.fetchval(
+        "INSERT INTO platform.users (email, role) VALUES ($1, 'user') RETURNING id",
+        f"journal-upsert-{uuid.uuid4().hex}@example.com",
+    )
+    entry_date = date(2031, 5, 17)
+    stored_entry = """SELECT date, prompts->>'worked' AS worked
+                      FROM learning.journal_entries WHERE user_id = $1"""
+
+    created = await apply_command(
+        pool,
+        command_type="journal.upsert",
+        request_id=str(uuid.uuid4()),
+        user_id=user_id,
+        payload={"date": entry_date.isoformat(), "prompts": {"worked": "first draft"}},
+    )
+    entry = await bootstrap.fetchrow(stored_entry, user_id)
+
+    assert created is True
+    assert entry is not None, "journal.upsert did not persist the day"
+    assert entry["date"] == entry_date
+    assert entry["worked"] == "first draft"
+
+    rewritten = await apply_command(
+        pool,
+        command_type="journal.upsert",
+        request_id=str(uuid.uuid4()),
+        user_id=user_id,
+        payload={"date": entry_date.isoformat(), "prompts": {"worked": "revised"}},
+    )
+    saved_days = await bootstrap.fetchval(
+        "SELECT COUNT(*) FROM learning.journal_entries WHERE user_id = $1",
+        user_id,
+    )
+    updated = await bootstrap.fetchrow(stored_entry, user_id)
+
+    assert rewritten is True
+    assert saved_days == 1, "a second save must replace the day, not add a row"
+    assert updated["worked"] == "revised"
 
 
 async def test_user_erasure_is_idempotent_and_leaves_no_learning_subject_rows(

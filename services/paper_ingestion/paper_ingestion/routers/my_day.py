@@ -85,12 +85,10 @@ async def get_journal_entry(
 async def upsert_journal_entry(
     request: Request,
     body: JournalEntryCreate,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> JournalEntryResponse:
     """Create or update a journal entry through the Learning owner command."""
     prompts_dict = body.prompts.model_dump(exclude_none=True)
-    _ = db_pool
     settings = get_paper_ingestion_settings()
     path = "/internal/domains/journal"
     try:
