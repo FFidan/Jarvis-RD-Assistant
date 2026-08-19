@@ -30,7 +30,7 @@
 #                           ${OUT_DIR}/perf-probe.jsonl)
 #   PERF_GPU_POLL_SECONDS   gpu_probe.sh polling interval in seconds (default: 2)
 #   SKIP_LIGHTHOUSE         Set to 1 to skip Lighthouse (useful on CI; default: 0)
-#   PAPER_INGESTION_HOST_PORT  Backend port (default: 8010)
+#   JARVIS_BASE_URL          Product gateway URL (default: http://localhost:3001)
 #
 # This script never fails the build — missing tools log warnings instead.
 set -euo pipefail
@@ -39,10 +39,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="${REPO_ROOT}/artifacts/perf/${TIMESTAMP}"
 mkdir -p "${OUT_DIR}"
+PROFILE_TMP="$(mktemp -d)"
+trap 'rm -rf "${PROFILE_TMP}"' EXIT
 
 API_KEY_FILE="${REPO_ROOT}/secrets/jarvis_api_key.txt"
-PAPER_INGEST_PORT="${PAPER_INGESTION_HOST_PORT:-8010}"
-PAPER_INGEST_BASE="http://localhost:${PAPER_INGEST_PORT}"
+JARVIS_BASE_URL="${JARVIS_BASE_URL:-http://localhost:${DASHBOARD_HOST_PORT:-3001}}"
+PROFILE_COOKIE_JAR="${PROFILE_TMP}/jarvis_session.cookies"
 
 log() { echo "[profile] $*" >&2; }
 
@@ -97,27 +99,36 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Backend endpoint wall-clock timings
 # ---------------------------------------------------------------------------
-log "Timing backend GET endpoints (3x each)"
-{
-  echo "endpoint,run,seconds,http_code"
-  for path in \
-    "/api/papers/feed?limit=20" \
-    "/api/papers/brief" \
-    "/api/dashboard/metrics" \
-    "/api/system/models" \
-    "/health"
-  do
-    for i in 1 2 3; do
-      t=$(curl -s -o /dev/null \
-            -w "%{time_total},%{http_code}" \
-            "${PAPER_INGEST_BASE}${path}" \
-            -H "X-API-Key: ${API_KEY}" \
-            -H "Accept: application/json" 2>/dev/null || echo "ERR,000")
-      echo "${path},${i},${t}"
+profile_auth_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+  -X POST "${JARVIS_BASE_URL}/api/auth/api-key-session" \
+  -H "X-API-Key: ${API_KEY}" -H "Content-Type: application/json" \
+  -c "${PROFILE_COOKIE_JAR}" -d '{}' 2>/dev/null || echo "000")
+if [[ "${profile_auth_code}" == "200" ]] && \
+   grep -q 'jarvis_session' "${PROFILE_COOKIE_JAR}" 2>/dev/null; then
+  log "Timing authenticated gateway GET endpoints (3x each)"
+  {
+    echo "endpoint,run,seconds,http_code"
+    for path in \
+      "/api/papers/feed?limit=20" \
+      "/api/papers/brief" \
+      "/api/dashboard/metrics" \
+      "/api/system/models" \
+      "/health"
+    do
+      for i in 1 2 3; do
+        t=$(curl -s -o /dev/null \
+              -w "%{time_total},%{http_code}" \
+              "${JARVIS_BASE_URL}${path}" \
+              -b "${PROFILE_COOKIE_JAR}" \
+              -H "Accept: application/json" 2>/dev/null || echo "ERR,000")
+        echo "${path},${i},${t}"
+      done
     done
-  done
-} > "${OUT_DIR}/backend-timings.csv"
-log "Backend timings saved → ${OUT_DIR}/backend-timings.csv"
+  } > "${OUT_DIR}/backend-timings.csv"
+  log "Backend timings saved → ${OUT_DIR}/backend-timings.csv"
+else
+  log "WARN: owner session unavailable (HTTP ${profile_auth_code}) — skipping backend timings"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. py-spy flamegraph (best-effort)
@@ -200,7 +211,7 @@ if [[ -f "${LOADGEN_SCRIPT}" ]]; then
   PERF_CONCURRENCY="${PERF_CONCURRENCY:-10}" \
   PERF_PROBE_ENABLED="${PERF_PROBE_ENABLED:-0}" \
   PERF_PROBE_PATH="${PERF_PROBE_PATH:-${OUT_DIR}/perf-probe.jsonl}" \
-  PAPER_INGESTION_HOST_PORT="${PAPER_INGESTION_HOST_PORT:-8010}" \
+  JARVIS_BASE_URL="${JARVIS_BASE_URL}" \
   bash "${LOADGEN_SCRIPT}" || log "WARN: loadgen exited non-zero — concurrency metrics may be partial"
 else
   log "WARN: ${LOADGEN_SCRIPT} not found — skipping concurrency load generation"

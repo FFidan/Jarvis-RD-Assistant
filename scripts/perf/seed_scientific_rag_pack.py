@@ -12,13 +12,15 @@ from http.cookiejar import LoadError, MozillaCookieJar
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPO_ROOT / "docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl"
 DEFAULT_ARTIFACT_ROOT = REPO_ROOT / "artifacts/perf"
 DEFAULT_RUN_ID = "scientific-rag-pack"
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
+PDF_PROCESS_DEADLINE_SECONDS = 900.0
+JOB_POLL_INTERVAL_SECONDS = 1.0
 
 
 class SeedPackError(RuntimeError):
@@ -52,50 +54,171 @@ class ReadinessResult:
 class SeedClient(Protocol):
     """Product HTTP operations used by the seeder."""
 
-    def list_library(self) -> list[dict[str, Any]]: ...
-    def get_paper_detail(self, paper_id: int) -> dict[str, Any]: ...
-    def download_pdf(self, paper_id: int) -> None: ...
-    def process_pdf(self, paper_id: int) -> None: ...
+    def list_library(self) -> list[dict[str, Any]]:
+        """Return lightweight rows for the authenticated library.
+
+        Returns
+        -------
+        list[dict[str, Any]]
+            Paper rows visible to the authenticated owner.
+
+        """
+        ...
+
+    def get_paper_detail(self, paper_id: int) -> dict[str, Any]:
+        """Return the current PDF and indexing state for one paper.
+
+        Parameters
+        ----------
+        paper_id : int
+            Local paper identifier.
+
+        Returns
+        -------
+        dict[str, Any]
+            Current product representation of the paper.
+
+        """
+        ...
+
+    def download_pdf(self, paper_id: int) -> None:
+        """Request a PDF download for one local paper.
+
+        Parameters
+        ----------
+        paper_id : int
+            Local paper identifier.
+
+        """
+        ...
+
+    def process_pdf(self, paper_id: int) -> None:
+        """Request and await PDF processing for one local paper.
+
+        Parameters
+        ----------
+        paper_id : int
+            Local paper identifier.
+
+        """
+        ...
 
 
 class ProductHttpClient:
     """Minimal stdlib HTTP client for product-supported seeding routes."""
 
     def __init__(self, base_url: str, headers: dict[str, str]) -> None:
+        """Initialize a client without retaining caller-owned header state.
+
+        Parameters
+        ----------
+        base_url : str
+            Product gateway base URL.
+        headers : dict[str, str]
+            Authentication headers loaded from protected files.
+
+        """
         self._base_url = base_url.rstrip("/")
         self._headers = dict(headers)
 
     def list_library(self) -> list[dict[str, Any]]:
-        """Return the caller's lightweight library rows."""
+        """Return the caller's lightweight library rows.
+
+        Returns
+        -------
+        list[dict[str, Any]]
+            Paper rows visible to the authenticated owner.
+
+        """
         body = self._request("GET", "/api/papers/brief")
         if not isinstance(body, list):
             raise SeedPackError("/api/papers/brief returned a non-list response")
         return [dict(row) for row in body]
 
     def get_paper_detail(self, paper_id: int) -> dict[str, Any]:
-        """Return paper detail, including PDF and chunk readiness fields."""
+        """Return paper detail, including PDF and chunk readiness fields.
+
+        Parameters
+        ----------
+        paper_id : int
+            Local paper identifier.
+
+        Returns
+        -------
+        dict[str, Any]
+            Current product representation of the paper.
+
+        """
         body = self._request("GET", f"/api/papers/{paper_id}")
         if not isinstance(body, dict):
             raise SeedPackError(f"/api/papers/{paper_id} returned a non-object response")
         return body
 
     def download_pdf(self, paper_id: int) -> None:
-        """Download a paper PDF through the product PDF endpoint."""
+        """Download a paper PDF through the product PDF endpoint.
+
+        Parameters
+        ----------
+        paper_id : int
+            Local paper identifier.
+
+        """
         self._request("POST", f"/api/download-pdf/{paper_id}")
 
     def process_pdf(self, paper_id: int) -> None:
-        """Synchronously process a paper PDF through the product endpoint."""
-        query = urlencode({"sync": "true"})
-        self._request("POST", f"/api/process-pdf/{paper_id}?{query}")
+        """Process a paper through the public background-job workflow.
 
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+        Parameters
+        ----------
+        paper_id : int
+            Local paper identifier to process.
+
+        Raises
+        ------
+        SeedPackError
+            If enqueueing fails, the job reports failure or cancellation, or
+            the bounded processing deadline expires.
+
+        """
+        queued = self._request("POST", f"/api/process-pdf/{paper_id}")
+        if not isinstance(queued, dict):
+            raise SeedPackError("PDF processing enqueue returned a non-object response")
+        job_id = queued.get("job_id")
+        if queued.get("status") != "queued" or not isinstance(job_id, str) or not job_id:
+            raise SeedPackError("PDF processing enqueue returned an invalid job response")
+
+        deadline = time.monotonic() + PDF_PROCESS_DEADLINE_SECONDS
+        while True:
+            job = self._request("GET", f"/api/jobs/{job_id}")
+            if not isinstance(job, dict):
+                raise SeedPackError("PDF processing status returned a non-object response")
+            status = job.get("status")
+            if status == "succeeded":
+                return
+            if status in {"failed", "cancelled"}:
+                raise SeedPackError(f"PDF processing job ended with status {status}")
+            if status not in {"queued", "running"}:
+                raise SeedPackError("PDF processing job returned an invalid status")
+            if time.monotonic() >= deadline:
+                raise SeedPackError("PDF processing job exceeded the bounded wait")
+            time.sleep(JOB_POLL_INTERVAL_SECONDS)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
         data = None if body is None else json.dumps(body).encode("utf-8")
         headers = {"Accept": "application/json", **self._headers}
         if body is not None:
             headers["Content-Type"] = "application/json"
         request = Request(f"{self._base_url}{path}", data=data, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=120) as response:  # noqa: S310 - operator-supplied local URL.
+            with urlopen(  # noqa: S310 - operator-supplied local URL.
+                request,
+                timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            ) as response:
                 payload = response.read()
         except HTTPError as exc:
             message = exc.read().decode("utf-8", errors="replace")
@@ -110,13 +233,14 @@ def load_fixed_pack(path: Path = DEFAULT_MANIFEST) -> list[FixedPaper]:
 
     Parameters
     ----------
-    path
+    path : Path, optional
         JSONL manifest containing mixed ``paper`` and ``question`` rows.
 
     Returns
     -------
     list[FixedPaper]
         Paper rows in manifest order; question rows are ignored.
+
     """
     papers: list[FixedPaper] = []
     for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -145,15 +269,16 @@ def load_auth_files(headers_path: Path | None, cookies_path: Path | None) -> Aut
 
     Parameters
     ----------
-    headers_path
+    headers_path : Path or None
         Optional JSON object mapping header names to values.
-    cookies_path
+    cookies_path : Path or None
         Optional raw Cookie header or Mozilla/curl cookie-jar file.
 
     Returns
     -------
     AuthMaterial
         Headers suitable for authenticated product API calls.
+
     """
     headers: dict[str, str] = {}
     if headers_path is not None:
@@ -171,13 +296,14 @@ def _read_cookie_header(path: Path) -> str:
 
     Parameters
     ----------
-    path
+    path : Path
         File containing either a raw Cookie header or a browser/curl cookie jar.
 
     Returns
     -------
     str
         Cookie header value safe to attach to product API requests.
+
     """
     jar = MozillaCookieJar()
     try:
@@ -204,18 +330,20 @@ def run_check_only(
 
     Parameters
     ----------
-    client
+    client : SeedClient
         Injected product client.
-    fixed_pack
+    fixed_pack : list[FixedPaper]
         Fixed scientific RAG paper pack.
-    output_dir
+    output_dir : Path or None
         Optional artifact directory for readiness JSON and paper map.
-    allow_extra_library_papers
+    allow_extra_library_papers : bool
         Permit diagnostic inventory when the authenticated library has extras.
+
     Returns
     -------
     ReadinessResult
         Per-paper readiness rows and aggregate readiness.
+
     """
     result = _build_readiness(client, fixed_pack, allow_extra_library_papers)
     _write_artifacts(
@@ -238,18 +366,22 @@ def run_seed(
 
     Parameters
     ----------
-    client
+    client : SeedClient
         Injected product client.
-    fixed_pack
+    fixed_pack : list[FixedPaper]
         Fixed scientific RAG paper pack.
-    output_dir
+    output_dir : Path
         Artifact directory under ``artifacts/perf/<run-id>``.
-    allow_extra_library_papers
+    allow_extra_library_papers : bool
         Permit diagnostic inventory when the authenticated library has extras.
+    process_delay_seconds : float, optional
+        Delay after each completed processing job, for constrained local hosts.
+
     Returns
     -------
     ReadinessResult
         Final readiness after search, save, download, and process attempts.
+
     """
     if allow_extra_library_papers:
         raise SeedPackError(
@@ -301,7 +433,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--api-base",
         "--base-url",
         dest="api_base",
-        default="http://127.0.0.1:8080",
+        default="http://127.0.0.1:3001",
         help="Product API base URL",
     )
     parser.add_argument(

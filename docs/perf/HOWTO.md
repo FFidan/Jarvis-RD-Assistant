@@ -5,6 +5,27 @@
 each step degrades to a logged warning if its tool is missing, so a partial
 snapshot still ships.
 
+## Strict captures
+
+The default profile is best-effort for local diagnosis. When a capture must be
+trustworthy — comparing two builds, or recording numbers you will act on — run
+the load generator in strict mode so an unreachable backend, missing Scenario C
+prerequisites, a failed request, or an undersampled scenario exits with status 3
+and leaves no load-summary CSV that could be mistaken for a passing run:
+
+```bash
+LOADGEN_STRICT=1 LOADGEN_MIN_SAMPLES=10 OUT_DIR=<capture-directory> \
+  bash scripts/perf/loadgen.sh
+```
+
+When the fixed RAG population exceeds the default `10/minute` Ask limit, start
+Research with a bounded `ASK_RATE_LIMIT` override, apply the same override to
+every profile you compare, and recreate Research without it afterwards. A
+strict run must not accept HTTP 429 responses as timing samples.
+
+Record the exact command, environment overrides, and source commit next to any
+capture you keep; a summary without its provenance is not comparable evidence.
+
 ## Tool prerequisites
 
 | Capture | Tool | Install | Notes |
@@ -46,11 +67,17 @@ All knobs are optional. Sensible defaults are shown.
 | Variable | Default | Description |
 |---|---|---|
 | `PERF_CONCURRENCY` | `10` | Concurrent curl workers per loadgen batch. Lower (e.g. `3`) for CI; raise for stress testing. |
+| `PERF_SUSTAIN_SECS` | `15` | Developer-mode sustained-load duration; strict captures use fixed batches instead. |
+| `LOADGEN_SUSTAIN_BATCHES` | `1` | Positive fixed Scenario B batch cycles used only by strict release captures. |
+| `SEARCH_BATCHES` | `1` | Back-to-back hybrid-search batches; increase with low concurrency to satisfy the strict sample floor. |
+| `RAG_BATCHES` | `1` | Back-to-back RAG batches; increase with low concurrency to satisfy the strict sample floor. |
+| `LOADGEN_STRICT` | `0` | Set to `1` only for release evidence. It fails closed with exit 3 rather than producing a partial or skipped measurement. |
+| `LOADGEN_MIN_SAMPLES` | `1` | Positive minimum successful samples required for each strict-mode summary scenario. |
 | `PERF_PROBE_ENABLED` | `0` | Set to `1` to enable in-process span probes (pulse Stage-2 LLM, embed POST, BM25 SQL, cross-paper RAG). **Must be set in the Docker container env** (not just the host shell) — see "Enabling in-process probes" below. |
 | `PERF_PROBE_PATH` | `${OUT_DIR}/perf-probe.jsonl` | Override probe output path (usually leave at default). |
 | `PERF_GPU_POLL_SECONDS` | `2` | `gpu_probe.sh` polling interval in seconds (float allowed, e.g. `0.5` for high-res). |
 | `SKIP_LIGHTHOUSE` | `0` | Set to `1` to skip Lighthouse (useful on CI without Chrome). |
-| `PAPER_INGESTION_HOST_PORT` | `8010` | Override the backend port. |
+| `JARVIS_BASE_URL` | `http://localhost:3001` | Product gateway used by the fixed load profile. |
 
 ## Running it
 
@@ -75,8 +102,8 @@ ANALYZE_BUNDLE=true npm --prefix frontend run build
 # Skip Lighthouse (often fails on CI without Chrome):
 SKIP_LIGHTHOUSE=1 make profile
 
-# Override default port:
-PAPER_INGESTION_HOST_PORT=8010 make profile
+# Override the product gateway:
+JARVIS_BASE_URL=http://127.0.0.1:23001 make profile
 ```
 
 Outputs:

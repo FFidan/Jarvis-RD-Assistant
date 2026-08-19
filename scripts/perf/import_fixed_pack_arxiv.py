@@ -20,6 +20,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.app_factory import build_database_url
+from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.library import add_to_library
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType
@@ -83,8 +84,12 @@ async def import_fixed_pack(
     list[ImportedPaper]
         Imported canonical paper ids and insertion flags.
     """
+    settings = get_jarvis_common_settings()
     pool = await asyncpg.create_pool(
-        build_database_url(),
+        build_database_url(
+            user=settings.postgres_user,
+            password_file=settings.postgres_password_file,
+        ),
         min_size=pool_min,
         max_size=pool_max,
         init=init_pg_connection,
