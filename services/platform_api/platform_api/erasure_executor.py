@@ -12,12 +12,23 @@ _EXECUTOR_INTERVAL_SECONDS = 30.0
 
 
 async def finalize_due_requests(pool: asyncpg.Pool, *, limit: int = 20) -> int:
-    """Finalize eligible requests through the executor-only SQL capability."""
+    """Finalize a bounded pass of due erasure requests.
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool
+        Pool authenticated as the isolated erasure executor.
+    limit : int, default=20
+        Maximum number of due requests to process in this pass.
+
+    Returns
+    -------
+    int
+        Number of requests whose idempotent finalization completed.
+    """
     async with pool.acquire() as conn:
         request_ids = await conn.fetch(
-            """SELECT request_id FROM erasure_requests
-               WHERE state = 'ready' AND eligible_at <= NOW()
-               ORDER BY eligible_at LIMIT $1""",
+            "SELECT request_id FROM platform.due_erasure_request_ids($1)",
             limit,
         )
     finalized = 0

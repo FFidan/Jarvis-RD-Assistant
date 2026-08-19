@@ -250,12 +250,21 @@ async def test_runtime_foreign_table_grants_match_the_final_contract(
     )
     assert await contract_conn.fetchval(
         "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+        "jarvis_erasure_executor",
+        "platform.due_erasure_request_ids(integer)",
+    )
+    assert await contract_conn.fetchval(
+        "SELECT has_function_privilege($1, $2, 'EXECUTE')",
         "jarvis_research_runtime",
         "learning.update_scheduled_nudge_v1(integer,boolean,text,boolean,boolean,boolean,jsonb)",
     )
     assert not await contract_conn.fetchval(
         "SELECT has_function_privilege('public', $1, 'EXECUTE')",
         "platform.audit_readiness_v1()",
+    )
+    assert not await contract_conn.fetchval(
+        "SELECT has_function_privilege('public', $1, 'EXECUTE')",
+        "platform.due_erasure_request_ids(integer)",
     )
     for runtime, function in (
         ("jarvis_platform_runtime", "platform.audit_readiness_v1()"),
@@ -380,6 +389,21 @@ async def test_restore_authority_reapplies_current_privileges(live_pg_dsn: str) 
                 "jarvis_platform_runtime",
                 "platform.users",
                 privilege,
+            )
+        assert await bootstrap.fetchval(
+            "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+            "jarvis_erasure_executor",
+            "platform.due_erasure_request_ids(integer)",
+        )
+        for runtime in (
+            "jarvis_platform_runtime",
+            "jarvis_research_runtime",
+            "jarvis_learning_runtime",
+        ):
+            assert not await bootstrap.fetchval(
+                "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+                runtime,
+                "platform.due_erasure_request_ids(integer)",
             )
         await bootstrap.execute("SET ROLE jarvis_platform_owner")
         await bootstrap.execute(

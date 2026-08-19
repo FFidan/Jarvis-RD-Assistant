@@ -2061,7 +2061,8 @@ INSERT INTO schema_migrations (version) VALUES
     (81), (82), (83), (84), (85), (86), (87), (88),
     (89), (90), (91), (92), (93), (94), (95), (96),
     (97), (98), (99), (100), (101), (102), (103), (104), (105), (106),
-    (107), (108), (109), (110), (111), (112), (113), (114), (115), (116), (117), (118)
+    (107), (108), (109), (110), (111), (112), (113), (114), (115), (116), (117), (118),
+    (119)
 ON CONFLICT (version) DO NOTHING;
 
 -- The dedicated ``litellm`` admin database is created by the litellm-db-init
@@ -3146,7 +3147,7 @@ CREATE OR REPLACE FUNCTION platform.rotate_visibility_checkpoint_v1(
 SET search_path = platform, pg_catalog AS $$
 BEGIN
     IF session_user <> 'jarvis_research_runtime'
-       OR p_key <> 'qdrant.visibility_checkpoint'
+       OR p_key <> 'vector_visibility.checkpoint'
        OR p_generation !~ '^[a-f0-9]{32}$' OR length(p_recovery) NOT BETWEEN 1 AND 128 THEN
         RAISE EXCEPTION 'visibility checkpoint rotation is not allowed';
     END IF;
@@ -3163,7 +3164,7 @@ CREATE OR REPLACE FUNCTION platform.claim_visibility_lease_v1(
 ) RETURNS TABLE(value jsonb) LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = platform, pg_catalog AS $$
 BEGIN
-    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'qdrant.visibility_checkpoint'
+    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'vector_visibility.checkpoint'
        OR p_worker = '' OR p_seconds NOT BETWEEN 1 AND 3600 THEN
         RAISE EXCEPTION 'visibility lease is not allowed';
     END IF;
@@ -3186,7 +3187,7 @@ CREATE OR REPLACE FUNCTION platform.advance_visibility_checkpoint_v1(
 ) RETURNS TABLE(value jsonb) LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = platform, pg_catalog AS $$
 BEGIN
-    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'qdrant.visibility_checkpoint'
+    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'vector_visibility.checkpoint'
        OR p_chunk < 0 OR p_seconds NOT BETWEEN 1 AND 3600 THEN
         RAISE EXCEPTION 'visibility progress is not allowed';
     END IF;
@@ -3209,7 +3210,7 @@ CREATE OR REPLACE FUNCTION platform.complete_visibility_checkpoint_v1(
 ) RETURNS TABLE(value jsonb) LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = platform, pg_catalog AS $$
 BEGIN
-    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'qdrant.visibility_checkpoint' THEN
+    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'vector_visibility.checkpoint' THEN
         RAISE EXCEPTION 'visibility completion is not allowed';
     END IF;
     RETURN QUERY UPDATE platform.user_config
@@ -3720,4 +3721,37 @@ GRANT SELECT ON ops.schema_migrations TO jarvis_platform_runtime;
 RESET ROLE;
 SET LOCAL search_path TO ops, public, pg_catalog;
 UPDATE ops.schema_migrations SET sha256 = 'f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468' WHERE version = 118;
+
+-- 0119: executor-only due-erasure selection and checkpoint-key correction.
+SET LOCAL ROLE jarvis_platform_owner;
+CREATE OR REPLACE FUNCTION platform.due_erasure_request_ids(p_limit integer)
+RETURNS TABLE(request_id uuid)
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_erasure_executor'
+       OR p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
+        RAISE EXCEPTION 'erasure due-request listing is not allowed';
+    END IF;
+    RETURN QUERY
+    SELECT request.request_id
+    FROM platform.erasure_requests AS request
+    JOIN platform.users AS account ON account.id = request.user_id
+    WHERE request.state = 'ready'
+      AND request.eligible_at <= NOW()
+      AND account.deleted_at IS NOT NULL
+      AND account.deleted_at + INTERVAL '30 days' <= NOW()
+    ORDER BY request.eligible_at, request.request_id
+    LIMIT p_limit;
+END;
+$$;
+REVOKE ALL ON FUNCTION platform.due_erasure_request_ids(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION platform.due_erasure_request_ids(integer)
+    TO jarvis_erasure_executor;
+
+RESET ROLE;
+SET LOCAL search_path TO ops, public, pg_catalog;
+UPDATE ops.schema_migrations
+SET sha256 = '9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296'
+WHERE version = 119;
 COMMIT;

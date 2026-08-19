@@ -200,8 +200,12 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
             await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 118")
             == "f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468"
         )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 119")
+            == "9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296"
+        )
         current_version = await bootstrap.fetchval("SELECT max(version) FROM ops.schema_migrations")
-        assert current_version == 118
+        assert current_version == 119
         assert await bootstrap.fetchrow(
             """
             SELECT owner_queue, owner_service FROM ops.procrastinate_jobs
@@ -227,6 +231,14 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
         assert await bootstrap.fetchval(
             "SELECT has_function_privilege('jarvis_erasure_executor', "
             "'platform.finalize_erasure(uuid)', 'EXECUTE')"
+        )
+        assert await bootstrap.fetchval(
+            "SELECT has_function_privilege('jarvis_erasure_executor', "
+            "'platform.due_erasure_request_ids(integer)', 'EXECUTE')"
+        )
+        assert not await bootstrap.fetchval(
+            "SELECT has_table_privilege('jarvis_erasure_executor', "
+            "'platform.erasure_requests', 'SELECT')"
         )
         assert not await bootstrap.fetchval(
             """

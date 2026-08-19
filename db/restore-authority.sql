@@ -14,8 +14,8 @@ DECLARE
     domain record;
 BEGIN
     SELECT COALESCE(MAX(version), 0) INTO live_floor FROM ops.schema_migrations;
-    IF live_floor <> 118 THEN
-        RAISE EXCEPTION 'restore authority requires packaged schema 118, found %', live_floor;
+    IF live_floor <> 119 THEN
+        RAISE EXCEPTION 'restore authority requires packaged schema 119, found %', live_floor;
     END IF;
 
     ALTER ROLE jarvis_backup_reader WITH BYPASSRLS;
@@ -211,6 +211,7 @@ REVOKE ALL ON FUNCTION
     platform.advance_visibility_checkpoint_v1(text,text,text,bigint,integer),
     platform.complete_visibility_checkpoint_v1(text,text,text),
     platform.append_audit_event(text,text,text,jsonb),
+    platform.due_erasure_request_ids(integer),
     platform.finalize_erasure(uuid),
     platform.audit_readiness_v1()
 FROM PUBLIC;
@@ -234,7 +235,10 @@ TO jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
 GRANT EXECUTE ON FUNCTION platform.append_audit_event(text,text,text,jsonb)
 TO jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
 GRANT EXECUTE ON FUNCTION platform.audit_readiness_v1() TO jarvis_research_runtime;
-GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_executor;
+GRANT EXECUTE ON FUNCTION
+    platform.due_erasure_request_ids(integer),
+    platform.finalize_erasure(uuid)
+TO jarvis_erasure_executor;
 REVOKE EXECUTE ON FUNCTION
     platform.set_research_config_v1(bigint,text,jsonb,text),
     platform.purge_identity_retention_v1(text),
@@ -243,10 +247,13 @@ REVOKE EXECUTE ON FUNCTION
     platform.claim_visibility_lease_v1(text,text,text,integer),
     platform.advance_visibility_checkpoint_v1(text,text,text,bigint,integer),
     platform.complete_visibility_checkpoint_v1(text,text,text),
+    platform.due_erasure_request_ids(integer),
     platform.finalize_erasure(uuid),
     platform.audit_readiness_v1()
 FROM jarvis_platform_runtime;
-REVOKE EXECUTE ON FUNCTION platform.finalize_erasure(uuid)
+REVOKE EXECUTE ON FUNCTION
+    platform.due_erasure_request_ids(integer),
+    platform.finalize_erasure(uuid)
 FROM jarvis_research_runtime, jarvis_learning_runtime;
 
 REVOKE ALL ON FUNCTION learning.clear_zotero_collection_keys_v1(integer) FROM PUBLIC;

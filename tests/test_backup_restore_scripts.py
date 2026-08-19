@@ -830,6 +830,46 @@ def test_litellm_healthcheck_allows_dependents_during_restore_review(tmp_path: P
     assert result.returncode == 0, result.stderr
 
 
+def test_litellm_database_url_has_a_bounded_runtime_pool(tmp_path: Path) -> None:
+    """The runtime URL must carry the configured Prisma connection limit."""
+    password_file = tmp_path / "litellm-password"
+    password_file.write_text("test-pass@word", encoding="utf-8")
+
+    result = _run_bash(
+        "source scripts/litellm-entrypoint.sh --functions-only\n"
+        "load_litellm_database_url\n"
+        "printf '%s' \"$DATABASE_URL\"\n",
+        env={"POSTGRES_PASSWORD_FILE": str(password_file)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "postgresql://jarvis_litellm_runtime:test-pass%40word@postgres:5432/litellm"
+        "?connection_limit=5"
+    )
+
+
+@pytest.mark.parametrize("connection_limit", ["0", "00", "-1", "1.5", "many"])
+def test_litellm_database_url_rejects_invalid_connection_limits(
+    tmp_path: Path,
+    connection_limit: str,
+) -> None:
+    """Invalid pool limits must stop LiteLLM before it receives a database URL."""
+    password_file = tmp_path / "litellm-password"
+    password_file.write_text("test-password", encoding="utf-8")
+
+    result = _run_bash(
+        "source scripts/litellm-entrypoint.sh --functions-only\nload_litellm_database_url\n",
+        env={
+            "LITELLM_DB_CONNECTION_LIMIT": connection_limit,
+            "POSTGRES_PASSWORD_FILE": str(password_file),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "must be a positive integer" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("contents", "expected"),
     [("42\n", "42"), ("42\n43\n", "0"), ("not-an-epoch\n", "0")],

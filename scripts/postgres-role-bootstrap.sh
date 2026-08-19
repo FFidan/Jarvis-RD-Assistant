@@ -485,9 +485,9 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -c "
 if role_exists jarvis; then
   transfer_owned_objects litellm jarvis jarvis_litellm_migrator
 fi
+transfer_owned_objects litellm jarvis_cluster_bootstrap jarvis_litellm_migrator
 connect_as "$bootstrap_role" "$bootstrap_password_file" -d litellm -c "
   REASSIGN OWNED BY jarvis_restore_operator TO jarvis_litellm_migrator;
-  REASSIGN OWNED BY jarvis_cluster_bootstrap TO jarvis_litellm_migrator;
   REASSIGN OWNED BY jarvis_legacy_rollback TO jarvis_litellm_migrator;
   REVOKE CREATE ON SCHEMA public FROM PUBLIC;
   REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;

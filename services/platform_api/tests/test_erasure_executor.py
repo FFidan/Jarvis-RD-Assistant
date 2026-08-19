@@ -38,9 +38,10 @@ async def erasure_connections(contract_pg_dsn, _contract_pool):
 
 
 async def test_executor_is_capability_only_and_duplicate_finalization_is_harmless(
+    contract_pg_dsn: str,
     erasure_connections,
 ) -> None:
-    """Only the executor capability finalizes, without exposing generic tables."""
+    """The executor lists and finalizes only through its exact capabilities."""
     bootstrap, executor = erasure_connections
     user_id = await bootstrap.fetchval(
         """INSERT INTO platform.users (email, role, deleted_at)
@@ -64,6 +65,19 @@ async def test_executor_is_capability_only_and_duplicate_finalization_is_harmles
             (request_id, "learning", {"acknowledged": True}),
         ],
     )
+    ineligible_user_id = await bootstrap.fetchval(
+        """INSERT INTO platform.users (email, role, deleted_at)
+           VALUES ($1, 'user', NOW() - INTERVAL '31 days') RETURNING id""",
+        f"executor-ineligible-{uuid.uuid4().hex}@example.com",
+    )
+    ineligible_request_id = uuid.uuid4()
+    await bootstrap.execute(
+        """INSERT INTO platform.erasure_requests
+           (request_id, user_id, state, resume_state, eligible_at)
+           VALUES ($1, $2, 'ready', 'learning_pending', NOW() + INTERVAL '1 day')""",
+        ineligible_request_id,
+        ineligible_user_id,
+    )
     job_id = str(uuid.uuid4())
     await bootstrap.execute(
         """INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
@@ -74,10 +88,36 @@ async def test_executor_is_capability_only_and_duplicate_finalization_is_harmles
     with pytest.raises(Exception, match="executor-only"):
         await bootstrap.fetchval("SELECT platform.finalize_erasure($1)", request_id)
 
-    first_finalize = await executor.fetchval("SELECT platform.finalize_erasure($1)", request_id)
-    second_finalize = await executor.fetchval("SELECT platform.finalize_erasure($1)", request_id)
-    assert first_finalize is True
-    assert second_finalize is False
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await executor.fetch("SELECT request_id FROM platform.erasure_requests")
+    for limit in (None, -1, 0, 101):
+        with pytest.raises(asyncpg.RaiseError, match="due-request listing is not allowed"):
+            await executor.fetch(
+                "SELECT request_id FROM platform.due_erasure_request_ids($1)", limit
+            )
+
+    due_ids = await executor.fetch(
+        "SELECT request_id FROM platform.due_erasure_request_ids($1)", 20
+    )
+    assert [row["request_id"] for row in due_ids] == [request_id]
+    assert ineligible_request_id not in [row["request_id"] for row in due_ids]
+
+    pool = await asyncpg.create_pool(
+        contract_pg_dsn,
+        user="jarvis_erasure_executor",
+        password="erasure-executor-contract-password",
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        from platform_api.erasure_executor import finalize_due_requests
+
+        assert await finalize_due_requests(pool, limit=20) == 1
+    finally:
+        await pool.close()
+
+    repeat_finalize = await executor.fetchval("SELECT platform.finalize_erasure($1)", request_id)
+    assert repeat_finalize is False
     assert (
         await bootstrap.fetchval("SELECT COUNT(*) FROM platform.users WHERE id = $1", user_id) == 0
     )
@@ -98,3 +138,17 @@ async def test_executor_is_capability_only_and_duplicate_finalization_is_harmles
 
     with pytest.raises(asyncpg.InsufficientPrivilegeError):
         await executor.fetchval("SELECT COUNT(*) FROM platform.users")
+
+    await bootstrap.execute(
+        "ALTER ROLE jarvis_research_runtime LOGIN PASSWORD 'research-runtime-contract-password'"
+    )
+    research = await asyncpg.connect(
+        contract_pg_dsn,
+        user="jarvis_research_runtime",
+        password="research-runtime-contract-password",
+    )
+    try:
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await research.fetch("SELECT request_id FROM platform.due_erasure_request_ids($1)", 1)
+    finally:
+        await research.close()

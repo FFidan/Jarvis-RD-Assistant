@@ -4,8 +4,8 @@
   "privilege_enforcement": "enforced",
   "restore_authority": {
     "path": "db/restore-authority.sql",
-    "sha256": "aa58d47809de0ca7b536817e960dee33fbed3daf4f0d8fa8e61d322a4ad57c6a",
-    "schema_version": 118
+    "sha256": "ff7083b5fc0dda25bf615aedc997337ade6d3fdd11234759503f5629012f3d20",
+    "schema_version": 119
   },
   "compatibility_baseline": {
     "source_release": "v1.2.5",
@@ -85,6 +85,10 @@
       {
         "path": "0118_enforce_runtime_privileges.sql",
         "sha256": "f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468"
+      },
+      {
+        "path": "0119_erasure_executor_capability.sql",
+        "sha256": "9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296"
       }
     ]
   },
@@ -267,6 +271,7 @@
       "platform.append_system_event_v1",
       "platform.claim_visibility_lease_v1",
       "platform.complete_visibility_checkpoint_v1",
+      "platform.due_erasure_request_ids",
       "platform.finalize_erasure",
       "platform.mint_session_v1",
       "platform.purge_identity_retention_v1",
