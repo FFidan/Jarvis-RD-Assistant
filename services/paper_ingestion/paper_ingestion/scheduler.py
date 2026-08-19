@@ -517,11 +517,16 @@ async def purge_job_history_task(app: Any) -> None:
         # Looked up by exact registry key rather than by importing the task
         # object: the module-level object is shared process-wide across both
         # services' apps, while this key is registered on ours.
-        await procrastinate_app.tasks[_REMOVE_OLD_JOBS_TASK].defer_async(
-            max_hours=_JOB_HISTORY_MAX_HOURS,
-            remove_failed=True,
-            remove_cancelled=True,
-            remove_aborted=True,
+        await (
+            procrastinate_app.tasks[_REMOVE_OLD_JOBS_TASK]
+            .configure(queue="paper_ingestion")
+            .defer_async(
+                max_hours=_JOB_HISTORY_MAX_HOURS,
+                queue="paper_ingestion",
+                remove_failed=True,
+                remove_cancelled=True,
+                remove_aborted=True,
+            )
         )
         # Ordering against the deferral above is irrelevant: a deferral is
         # fire-and-forget, and this deletes the rows orphaned by any PRIOR

@@ -430,7 +430,7 @@ def _register_tasks(procrastinate_app: Any) -> None:
 
 # The worker and maintenance watcher share one queue list so pause and resume
 # always cover the queues the service polls.
-_WORKER_QUEUES = ["paper_ingestion", "builtin"]
+_WORKER_QUEUES = ["paper_ingestion"]
 _start_procrastinate_worker = make_procrastinate_worker_hook(_register_tasks, queues=_WORKER_QUEUES)
 _maintenance_watcher = make_maintenance_watcher_hook(queues=_WORKER_QUEUES)
 

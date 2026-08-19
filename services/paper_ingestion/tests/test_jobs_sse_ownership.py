@@ -86,7 +86,7 @@ def _app_with_pool():
     from fastapi import HTTPException
 
     from jarvis_common import current_user_id_strict, verify_api_key
-    from platform_api.deps import get_db_pool, limiter
+    from platform_api.deps import get_db_pool, limiter, verify_platform_request
     from platform_api.main import app
 
     with ExitStack() as stack:
@@ -118,6 +118,7 @@ def _app_with_pool():
                         disable_limiter=True,
                         dependency_overrides={
                             verify_api_key: lambda: None,
+                            verify_platform_request: lambda: None,
                             current_user_id_strict: _caller_override,
                         },
                     ),

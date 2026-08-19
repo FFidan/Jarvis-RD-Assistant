@@ -9,7 +9,10 @@ it kept the progress row whose job is still around.
 from __future__ import annotations
 
 import asyncpg
+import procrastinate
 import pytest
+from procrastinate.contrib.aiopg import AiopgConnector
+from jarvis_common.db_helpers import init_pg_connection
 
 from paper_ingestion.scheduler import ORPHANED_JOB_PROGRESS_PURGE
 
@@ -51,3 +54,61 @@ async def test_purge_removes_only_progress_rows_whose_job_is_gone(
         await contract_conn.execute("RESET SESSION AUTHORIZATION")
 
     assert await _progress_ids(contract_conn, [live_id, orphan_id]) == {live_id}
+
+
+async def test_research_retention_preserves_learning_job_history(
+    contract_pg_dsn: str,
+    _contract_pool: asyncpg.Pool,
+) -> None:
+    """The real Procrastinate cleanup filters to Research's owning queue."""
+    seed = await asyncpg.connect(contract_pg_dsn)
+    await init_pg_connection(seed)
+    await seed.execute("SET search_path TO ops, public")
+    learning_job: int | None = None
+    try:
+        research_job = await seed.fetchval(
+            """INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
+               VALUES ('paper_ingestion', 'paper.process', '{}'::jsonb, 'succeeded')
+               RETURNING id"""
+        )
+        learning_job = await seed.fetchval(
+            """INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
+               VALUES ('learning_engine', 'card.generate', '{}'::jsonb, 'succeeded')
+               RETURNING id"""
+        )
+        await seed.executemany(
+            """INSERT INTO ops.procrastinate_events (job_id, type, at)
+               VALUES ($1, 'succeeded', NOW() - INTERVAL '31 days')""",
+            [(research_job,), (learning_job,)],
+        )
+
+        cleanup_app = procrastinate.App(
+            connector=AiopgConnector(dsn=contract_pg_dsn, options="-c search_path=ops,public")
+        )
+        async with cleanup_app.open_async():
+            await cleanup_app.job_manager.delete_old_jobs(
+                nb_hours=30 * 24,
+                queue="paper_ingestion",
+                include_failed=True,
+                include_cancelled=True,
+                include_aborted=True,
+            )
+
+        assert (
+            await seed.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM ops.procrastinate_jobs WHERE id = $1)",
+                research_job,
+            )
+            is False
+        )
+        assert (
+            await seed.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM ops.procrastinate_jobs WHERE id = $1)",
+                learning_job,
+            )
+            is True
+        )
+    finally:
+        if learning_job is not None:
+            await seed.execute("DELETE FROM ops.procrastinate_jobs WHERE id = $1", learning_job)
+        await seed.close()

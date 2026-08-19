@@ -477,6 +477,7 @@ def _app_with_procrastinate() -> tuple[SimpleNamespace, MagicMock, AsyncMock]:
     from paper_ingestion.scheduler import _REMOVE_OLD_JOBS_TASK  # noqa: PLC0415
 
     prune_task = MagicMock(defer_async=AsyncMock())
+    prune_task.configure.return_value = prune_task
     procrastinate_app = MagicMock(tasks={_REMOVE_OLD_JOBS_TASK: prune_task})
     db_pool = MagicMock(execute=AsyncMock(return_value="DELETE 4"))
     app = SimpleNamespace(
@@ -531,8 +532,10 @@ async def test_prune_defers_the_builtin_task_once_and_purges_orphan_progress() -
     await purge_job_history_task(app)
 
     prune_task.defer_async.assert_awaited_once()
+    prune_task.configure.assert_called_once_with(queue="paper_ingestion")
     kwargs = prune_task.defer_async.await_args.kwargs
     assert kwargs["max_hours"] == 24 * 30
+    assert kwargs["queue"] == "paper_ingestion"
     assert kwargs["remove_failed"] and kwargs["remove_cancelled"] and kwargs["remove_aborted"]
     # Which rows the sweep spares is proven against a real schema in
     # tests/contract/test_job_history_purge_contract.py. Here it is enough that
