@@ -326,6 +326,54 @@ async def test_card_message_has_three_inline_buttons(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_header_states_the_delivered_slice_and_links_the_web_deck():
+    """The header must say how much of the deck arrived and where the rest is."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = _ok_response(_make_deck(20))
+
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
+        await research_pulse.run_research_pulse(
+            http_client,
+            AsyncMock(),
+            bot,
+            make_bot_config(
+                BotConfig,
+                jarvis_api_key=SecretStr("secret"),
+                jarvis_base_url="https://jarvis.example.test",
+            ),
+        )
+
+    header = bot.send_message.await_args_list[0].kwargs["text"]
+    assert "Top 5 of 20" in header
+    assert 'href="https://jarvis.example.test/pulse"' in header
+
+
+@pytest.mark.asyncio
+async def test_header_omits_the_deck_link_without_a_public_base_url():
+    """Telegram cannot render a relative href, so no base URL means no link."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = _ok_response(_make_deck(3))
+
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
+        await research_pulse.run_research_pulse(
+            http_client,
+            AsyncMock(),
+            bot,
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
+        )
+
+    header = bot.send_message.await_args_list[0].kwargs["text"]
+    assert "Top 3 of 3" in header
+    assert "<a href=" not in header
+
+
+@pytest.mark.asyncio
 async def test_deck_is_capped_to_top_n():
     """A 20-card deck should only send up to PULSE_TELEGRAM_TOP_N cards."""
     bot = AsyncMock()

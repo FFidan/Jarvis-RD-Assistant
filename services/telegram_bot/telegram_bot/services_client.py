@@ -15,13 +15,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
 from telegram_bot.config import BotConfig, _owner_headers
 from telegram_bot.focus_contract import FocusSession, FocusTransition
-from telegram_bot.pulse_contract import PulseDeck, PulseGenerateJob
+from telegram_bot.pulse_contract import PulseDeck, PulseGenerateJob, PulseGenerateStatus
 
 __all__ = [
     "PulsePayloadError",
@@ -55,6 +56,7 @@ __all__ = [
     "record_paper_feedback",
     "fetch_pulse_today",
     "trigger_pulse_generation",
+    "fetch_pulse_generation_status",
     "fetch_weekly_digest",
     "ScheduledNudgePayload",
     "acknowledge_scheduled_nudge",
@@ -846,6 +848,29 @@ async def trigger_pulse_generation(
         return PulseGenerateJob.model_validate(resp.json())
     except ValidationError:
         raise PulsePayloadError("Pulse job response did not match the expected contract") from None
+
+
+async def fetch_pulse_generation_status(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    job_id: str,
+) -> PulseGenerateStatus:
+    """GET {paper_ingestion}/api/pulse/generate/{job_id}.
+
+    Return the validated progress of a generation job this user started, so a
+    caller can wait for the deck instead of guessing when it is ready.
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/pulse/generate/{quote(job_id, safe='')}",
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    try:
+        return PulseGenerateStatus.model_validate(resp.json())
+    except ValidationError:
+        raise PulsePayloadError("Pulse job status did not match the expected contract") from None
 
 
 async def fetch_weekly_digest(

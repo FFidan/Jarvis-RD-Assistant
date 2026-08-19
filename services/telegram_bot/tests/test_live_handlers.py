@@ -66,9 +66,11 @@ from telegram_bot.config import BotConfig, service_headers
 from telegram_bot.handlers.commands import briefing_command, tasks_command
 from telegram_bot.handlers.commands.paper_commands import (
     discover_command,
+    next_command,
     papers_command,
     stats_command,
 )
+from telegram_bot.handlers.commands.system_commands import pulse_now_command
 from telegram_bot.service_auth import TelegramBackendAuth
 
 pytestmark = [
@@ -87,6 +89,11 @@ _OPT_IN_ENV = "JARVIS_RUN_LIVE_BACKEND"
 #: Chat id of the synthesized private chat. Never reaches the network: the
 #: Telegram Bot API boundary stays a test double, only the backend is live.
 _LIVE_CHAT_ID = 424242
+
+#: Second opt-in for the one handler that changes deployment state. ``/pulse_now``
+#: starts a real Pulse run: minutes of LLM work against a rate limit of three
+#: per hour. Reading the deck changes nothing, so it stays separate.
+_GENERATE_OPT_IN_ENV = "JARVIS_RUN_LIVE_PULSE_GENERATE"
 
 if os.environ.get(_OPT_IN_ENV) != "1":
     pytest.skip(
@@ -486,3 +493,67 @@ async def test_live_tasks_command_lists_task_shape(live_backend: LiveBackend) ->
     assert bullets, f"task list carries a header but no rows: {text!r}"
     for line in bullets:
         assert "]" in line, f"task row is missing its identifier bracket: {line!r}"
+
+
+async def test_live_next_command_advances_past_acted_cards(live_backend: LiveBackend) -> None:
+    """``/next`` renders a live Pulse card, the finished-deck reply, or an empty state.
+
+    The card it picks is the highest-ranked one whose backend lifecycle state
+    says the user has not acted on it, so a deck read that stopped reporting
+    that state surfaces here as the finished-deck reply on a deck that still
+    has unread cards.
+    """
+    update, context = _live_update_and_context(live_backend)
+
+    await next_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = _replies(update)[0]
+    _assert_no_raw_error(text)
+    assert "Failed to load next recommendation" not in text, (
+        "the live deck endpoint did not answer the shape the handler parses"
+    )
+
+    empty_states = ("No Pulse deck yet", "No Pulse cards are available", "no papers are available")
+    if any(state in text for state in empty_states) or "acted on all" in text:
+        return
+
+    assert "Pulse for" in text or "Earlier Pulse from" in text, (
+        f"a live card reply must carry the deck status header: {text!r}"
+    )
+    _assert_keyboard_rows(
+        update.message.reply_text.await_args.kwargs["reply_markup"],
+        ("paper:feedback_pos:", "paper:feedback_neg:", "paper:save:"),
+    )
+
+
+async def test_live_pulse_now_command_waits_for_the_job_it_started(
+    live_backend: LiveBackend,
+) -> None:
+    """``/pulse_now`` enqueues a real run, follows it, and answers with an outcome.
+
+    Skipped unless the generate opt-in is set as well: this is the only handler
+    in the module that changes deployment state.
+    """
+    if os.environ.get(_GENERATE_OPT_IN_ENV) != "1":
+        pytest.skip(f"starting a real Pulse run requires {_GENERATE_OPT_IN_ENV}=1")
+
+    update, context = _live_update_and_context(live_backend)
+
+    await pulse_now_command(update, context)
+
+    replies = _replies(update)
+    assert replies, "/pulse_now sent no reply"
+    for text in replies:
+        _assert_no_raw_error(text)
+    assert "Failed to trigger Pulse generation" not in replies[0], (
+        "the live generate endpoint did not answer the shape the handler parses"
+    )
+    assert "Pulse generation started" in replies[0]
+    # The handler either delivered the deck through the scheduled path (which
+    # sends through the bot, not reply_text) or answered with one of its two
+    # honest outcomes.
+    if len(replies) > 1:
+        assert "still generating" in replies[1] or "did not finish" in replies[1], (
+            f"the wait must end in a stated outcome: {replies[1]!r}"
+        )

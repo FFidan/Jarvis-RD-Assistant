@@ -40,6 +40,7 @@ from telegram_bot.services_client import (
     fetch_project_milestones,
     fetch_project_tasks,
     fetch_projects,
+    fetch_pulse_generation_status,
     fetch_pulse_today,
     fetch_stats,
     fetch_tasks,
@@ -1061,6 +1062,34 @@ async def test_trigger_pulse_generation_rejects_missing_job_identity(config: Bot
 
     with pytest.raises(PulsePayloadError, match="job response"):
         await trigger_pulse_generation(http, config, USER_ID)
+
+
+# ---------------------------------------------------------------------------
+# fetch_pulse_generation_status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_pulse_generation_status_correct_url(config: BotConfig) -> None:
+    http = _make_http(make_http_response({"job_id": "job-1", "status": "running"}))
+
+    status = await fetch_pulse_generation_status(http, config, USER_ID, "job-1")
+
+    http.get.assert_called_once()
+    call_args, call_kwargs = http.get.call_args
+    url = call_args[0] if call_args else call_kwargs["url"]
+    assert url == "http://paper:8000/api/pulse/generate/job-1"
+    _assert_owner_headers(call_kwargs)
+    assert status.status == "running"
+    assert status.is_terminal is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_pulse_generation_status_rejects_unknown_status(config: BotConfig) -> None:
+    http = _make_http(make_http_response({"job_id": "job-1", "status": "almost"}))
+
+    with pytest.raises(PulsePayloadError, match="job status"):
+        await fetch_pulse_generation_status(http, config, USER_ID, "job-1")
 
 
 # ---------------------------------------------------------------------------

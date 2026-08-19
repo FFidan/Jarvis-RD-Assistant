@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -9,6 +10,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from telegram_bot import services_client
+from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_help
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import (
@@ -19,10 +21,21 @@ from telegram_bot.handlers.helpers import (
     get_platform_http,
 )
 from telegram_bot.handlers.rate_limit import rate_limit
+from telegram_bot.orchestration.research_pulse import deliver_pulse_to_chat
+from telegram_bot.pulse_contract import PulseGenerateStatus
 
 logger = logging.getLogger(__name__)
 
 _MAX_FOCUS_MINUTES = 480  # 8 hours — prevents resource exhaustion
+
+#: Seconds between two Pulse job-status reads while ``/pulse_now`` waits.
+_PULSE_POLL_INTERVAL_SECONDS = 10.0
+
+#: Total seconds ``/pulse_now`` waits for a deck before telling the user it is
+#: still running. A full Pulse run is LLM-bound, so the wait is bounded rather
+#: than open-ended: the handler always answers, and the deck stays reachable
+#: through /next and the web deck afterwards.
+_PULSE_POLL_BUDGET_SECONDS = 180.0
 
 
 @rate_limit(max_calls=10, window_seconds=60)
@@ -100,7 +113,7 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     jarvis_user_id = get_jarvis_user_id(context)
     assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        await services_client.trigger_pulse_generation(http, config, jarvis_user_id)
+        job = await services_client.trigger_pulse_generation(http, config, jarvis_user_id)
     except Exception:
         logger.exception("Failed to trigger Pulse generation")
         await update.message.reply_text(
@@ -110,9 +123,71 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     await update.message.reply_text(
-        "⚡ Pulse generation started. Check back in a few minutes.",
+        "⚡ Pulse generation started. I'll send the deck here when it's ready.",
         parse_mode="HTML",
     )
+
+    status = await _await_pulse_job(http, config, jarvis_user_id, job.job_id)
+    if status is None:
+        await update.message.reply_text(
+            "Pulse is still generating. Run /next in a few minutes to read the new deck.",
+            parse_mode="HTML",
+        )
+        return
+    if status.status != "succeeded":
+        await update.message.reply_text(
+            "Pulse generation did not finish. Try /pulse_now again later.",
+            parse_mode="HTML",
+        )
+        return
+
+    chat = update.effective_chat
+    if chat is None:
+        return
+    await deliver_pulse_to_chat(http, context.bot, config, chat.id, jarvis_user_id)
+
+
+async def _await_pulse_job(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    job_id: str,
+) -> PulseGenerateStatus | None:
+    """Wait for one Pulse generation job within a fixed budget.
+
+    Parameters
+    ----------
+    http : httpx.AsyncClient
+        Client carrying the paired-user marker.
+    config : BotConfig
+        Bot configuration.
+    user_id : int
+        Paired JARVIS user the job belongs to.
+    job_id : str
+        Identifier the generation request returned.
+
+    Returns
+    -------
+    PulseGenerateStatus or None
+        The terminal status, or ``None`` when the budget ran out first or the
+        status could not be read. A transient read failure is retried until the
+        budget expires rather than reported as a finished job.
+    """
+    deadline = asyncio.get_running_loop().time() + _PULSE_POLL_BUDGET_SECONDS
+    while True:
+        try:
+            status = await services_client.fetch_pulse_generation_status(
+                http, config, user_id, job_id
+            )
+        except Exception:
+            logger.exception("Failed to read Pulse generation status")
+            status = None
+        if status is not None and status.is_terminal:
+            return status
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(_PULSE_POLL_INTERVAL_SECONDS, remaining))
 
 
 @rate_limit(max_calls=3, window_seconds=60)
