@@ -3,6 +3,8 @@
 Covers:
 - SSRF guard (_validate_pdf_url): allowlist, private/reserved IPs, schemes, IDN,
   DNS failure, DNS rebinding, userinfo injection, malformed URLs
+- Outbound quarantine: no HEAD, redirect or GET leaves a deployment awaiting
+  restored-credential review, and the download endpoint reports 503
 - Size cap (MAX_PDF_SIZE): streaming accumulation exceeds limit → ValueError
 - Page cap (MAX_PDF_PAGES): pypdfium2.PdfDocument returns oversized doc → ValueError
 - Malformed PDF bytes: empty, non-PDF, truncated
@@ -25,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock
 import paper_ingestion.pdf_processor as pdf_processor
 import httpx
 import pytest
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from paper_ingestion.pdf_processor import (
     ALLOWED_PDF_DOMAINS,
@@ -416,6 +419,52 @@ async def test_pdf_redirect_and_final_get_use_the_pinned_transport(
         ("HEAD", "/final.pdf", f"host.docker.internal:{port}"),
         ("GET", "/final.pdf", f"host.docker.internal:{port}"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Outbound quarantine — no PDF request may leave a deployment awaiting review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed_sends", [0, 1, 2])
+async def test_pdf_download_stops_before_every_quarantined_send(
+    allowed_sends: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quarantine must stop the download before the next request leaves.
+
+    The first HEAD, each redirect re-request and the streamed GET open their own
+    connection, so a quarantine that begins mid-download has to be observed at
+    each one. ``allowed_sends`` is how many requests complete before the
+    sentinel appears: 0 blocks the first HEAD, 1 the redirect HEAD, 2 the GET.
+    """
+    quarantine = tmp_path / ".outbound-quarantine.json"
+    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
+    monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(tmp_path))
+    if allowed_sends == 0:
+        quarantine.touch()
+
+    sent: list[str] = []
+
+    async def fake_request(method: str, url: str, **_kwargs: Any) -> MagicMock:
+        sent.append(method)
+        if len(sent) == allowed_sends:
+            quarantine.touch()
+        response = MagicMock()
+        response.status_code = 302 if url.endswith("start.pdf") else 200
+        response.headers = {"Location": "https://arxiv.org/pdf/final.pdf"}
+        return response
+
+    client = MagicMock()
+    client.request = fake_request
+    client.stream = MagicMock(side_effect=AssertionError("quarantined GET must not be sent"))
+    processor = PDFProcessor(http_client=client, embedder=MagicMock())
+
+    with pytest.raises(OutboundEgressBlockedError):
+        await processor.stage_pdf_download("https://arxiv.org/pdf/start.pdf", paper_id=11)
+
+    assert len(sent) == allowed_sends
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 # ---------------------------------------------------------------------------

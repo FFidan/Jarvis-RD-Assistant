@@ -19,6 +19,7 @@ from jarvis_common.jobs import JobError  # noqa: E402
 from paper_ingestion.pdf_processor import PDFPublishBlockedError  # noqa: E402
 from paper_ingestion.routers import pdf_actions as pdf  # noqa: E402
 from paper_ingestion.services import local_pdfs  # noqa: E402
+from jarvis_common.maintenance import OutboundEgressBlockedError
 from tests.conftest import FakeRecord  # noqa: E402
 
 
@@ -124,6 +125,48 @@ async def test_download_pdf_maps_restore_race_to_503():
 
     assert response.status_code == 503
     assert "restore" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_maps_outbound_quarantine_to_503():
+    """A download attempted under outbound quarantine answers, rather than erroring.
+
+    A restore leaves credentials unreviewed and outbound egress closed. The
+    fetch is refused before it leaves the process, and the endpoint has to
+    translate that the way the maintenance branch above does.
+    """
+    conn = AsyncMock()
+    conn.fetchrow.return_value = FakeRecord(
+        id=1,
+        title="Paper",
+        external_id="arxiv:1",
+        source_type="arxiv",
+        authors=["Ada"],
+        abstract="A paper",
+        published_date=None,
+        url="https://arxiv.org/abs/1",
+        pdf_url="https://arxiv.org/pdf/1.pdf",
+        pdf_downloaded=False,
+        pdf_local_path=None,
+        citation_count=0,
+        metadata={},
+        created_at="2026-03-11T00:00:00Z",
+        is_visible=True,
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+    processor = MagicMock()
+    processor.stage_pdf_download = AsyncMock(
+        side_effect=OutboundEgressBlockedError("outbound egress is disabled")
+    )
+
+    app = _pdf_router_app(pool=pool, processor=processor)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/download-pdf/1")
+
+    assert response.status_code == 503
+    assert "restored credentials" in response.json()["detail"]
 
 
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).

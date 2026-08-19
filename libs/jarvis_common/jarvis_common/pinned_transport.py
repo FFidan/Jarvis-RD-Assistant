@@ -25,6 +25,7 @@ from jarvis_common.net import is_non_public_address
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 Resolver = Callable[[str, int], Awaitable[list[tuple[int, str]]]]
+BlockingResolver = Callable[[str, int], list[tuple[int, str]]]
 
 _HTTPCORE_EXCEPTION_MAP: tuple[tuple[type[Exception], type[httpx.RequestError]], ...] = (
     (httpcore.ConnectTimeout, httpx.ConnectTimeout),
@@ -121,6 +122,15 @@ LITELLM_PROVIDER_POLICY = OutboundAddressPolicy(
     allowed_private_hosts=frozenset({"localhost", "ollama", "vllm", "host.docker.internal"}),
     allowed_private_addresses=frozenset({"127.0.0.1", "::1"}),
 )
+# Trace export is opt-in and reaches the self-hosted server only.  The
+# observability profile publishes it under the Compose service name `langfuse`
+# on the private bridge, which is the value LANGFUSE_HOST is documented with, so
+# the general service policy would refuse every export.  Any other host the
+# operator points LANGFUSE_HOST at must be publicly routable.
+LANGFUSE_EXPORT_POLICY = OutboundAddressPolicy(
+    allowed_private_hosts=frozenset({"localhost", "langfuse", "host.docker.internal"}),
+    allowed_private_addresses=frozenset({"127.0.0.1", "::1"}),
+)
 
 
 def policy_allowing_private_host(host: str) -> OutboundAddressPolicy:
@@ -128,22 +138,18 @@ def policy_allowing_private_host(host: str) -> OutboundAddressPolicy:
     return OutboundAddressPolicy(allowed_private_hosts=frozenset({host.rstrip(".").lower()}))
 
 
-async def _resolve_addresses(host: str, port: int) -> list[tuple[int, str]]:
-    """Resolve *host* once, preserving the resolver's IPv4/IPv6 order."""
+def _literal_answer(host: str) -> list[tuple[int, str]] | None:
+    """Return the single-family answer for an IP literal, or ``None`` for a name."""
     try:
         literal = ipaddress.ip_address(host)
     except ValueError:
-        literal = None
-    if literal is not None:
-        family = socket.AF_INET6 if literal.version == 6 else socket.AF_INET
-        return [(family, str(literal))]
+        return None
+    family = socket.AF_INET6 if literal.version == 6 else socket.AF_INET
+    return [(family, str(literal))]
 
-    loop = asyncio.get_running_loop()
-    try:
-        infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise httpcore.ConnectError("Unable to resolve host") from exc
 
+def _unique_addresses(infos: Iterable[tuple[Any, ...]]) -> list[tuple[int, str]]:
+    """Collapse one resolver answer to unique ``(family, address)`` pairs in order."""
     addresses: list[tuple[int, str]] = []
     seen: set[tuple[int, str]] = set()
     for family, _type, _proto, _canonname, sockaddr in infos:
@@ -154,6 +160,33 @@ async def _resolve_addresses(host: str, port: int) -> list[tuple[int, str]]:
     if not addresses:
         raise httpcore.ConnectError("Unable to resolve host")
     return addresses
+
+
+async def _resolve_addresses(host: str, port: int) -> list[tuple[int, str]]:
+    """Resolve *host* once, preserving the resolver's IPv4/IPv6 order."""
+    literal = _literal_answer(host)
+    if literal is not None:
+        return literal
+
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise httpcore.ConnectError("Unable to resolve host") from exc
+    return _unique_addresses(infos)
+
+
+def _resolve_addresses_blocking(host: str, port: int) -> list[tuple[int, str]]:
+    """Resolve *host* once on the calling thread, preserving the resolver's order."""
+    literal = _literal_answer(host)
+    if literal is not None:
+        return literal
+
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise httpcore.ConnectError("Unable to resolve host") from exc
+    return _unique_addresses(infos)
 
 
 def _validate_addresses(
@@ -229,6 +262,64 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
         await self._backend.sleep(seconds)
 
 
+class PinnedBlockingNetworkBackend(httpcore.NetworkBackend):
+    """Blocking counterpart of :class:`PinnedNetworkBackend`.
+
+    Exists for sinks that run on their own thread rather than the event loop,
+    such as the OpenTelemetry batch exporter, and applies the same one-shot
+    resolution and address policy before any TCP connection.
+    """
+
+    def __init__(
+        self,
+        policy: OutboundAddressPolicy = PUBLIC_ONLY,
+        *,
+        resolver: BlockingResolver = _resolve_addresses_blocking,
+        backend: httpcore.NetworkBackend | None = None,
+    ) -> None:
+        self._policy = policy
+        self._resolver = resolver
+        self._backend = backend or httpcore.SyncBackend()
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.NetworkStream:
+        addresses = _validate_addresses(host, self._resolver(host, port), self._policy)
+        last_error: httpcore.ConnectError | httpcore.ConnectTimeout | None = None
+        for _family, address in addresses:
+            # A blackholed candidate raises ConnectTimeout rather than
+            # ConnectError, so catch both and fall through to the next address.
+            try:
+                return self._backend.connect_tcp(
+                    address,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last_error = exc
+        raise httpcore.ConnectError("Unable to connect to destination") from last_error
+
+    def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.NetworkStream:
+        return self._backend.connect_unix_socket(
+            path, timeout=timeout, socket_options=socket_options
+        )
+
+    def sleep(self, seconds: float) -> None:
+        self._backend.sleep(seconds)
+
+
 class _ResponseStream(httpx.AsyncByteStream):
     """Map httpcore response-stream exceptions back to HTTPX's public types."""
 
@@ -299,6 +390,73 @@ class PinnedAsyncTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._pool.aclose()
+
+
+class _BlockingResponseStream(httpx.SyncByteStream):
+    """Map httpcore response-stream exceptions back to HTTPX's public types."""
+
+    def __init__(self, stream: Any, request: httpx.Request) -> None:
+        self._stream = stream
+        self._request = request
+
+    def __iter__(self) -> Iterator[bytes]:
+        with _map_httpcore_exceptions(self._request):
+            yield from self._stream
+
+    def close(self) -> None:
+        with _map_httpcore_exceptions(self._request):
+            self._stream.close()
+
+
+class PinnedBlockingTransport(httpx.BaseTransport):
+    """Blocking counterpart of :class:`PinnedAsyncTransport`.
+
+    Parameters
+    ----------
+    policy : OutboundAddressPolicy
+        Address policy applied after pinned DNS resolution.
+    resolver : BlockingResolver, optional
+        Resolution hook, replaced in tests to bind a destination explicitly.
+    """
+
+    def __init__(
+        self,
+        policy: OutboundAddressPolicy = PUBLIC_ONLY,
+        *,
+        resolver: BlockingResolver = _resolve_addresses_blocking,
+    ) -> None:
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(trust_env=False),
+            network_backend=PinnedBlockingNetworkBackend(policy, resolver=resolver),
+        )
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        assert isinstance(request.stream, httpx.SyncByteStream)
+        core_request = httpcore.Request(
+            method=request.method,
+            url=httpcore.URL(
+                scheme=request.url.raw_scheme,
+                host=request.url.raw_host,
+                port=request.url.port,
+                target=request.url.raw_path,
+            ),
+            headers=request.headers.raw,
+            content=request.stream,
+            extensions=request.extensions,
+        )
+        with _map_httpcore_exceptions(request):
+            response = self._pool.handle_request(core_request)
+        assert isinstance(response.stream, Iterable)
+        return httpx.Response(
+            status_code=response.status,
+            headers=response.headers,
+            stream=_BlockingResponseStream(response.stream, request),
+            extensions=response.extensions,
+            request=request,
+        )
+
+    def close(self) -> None:
+        self._pool.close()
 
 
 def pinned_async_client(

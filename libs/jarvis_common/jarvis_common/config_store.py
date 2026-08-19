@@ -8,7 +8,6 @@ from cryptography.fernet import InvalidToken
 
 from jarvis_common.config_metadata import (
     _ENCRYPTED_KEYS,
-    _SECRET_KEYS,
     _classify_config_key,
 )
 from jarvis_common.crypto import (
@@ -16,6 +15,7 @@ from jarvis_common.crypto import (
     encrypt_secret,
     mask_secret,
 )
+from jarvis_common.llm_provider_registry import PROVIDER_BASE_URL_CONFIG_KEYS
 
 __all__ = [
     "_fetch_effective_config_row",
@@ -137,23 +137,60 @@ def _resolve_config_value(key: str, row: Any) -> Any:
             # Legacy plaintext row: mask without decrypting
             return mask_secret(str(raw))
         return None
-    if key in _SECRET_KEYS:
-        raw = row.get("value")
-        return "****" if raw is not None else None
     return row.get("value")
 
 
+async def _decrypt_stored_provider_base_urls(conn: Any) -> int:
+    """Move provider base URLs back into ``value`` so an administrator can read them.
+
+    Releases before this one classified every provider registry key as a secret,
+    so a custom endpoint was stored as Fernet ciphertext with ``value`` NULL.
+    Now that a base URL is no longer in :data:`_ENCRYPTED_KEYS`, those rows would
+    read as "not configured" on the settings page while the runtime kept using
+    the stored endpoint. This pass decrypts them once, in place.
+
+    Rows already holding a readable ``value`` are not selected, so re-running is
+    a no-op. A row the current key cannot decrypt is left untouched and logged;
+    the administrator replaces it by saving the endpoint again.
+    """
+    rows = await conn.fetch(
+        "SELECT user_id, key, encrypted_value FROM user_config "
+        "WHERE key = ANY($1::text[]) AND encrypted_value IS NOT NULL",
+        sorted(PROVIDER_BASE_URL_CONFIG_KEYS),
+    )
+    moved = 0
+    for row in rows:
+        ciphertext = row.get("encrypted_value")
+        if ciphertext is None:
+            continue
+        try:
+            plaintext = decrypt_secret(ciphertext.decode("ascii"))
+        except (InvalidToken, UnicodeDecodeError):
+            logger.warning(
+                "migrate_plaintext_secrets: endpoint for key=%s could not be decrypted; skipping",
+                row["key"],
+                exc_info=True,
+            )
+            continue
+        await _write_config_row(conn, user_id=row["user_id"], key=row["key"], value=plaintext)
+        moved += 1
+    return moved
+
+
 async def migrate_plaintext_secrets(db_pool: asyncpg.Pool) -> int:
-    """Eagerly re-encrypt any plaintext rows for keys in :data:`_ENCRYPTED_KEYS`.
+    """Reconcile stored configuration rows with the current encryption policy.
 
     Older rows may still hold a plaintext secret in ``user_config.value`` while
     ``encrypted_value`` is NULL — the result of upgrading from a release that
     predated envelope encryption. This helper runs once at service startup and
     rewrites such rows in place: encrypts ``value`` into ``encrypted_value``
-    and clears ``value`` so the API never returns plaintext.
+    and clears ``value`` so the API never returns plaintext. Rows that already
+    have ``encrypted_value`` populated are skipped, so the pass is idempotent.
 
-    Skips rows that already have ``encrypted_value`` populated (idempotent).
-    Returns the number of rows rewritten.
+    It then runs :func:`_decrypt_stored_provider_base_urls`, the matching
+    correction for keys an earlier release encrypted but this one does not.
+
+    Returns the number of rows rewritten by either pass.
     """
     if not _ENCRYPTED_KEYS:
         return 0
@@ -188,6 +225,9 @@ async def migrate_plaintext_secrets(db_pool: asyncpg.Pool) -> int:
                 ciphertext_bytes,
             )
             rewritten += 1
-    if rewritten:
-        logger.info("migrate_plaintext_secrets: re-encrypted %d row(s)", rewritten)
-    return rewritten
+        if rewritten:
+            logger.info("migrate_plaintext_secrets: re-encrypted %d row(s)", rewritten)
+        moved = await _decrypt_stored_provider_base_urls(conn)
+    if moved:
+        logger.info("migrate_plaintext_secrets: made %d endpoint row(s) readable", moved)
+    return rewritten + moved

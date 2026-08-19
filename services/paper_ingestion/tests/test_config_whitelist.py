@@ -341,14 +341,38 @@ def test_api_key_login_key_allowed_and_system_scoped():
 
 
 def test_provider_registry_keys_are_system_scoped_secret_and_encrypted():
-    """Every provider registry config key must be admin/system scoped and protected."""
-    from jarvis_common.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
-    from jarvis_common.llm_provider_registry import PROVIDER_CONFIG_KEYS
+    """Provider credentials are protected; a provider endpoint stays readable.
 
+    Encrypting a base URL stored it as ciphertext with no readable value, so the
+    settings page showed the custom endpoint as unset while the runtime still
+    dialled it. Only the API key of a provider belongs in these two sets.
+    """
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
+    from jarvis_common.llm_provider_registry import (
+        PROVIDER_API_KEY_CONFIG_KEYS,
+        PROVIDER_BASE_URL_CONFIG_KEYS,
+        PROVIDER_CONFIG_KEYS,
+    )
+
+    assert PROVIDER_BASE_URL_CONFIG_KEYS, "a provider base-URL key must exist to be classified"
     assert PROVIDER_CONFIG_KEYS <= SYSTEM_KEYS
-    assert PROVIDER_CONFIG_KEYS <= _SECRET_KEYS
-    assert PROVIDER_CONFIG_KEYS <= _ENCRYPTED_KEYS
+    assert PROVIDER_API_KEY_CONFIG_KEYS <= _SECRET_KEYS
+    assert PROVIDER_API_KEY_CONFIG_KEYS <= _ENCRYPTED_KEYS
+    assert not (PROVIDER_BASE_URL_CONFIG_KEYS & _SECRET_KEYS)
+    assert not (PROVIDER_BASE_URL_CONFIG_KEYS & _ENCRYPTED_KEYS)
     assert all(_classify_config_key(key) == "system" for key in PROVIDER_CONFIG_KEYS)
+
+
+def test_secret_and_encrypted_config_keys_stay_identical():
+    """A key that is masked must also be encrypted at rest.
+
+    ``_resolve_config_value`` used to carry a second masking branch for keys in
+    ``_SECRET_KEYS`` alone. The branch was unreachable and was removed, so this
+    equality is what now keeps a "secret" key from being served in the clear.
+    """
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
+
+    assert _SECRET_KEYS == _ENCRYPTED_KEYS
 
 
 def test_provider_registry_keys_have_validators():
@@ -378,6 +402,66 @@ def test_one_unreadable_secret_does_not_break_the_configuration_listing() -> Non
     assert resolved is not None
     assert "not-decryptable" not in str(resolved)
     assert _resolve_config_value(key, {"key": key, "encrypted_value": None, "value": None}) is None
+
+
+@pytest.mark.usefixtures("fernet_key")
+def test_provider_base_url_stays_readable_while_its_api_key_is_masked() -> None:
+    """A configured endpoint must be shown, and its credential must not be."""
+    from jarvis_common.config_store import _resolve_config_value
+    from jarvis_common.crypto import encrypt_secret
+
+    endpoint = "https://llm.example.com/v1"
+    resolved_url = _resolve_config_value(
+        "llm.providers.custom_openai_compatible.base_url",
+        {"value": endpoint, "encrypted_value": None},
+    )
+    resolved_key = _resolve_config_value(
+        "llm.providers.custom_openai_compatible.api_key",
+        {"value": None, "encrypted_value": encrypt_secret("sk-live-secret").encode("ascii")},
+    )
+
+    assert resolved_url == endpoint
+    assert resolved_key is not None
+    assert "sk-live-secret" not in str(resolved_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_startup_migration_makes_a_stored_endpoint_readable_again() -> None:
+    """An endpoint an earlier release encrypted must come back as a readable row.
+
+    Those rows hold ciphertext with ``value`` NULL. Without this one-shot pass the
+    endpoint would read as never configured on the settings page while the runtime
+    kept dialling it, and only re-saving it by hand would agree the two again.
+    """
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.config_store import migrate_plaintext_secrets
+    from jarvis_common.crypto import encrypt_secret
+    from jarvis_common.testing import make_pool_and_conn
+
+    key = "llm.providers.custom_openai_compatible.base_url"
+    endpoint = "https://llm.example.com/v1"
+    pool, conn = make_pool_and_conn(with_transaction=False)
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [],  # no legacy plaintext secret rows to re-encrypt
+            [
+                {
+                    "user_id": None,
+                    "key": key,
+                    "encrypted_value": encrypt_secret(endpoint).encode("ascii"),
+                }
+            ],
+        ]
+    )
+
+    moved = await migrate_plaintext_secrets(pool)
+
+    assert moved == 1
+    assert [call.args for call in conn.execute.await_args_list] == [
+        ("SELECT platform.upsert_config_v1($1, $2, $3::jsonb, NULL)", None, key, endpoint)
+    ]
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,7 @@ from jarvis_common.llm_provider_registry import (
 )
 from jarvis_common.llm_provider_registry import (
     CLOUD_PROVIDERS,
+    PROVIDER_API_KEY_CONFIG_KEYS,
     PROVIDER_CONFIG_KEYS,
 )
 
@@ -278,6 +279,9 @@ def _classify_config_key(key: str) -> str:
     return "unknown"
 
 
+# Only the provider credential keys join these sets. A provider's base URL is an
+# endpoint, not a credential: masking it hid the custom endpoint an administrator
+# had configured behind a row that read as unset, while the runtime kept using it.
 _SECRET_KEYS: frozenset[str] = (
     frozenset(
         {
@@ -286,15 +290,12 @@ _SECRET_KEYS: frozenset[str] = (
             "telegram.bot_token",
         }
     )
-    | PROVIDER_CONFIG_KEYS
+    | PROVIDER_API_KEY_CONFIG_KEYS
 )
 
 _ENCRYPTED_KEYS: frozenset[str] = (
     frozenset(
         {
-            "llm.anthropic.api_key",
-            "llm.openai.api_key",
-            "llm.google.api_key",
             "zotero.api_key",
             # setup.py persists smtp.pass as Fernet ciphertext in encrypted_value;
             # keep the generic /api/config surface masking it consistently.
@@ -303,7 +304,7 @@ _ENCRYPTED_KEYS: frozenset[str] = (
             "telegram.bot_token",
         }
     )
-    | PROVIDER_CONFIG_KEYS
+    | PROVIDER_API_KEY_CONFIG_KEYS
 )
 
 # ---------------------------------------------------------------------------
