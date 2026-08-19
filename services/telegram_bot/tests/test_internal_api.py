@@ -42,8 +42,8 @@ def test_internal_api_has_session_and_slowapi_middleware() -> None:
     assert "SessionMiddleware" in middleware_class_names, (
         f"SessionMiddleware missing from internal_api; got {middleware_class_names}"
     )
-    assert "SlowAPIMiddleware" in middleware_class_names, (
-        f"SlowAPIMiddleware missing from internal_api; got {middleware_class_names}"
+    assert "SlowAPIASGIMiddleware" in middleware_class_names, (
+        f"rate-limit middleware missing from internal_api; got {middleware_class_names}"
     )
 
 

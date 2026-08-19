@@ -48,10 +48,10 @@ def _event_row(*, id: int = 1) -> dict:
 
 @pytest.fixture()
 def _base_app(mock_db):
-    """Return (app, pool, conn) with rate-limiter + verify_api_key bypassed."""
+    """Return (app, pool, conn) with the rate limiter and request authentication bypassed."""
     from jarvis_common.auth import verify_api_key
     from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
-    from platform_api.deps import get_db_pool, limiter
+    from platform_api.deps import get_db_pool, limiter, verify_platform_request
     from platform_api.main import app
 
     pool, conn = mock_db
@@ -64,7 +64,10 @@ def _base_app(mock_db):
             remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
-            dependency_overrides={verify_api_key: lambda: None},
+            dependency_overrides={
+                verify_platform_request: lambda: None,
+                verify_api_key: lambda: None,
+            },
         ),
     ):
         yield app, pool, conn

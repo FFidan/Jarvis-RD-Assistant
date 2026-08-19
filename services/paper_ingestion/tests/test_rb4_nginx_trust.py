@@ -283,9 +283,13 @@ def test_nginx_proxies_backend_liveness_routes():
     """The dashboard can check process liveness without deep dependency probes."""
     text = _nginx_text()
     assert "location = /health/paper_ingestion/live" in text
-    assert "proxy_pass http://paper_ingestion:8000/health/live;" in text
+    assert "proxy_pass http://jarvis_research/health/live;" in text
     assert "location = /health/learning_engine/live" in text
-    assert "proxy_pass http://learning_engine:8001/health/live;" in text
+    assert "proxy_pass http://jarvis_learning/health/live;" in text
+    # The named upstreams exist so connections are reused; they must still
+    # resolve to the backends themselves, or the liveness route proves nothing.
+    assert "upstream jarvis_research {\n    server paper_ingestion:8000;" in text
+    assert "upstream jarvis_learning {\n    server learning_engine:8001;" in text
 
 
 def test_nginx_proxied_locations_strip_owner_header():

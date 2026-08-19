@@ -205,12 +205,25 @@ class SessionMiddleware:
                 value for name, value in renewal.raw_headers if name == b"set-cookie"
             )
 
+        session_cookie_prefix = f"{SESSION_COOKIE_NAME}=".encode()
+
         async def send_with_renewal(message: Message) -> None:
-            """Append the renewal cookie without buffering the response body."""
+            """Append the renewal cookie without buffering the response body.
+
+            A handler that sets the session cookie itself owns the session for
+            this response: sign-out clears it, and sign-in mints a new one.
+            Appending a rolling renewal after either would put a live cookie
+            last and undo the handler's decision.
+            """
             if message["type"] == "http.response.start" and renewal_header is not None:
                 headers = list(message.get("headers", []))
-                headers.append((b"set-cookie", renewal_header))
-                message["headers"] = headers
+                handler_set_session = any(
+                    name.lower() == b"set-cookie" and value.startswith(session_cookie_prefix)
+                    for name, value in headers
+                )
+                if not handler_set_session:
+                    headers.append((b"set-cookie", renewal_header))
+                    message["headers"] = headers
             await send(message)
 
         await self.app(scope, receive, send_with_renewal)
