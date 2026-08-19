@@ -549,6 +549,64 @@ async def test_briefing_partial_degradation_on_milestones_failure():
     text = update.message.reply_text.call_args[0][0]
     assert "Briefing" in text or "briefing" in text.lower()
     assert "Task 1" in text
+    # Each surviving count carries the value its own gather returned, so a
+    # gather whose payload went to the wrong section cannot pass unnoticed.
+    assert "1</b> papers added to your library since midnight UTC" in text
+    assert "4</b> waiting in your inbox" in text
+    assert "2</b> cards due for review right now" in text
+    # The list section that failed says so. An absent section reads as "nothing
+    # due", which is the same untruth as a zero count.
+    assert "Milestones due in the next 7 days are unavailable right now" in text
+
+
+@pytest.mark.asyncio
+async def test_briefing_reports_unavailable_counts_rather_than_zero():
+    """A count whose gather failed says so; a backend outage is not a real zero."""
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.side_effect = [
+        make_http_response(None, status=500),  # new-paper count fails
+        make_http_response(None, status=500),  # inbox count fails
+        make_http_response(None, status=500),  # due cards fail
+        make_http_response(  # tasks OK
+            [{"title": "Task 1", "project_name": "Proj", "status": "todo"}]
+        ),
+        make_http_response([]),  # milestones OK
+    ]
+
+    await briefing_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "0</b> papers added to your library since midnight UTC" not in text
+    assert "0</b> waiting in your inbox" not in text
+    assert "0</b> cards due for review right now" not in text
+    assert "Papers added to your library since midnight UTC are unavailable right now" in text
+    assert "Your inbox count is unavailable right now" in text
+    assert "Cards due for review are unavailable right now" in text
+    # The sections that were read still render.
+    assert "Task 1" in text
+    # An empty list that was actually read stays absent; only an unread one speaks.
+    assert "Milestones due in the next 7 days" not in text
+
+
+@pytest.mark.asyncio
+async def test_briefing_distinguishes_an_unread_list_from_an_empty_one():
+    """An unread list says so; a list read as empty stays silent."""
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.side_effect = [
+        make_http_response({"count": 1}),
+        make_http_response({"total": 4}),
+        make_http_response({"due_count": 2}),
+        make_http_response(None, status=500),  # tasks unreadable
+        make_http_response([]),  # milestones genuinely empty
+    ]
+
+    await briefing_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "Your open tasks are unavailable right now" in text
+    assert "Open tasks (" not in text
+    assert "Milestones due in the next 7 days" not in text
 
 
 # ---------------------------------------------------------------------------

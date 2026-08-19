@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
@@ -27,7 +26,7 @@ from telegram_bot.handlers.helpers import (
     get_jarvis_user_id,
 )
 from telegram_bot.handlers.rate_limit import rate_limit
-from telegram_bot.vocabulary import is_not_done
+from telegram_bot.orchestration.daily_briefing import gather_briefing_sections
 
 logger = logging.getLogger(__name__)
 
@@ -318,51 +317,14 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = get_jarvis_user_id(context)
     assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
 
-    # Each section degrades independently: a transient failure on one gather
-    # leaves that section empty/zero rather than aborting the whole briefing.
-
-    # Papers added to the library since midnight UTC.
-    new_papers_count = 0
-    try:
-        new_papers_count = await services_client.fetch_new_paper_count(http, config, user_id)
-    except (httpx.HTTPError, ValueError, KeyError):
-        logger.exception("Failed to fetch new-paper count for briefing")
-
-    # Papers currently sitting in the Inbox view.
-    inbox_total = 0
-    try:
-        inbox_total = await services_client.fetch_inbox_count(http, config, user_id)
-    except (httpx.HTTPError, ValueError, KeyError):
-        logger.exception("Failed to fetch inbox count for briefing")
-
-    # Due cards from learning engine.
-    due_cards = 0
-    try:
-        due_cards = await services_client.fetch_due_card_count(http, config, user_id)
-    except (httpx.HTTPError, ValueError, KeyError):
-        logger.exception("Failed to fetch due-card count for briefing")
-
-    # Outstanding tasks. The endpoint filters on a single status, so the
-    # not-done set is applied here — one request, then My Day's own rule.
-    open_tasks: list[dict] = []
-    try:
-        all_tasks = await services_client.fetch_tasks(
-            http, config, user_id, limit=services_client.MAX_TASK_PAGE_SIZE
-        )
-        open_tasks = [task for task in all_tasks if is_not_done(task)]
-    except (httpx.HTTPError, ValueError, KeyError):
-        logger.exception("Failed to fetch tasks for briefing")
-
-    # Upcoming milestones (next 7 days).
-    milestones: list[dict] = []
-    try:
-        milestones = await services_client.fetch_upcoming_milestones(
-            http, config, user_id, within_days=7
-        )
-    except (httpx.HTTPError, ValueError, KeyError):
-        logger.exception("Failed to fetch milestones for briefing")
-
-    text = format_morning_briefing(new_papers_count, inbox_total, due_cards, open_tasks, milestones)
+    sections = await gather_briefing_sections(http, config, user_id)
+    text = format_morning_briefing(
+        sections.new_papers_count,
+        sections.inbox_total,
+        sections.due_cards,
+        sections.open_tasks,
+        sections.milestones,
+    )
     await update.message.reply_text(text, parse_mode="HTML")
 
 
