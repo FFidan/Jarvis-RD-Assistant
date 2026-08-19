@@ -74,6 +74,22 @@ class TelegramRuntime:
     timezone: str
 
 
+@dataclass(frozen=True, slots=True)
+class TimerPreferences:
+    """One user's saved focus-timer preference.
+
+    Parameters
+    ----------
+    work_minutes : int
+        Length of a single focus block, as configured in the web app.
+    target_cycles : int
+        How many focus blocks the user aims to complete in a day.
+    """
+
+    work_minutes: int
+    target_cycles: int
+
+
 async def resolve_pairing(
     client: httpx.AsyncClient,
     config: BotConfig,
@@ -172,6 +188,49 @@ async def get_runtime_context(
     if not isinstance(timezone, str) or not timezone:
         raise RuntimeError("Platform returned an invalid Telegram runtime context")
     return TelegramRuntime(owner_user_id, owner_chat_id, timezone)
+
+
+async def get_timer_preferences(
+    client: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> TimerPreferences:
+    """Return one user's saved focus-timer preference.
+
+    Parameters
+    ----------
+    client : httpx.AsyncClient
+        Dedicated Platform client.
+    config : BotConfig
+        Runtime configuration containing the Platform origin.
+    user_id : int
+        Paired JARVIS user whose preference is read.
+
+    Returns
+    -------
+    TimerPreferences
+        Validated timer preference; Platform substitutes the web app's
+        defaults when the user has never saved one.
+
+    Raises
+    ------
+    httpx.HTTPStatusError
+        If Platform rejects or cannot serve the request.
+    RuntimeError
+        If Platform returns a malformed response.
+    """
+    response = await client.get(
+        f"{config.platform_api_url}/internal/telegram/preferences/{user_id}/timer"
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("Platform returned an invalid timer preference")
+    work_minutes = _optional_int(payload.get("work_minutes"))
+    target_cycles = _optional_int(payload.get("target_cycles"))
+    if work_minutes is None or target_cycles is None:
+        raise RuntimeError("Platform returned an invalid timer preference")
+    return TimerPreferences(work_minutes, target_cycles)
 
 
 async def pair_chat(
@@ -337,8 +396,10 @@ def _optional_int(value: object) -> int | None:
 __all__ = [
     "PairingOutcome",
     "TelegramRuntime",
+    "TimerPreferences",
     "UserPairing",
     "get_runtime_context",
+    "get_timer_preferences",
     "list_user_pairings",
     "pair_chat",
     "record_event",

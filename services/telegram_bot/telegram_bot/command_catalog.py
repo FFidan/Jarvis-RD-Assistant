@@ -62,8 +62,8 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("done", "done <id>", "Mark a task complete", "Projects and tasks", "standard"),
     CommandSpec(
         "focus",
-        "focus [minutes]",
-        "Start a focus session",
+        "focus [start [minutes] / pause / resume / stop]",
+        "Show the focus timer, or start, pause, resume, or stop it",
         "Projects and tasks",
         "standard",
     ),

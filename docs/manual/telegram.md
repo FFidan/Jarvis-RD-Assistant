@@ -88,7 +88,7 @@ required.
 | `/newproject <name>` | Create a project |
 | `/tasks` | List in-progress tasks |
 | `/done <id>` | Mark a task complete |
-| `/focus [minutes]` | Start a shared focus session; the default is 25 minutes and the accepted range is 1–480 |
+| `/focus [start [minutes] / pause / resume / stop]` | Show the focus timer, or start, pause, resume, or stop it; a started session defaults to your saved focus length and accepts 1–480 minutes |
 | `/pair <code>` | Pair this Telegram chat to a JARVIS account |
 | `/unpair` | Unlink this chat from its account |
 | `/whoami` | Show the paired account |
@@ -135,9 +135,12 @@ feedback are unchanged; daily novelty is not guaranteed.
 
 ## Shared focus sessions
 
-`/focus [minutes]` starts the same per-user focus interval shown by the Web
-TopBar timer. The Web interface observes Telegram starts and can pause, resume,
-or stop that session. Starting another interval while one is active is refused,
+`/focus` reports the same per-user focus interval shown by the Web TopBar
+timer: its state and remaining time, today's focused minutes against your
+daily target, and your streak. `/focus start` begins an interval at your saved
+focus length unless you pass an explicit number of minutes, and `/focus pause`,
+`/focus resume`, and `/focus stop` drive the running one. Either client can
+drive the session. Starting another interval while one is active is refused,
 and completion time is recorded once even if both clients observe it.
 
 While the interval is active or paused, JARVIS suppresses scheduled morning
@@ -146,9 +149,10 @@ and author alerts for that user. The focus-completion notice and operator-error
 messages remain available. If the bot cannot confirm focus state, scheduled
 delivery stays suppressed rather than breaking the pause promise.
 
-Work and break durations, break cycles, and browser notification permission are
-device-local preferences. The active focus interval and its accounting are
-shared server state.
+Timer durations and the daily cycle target are account preferences, so
+Telegram uses the same values as the Web timer; browser notification permission
+stays device-local. The active focus interval and its accounting are shared
+server state.
 
 ---
 

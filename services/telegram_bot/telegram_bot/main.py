@@ -27,7 +27,14 @@ from jarvis_common.sentry import maybe_init_sentry
 from jarvis_common.settings import get_core_settings
 from jarvis_common.telemetry import configure_telemetry, flush_telemetry
 from telegram import BotCommand, Update
-from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
+from telegram.ext import (
+    Application,
+    ApplicationHandlerStop,
+    ContextTypes,
+    MessageHandler,
+    TypeHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
 from telegram_bot.command_catalog import menu_command_specs
@@ -246,6 +253,17 @@ async def _maintenance_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     raise ApplicationHandlerStop
 
 
+async def _unrecognized_text(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer plain text so a message the bot cannot act on is never dropped silently.
+
+    Registered last in the default group, so every command, conversation state,
+    and callback claims its own updates first.
+    """
+    if update.message is None:
+        return
+    await update.message.reply_text("I only understand commands — try /help")
+
+
 def main() -> None:
     """Build the bot application and start polling for updates.
 
@@ -287,6 +305,7 @@ def main() -> None:
     register_command_handlers(application)
     application.add_handler(get_review_conversation_handler())
     register_callback_handlers(application)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _unrecognized_text))
 
     logger.info("JARVIS Telegram Bot starting")
     application.run_polling(allowed_updates=["message", "callback_query"])

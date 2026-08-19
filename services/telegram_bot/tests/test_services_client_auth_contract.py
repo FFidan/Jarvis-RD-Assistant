@@ -39,6 +39,7 @@ _LE_TARGETS = [
     ("GET", "/api/review/next"),
     ("POST", "/api/review/{card_id:int}"),
     ("POST", "/api/executive/focus/log"),
+    ("GET", "/api/executive/my-day"),
 ]
 _PI_TARGETS = [
     ("GET", "/api/papers/feed"),

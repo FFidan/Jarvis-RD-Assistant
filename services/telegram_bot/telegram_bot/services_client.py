@@ -30,6 +30,7 @@ MAX_TASK_PAGE_SIZE = 200
 
 __all__ = [
     "MAX_TASK_PAGE_SIZE",
+    "MyDayFocusSummary",
     "PulsePayloadError",
     "fetch_projects",
     "fetch_project",
@@ -44,6 +45,7 @@ __all__ = [
     "fetch_next_review_card",
     "submit_review_rating",
     "fetch_active_focus_session",
+    "fetch_my_day_focus",
     "fetch_pending_telegram_focus_completion",
     "start_focus_session",
     "pause_focus_session",
@@ -452,6 +454,35 @@ async def log_focus_session(
         timeout=10.0,
     )
     resp.raise_for_status()
+
+
+class MyDayFocusSummary(BaseModel):
+    """The focus totals the executive My Day view reports for today."""
+
+    today_focus_hours: float
+    focus_streak_days: int
+
+
+async def fetch_my_day_focus(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> MyDayFocusSummary:
+    """GET {learning_engine}/api/executive/my-day → today's focus totals.
+
+    Only the two focus fields are parsed; the rest of the My Day payload
+    belongs to the web dashboard and is deliberately ignored here.
+    """
+    resp = await http.get(
+        f"{config.learning_engine_url}/api/executive/my-day",
+        headers=_owner_headers(config, user_id),
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    try:
+        return MyDayFocusSummary.model_validate(resp.json())
+    except ValidationError as exc:
+        raise ValueError("Learning Engine returned an invalid my-day payload") from exc
 
 
 def _parse_focus_session(payload: object) -> FocusSession:

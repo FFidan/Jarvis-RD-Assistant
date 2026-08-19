@@ -63,7 +63,7 @@ def test_menu_and_help_are_exact_catalog_projections() -> None:
         rendered = f"/{html.escape(spec.usage)} — {html.escape(spec.description)}"
         assert help_text.count(rendered) == 1
     assert "/papers [query]" in help_text
-    assert "/focus [minutes]" in help_text
+    assert "/focus [start [minutes] / pause / resume / stop]" in help_text
     assert "/cancel — Cancel the current flashcard review" in help_text
 
 
