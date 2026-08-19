@@ -86,6 +86,7 @@ class TestListFeedPapers:
         assert "total" in body
         assert body["total"] == 3
         assert len(body["papers"]) == 3
+        conn.fetchval.assert_not_awaited()
 
         paper = body["papers"][0]
         assert "id" in paper
@@ -158,7 +159,7 @@ class TestListFeedPapers:
 
         resp = test_client.get(
             "/api/papers/feed",
-            params={"q": "highlight", "include_zotero_notes": "true"},
+            params={"q": "highlight", "include_zotero_notes": "true", "limit": 1},
         )
         assert resp.status_code == 200
 

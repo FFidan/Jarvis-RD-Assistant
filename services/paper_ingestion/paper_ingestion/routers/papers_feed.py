@@ -311,7 +311,10 @@ async def list_feed_papers(
 
     async with db_pool.acquire() as conn:
         rows = await fetch_feed_rows(conn, query_parts)
-        count_row = await conn.fetchval(query_parts.count_query, *query_parts.count_params)
+        if offset == 0 and len(rows) < limit:
+            count_row = len(rows)
+        else:
+            count_row = await conn.fetchval(query_parts.count_query, *query_parts.count_params)
 
     papers = [row_to_feed_paper(row) for row in rows]
     for paper in papers:
