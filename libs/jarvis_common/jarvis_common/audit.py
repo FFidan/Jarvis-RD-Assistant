@@ -19,6 +19,16 @@ _ERASABLE_METADATA_KEYS = frozenset(
     {"email", "ip", "client_ip", "raw_client_ip", "name", "username", "user_agent", "user_id"}
 )
 _SAFE_RESOURCE_RE = re.compile(r"^/?[a-z][a-z0-9_./:-]{0,255}$")
+# Resource strings are delimited paths ("users/12", "telegram:pairing:user:12").
+# Splitting on the delimiters keeps the separators in the result, so joining the
+# parts back together reproduces the input except for the segments replaced.
+_RESOURCE_DELIMITER_RE = re.compile(r"([/:._-])")
+# Metadata keys that carry a caller's network address.
+_SOURCE_ADDRESS_KEYS = ("ip", "client_ip", "raw_client_ip")
+# 48 bits of SHA-256: wide enough to tell sources apart in an audit trail, and
+# small enough to survive JSON transport to the audit view, which reads numbers
+# as doubles and would silently round anything above 2**53.
+_ADDRESS_DIGEST_HEX_CHARS = 12
 
 
 def _cap_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -51,24 +61,51 @@ def _cap_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return json.loads(encoded)
 
 
+def _address_digest(address: str) -> int:
+    """Return a stable pseudonym for a caller's network *address*."""
+    return int(hashlib.sha256(address.encode("utf-8")).hexdigest()[:_ADDRESS_DIGEST_HEX_CHARS], 16)
+
+
 def _immutable_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Return audit-safe facts without erasable text values.
 
     The mutable Platform subject mapping owns identity and personal metadata.
     Immutable audit rows retain only typed operational facts, never arbitrary
     text that could contain an erasable identifier.
+
+    A caller's network address is the one exception, and it is kept as a
+    digest rather than dropped: an authentication failure with no attributable
+    source cannot be correlated at all, so repeated attempts from one address
+    would be indistinguishable from unrelated ones.
     """
     capped = _cap_metadata(metadata)
-    return {
+    immutable = {
         key: value
         for key, value in capped.items()
         if key not in _ERASABLE_METADATA_KEYS and isinstance(value, bool | int | float | type(None))
     }
+    for key in _SOURCE_ADDRESS_KEYS:
+        address = capped.get(key)
+        if isinstance(address, str) and address:
+            immutable["ip_hash"] = _address_digest(address)
+            break
+    return immutable
 
 
 def _immutable_resource(resource: str, user_id: str | None) -> str:
-    """Return a bounded non-identifying resource accepted by the database."""
-    sanitized = resource.replace(user_id, "subject") if user_id else resource
+    """Return a bounded non-identifying resource accepted by the database.
+
+    Only a whole delimited segment equal to *user_id* is pseudonymised. A
+    substring replacement would rename unrelated objects — for actor ``1``,
+    ``milestone:137`` became ``milestone:subject37`` and ``paper:1001`` became
+    ``paper:subject00subject`` — so distinct actions collapsed onto identical
+    strings in a table that cannot be corrected afterwards.
+    """
+    if user_id:
+        parts = _RESOURCE_DELIMITER_RE.split(resource)
+        sanitized = "".join("subject" if part == user_id else part for part in parts)
+    else:
+        sanitized = resource
     if _SAFE_RESOURCE_RE.fullmatch(sanitized):
         return sanitized
     digest = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()

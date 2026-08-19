@@ -226,6 +226,75 @@ async def test_log_audit_hashes_an_unsafe_resource(audit_runtime_conn):
     assert unsafe_resource not in stored
 
 
+@pytest.mark.parametrize(
+    ("actor_id", "resource", "expected"),
+    [
+        ("1", "milestone:137", "milestone:137"),
+        ("2", "project:22", "project:22"),
+        ("1", "paper:1001", "paper:1001"),
+        ("12", "task:123", "task:123"),
+        ("137", "milestone:137", "milestone:subject"),
+        ("1", "users/1", "users/subject"),
+    ],
+)
+async def test_log_audit_names_the_object_the_action_touched(
+    audit_runtime_conn, actor_id, resource, expected
+):
+    """The stored resource names the object, not a digit-substring of the actor.
+
+    The last two cases hold the other side of the contract: a segment that *is*
+    the actor's id stays pseudonymised, so the append-only row carries no
+    erasable identifier.
+    Verified: audit.py:78-96 — _immutable_resource replaces whole segments only.
+    """
+    from jarvis_common.audit import log_audit
+
+    action = f"test.resource.{uuid.uuid4().hex[:8]}"
+    await log_audit(_pool(audit_runtime_conn), action=action, resource=resource, user_id=actor_id)
+
+    stored = await audit_runtime_conn.fetchval(
+        "SELECT resource FROM audit_log WHERE action = $1",
+        action,
+    )
+    assert stored == expected
+
+
+async def test_log_audit_keeps_an_attributable_source_for_auth_failures(audit_runtime_conn):
+    """An authentication failure records where it came from, without the raw address.
+
+    Verified: auth.py:511,633 — auth.api_key.invalid and auth.session.missing
+    pass metadata={"ip": ...}.
+    Verified: db/init.sql:2818 — append_audit_event rejects any metadata value
+    that is not boolean, number or null, so the address is kept as a digest.
+    """
+    from jarvis_common.audit import log_audit
+
+    async def source_of_one_failure(address: str) -> int:
+        action = f"auth.api_key.invalid.{uuid.uuid4().hex[:8]}"
+        await log_audit(
+            _pool(audit_runtime_conn),
+            action=action,
+            resource="/api/test",
+            metadata={"ip": address},
+        )
+        stored = await audit_runtime_conn.fetchval(
+            "SELECT metadata FROM audit_log WHERE action = $1",
+            action,
+        )
+        assert stored is not None, "log_audit did not write the authentication-failure row"
+        assert "ip" not in stored, "the raw address must not reach the immutable row"
+        assert "ip_hash" in stored, "the authentication-failure row has no attributable source"
+        return stored["ip_hash"]
+
+    first = await source_of_one_failure("198.51.100.7")
+    repeat = await source_of_one_failure("198.51.100.7")
+    other = await source_of_one_failure("198.51.100.8")
+
+    assert first == repeat, "repeated attempts from one address must be correlatable"
+    assert first != other, "distinct addresses must not collapse onto one value"
+    assert first < 2**53, "the audit view transports metadata numbers as doubles"
+
+
 async def test_log_audit_strict_uses_the_supplied_connection(audit_runtime_conn):
     """Security-critical callers can join the audit insert to their transaction."""
     from jarvis_common.audit import log_audit_strict
