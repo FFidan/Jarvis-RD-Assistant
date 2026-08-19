@@ -44,6 +44,7 @@ _PASSKEY_ROUTER = (
 )
 _DOCKERIGNORE = _REPO_ROOT / ".dockerignore"
 _NGINX_CONFIG = _REPO_ROOT / "frontend" / "nginx.conf"
+_NGINX_FORWARDED_HEADERS = _REPO_ROOT / "frontend" / "nginx-forwarded-headers.conf"
 _COMPOSE_CONFIG = _REPO_ROOT / "docker-compose.yml"
 _CADDY_CONFIGS = (
     _REPO_ROOT / "caddy" / "Caddyfile",
@@ -432,8 +433,11 @@ def test_published_docs_match_access_reconfiguration_and_cloudflare_trust() -> N
     assert "Never bypass the whole application" in setup
 
     assert "$jarvis_cf_ingress" in nginx
-    assert "X-Jarvis-CF-Ingress" in nginx
     assert "$jarvis_cf_connecting_ip" in nginx
+    # The gateway sets the ingress marker from its shared forwarding include,
+    # which every proxying location pulls in.
+    forwarded_headers = _NGINX_FORWARDED_HEADERS.read_text(encoding="utf-8")
+    assert "proxy_set_header X-Jarvis-CF-Ingress $jarvis_cf_ingress;" in forwarded_headers
 
 
 def test_install_examples_use_host_paths_and_cover_supported_access_profiles() -> None:
