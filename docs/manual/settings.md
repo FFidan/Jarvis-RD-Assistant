@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-07-20 | routes: /settings, /settings?section=&item= -->
+<!-- verified-against-UI: 2026-08-19 | routes: /settings, /settings?section=&item= -->
 
 # Settings
 
@@ -24,7 +24,9 @@ Download a ZIP of your own account data from the Account section. This is the GD
 
 ### Appearance
 
-Toggle between **light mode**, **dark mode**, and **system** (follows your OS preference).
+Choose light, dark, or system (following your operating system), plus an **accent color** (Ink Blue, Forest, Burgundy, Slate, or Plum), a **type pairing** (Serif Calm, Sans Modern, Editorial, or Legacy), and an **information density** (Comfortable, Default, or Compact).
+
+All of these follow your account, not the browser. Sign in on another machine and the workspace looks the same; a colleague signing in on yours gets their own. The same is true of the [timer](#timer) durations and of the simple-or-full sidebar choice described in [Navigation](navigation.md).
 
 ### Passkeys
 
@@ -46,7 +48,7 @@ Enable and configure the paper data sources the system uses to discover new pape
 
 **ADMIN only.**
 
-### LLM Models
+### AI models
 
 Choose the models JARVIS uses. Each control is labelled in plain language with its technical alias in parentheses, so you don't need to know the jargon:
 
@@ -142,14 +144,23 @@ Repeated negative feedback for a topic dampens its positive similarity contribut
 
 ### Timer
 
-Configure the Pomodoro-style timer available in the TopBar: work interval,
-break interval, and long-break interval. Those preferences and break cycles are
-local to this browser. The active focus interval itself is stored per user, so
-starting it from the Web interface or Telegram shows the same remaining session
-in the other client. Pause, resume, stop, and completed-time accounting use that
-shared server state.
+Set the durations for the focus timer in the TopBar: work duration (15–60
+minutes), short break (3–15), long break (10–30), and how many work sessions
+run before a long break (2–8).
 
-### Observability
+These durations follow your account rather than the browser, so Telegram's
+`/focus` uses exactly the same numbers as the Web timer. Note that this settings
+page sits in the admin-only System section, but what it saves belongs to the
+signed-in account, not to the deployment. Changing a duration while a session is
+running applies from the next session, and the page says so.
+
+The running interval itself is shared server state: start it in the browser and
+Telegram reports the same remaining time, and pause, resume, stop, and the
+completed-minutes accounting all act on that one interval. Browser notification
+permission is the one thing that stays local to the device. See
+[Telegram](telegram.md#shared-focus-sessions).
+
+### Monitoring (Langfuse)
 
 Configure the Langfuse observability integration for tracing LLM calls. This setting is **hardware- and opt-in gated** — it requires a running Langfuse instance and is only active when explicitly enabled.
 
@@ -168,16 +179,19 @@ The change applies on the next status check — no restart required.
 
 ### Telegram
 
-Available to **all users**. Telegram pairing is personal: pair your own account
-with the configured bot to receive Pulse digests and interact with your library.
-See [Telegram](telegram.md) for the full pairing flow.
+One page covers the whole integration. **Your Telegram** is available to all
+users: Telegram pairing is personal, so you pair your own account with the
+instance's bot to receive Pulse digests and work with your library from your
+phone.
 
-### Bot Token
+Administrators see a second block below it, **Instance bot (admin)**, holding
+the BotFather token. The bot token is deployment-wide and encrypted in the
+database; each user's pairing stays separate from it. The `telegram` Compose
+profile must be enabled for the bot service to run, and a saved replacement
+token takes effect after that service is restarted.
 
-**ADMIN only.** The bot token is deployment-wide and encrypted in the database;
-each user's pairing remains separate. The `telegram` Compose profile must be
-enabled for the bot service to run, and a saved replacement token takes effect
-after that service is restarted. See [Telegram](telegram.md) for more context.
+Older links to a separate Bot Token item land on this page. See
+[Telegram](telegram.md) for the full pairing flow.
 
 ### Zotero
 
@@ -238,7 +252,7 @@ Create and manage your research topics. Topics are used by the Pulse engine to s
 
 Track specific authors. Papers by tracked authors are surfaced in your Pulse deck and feed.
 
-### Spaced Repetition
+### Learning Cards
 
 Configure FSRS parameters for the [Learning Cards](learning-cards.md) system: desired retention rate and learning step intervals.
 
@@ -250,4 +264,4 @@ Configure FSRS parameters for the [Learning Cards](learning-cards.md) system: de
 - [Telegram](telegram.md) — step-by-step pairing guide (Integrations → Telegram).
 - [Admin & Multi-tenant](admin.md) — admin-only pages for user management, audit log, and system health.
 - [Extraction Table](extraction-table.md) — uses templates managed in §IV System → Extraction Templates.
-- [Learning Cards](learning-cards.md) — uses FSRS parameters from §VI Research → Spaced Repetition.
+- [Learning Cards](learning-cards.md) — uses the FSRS parameters set in §VI Research → Learning Cards.

@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-27 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /consensus, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
+<!-- verified-against-UI: 2026-08-19 | routes: /, /my-day, /pulse, /feed?surface=library, /feed?surface=search, /projects, /ask, /extractions, /knowledge, /citations, /consensus, /cards, /analytics, /admin/users, /admin/system-health, /admin/audit-log, /admin/backups, /logs, /settings -->
 
 # Navigation
 
@@ -12,43 +12,59 @@ JARVIS RD Assistant uses a consistent application shell across all pages.
 
 The application is divided into three regions:
 
-- **Sidebar** (left) — primary navigation, grouped by function.
-- **TopBar** (top) — global controls: quick search, jobs indicator, Pomodoro timer, and theme toggle.
+- **Sidebar** (left) — primary navigation.
+- **TopBar** (top) — global controls: quick search, jobs indicator, focus timer, and theme toggle.
 - **Main content area** — the active page.
 
-On narrow viewports (below the `md` breakpoint) the sidebar is hidden and replaced by a **hamburger menu button** (☰) on the left of the TopBar; tapping it slides the full sidebar in from the left as a drawer (a Sheet overlay). Tapping outside the drawer or selecting a destination closes it.
+On narrow viewports (below the `md` breakpoint) the sidebar is hidden and replaced by a **hamburger menu button** on the left of the TopBar; tapping it slides the full sidebar in from the left as a drawer. Tapping outside the drawer or selecting a destination closes it.
 
 ---
 
-## Sidebar navigation groups
+## Two rails: simple and full
 
-The sidebar is divided into five labelled groups identified by Roman numerals. Each group has a short sub-label describing its purpose. The **Ⅴ Admin** group is only rendered for users with the **admin** role; it is hidden entirely from regular users.
+The sidebar has two densities, and the choice follows your account rather than the browser you happen to be using.
+
+**Simple** is what you start on. It is a short rail of the six places the daily research loop actually visits:
+
+| Item | Route |
+|------|-------|
+| [My Day](home-my-day.md) | `/my-day` |
+| [Papers](research-feed.md) | `/feed?surface=library` |
+| [Discover](research-feed.md) | `/feed?surface=search` |
+| [Projects](projects.md) | `/projects` |
+| [Learning Cards](learning-cards.md) | `/cards` |
+| [Ask](ask.md) | `/ask` |
+
+**Full** is the grouped layout below. Switch with the **Show all features** / **Simple view** button in the sidebar footer. Nothing is hidden by the simple rail in the sense of being unreachable — every page still has a URL, and links from other pages still work.
+
+Once you have saved or analyzed your first paper, a one-time tip appears above the toggle naming exactly what the full rail adds. Dismissing it or using the toggle retires it.
+
+---
+
+## Sidebar groups in full mode
+
+Groups are labelled with a Roman numeral and a one-line description of what they are for. The **Ⅳ Admin** group renders only for accounts with the admin role; regular users do not see it at all.
 
 | Group | Items (route) |
 |-------|---------------|
-| **Ⅰ Today** — *What needs your attention right now.* | [Home](home-my-day.md) (`/`) · [My Day](home-my-day.md) (`/my-day`) · [Pulse Deck](pulse.md) (`/pulse`) · [Library](research-feed.md) (`/feed`) · [Discover](research-feed.md) (`/feed?surface=search`) |
-| **Ⅱ Read** — *Your library, projects, and the graph that connects them.* | [Projects](projects.md) (`/projects`) · [Knowledge Graph](knowledge-graph.md) (`/knowledge`) · [Citation Graph](citation-graph.md) (`/citations`) · [Consensus](consensus.md) (`/consensus`) · [Extraction Table](extraction-table.md) (`/extractions`) |
+| **Ⅰ Today** — *What needs your attention right now.* | [My Day](home-my-day.md) (`/my-day`) · [Home](home-my-day.md) (`/`) · [Pulse Deck](pulse.md) (`/pulse`) · [Papers](research-feed.md) (`/feed?surface=library`) · [Discover](research-feed.md) (`/feed?surface=search`) |
+| **Ⅱ Workspace** — *Projects, questions, and the tools that connect your papers.* | [Projects](projects.md) (`/projects`) · [Ask](ask.md) (`/ask`) · [Extraction Table](extraction-table.md) (`/extractions`) · [Knowledge Graph](knowledge-graph.md) (`/knowledge`) · [Citation Graph](citation-graph.md) (`/citations`) · [Consensus](consensus.md) (`/consensus`) |
 | **Ⅲ Learn** — *Cards, analytics, and how your knowledge grows.* | [Learning Cards](learning-cards.md) (`/cards`) · [Analytics](analytics.md) (`/analytics`) |
-| **Ⅳ Ask** — *Cross-paper reasoning and workspace.* | [Ask](ask.md) (`/ask`) |
-| **Ⅴ Admin** — *Users, health, backups, and audit trail.* (**admin role only**) | [User Management](admin.md) (`/admin/users`) · [System Health](admin.md) (`/admin/system-health`) · [Audit Log](admin.md) (`/admin/audit-log`) · [Backups](admin.md) (`/admin/backups`) · [System Logs](admin.md) (`/logs`) |
+| **Ⅳ Admin** — *Users, health, and audit trail.* (**admin role only**) | [User Management](admin.md) (`/admin/users`) · [System Health](admin.md) (`/admin/system-health`) · [Audit Log](admin.md) (`/admin/audit-log`) · [Backups](admin.md) (`/admin/backups`) · [System Logs](admin.md) (`/logs`) |
 
-### Density modes — simple and full
-
-The sidebar has two density modes, remembered per device:
-
-- **Simple** — a short rail of the daily essentials (**Home · My Day · Library · Ask · Cards**). Everything else is one **"Show all features"** toggle away in the sidebar footer. This is the default the first time you use JARVIS, so the app isn't overwhelming.
-- **Full** — the complete grouped layout shown above. This is the default for returning users.
-
-Switch modes any time with the **"Show all features" / "Simple view"** toggle in the sidebar footer. Your choice is stored on your device and survives logout; it does not change which pages exist — every destination is always reachable.
+**Papers** and **Discover** are two views of the same `/feed` route, told apart by the `surface` query parameter. Discover is highlighted only while `surface=search`; every other feed state — Inbox, Saved, Reading, Trash — highlights Papers. See [Papers & Discover](research-feed.md).
 
 ### Sidebar footer
 
-Below a separator, the sidebar footer is visible to **all users**:
+Below a separator, and visible to everyone:
 
-- **Density toggle** (**"Show all features" / "Simple view"**) — switches the sidebar between simple and full modes (see above).
-- **Settings** link (`/settings`) — navigates to the Settings page.
-- **HealthDots pill** — shows live service health indicators. Admin users can click the pill to navigate to `/admin/system-health`; non-admin users see an in-place popover.
-- **Logout** button — ends the current session.
+- The **Show all features** / **Simple view** toggle described above.
+- **Settings** (`/settings`) — a footer utility link, not a member of any numbered group.
+- The **health pill** — live service-health dots. Admins can click it to open System Health; everyone else gets the detail in a popover on the spot.
+- The running version number.
+- **Sign out**.
+
+Collapsing the sidebar with the chevron in its header leaves icons only; each one keeps its label as a tooltip.
 
 ---
 
@@ -56,18 +72,26 @@ Below a separator, the sidebar footer is visible to **all users**:
 
 | Control | Function |
 |---------|----------|
-| **BrandMark** | Application logo / home anchor |
-| **⌘K / Ctrl+K** | Open the command-palette search — search papers, navigate to pages, or run actions |
-| **Error pill** | Appears only when the application has logged errors in the last 24 hours; shows the count of error/critical events and, when clicked, opens the System Logs error view. Hidden when there are no recent errors. |
-| **Jobs indicator** | Shows queued, running, and recent background work for your account, including work started from Telegram or another browser; click to expand the jobs panel |
-| **Pomodoro timer** | Shows the shared per-user focus session started from Web or Telegram; pause, resume, and stop operate on the same interval, while work and break preferences remain local to this browser (configure them in [Settings](settings.md) §IV System → Timer) |
-| **Keyboard shortcuts** | Opens the keyboard-shortcuts reference panel |
-| **Theme toggle** | Switch between light and dark mode |
-| **User avatar menu** | A round avatar button; opens a menu with two items — **Settings** (goes to `/settings`) and **Logout** (ends the session and returns to the sign-in page). |
+| **BrandMark** | Application logo and home anchor |
+| **Search your papers** (⌘K / Ctrl+K) | Opens the command palette over the papers you have saved |
+| **Error pill** | Appears only when the application has logged errors in the last 24 hours; shows the count and opens the System Logs error view |
+| **Jobs indicator** | Queued, running, and recent background work for your account, including work started from Telegram or another browser |
+| **Focus timer** | The shared per-user focus interval, startable from either Web or Telegram; see [Settings](settings.md) |
+| **Keyboard shortcuts** | Opens the shortcut reference (also `?`) |
+| **Theme toggle** | Light or dark |
+| **User avatar menu** | Settings and Sign out |
+
+### The three ways to search
+
+The app has three search inputs and they never overlap, so a result is always where you expect it:
+
+1. **⌘K in the TopBar** searches **the papers you have already saved** and opens one.
+2. **The filter box on Papers, Inbox, or Trash** narrows **the list you are currently looking at** by title or author, inside whatever facets are selected. It does not leave the view.
+3. **Discover** searches **external sources you do not have yet** — arXiv, Semantic Scholar, OpenAlex, PubMed — and its results have to be saved before they join your library.
 
 ---
 
 ## Related pages
 
 - [Getting Started](getting-started.md) — signing in and the setup wizard that precedes first use.
-- [Settings](settings.md) — configure the timer interval and appearance preferences.
+- [Settings](settings.md) — appearance, timer, and account preferences.

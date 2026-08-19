@@ -1,95 +1,85 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /feed, /feed?surface=inbox, /feed?surface=library, /feed?surface=search, /feed?surface=trash -->
+<!-- verified-against-UI: 2026-08-19 | routes: /feed, /feed?surface=inbox, /feed?surface=library, /feed?surface=search, /feed?surface=trash -->
 
-# Research Feed & Library
+# Papers & Discover
 
-The **Research Feed** at `/feed` is your primary paper management surface. It uses a three-pane layout: a **FacetRail** on the left for filtering, a **paper list** in the centre, and a detail preview or action panel on the right. The active surface is selected via the `?surface=` query parameter; the sidebar also provides direct navigation links for each surface.
+Both live at `/feed`, and the `surface` query parameter decides which one you see. The split is about ownership: **Papers** is what you already have, **Discover** is everything you do not.
 
 <!-- screenshot: /feed?surface=inbox — three-pane layout showing FacetRail, paper list with source filter chips, and a paper preview -->
 
 ---
 
-## Surfaces
+## Papers
 
-### Inbox — `?surface=inbox`
+Papers shows a facet rail on the left and the paper list on the right. The rail always describes **your own papers**, never the wider instance.
 
-The Inbox shows **unread** papers that have arrived since your last visit. It is the default view when you navigate to `/feed` without a surface parameter.
+### The facet rail
 
-**Source filter chips** at the top of the list let you narrow papers by origin: **arXiv**, **Semantic Scholar**, **OpenAlex**, **PubMed**, and any other configured sources. Chips are multi-select; selecting none shows all sources.
+| Group | Entries |
+|-------|---------|
+| **Status** | Inbox, Saved, Reading, Reading List, Done, Trash |
+| **Star** | Starred |
+| **Source** | One entry per source your papers came from |
+| **Topic** | One entry per topic your papers are tagged with, plus Untagged |
 
-**Upload PDF** — a button in the Inbox toolbar lets you upload a local PDF file directly into your library. The uploaded paper is queued for processing (text extraction, summarisation, embedding) in the same way as any other ingested paper.
+Every entry carries a count. Source and Topic need a live connection and say so when you are offline; Status and Star keep working from the cache.
 
-Marking a paper as read (or opening its detail view) removes it from the Inbox; it moves to the Library.
+When a facet has nothing in it, the rail explains why rather than showing an empty heading — no papers saved yet, or no topic tags yet, with a pointer to add a topic in Settings and turn on **Auto-add matches**.
 
----
+### The surfaces
 
-### Library — `?surface=library`
+**Inbox** (`?surface=inbox`) holds unread papers arriving from your configured sources, and it is where `/feed` lands by default when you are online. It needs a connection: offline it says so and points you at your saved papers.
 
-The Library contains all **saved** papers — those you have explicitly kept or that have been moved out of the Inbox.
+**Saved** (`?surface=library`) is everything you own. Offline, this is the surface `/feed` lands on instead, reading from the local cache and labelled with how old that cache is when the timestamp is known. An empty library shows a **Discover papers** and **Upload PDF** prompt rather than a blank list.
 
-**Filter box** — a search input at the top of the list. Once three or more characters are typed, the box performs a server-side full-text search across titles, authors, and abstracts across your whole library.
+The Reading, Reading List, and Done entries are the same surface with a reading-state filter applied.
 
-**Scope selector** at the top of the list toggles between:
+**Trash** (`?surface=trash`) holds papers you removed. They stay until you delete them for good, and **Restore** puts a paper back where it was. Permanent deletion removes your notes, summaries, highlights, and other private activity for that paper and cannot be undone — the shared paper record and its processed search content may remain, because this is your library's delete, not the instance's.
 
-- **My library** — papers you have personally saved or interacted with.
-- **Public + mine** — papers verified through the server's public scholarly
-  sources, together with private papers in your own library. It never includes
-  another user's private upload or personal integration merely because it
-  exists on the same instance.
+### Filtering the list in front of you
 
-See [Source-aware paper visibility](../SECURITY.md#source-aware-paper-visibility)
-for the canonical source matrix.
-
-**State filter chips** allow you to narrow by reading state:
-
-| Chip | Papers shown |
-|------|-------------|
-| ★ Starred | Papers you have starred |
-| Reading | Papers with state `reading` |
-| To read | Papers with state `to_read` |
-| Done | Papers with state `done` |
-
-If your library is empty, a **Discover CTA** prompt appears in the list area inviting you to run a search or trigger a Pulse deck to populate your library.
+The box above the list filters the **current** view by title, author, or abstract. It does not reach outside the facets you have selected and it does not navigate anywhere. **Upload PDF** sits beside it and takes you to Discover's upload zone.
 
 ---
 
-### Discover / Search — `?surface=search`
+## Discover
 
-The Search surface combines full-text keyword search with cross-source discovery.
+Discover has no facet rail: the rail counts your own papers, which is not what either Discover tab shows. Instead there are two tabs.
 
-**SearchBar** — a text input at the top of the list. Results update as you type (with debouncing). Results are shown as **PreviewResults** cards; each preview card has a **Save to library** button that adds the paper to your Library without navigating away.
+**Find new papers** searches external databases live. Tick the sources to include — a source that needs an API key you have not supplied is listed but cannot be ticked, marked *API key required* — type a query, and press **Search**. **Filters** adds a year range, an author, a sort order, and a result cap. Nothing runs as you type; the search is deliberate.
 
-**Source checkboxes** below the search bar let you restrict results to specific sources (arXiv, Semantic Scholar, OpenAlex, PubMed). By default all sources are included.
+**Browse public corpus** lists the public papers this instance already holds, plus your own, so you can save from them without going out to the network.
 
-**PDF upload zone** — a drag-and-drop area for uploading PDFs directly from the search surface, in addition to the Inbox upload button.
+Discover needs a connection. Offline it states that search is unavailable instead of failing quietly.
 
-> **Offline:** The Search surface requires an internet connection and is **disabled offline**. If you are offline, the surface shows a notice that search is unavailable and invites you to browse your locally cached Library instead.
+### What the results tell you
 
----
+Results arrive with a count and a sort control (relevance, newest, title, most cited). Above them is one row per source searched, and this is where the honesty matters:
 
-### Trash — `?surface=trash`
+- A source that answered reports **N results**.
+- A source that **failed** reports **not searched** — not "0 results", because it never looked. Its error message is printed underneath, along with the status code, any retry-after delay, and a settings hint when one applies.
 
-The Trash surface lists papers you have soft-deleted. Each paper has a **Restore** button that returns it to the Library. Papers in the Trash are not shown in any other surface.
+Nothing is pre-selected. Tick the papers you want and choose **Save N selected**, or **Save all unsaved**. Results already in your library are marked and excluded from saving; when every result is already yours, the page says so instead of offering a button that would do nothing.
 
-**Hard-delete** — a confirmation modal permanently removes a paper from your library, including your notes, summaries, highlights, and other private activity. This cannot be undone. A public paper record and its processed search content may remain; the web action is not a system-wide delete.
-
----
-
-## Bulk selection
-
-In all surfaces except Trash, you can select multiple papers using the checkbox that appears on hover for each list item. Once one or more papers are selected:
-
-- A **bulk action toolbar** appears above the list with actions appropriate to the current surface (e.g. Save, Mark as Done, Move to Trash).
-- Selecting all visible papers uses the header checkbox.
+**Upload PDF** — a drag-and-drop zone at the foot of Discover takes local PDFs directly. Arriving from the Upload PDF button on Papers moves that zone to the top of the page.
 
 ---
 
-## Pagination
+## Which papers you can see
 
-The paper list paginates when the result set is large. Navigation controls appear at the bottom of the list. The current page is preserved in the URL so you can bookmark or share a specific page.
+See [Source-aware paper visibility](../SECURITY.md#source-aware-paper-visibility) for the canonical matrix. In short: papers verified through the server's public scholarly sources are shared across the instance, and another user's private upload or personal integration never becomes visible to you merely because it exists on the same machine.
+
+---
+
+## Bulk selection and pagination
+
+Outside Trash, a checkbox appears on each row on hover; selecting one or more raises a bulk-action toolbar carrying the actions that make sense for the current surface. The header checkbox selects everything visible. Changing surface or facet clears the selection.
+
+Long result sets paginate, and the current page is carried in the URL so you can bookmark or share it.
 
 ---
 
 ## Related pages
 
-- [Paper Detail](paper-detail.md) — open any paper for full metadata, RAG chat, and analysis actions.
-- [Settings](settings.md) — configure sources, topics, and automation schedules that feed papers into this surface.
+- [Paper Detail](paper-detail.md) — open any paper for its full reading view.
+- [Settings](settings.md) — the sources, topics, and schedules that fill these surfaces.
+- [Navigation](navigation.md) — how Papers, Discover, and the command palette divide the job of searching.

@@ -1,112 +1,100 @@
-<!-- verified-against-UI: 2026-07-25 | routes: /, /my-day -->
+<!-- verified-against-UI: 2026-08-19 | routes: /, /my-day -->
 
 # My Day & Home
 
----
-
-## Home — `/`
-
-The Home page (titled **Dashboard**) is the first screen you see after signing in. It provides a quick-start dashboard for your research session and a system health overview.
-
-<!-- screenshot: / — Home page showing MetricTileGrid, SetupBanner, and onboarding checklist -->
-
-### MetricTileGrid
-
-A row of five **KPI tiles**: **Papers**, **Due Cards**, **Active Projects**, **Topics**, and **Scheduled Jobs**. The tiles are read-only; click any tile to navigate to the corresponding surface.
-
-### SetupBanner
-
-If the onboarding wizard has not been fully completed, a **SetupBanner** may appear at the top of the Home page. Once setup is complete it no longer appears. See [Getting Started](getting-started.md) for the full onboarding wizard flow.
-
-### Onboarding checklist
-
-Alongside the SetupBanner, an **onboarding checklist** ("Get started in 3 steps") tracks three first-use milestones: **Add a research topic**, **Fetch your first papers**, and **Analyze a paper**. Each step has a shortcut button (Go to Settings, Open Library) and is checked off automatically as you complete it. The checklist disappears once all three are done, or you can dismiss it with the × button.
-
-### Prepare library
-
-A **Prepare library** section queues background work for papers that are already in your library:
-
-| Operation | What it does |
-|-----------|-------------|
-| Process whole library | Queues eligible library papers for PDF download and processing, explicitly including summary generation, without requiring you to run each stage separately |
-| Process PDFs | Run text extraction and chunking for papers that have a local PDF but have not yet been processed |
-| Summarise | Generate summaries for processed papers that do not yet have summaries |
-
-Each queued operation appears in the Jobs panel while it runs, with progress and completed, failed, or blocked counts. You can cancel a running job; completed work remains, and it is safe to run the relevant operation again for papers that were skipped or did not finish. If there is nothing to queue, Home shows a no-work message instead of adding an empty job.
-
-Entity extraction is an administrator action and is shown only to admins after the advanced controls are opened.
+Two daily surfaces with different jobs. **My Day** is where you work: one thing to do now, and everything else folded away until you ask for it. **Home** is the instance dashboard — counts, setup progress, and the batch operations that prepare papers you already have.
 
 ---
 
 ## My Day — `/my-day`
 
-The **My Day** page gives you a focused daily research workspace. It is structured as a vertical sequence of sections, described below in order.
-
 <!-- screenshot: /my-day — DateMasthead at top, HeroNow section with HeroThread visible, and ProjectsSection below -->
 
-### DateMasthead
+The page opens with only the daily loop visible.
 
-The date and day of the week are shown at the top of the page, grounding the session in the current day.
+### The date
 
-### YesterdaySection
+Today's date and weekday sit at the top, so a page left open overnight cannot quietly pretend it is still yesterday.
 
-A brief summary of what you accomplished in the previous session: papers saved, cards reviewed, tasks completed.
+### Yesterday
 
-### HeroNow
+A short account of what the previous session produced. It hides itself entirely when there was no recorded activity, rather than showing a row of zeros.
 
-The primary focus section for the current moment. Shows one of four **Hero** components depending on your current activity:
+### Now
 
-| Component | Shown when |
-|-----------|-----------|
-| **HeroThread** | You have an active reading thread (a paper you were reading and left mid-way) |
-| **HeroTask** | You have an overdue or high-priority task in an active project |
-| **HeroPulse** | A new Pulse deck is available and you have not rated any cards today. When no deck exists yet, this surface shows a calm "No Pulse for today yet — generate one" call-to-action rather than an error. |
-| **HeroResumeReading** | A paper is marked as **Reading** and was last opened more than one day ago |
+The one thing to work on. **Now** offers up to four choices as small tabs, and only the ones that apply to you appear:
 
-Only the highest-priority hero is shown at a time.
+| Tab | Appears when |
+|-----|--------------|
+| **Pulse #1** | Always — the top card of today's [Pulse](pulse.md) deck |
+| **Resume thread** | You have an open reading thread |
+| **Continue task**, or **On break** | A focus interval is running or paused |
+| **Resume reading** | A paper is marked Reading |
 
-### IntentSection
+JARVIS picks a sensible starting tab, but an explicit choice wins and is remembered. If no Pulse deck exists yet, the Pulse tab offers to generate one instead of reporting an error.
 
-An input where you can set your **research intent** for today — a short statement of what you want to accomplish. Your intent is saved and displayed in subsequent sessions until you update it.
+### Intent
 
-### ProjectsSection
+A one-line statement of what you want to get done today. It is saved and shown back to you in later sessions until you change it.
 
-A compact list of your active projects with recent activity. Each project links directly to its detail view on the [Projects](projects.md) page.
+### Today's Pulse
 
-### ThreadsSection
+A preview of the top cards from today's deck, linking through to `/pulse` for the full deck and rating.
 
-A list of reading threads — papers you started reading but have not finished or marked as Done. Each thread shows the paper title, how long ago you last opened it, and a **Resume** button.
+### More
 
-### TodaysPulseSection
+Everything episodic sits behind a row of **More** chips at the foot of the page. Each chip expands the real section in place — nothing here is a summary of something else:
 
-A preview of today's [Pulse](pulse.md) deck showing the top recommended cards. Click through to `/pulse` to see the full deck and rate cards.
+| Chip | What opens |
+|------|-----------|
+| **Projects** | Your active projects and their recent activity, each linking to [Projects](projects.md) |
+| **Open threads** | Papers you started and have not finished, each with a Resume button |
+| **Triage** | Papers that arrived in your Inbox today: save, discard, or open |
+| **Learning & focus** | Cards due, your streak, and an estimated time for today's review, linking to [Learning Cards](learning-cards.md) |
+| **Weekly digest** | Papers ingested, cards reviewed, and topics covered over the past seven days |
+| **End of day** | A reflection prompt you can save as a note |
 
-### TriageSection
+Chips are independent: open as many as you want, and they stay open until you close them or leave the page.
 
-Papers that have arrived in your Inbox today, presented for quick triage: save to library, discard, or open for detail.
+---
 
-### LearningFocusSection
+## Home — `/`
 
-A summary of your spaced-repetition study for today: cards due, your current streak, and an estimated time to complete today's review. A **Review now** button links to `/cards`.
+The Home page, titled **Dashboard**, is the instance overview.
 
-### WeeklyDigestSection
+<!-- screenshot: / — Home page showing MetricTileGrid, SetupBanner, and onboarding checklist -->
 
-A compact weekly summary: papers ingested, cards reviewed, and topics covered over the past seven days.
+### Setup banner and first steps
 
-### EndOfDaySection
+If installation setup is not finished, a banner appears at the top; see [Getting Started](getting-started.md). Alongside it, a **Welcome to JARVIS Research Assistant** card tracks three first-use steps — **Add a research topic**, **Fetch your first papers**, and **Analyze a paper** — each with a shortcut button (Go to Settings, Open Papers). Steps check themselves off as you complete them, the card disappears once all three are done, and you can dismiss it early with the × button. Completing all three shows a one-time "All set! Happy researching." note.
 
-A reflection prompt that appears in the afternoon or evening. It invites you to note what you learned or questions that came up, which can be saved as notes or project entries.
+### Metric tiles
 
-### Footer
+Five counts, each a link: **Papers** (`/feed`), **Due Cards** (`/cards`), **Active Projects** (`/projects`), **Topics** (`/settings`), and **Scheduled Jobs** (`/settings`). They are read-only.
 
-Standard site footer with version information.
+### Prepare your papers
+
+Queue work for papers already in your library. Each button confirms first, then reports what it queued.
+
+| Button | What it does |
+|--------|-------------|
+| **Process all papers** | Queues download, PDF processing, and summaries for every saved paper that still needs them |
+| **Process PDFs** | Runs text extraction and chunking for papers that have a local PDF but have not been processed |
+
+Behind an **Advanced** disclosure:
+
+| Button | What it does |
+|--------|-------------|
+| **Summarize** | Generates summaries for processed papers that do not have one yet |
+| **Extract Entities** | Runs entity extraction for the Knowledge Graph. Administrators only; other accounts see a line explaining that in its place |
+
+Queued work appears in the jobs panel with a progress bar and, when it finishes only partly, a line reading how many items failed, were skipped, and were not processed out of the total. You can cancel a running job — it stops after the step in flight. Finished work stays finished, and re-running an operation for the papers that were skipped is safe. When there is nothing to queue, the button says so instead of creating an empty job.
 
 ---
 
 ## Related pages
 
-- [Getting Started](getting-started.md) — SetupBanner and onboarding checklist context.
-- [Pulse](pulse.md) — full Pulse deck linked from TodaysPulseSection.
-- [Projects](projects.md) — active projects linked from ProjectsSection.
-- [Learning Cards](learning-cards.md) — review session linked from LearningFocusSection.
-- [Research Feed & Library](research-feed.md) — Inbox triage linked from TriageSection.
+- [Getting Started](getting-started.md) — the setup banner and the first-run wizard.
+- [Pulse](pulse.md) — the full deck previewed on My Day.
+- [Papers & Discover](research-feed.md) — where triage and Papers live.
+- [Learning Cards](learning-cards.md) — the review session linked from Learning & focus.

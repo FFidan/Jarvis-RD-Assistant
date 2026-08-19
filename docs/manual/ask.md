@@ -81,5 +81,5 @@ The Ask workspace requires a live connection to the LLM backend. It is **not ava
 ## Related pages
 
 - [Paper Detail](paper-detail.md) — single-paper Ask tab for questions scoped to one document.
-- [Research Feed & Library](research-feed.md) — add more papers to your library to broaden the evidence base for answers.
+- [Papers & Discover](research-feed.md) — add more papers to your library to broaden the evidence base for answers.
 - [Settings](settings.md) — configure the LLM models used for answering.
