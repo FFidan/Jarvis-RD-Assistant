@@ -614,6 +614,84 @@ async def test_job_owner_registry_rejects_cross_queue_and_keeps_rollback_view(
             )
 
 
+async def test_the_test_only_job_kind_is_registered_and_owned_by_research(
+    contract_conn: asyncpg.Connection,
+) -> None:
+    """The test-only kind reaches the queue instead of being rejected on insert.
+
+    Exercises the ``ops.job_owner_registry`` seed installed by ``db/init.sql``
+    (the fresh-install mirror of ``db/migrations/0116_unified_job_facade.sql``).
+    ``ops.enforce_job_owner_metadata_v1`` raises for any job carrying
+    ``args->>'job_id'`` whose task has no registry row, and the public jobs API
+    always defers with a ``job_id``, so an unregistered kind cannot be enqueued
+    at all when ``JARVIS_ENABLE_TEST_JOBS=1`` exposes it.
+    """
+    from jarvis_common.task_registry import app
+
+    job_id = str(uuid.uuid4())
+    await contract_conn.execute(
+        """
+        INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
+        VALUES ($1, 'noop.test', $2::jsonb, 'todo')
+        """,
+        app.tasks["noop.test"].queue,
+        {"job_id": job_id, "user_id": 71},
+    )
+    assert await contract_conn.fetchrow(
+        "SELECT owner_queue, owner_service FROM ops.procrastinate_jobs WHERE args->>'job_id' = $1",
+        job_id,
+    ) == ("paper_ingestion", "research")
+
+
+async def test_job_cancel_reports_no_cancellation_for_finished_or_aborting_jobs(
+    contract_conn: asyncpg.Connection,
+) -> None:
+    """Cancelling a job that is no longer running reports that nothing was cancelled.
+
+    Exercises ``ops.jarvis_job_cancel_v1`` as installed by ``db/init.sql``.  The
+    public jobs API turns the returned boolean into 404-or-ok, so a job that was
+    already finished must not be reported as cancelled.  ``aborting`` is
+    deliberately grouped with the finished statuses: the job has already been
+    asked to stop, so a second cancellation cancels nothing.
+    """
+    uncancellable = {
+        status: await _seed_research_job(contract_conn, status)
+        for status in ("succeeded", "failed", "cancelled", "aborted", "aborting")
+    }
+    running_job_id = await _seed_research_job(contract_conn, "doing")
+
+    await contract_conn.execute("SET LOCAL ROLE jarvis_platform_runtime")
+    try:
+        for status, job_id in uncancellable.items():
+            assert (
+                await contract_conn.fetchval("SELECT ops.jarvis_job_cancel_v1($1, '71')", job_id)
+                is False
+            ), f"cancelling a {status} job must report that nothing was cancelled"
+        assert (
+            await contract_conn.fetchval(
+                "SELECT ops.jarvis_job_cancel_v1($1, '71')", running_job_id
+            )
+            is True
+        )
+    finally:
+        await contract_conn.execute("RESET ROLE")
+
+
+async def _seed_research_job(conn: asyncpg.Connection, status: str) -> str:
+    """Insert one owned research job in *status* and return its public job id."""
+    job_id = str(uuid.uuid4())
+    await conn.execute(
+        """
+        INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
+        VALUES ('paper_ingestion', 'paper.process', $1::jsonb,
+                $2::ops.procrastinate_job_status)
+        """,
+        {"job_id": job_id, "user_id": 71},
+        status,
+    )
+    return job_id
+
+
 async def test_job_rows_are_isolated_by_runtime_login(
     contract_conn: asyncpg.Connection,
 ) -> None:

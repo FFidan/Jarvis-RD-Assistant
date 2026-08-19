@@ -183,22 +183,22 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
         recorded_hash = await bootstrap.fetchval(
             "SELECT sha256 FROM ops.schema_migrations WHERE version = 114"
         )
-        assert recorded_hash == "2380f76ef37b0c6a0aa15c3a55cffbe7365ede9bfe5d8f22f4c1a72fde334a24"
+        assert recorded_hash == "d05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374"
         assert (
             await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 115")
-            == "852dc3ab061d731179d1cd53714887eca328db436eb6e2a4891d98bb1a1e6bcc"
+            == "f0bffa08d071b9bcd576f981d3e9db7074f63c1a2e538a5bd8acf4c181c41d46"
         )
         assert (
             await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 116")
-            == "9bbd93a0176f882062a66674cf9897d49473bfdc181c620a4d79131adb99fca6"
+            == "30852fdba224eca98935cf2011dc112532c40e7c61159c5f43cdc8c565b486e3"
         )
         assert (
             await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 117")
-            == "d8ff5e67cb30eb0ac0efb6be7e25cc0101b3ee18cd1902e91b8a50cd4954117b"
+            == "73ef094e42223b7c0c75067d2eb3c382fc0e3e6464b8054792539bf743cd7a98"
         )
         assert (
             await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 118")
-            == "f12a1b51a1c26225db1d96b1da5cb655584b7938f83bce30ffb638928c3c5468"
+            == "7f635041cdbc5f267a8d7816d3bdeb9475b5d1a34bc21e0b367d8f51e823ddcf"
         )
         assert (
             await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 119")

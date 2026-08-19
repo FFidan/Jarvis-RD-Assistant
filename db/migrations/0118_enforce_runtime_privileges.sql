@@ -166,4 +166,3 @@ FROM jarvis_research_runtime, jarvis_learning_runtime;
 GRANT SELECT ON ops.schema_migrations TO jarvis_platform_runtime;
 
 RESET ROLE;
-SET LOCAL search_path TO ops, public, pg_catalog;
