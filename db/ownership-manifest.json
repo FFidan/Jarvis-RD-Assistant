@@ -4,8 +4,8 @@
   "privilege_enforcement": "enforced",
   "restore_authority": {
     "path": "db/restore-authority.sql",
-    "sha256": "b1d00b7f61cfa92f1857b28bbaa52115fe8a3bcaeaccf0984a7831442069a469",
-    "schema_version": 119
+    "sha256": "cf863d946a88c22c15096c147dc2cf6350930deeb17e6267d44c511af7593710",
+    "schema_version": 120
   },
   "compatibility_baseline": {
     "source_release": "v1.2.5",
@@ -89,6 +89,10 @@
       {
         "path": "0119_erasure_executor_capability.sql",
         "sha256": "9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296"
+      },
+      {
+        "path": "0120_erasure_capability_boundary.sql",
+        "sha256": "2a714b13ecd9fd440d33594c3425e6922999d42bd5f8e47754834ae7e1431847"
       }
     ]
   },
@@ -266,9 +270,10 @@
   "functions": {
     "platform": [
       "platform.advance_visibility_checkpoint_v1",
-      "platform.audit_readiness_v1",
       "platform.append_audit_event",
       "platform.append_system_event_v1",
+      "platform.audit_readiness_v1",
+      "platform.begin_erasure_destructive_v1",
       "platform.claim_visibility_lease_v1",
       "platform.complete_visibility_checkpoint_v1",
       "platform.due_erasure_request_ids",
@@ -276,11 +281,18 @@
       "platform.mint_session_v1",
       "platform.purge_identity_retention_v1",
       "platform.purge_system_events_v1",
+      "platform.record_erasure_ack_v1",
+      "platform.record_erasure_retry_v1",
       "platform.reencrypt_config_v1",
       "platform.renew_session_v1",
+      "platform.request_erasure_v1",
+      "platform.restore_account_v1",
       "platform.rotate_visibility_checkpoint_v1",
+      "platform.set_account_deleted_v1",
       "platform.set_research_config_v1",
+      "platform.transition_erasure_v1",
       "platform.upsert_config_v1",
+      "platform.withdraw_erasure_v1",
       "set_updated_at"
     ],
     "research": [

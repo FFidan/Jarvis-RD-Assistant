@@ -57,13 +57,13 @@ def test_paper_chunks_have_no_user_ownership_in_fresh_or_upgraded_schema() -> No
 
 
 _BOOTSTRAP_SEED_LO = 1
-_BOOTSTRAP_SEED_HI = 119  # fresh init premarks the complete 1..118 baseline
+_BOOTSTRAP_SEED_HI = 121  # fresh init premarks the complete 1..120 baseline
 
 
 def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     """init.sql bootstrap must use an explicit version list, not generate_series.
 
-    Fresh init embodies and premarks the complete schema through version 118.
+    Fresh init embodies and premarks the complete schema through version 120.
     The seeded set must be exactly set(range(_BOOTSTRAP_SEED_LO,
     _BOOTSTRAP_SEED_HI)) — contiguous, no gaps.
     """
@@ -89,7 +89,7 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
 def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     """The schema_migrations seed in init.sql must own the full consolidated baseline.
 
-    Fresh init embodies and premarks the complete schema through version 118.
+    Fresh init embodies and premarks the complete schema through version 120.
     - init.sql premarks _BOOTSTRAP_SEED_LO.._BOOTSTRAP_SEED_HI-1.
     - Retained migration files may also be premarked: they are needed for
       in-place upgrades, while fresh installs already embody their effects.

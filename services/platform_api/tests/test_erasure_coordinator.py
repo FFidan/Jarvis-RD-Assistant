@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 import asyncpg
 import pytest
 from fastapi import FastAPI
-from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.testing import SharedConnPool
 from platform_api.config import PlatformSettings
 from platform_api.repos import erasure
@@ -62,10 +61,46 @@ async def test_due_requests_exclude_the_restore_window(contract_conn) -> None:
     assert recent not in request_ids
 
 
-async def test_transition_rejects_a_skipped_phase(contract_conn) -> None:
+_SEED_PHASES: dict[str, tuple[str, ...]] = {
+    "requested": (),
+    "qdrant_pending": (),
+    "research_pending": ("research_pending",),
+    "learning_pending": ("research_pending", "learning_pending"),
+}
+
+
+async def _seed_request_through_capabilities(
+    conn, *, deleted_days: int, state: str = "requested"
+) -> uuid.UUID:
+    """Create one request on the runtime connection using only its capabilities.
+
+    The runtime cannot write the erasure tables directly, so a contract that
+    exercises it has to reach the wanted phase the way production does. Seeding
+    and exercising share one connection because each holds its own transaction.
+    """
+    user_id = await conn.fetchval(
+        "INSERT INTO platform.users (email, role, deleted_at) "
+        "VALUES ($1, 'user', NOW() - $2::interval) RETURNING id",
+        f"erasure-{uuid.uuid4().hex}@example.com",
+        timedelta(days=deleted_days),
+    )
+    request_id = await conn.fetchval("SELECT platform.request_erasure_v1($1)", user_id)
+    if state == "requested":
+        return request_id
+    await conn.fetch("SELECT * FROM platform.begin_erasure_destructive_v1($1)", request_id)
+    current = "qdrant_pending"
+    for target in _SEED_PHASES[state]:
+        await conn.fetchval(
+            "SELECT platform.transition_erasure_v1($1, $2, $3)", request_id, target, current
+        )
+        current = target
+    return request_id
+
+
+async def test_transition_rejects_a_skipped_phase(platform_runtime_conn) -> None:
     """The persisted graph cannot jump from requested directly to ready."""
-    request_id = await _seed_request(contract_conn, deleted_days=31)
-    pool = SharedConnPool(contract_conn)
+    request_id = await _seed_request_through_capabilities(platform_runtime_conn, deleted_days=31)
+    pool = SharedConnPool(platform_runtime_conn)
 
     with pytest.raises(ValueError, match="requested.*ready"):
         await erasure.transition(pool, request_id, erasure.ErasureState.READY)
@@ -74,21 +109,21 @@ async def test_transition_rejects_a_skipped_phase(contract_conn) -> None:
     assert state is erasure.ErasureState.QDRANT_PENDING
 
 
-async def test_retry_persists_and_resumes_the_exact_phase(contract_conn) -> None:
+async def test_retry_persists_and_resumes_the_exact_phase(
+    platform_runtime_conn,
+) -> None:
     """A temporary owner outage resumes only the incomplete durable phase."""
-    request_id = await _seed_request(
-        contract_conn,
-        deleted_days=31,
-        state="learning_pending",
+    request_id = await _seed_request_through_capabilities(
+        platform_runtime_conn, deleted_days=31, state="learning_pending"
     )
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(platform_runtime_conn)
 
     state = await erasure.record_retry(
         pool,
         request_id,
         erasure.ErasureState.LEARNING_PENDING,
     )
-    row = await contract_conn.fetchrow(
+    row = await platform_runtime_conn.fetchrow(
         "SELECT state, resume_state, attempts FROM platform.erasure_requests WHERE request_id = $1",
         request_id,
     )
@@ -109,15 +144,17 @@ async def test_retry_persists_and_resumes_the_exact_phase(contract_conn) -> None
     assert resumed is erasure.ErasureState.LEARNING_PENDING
 
 
-async def test_duplicate_acknowledgements_replace_one_durable_receipt(contract_conn) -> None:
+async def test_duplicate_acknowledgements_replace_one_durable_receipt(
+    platform_runtime_conn,
+) -> None:
     """Duplicate delivery updates one domain vote instead of adding another."""
-    request_id = await _seed_request(contract_conn, deleted_days=31)
-    pool = SharedConnPool(contract_conn)
+    request_id = await _seed_request_through_capabilities(platform_runtime_conn, deleted_days=31)
+    pool = SharedConnPool(platform_runtime_conn)
 
     await erasure.acknowledge(pool, request_id, "learning", {"attempt": 1})
     await erasure.acknowledge(pool, request_id, "learning", {"attempt": 2})
 
-    rows = await contract_conn.fetch(
+    rows = await platform_runtime_conn.fetch(
         "SELECT receipt FROM platform.erasure_acknowledgements "
         "WHERE request_id = $1 AND domain = 'learning'",
         request_id,
@@ -126,14 +163,14 @@ async def test_duplicate_acknowledgements_replace_one_durable_receipt(contract_c
     assert rows[0]["receipt"] == {"attempt": 2}
 
 
-async def test_resume_after_learning_outage_does_not_repeat_completed_owners(contract_conn) -> None:
+async def test_resume_after_learning_outage_does_not_repeat_completed_owners(
+    platform_runtime_conn,
+) -> None:
     """Persisted Qdrant and Research receipts narrow retry to Learning only."""
-    request_id = await _seed_request(
-        contract_conn,
-        deleted_days=31,
-        state="learning_pending",
+    request_id = await _seed_request_through_capabilities(
+        platform_runtime_conn, deleted_days=31, state="learning_pending"
     )
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(platform_runtime_conn)
     await erasure.acknowledge(pool, request_id, "qdrant", {"residual_points": 0})
     await erasure.acknowledge(pool, request_id, "research", {"acknowledged": True})
 
@@ -181,16 +218,11 @@ async def test_due_pass_isolates_a_concurrent_restore(
 async def test_restore_lock_cancels_a_waiting_destructive_start(
     contract_pg_dsn: str,
     _contract_pool,
+    platform_runtime_conn,
 ) -> None:
     """A restore holding the account rows wins before destructive work begins."""
     restore_conn = await asyncpg.connect(contract_pg_dsn)
-    pool = await asyncpg.create_pool(
-        contract_pg_dsn,
-        min_size=1,
-        max_size=1,
-        init=init_pg_connection,
-        server_settings={"search_path": "platform,public,pg_catalog"},
-    )
+    pool = SharedConnPool(platform_runtime_conn)
     transaction = restore_conn.transaction()
     committed = False
     try:
@@ -229,7 +261,6 @@ async def test_restore_lock_cancels_a_waiting_destructive_start(
     finally:
         if not committed and restore_conn.is_in_transaction():
             await transaction.rollback()
-        await pool.close()
         await restore_conn.close()
 
 

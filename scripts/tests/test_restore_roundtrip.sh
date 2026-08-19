@@ -1303,10 +1303,23 @@ restore_boundary_holds() {
   del=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.audit_subjects', 'DELETE')")
   subj=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.audit_subjects', 'UPDATE')")
   nudge=$(q jarvis "SELECT has_function_privilege('jarvis_research_runtime', 'learning.update_scheduled_nudge_v1(integer,boolean,text,boolean,boolean,boolean,jsonb)', 'EXECUTE')")
-  [ "$reader" = f ] && [ "$lister" = f ] && [ "$canceller" = f ]     && [ "$ins" = f ] && [ "$upd" = f ] && [ "$del" = f ] && [ "$subj" = f ]     && [ "$nudge" = t ]
+  local req_ins req_upd req_del ack_ins usr_del usr_upd usr_email cap
+  req_ins=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.erasure_requests', 'INSERT')")
+  req_upd=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.erasure_requests', 'UPDATE')")
+  req_del=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.erasure_requests', 'DELETE')")
+  ack_ins=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.erasure_acknowledgements', 'INSERT')")
+  usr_del=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.users', 'DELETE')")
+  usr_upd=$(q jarvis "SELECT has_column_privilege('jarvis_platform_runtime', 'platform.users', 'deleted_at', 'UPDATE')")
+  usr_email=$(q jarvis "SELECT has_column_privilege('jarvis_platform_runtime', 'platform.users', 'email', 'UPDATE')")
+  cap=$(q jarvis "SELECT has_function_privilege('jarvis_platform_runtime', 'platform.withdraw_erasure_v1(bigint)', 'EXECUTE')")
+  [ "$reader" = f ] && [ "$lister" = f ] && [ "$canceller" = f ] \
+    && [ "$ins" = f ] && [ "$upd" = f ] && [ "$del" = f ] && [ "$subj" = f ] \
+    && [ "$nudge" = t ] \
+    && [ "$req_ins" = f ] && [ "$req_upd" = f ] && [ "$req_del" = f ] && [ "$ack_ins" = f ] \
+    && [ "$usr_del" = f ] && [ "$usr_upd" = f ] && [ "$usr_email" = t ] && [ "$cap" = t ]
 }
 if restore_boundary_holds; then
-  ok "reconstructed authority matches the fresh-install privilege boundary (job facade Platform-only, audit tables capability-only, nudge update Research-only)"
+  ok "reconstructed authority matches the fresh-install privilege boundary (job facade, audit tables, erasure tables and the deletion clock are capability-only)"
 else
   no "reconstructed authority is broader than a fresh install: a restored deployment would be weaker than db/init.sql builds"
 fi

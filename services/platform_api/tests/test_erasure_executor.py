@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import asyncpg
 import pytest
@@ -152,3 +153,89 @@ async def test_executor_is_capability_only_and_duplicate_finalization_is_harmles
             await research.fetch("SELECT request_id FROM platform.due_erasure_request_ids($1)", 1)
     finally:
         await research.close()
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def platform_runtime_connection(contract_pg_dsn, _contract_pool):
+    """Yield a connection authenticated as the platform runtime role."""
+    password = "platform-runtime-contract-password"
+    bootstrap = await asyncpg.connect(contract_pg_dsn)
+    await init_pg_connection(bootstrap)
+    await bootstrap.execute(
+        "ALTER ROLE jarvis_platform_runtime LOGIN PASSWORD 'platform-runtime-contract-password'"
+    )
+    runtime = await asyncpg.connect(
+        contract_pg_dsn,
+        user="jarvis_platform_runtime",
+        password=password,
+    )
+    try:
+        yield bootstrap, runtime
+    finally:
+        await runtime.close()
+        await bootstrap.close()
+
+
+async def test_platform_runtime_cannot_bypass_the_erasure_invariants(
+    platform_runtime_connection,
+) -> None:
+    """Erasure state and the deletion clock are reachable only as capabilities.
+
+    Direct writes would let the service that requests an erasure also assemble
+    its preconditions: back-date the grace window, forge the acknowledgements
+    finalization counts, or remove the account outright.
+    """
+    bootstrap, runtime = platform_runtime_connection
+    user_id = await bootstrap.fetchval(
+        """INSERT INTO platform.users (email, role, deleted_at)
+           VALUES ($1, 'user', NOW()) RETURNING id""",
+        f"runtime-{uuid.uuid4().hex}@example.com",
+    )
+
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await runtime.execute(
+            """INSERT INTO platform.erasure_requests
+               (request_id, user_id, state, resume_state, eligible_at)
+               VALUES ($1, $2, 'ready', 'learning_pending', NOW())""",
+            uuid.uuid4(),
+            user_id,
+        )
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await runtime.execute(
+            """INSERT INTO platform.erasure_acknowledgements (request_id, domain, receipt)
+               VALUES ($1, 'research', '{}'::jsonb)""",
+            uuid.uuid4(),
+        )
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await runtime.execute(
+            "UPDATE platform.users SET deleted_at = NOW() - INTERVAL '99 days' WHERE id = $1",
+            user_id,
+        )
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await runtime.execute("DELETE FROM platform.users WHERE id = $1", user_id)
+
+    # Account administration the runtime legitimately owns still works.
+    await runtime.execute(
+        "UPDATE platform.users SET display_name = 'renamed' WHERE id = $1", user_id
+    )
+
+    # The capability derives the grace window itself, so a request created now
+    # is not yet due and the destructive phase refuses to start.
+    request_id = await runtime.fetchval("SELECT platform.request_erasure_v1($1)", user_id)
+    assert request_id is not None
+    with pytest.raises(asyncpg.RaiseError, match="restore grace"):
+        await runtime.fetch("SELECT * FROM platform.begin_erasure_destructive_v1($1)", request_id)
+
+    # Completion stays reserved for the executor's finalization capability.
+    with pytest.raises(asyncpg.RaiseError, match="reserved for finalization"):
+        await runtime.fetchval(
+            "SELECT platform.transition_erasure_v1($1, 'complete', 'requested')", request_id
+        )
+
+    eligible_at = await bootstrap.fetchval(
+        "SELECT eligible_at FROM platform.erasure_requests WHERE request_id = $1", request_id
+    )
+    deleted_at = await bootstrap.fetchval(
+        "SELECT deleted_at FROM platform.users WHERE id = $1", user_id
+    )
+    assert eligible_at == deleted_at + timedelta(days=30)

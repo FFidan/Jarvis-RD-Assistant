@@ -383,13 +383,40 @@ async def test_restore_authority_reapplies_current_privileges(live_pg_dsn: str) 
             ("jarvis_restore_operator", True),
         ]
 
-        for privilege in _DML:
+        # Accounts are readable and creatable by the runtime, but the deletion
+        # clock and account removal belong to the owner-defined capabilities:
+        # the grace window finalization measures must not be writable by the
+        # service that requests an erasure.
+        for privilege in ("INSERT", "SELECT"):
             assert await bootstrap.fetchval(
                 "SELECT has_table_privilege($1, $2, $3)",
                 "jarvis_platform_runtime",
                 "platform.users",
                 privilege,
             )
+        assert not await bootstrap.fetchval(
+            "SELECT has_table_privilege($1, $2, 'DELETE')",
+            "jarvis_platform_runtime",
+            "platform.users",
+        )
+        assert not await bootstrap.fetchval(
+            "SELECT has_column_privilege($1, $2, 'deleted_at', 'UPDATE')",
+            "jarvis_platform_runtime",
+            "platform.users",
+        )
+        assert await bootstrap.fetchval(
+            "SELECT has_column_privilege($1, $2, 'email', 'UPDATE')",
+            "jarvis_platform_runtime",
+            "platform.users",
+        )
+        for table in ("platform.erasure_requests", "platform.erasure_acknowledgements"):
+            for privilege in ("INSERT", "UPDATE", "DELETE"):
+                assert not await bootstrap.fetchval(
+                    "SELECT has_table_privilege($1, $2, $3)",
+                    "jarvis_platform_runtime",
+                    table,
+                    privilege,
+                )
         assert await bootstrap.fetchval(
             "SELECT has_function_privilege($1, $2, 'EXECUTE')",
             "jarvis_erasure_executor",

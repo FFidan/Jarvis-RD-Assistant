@@ -28,6 +28,8 @@ Carve-out: send_magic_link (SMTP) is patched out — outbound email boundary exe
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch
@@ -45,6 +47,39 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+async def _seed_soft_deleted(conn, user_id: int, ago: timedelta = timedelta(0)) -> None:
+    """Back-date a soft deletion for setup, outside the runtime's authority.
+
+    The deletion clock is capability-only for ``jarvis_platform_runtime`` so the
+    grace window cannot be shortened at runtime. Fixtures that need an aged
+    deletion therefore set it with the connection's own authority and hand the
+    runtime identity back before the request under test runs.
+    """
+    await conn.execute("RESET SESSION AUTHORIZATION")
+    try:
+        await conn.execute(
+            "UPDATE users SET deleted_at = NOW() - $2::interval WHERE id = $1",
+            user_id,
+            ago,
+        )
+    finally:
+        await conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
+
+
+async def _seed_erasure_request(conn, user_id: int) -> object:
+    """Create a pending erasure row for setup, outside the runtime's authority."""
+    await conn.execute("RESET SESSION AUTHORIZATION")
+    try:
+        return await conn.fetchval(
+            """INSERT INTO erasure_requests (request_id, user_id, state, resume_state)
+               VALUES (gen_random_uuid(), $1, 'requested', 'qdrant_pending')
+               RETURNING request_id""",
+            user_id,
+        )
+    finally:
+        await conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
 
 
 async def _seed_admin_user(conn) -> tuple[int, str]:
@@ -183,7 +218,7 @@ async def audit_admin_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from platform_api.deps import get_db_pool
+    from platform_api.deps import get_db_pool, verify_platform_request
     from platform_api.main import app
 
     async def _allow_all() -> None:
@@ -200,6 +235,7 @@ async def audit_admin_client(contract_conn):
                 set_overrides={
                     get_db_pool: lambda: shared,
                     verify_api_key: lambda: None,
+                    verify_platform_request: lambda: None,
                     require_admin: _allow_all,
                 },
             ),
@@ -280,10 +316,7 @@ async def test_a4_include_deleted_surfaces_restorable_soft_deleted_users(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         "include-deleted-target@example.com",
     )
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
-        target_id,
-    )
+    await _seed_soft_deleted(contract_conn, target_id, ago=timedelta(hours=1))
 
     # Default list must omit the soft-deleted user.
     default_resp = await admin_client.get("/api/admin/users")
@@ -385,10 +418,7 @@ async def test_a5_invite_soft_deleted_email_returns_409(admin_client, contract_c
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         soft_deleted_email,
     )
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() WHERE id = $1",
-        user_id,
-    )
+    await _seed_soft_deleted(contract_conn, user_id)
 
     resp = await admin_client.post(
         "/api/admin/users",
@@ -714,16 +744,8 @@ async def test_a8_restore_user_clears_deleted_at(admin_client, contract_conn):
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         "restore-target@example.com",
     )
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
-        target_id,
-    )
-    request_id = await contract_conn.fetchval(
-        """INSERT INTO erasure_requests (request_id, user_id, state, resume_state)
-           VALUES (gen_random_uuid(), $1, 'requested', 'qdrant_pending')
-           RETURNING request_id""",
-        target_id,
-    )
+    await _seed_soft_deleted(contract_conn, target_id, ago=timedelta(hours=1))
+    request_id = await _seed_erasure_request(contract_conn, target_id)
     assert request_id is not None
 
     with patch("platform_api.routers.admin.log_audit", new_callable=AsyncMock):
@@ -760,10 +782,7 @@ async def test_a8_restore_outside_grace_returns_404(admin_client, contract_conn)
         "restore-expired-target@example.com",
     )
     # Soft-delete the user past the 30-day grace window.
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() - INTERVAL '31 days' WHERE id = $1",
-        target_id,
-    )
+    await _seed_soft_deleted(contract_conn, target_id, ago=timedelta(days=31))
 
     resp = await admin_client.post(f"/api/admin/users/{target_id}/restore")
 
@@ -780,7 +799,7 @@ async def test_restoring_configured_deleted_admin_owner_requires_explicit_repair
         "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
         "configured-deleted-owner@example.com",
     )
-    await contract_conn.execute("UPDATE users SET deleted_at = NOW() WHERE id = $1", target_id)
+    await _seed_soft_deleted(contract_conn, target_id)
     await _set_database_owner(contract_conn, target_id)
 
     response = await admin_client.post(f"/api/admin/users/{target_id}/restore")

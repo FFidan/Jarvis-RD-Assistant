@@ -84,26 +84,11 @@ class ErasureRequest:
 
 async def create_or_get_request(conn: asyncpg.Connection, user_id: int) -> uuid.UUID:
     """Create one active request or return its stable idempotency key."""
-    active = await conn.fetchval(
-        """SELECT request_id FROM erasure_requests
-           WHERE user_id = $1 AND state NOT IN ('complete', 'attention_required')
-           ORDER BY requested_at DESC LIMIT 1""",
+    request_id = await conn.fetchval(
+        "SELECT platform.request_erasure_v1($1)",
         user_id,
     )
-    if active is not None:
-        return uuid.UUID(str(active))
-    request_id = uuid.uuid4()
-    await conn.execute(
-        """INSERT INTO erasure_requests
-           (request_id, user_id, state, resume_state, eligible_at)
-           SELECT $1, id, 'requested', 'qdrant_pending',
-                  deleted_at + INTERVAL '30 days'
-           FROM users
-           WHERE id = $2 AND deleted_at IS NOT NULL""",
-        request_id,
-        user_id,
-    )
-    return request_id
+    return uuid.UUID(str(request_id))
 
 
 async def get_request(pool: asyncpg.Pool, request_id: uuid.UUID) -> ErasureRequest | None:
@@ -132,42 +117,26 @@ async def get_request(pool: asyncpg.Pool, request_id: uuid.UUID) -> ErasureReque
 async def begin_destructive_phases(pool: asyncpg.Pool, request_id: uuid.UUID) -> ErasureRequest:
     """Serialize the grace-boundary transition with account restoration."""
     async with pool.acquire() as conn, conn.transaction():
-        row = await conn.fetchrow(
-            """SELECT request_id, user_id, state, attempts, resume_state, eligible_at
-               FROM erasure_requests WHERE request_id = $1 FOR UPDATE""",
-            request_id,
-        )
-        if row is None:
-            raise LookupError(f"erasure request {request_id} does not exist")
-        user = await conn.fetchrow(
-            "SELECT deleted_at FROM users WHERE id = $1 FOR UPDATE",
-            row["user_id"],
-        )
-        if user is None or user["deleted_at"] is None:
-            raise RuntimeError("erasure account is no longer disabled")
-        state = ErasureState(str(row["state"]))
-        if state is ErasureState.REQUESTED:
-            eligible = await conn.fetchval(
-                """SELECT $1 <= NOW() AND $2::timestamptz + INTERVAL '30 days' <= NOW()""",
-                row["eligible_at"],
-                user["deleted_at"],
-            )
-            if eligible is not True:
-                raise ValueError("account erasure is still inside the restore grace")
-            await conn.execute(
-                """UPDATE erasure_requests SET state = 'qdrant_pending'
-                   WHERE request_id = $1 AND state = 'requested'""",
+        try:
+            row = await conn.fetchrow(
+                "SELECT * FROM platform.begin_erasure_destructive_v1($1)",
                 request_id,
             )
-            state = ErasureState.QDRANT_PENDING
+        except asyncpg.RaiseError as exc:
+            message = str(exc)
+            if "does not exist" in message:
+                raise LookupError(f"erasure request {request_id} does not exist") from exc
+            if "restore grace" in message:
+                raise ValueError("account erasure is still inside the restore grace") from exc
+            raise RuntimeError("erasure account is no longer disabled") from exc
         return ErasureRequest(
-            request_id=uuid.UUID(str(row["request_id"])),
+            request_id=request_id,
             user_id=int(row["user_id"]),
-            state=state,
+            state=ErasureState(str(row["state"])),
             attempts=int(row["attempts"]),
             resume_state=ErasureState(str(row["resume_state"])),
             eligible_at=row["eligible_at"],
-            deleted_at=user["deleted_at"],
+            deleted_at=row["deleted_at"],
         )
 
 
@@ -197,12 +166,7 @@ async def acknowledge(
 ) -> None:
     """Persist an idempotent domain acknowledgement."""
     await pool.execute(
-        """
-        INSERT INTO erasure_acknowledgements (request_id, domain, receipt)
-        VALUES ($1, $2, $3::jsonb)
-        ON CONFLICT (request_id, domain)
-        DO UPDATE SET receipt = EXCLUDED.receipt, acknowledged_at = NOW()
-        """,
+        "SELECT platform.record_erasure_ack_v1($1, $2, $3)",
         request_id,
         domain,
         receipt,
@@ -258,11 +222,7 @@ async def transition(
                 f"expected {resume_state.value}"
             )
     persisted = await pool.fetchval(
-        """UPDATE erasure_requests
-           SET state = $2, last_error = NULL,
-               next_attempt_at = CASE WHEN $2 = 'retry_wait' THEN next_attempt_at ELSE NOW() END
-           WHERE request_id = $1 AND state = $3
-           RETURNING state""",
+        "SELECT platform.transition_erasure_v1($1, $2, $3)",
         request_id,
         target.value,
         current.value,
@@ -289,20 +249,8 @@ async def record_retry(
     if resume_state not in _RESUMABLE_STATES:
         raise ValueError(f"{resume_state.value} is not a resumable erasure phase")
     state = await pool.fetchval(
-        """
-        UPDATE erasure_requests
-        SET attempts = attempts + 1,
-            state = CASE WHEN attempts + 1 >= 8 THEN 'attention_required' ELSE 'retry_wait' END,
-            resume_state = $2,
-            last_error = 'owner command unavailable',
-            next_attempt_at = NOW() + LEAST(
-                INTERVAL '1 hour', POWER(2, attempts) * INTERVAL '30 seconds'
-            )
-        WHERE request_id = $1 AND state = $3 AND attempts < 8
-        RETURNING state
-        """,
+        "SELECT platform.record_erasure_retry_v1($1, $2)",
         request_id,
-        resume_state.value,
         resume_state.value,
     )
     if state is None:
@@ -310,20 +258,11 @@ async def record_retry(
     return ErasureState(str(state))
 
 
-async def cancel_active_request(conn: asyncpg.Connection, user_id: int) -> None:
-    """Delete pre-finalization work when an account is restored in grace."""
-    await conn.execute(
-        "DELETE FROM erasure_requests WHERE user_id = $1 AND state <> 'complete'",
-        user_id,
-    )
-
-
 __all__ = [
     "ErasureRequest",
     "ErasureState",
     "acknowledge",
     "begin_destructive_phases",
-    "cancel_active_request",
     "create_or_get_request",
     "acknowledged_domains",
     "due_request_ids",

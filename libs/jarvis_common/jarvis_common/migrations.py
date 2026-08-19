@@ -33,7 +33,7 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
 
 # Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
 # sync with that file, which is the single source of the baseline floor.
-_REQUIRED_CODE_SCHEMA_FALLBACK = 118
+_REQUIRED_CODE_SCHEMA_FALLBACK = 120
 
 
 @dataclass(frozen=True, slots=True)

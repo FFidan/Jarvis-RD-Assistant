@@ -37,7 +37,7 @@ from jarvis_common.owner import (
 from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field
 
-from platform_api.repos.erasure import cancel_active_request, create_or_get_request
+from platform_api.repos.erasure import create_or_get_request
 from platform_api.routers._auth_shared import build_verify_link
 from platform_api.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_token
 
@@ -624,14 +624,7 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
                         detail="Cannot delete the last admin",
                     )
 
-            await conn.execute(
-                """
-                UPDATE users
-                SET deleted_at = NOW()
-                WHERE id = $1 AND deleted_at IS NULL
-                """,
-                user_id,
-            )
+            await conn.execute("SELECT platform.set_account_deleted_v1($1)", user_id)
 
             # Revoking in the same transaction is what makes the deletion take
             # effect: an unexpired session cookie would otherwise keep
@@ -683,7 +676,7 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
             erasure_state = await conn.fetchval(
                 """SELECT state FROM erasure_requests
                    WHERE user_id = $1 AND state NOT IN ('complete', 'attention_required')
-                   ORDER BY requested_at DESC LIMIT 1 FOR UPDATE""",
+                   ORDER BY requested_at DESC LIMIT 1""",
                 user_id,
             )
             if erasure_state not in {None, "requested"}:
@@ -698,7 +691,6 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
                 WHERE id = $1
                   AND deleted_at IS NOT NULL
                   AND deleted_at >= NOW() - INTERVAL '30 days'
-                FOR UPDATE
                 """,
                 user_id,
             )
@@ -715,21 +707,21 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
                     detail=_owner_repair_detail(owner),
                 )
 
-            row = await conn.fetchrow(
-                """
-                UPDATE users
-                SET deleted_at = NULL
-                WHERE id = $1 AND deleted_at IS NOT NULL
-                RETURNING id, email, role, created_at, last_login_at
-                """,
-                user_id,
-            )
+            try:
+                row = await conn.fetchrow(
+                    "SELECT * FROM platform.restore_account_v1($1)",
+                    user_id,
+                )
+            except asyncpg.RaiseError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Account erasure has already started and cannot be restored",
+                ) from exc
             if row is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="The user changed while restore was in progress; reload and retry",
                 )
-            await cancel_active_request(conn, user_id)
 
     await log_audit(
         pool,

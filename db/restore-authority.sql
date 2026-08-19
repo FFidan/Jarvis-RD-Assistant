@@ -14,8 +14,8 @@ DECLARE
     domain record;
 BEGIN
     SELECT COALESCE(MAX(version), 0) INTO live_floor FROM ops.schema_migrations;
-    IF live_floor <> 119 THEN
-        RAISE EXCEPTION 'restore authority requires packaged schema 119, found %', live_floor;
+    IF live_floor <> 120 THEN
+        RAISE EXCEPTION 'restore authority requires packaged schema 120, found %', live_floor;
     END IF;
 
     ALTER ROLE jarvis_backup_reader WITH BYPASSRLS;
@@ -311,6 +311,33 @@ REVOKE EXECUTE ON FUNCTION
 FROM jarvis_research_runtime, jarvis_learning_runtime;
 REVOKE INSERT, UPDATE, DELETE ON platform.audit_log, platform.audit_subjects
 FROM jarvis_platform_runtime;
+-- Erasure state changes belong to the owner-defined capabilities, so the
+-- platform runtime keeps only column-scoped account administration.
+REVOKE ALL ON FUNCTION
+    platform.request_erasure_v1(bigint),
+    platform.begin_erasure_destructive_v1(uuid),
+    platform.record_erasure_ack_v1(uuid,text,jsonb),
+    platform.transition_erasure_v1(uuid,text,text),
+    platform.record_erasure_retry_v1(uuid,text),
+    platform.withdraw_erasure_v1(bigint),
+    platform.set_account_deleted_v1(bigint),
+    platform.restore_account_v1(bigint)
+FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION
+    platform.request_erasure_v1(bigint),
+    platform.begin_erasure_destructive_v1(uuid),
+    platform.record_erasure_ack_v1(uuid,text,jsonb),
+    platform.transition_erasure_v1(uuid,text,text),
+    platform.record_erasure_retry_v1(uuid,text),
+    platform.withdraw_erasure_v1(bigint),
+    platform.set_account_deleted_v1(bigint),
+    platform.restore_account_v1(bigint)
+TO jarvis_platform_runtime;
+REVOKE INSERT, UPDATE, DELETE ON platform.erasure_requests FROM jarvis_platform_runtime;
+REVOKE INSERT, UPDATE, DELETE ON platform.erasure_acknowledgements FROM jarvis_platform_runtime;
+REVOKE UPDATE, DELETE ON platform.users FROM jarvis_platform_runtime;
+GRANT UPDATE (email, role, display_name, last_login_at)
+    ON platform.users TO jarvis_platform_runtime;
 
 ALTER ROLE jarvis_platform_owner SET search_path TO platform, pg_catalog;
 ALTER ROLE jarvis_research_owner SET search_path TO research, pg_catalog;
