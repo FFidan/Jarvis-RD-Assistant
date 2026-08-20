@@ -4,7 +4,7 @@
   "privilege_enforcement": "enforced",
   "restore_authority": {
     "path": "db/restore-authority.sql",
-    "sha256": "12e0be3402161fc3fb7b25c33e857abefce2eef3f70dbc03db5952f3001d7493",
+    "sha256": "796294cd92f4f77dde24e2fd4738f1b742dfeb181156ee58b4b56af7089129d5",
     "schema_version": 120
   },
   "compatibility_baseline": {
@@ -92,7 +92,7 @@
       },
       {
         "path": "0120_erasure_capability_boundary.sql",
-        "sha256": "2a714b13ecd9fd440d33594c3425e6922999d42bd5f8e47754834ae7e1431847"
+        "sha256": "bbb454245c41be266b9f5b56d041edecd1a71b448fe9a38f7ab3f52f11216cbf"
       }
     ]
   },
@@ -277,6 +277,7 @@
       "platform.claim_visibility_lease_v1",
       "platform.complete_visibility_checkpoint_v1",
       "platform.due_erasure_request_ids",
+      "platform.erasure_transition_allowed_v1",
       "platform.finalize_erasure",
       "platform.mint_session_v1",
       "platform.purge_identity_retention_v1",
@@ -286,13 +287,13 @@
       "platform.reencrypt_config_v1",
       "platform.renew_session_v1",
       "platform.request_erasure_v1",
+      "platform.resume_erasure_v1",
       "platform.restore_account_v1",
       "platform.rotate_visibility_checkpoint_v1",
       "platform.set_account_deleted_v1",
       "platform.set_research_config_v1",
       "platform.transition_erasure_v1",
       "platform.upsert_config_v1",
-      "platform.withdraw_erasure_v1",
       "set_updated_at"
     ],
     "research": [
@@ -510,8 +511,7 @@
     ],
     "initial_state": "requested",
     "terminal_states": [
-      "complete",
-      "attention_required"
+      "complete"
     ],
     "transitions": {
       "requested": [

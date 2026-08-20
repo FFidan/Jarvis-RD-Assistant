@@ -1334,7 +1334,7 @@ restore_boundary_holds() {
   usr_del=$(q jarvis "SELECT has_table_privilege('jarvis_platform_runtime', 'platform.users', 'DELETE')")
   usr_upd=$(q jarvis "SELECT has_column_privilege('jarvis_platform_runtime', 'platform.users', 'deleted_at', 'UPDATE')")
   usr_email=$(q jarvis "SELECT has_column_privilege('jarvis_platform_runtime', 'platform.users', 'email', 'UPDATE')")
-  cap=$(q jarvis "SELECT has_function_privilege('jarvis_platform_runtime', 'platform.withdraw_erasure_v1(bigint)', 'EXECUTE')")
+  cap=$(q jarvis "SELECT has_function_privilege('jarvis_platform_runtime', 'platform.resume_erasure_v1(uuid)', 'EXECUTE')")
   [ "$reader" = f ] && [ "$lister" = f ] && [ "$canceller" = f ] \
     && [ "$ins" = f ] && [ "$upd" = f ] && [ "$del" = f ] && [ "$subj" = f ] \
     && [ "$nudge" = t ] \
