@@ -307,6 +307,17 @@ points, or a domain cleanup failure leaves the account disabled in a visible,
 retryable state; retry exhaustion requires operator attention rather than
 silently deleting relational data first.
 
+A completed erasure also removes the papers the account was the only holder of,
+together with the text extracted from them and the documents stored on disk, so
+that nothing an erased account contributed alone survives as retrievable
+content. Two kinds of paper are deliberately kept: one another researcher still
+holds in their library, which is that researcher's data and not the departing
+account's, and one the deployment publishes to everybody. That is the same rule
+the vector store already applies, so the two cannot disagree about what an
+erasure leaves behind, and it is re-checked at the moment of deletion rather
+than taken from the earlier read. Removal runs before the relational cleanup,
+because library membership is what identifies those papers.
+
 Immutable audit events must not retain directly erasable identity or free-form
 personal data. The schema cutover moves that link and erasable metadata into a
 mutable Platform-owned subject mapping, sanitizes historical rows once through

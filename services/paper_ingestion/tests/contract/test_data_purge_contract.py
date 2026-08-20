@@ -185,3 +185,188 @@ async def test_dead_lettered_outbox_events_return_to_the_queue(
         "a deletion whose owner and paper already have an undelivered sibling must stay "
         "dead-lettered; replaying it would break the per-owner uniqueness of undelivered deletions"
     )
+
+
+async def _seed_paper(
+    bootstrap: asyncpg.Connection, external_id: str, visibility_scope: str
+) -> int:
+    """Insert one paper with its chunk and return its identifier."""
+    paper_id = await bootstrap.fetchval(
+        """INSERT INTO research.papers
+           (external_id, source_type, title, authors, url, visibility_scope,
+            pdf_local_path, pdf_downloaded)
+           VALUES ($1, 'arxiv', 'Erasure fixture', ARRAY['A. Author'],
+                   $2, $3, $4, TRUE)
+           RETURNING id""",
+        external_id,
+        f"https://example.invalid/{external_id}",
+        visibility_scope,
+        f"{external_id}.pdf",
+    )
+    await bootstrap.execute(
+        """INSERT INTO research.paper_chunks (paper_id, chunk_index, content)
+           VALUES ($1, 0, 'uploaded document text')""",
+        paper_id,
+    )
+    return int(paper_id)
+
+
+async def test_erasure_removes_sole_owned_private_papers_and_keeps_the_rest(
+    research_erasure_connections, tmp_path, monkeypatch
+) -> None:
+    """A departed account's own papers go; public and co-held papers stay."""
+    from paper_ingestion.services import paper_content_reclaim
+
+    bootstrap, runtime = research_erasure_connections
+    user_id = uuid.uuid4().int % 1_000_000_000 + 1
+    survivor_id = user_id + 1
+    tag = uuid.uuid4().hex[:8]
+
+    for account in (user_id, survivor_id):
+        await bootstrap.execute(
+            "INSERT INTO platform.users (id, email) VALUES ($1, $2)",
+            account,
+            f"erasure-{account}@example.invalid",
+        )
+    sole_owned = await _seed_paper(bootstrap, f"sole-{tag}", "private")
+    co_held = await _seed_paper(bootstrap, f"shared-{tag}", "private")
+    public = await _seed_paper(bootstrap, f"public-{tag}", "public")
+    for paper_id in (sole_owned, co_held, public):
+        await bootstrap.execute(
+            """INSERT INTO research.user_library (user_id, paper_id, added_via)
+               VALUES ($1, $2, 'manual_save')""",
+            user_id,
+            paper_id,
+        )
+    await bootstrap.execute(
+        """INSERT INTO research.user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        survivor_id,
+        co_held,
+    )
+
+    storage = tmp_path / "pdfs"
+    snapshots = tmp_path / "snapshots"
+    storage.mkdir()
+    snapshots.mkdir()
+    for paper_id in (sole_owned, co_held, public):
+        (storage / f"{paper_id}.pdf").write_bytes(b"%PDF-1.4 fixture")
+        (snapshots / str(paper_id)).mkdir()
+        (snapshots / str(paper_id) / "1.png").write_bytes(b"page")
+    monkeypatch.setattr(paper_content_reclaim, "PDF_STORAGE_PATH", str(storage))
+    monkeypatch.setattr(paper_content_reclaim, "SNAPSHOT_STORAGE_PATH", str(snapshots))
+
+    removed = await paper_content_reclaim.erase_orphaned_user_papers(runtime, user_id)
+
+    assert removed == [sole_owned]
+    assert (
+        await bootstrap.fetchval("SELECT COUNT(*) FROM research.papers WHERE id = $1", sole_owned)
+        == 0
+    )
+    assert (
+        await bootstrap.fetchval(
+            "SELECT COUNT(*) FROM research.paper_chunks WHERE paper_id = $1", sole_owned
+        )
+        == 0
+    )
+    assert not (storage / f"{sole_owned}.pdf").exists()
+    assert not (snapshots / str(sole_owned)).exists()
+    for kept in (co_held, public):
+        assert (
+            await bootstrap.fetchval("SELECT COUNT(*) FROM research.papers WHERE id = $1", kept)
+            == 1
+        )
+        assert (
+            await bootstrap.fetchval(
+                "SELECT COUNT(*) FROM research.paper_chunks WHERE paper_id = $1", kept
+            )
+            == 1
+        )
+        assert (storage / f"{kept}.pdf").exists()
+        assert (snapshots / str(kept)).exists()
+
+    await bootstrap.execute(
+        "DELETE FROM research.papers WHERE id = ANY($1::int[])", [co_held, public]
+    )
+    await bootstrap.execute(
+        "DELETE FROM platform.users WHERE id = ANY($1::bigint[])", [user_id, survivor_id]
+    )
+
+
+async def test_a_paper_claimed_or_published_mid_erasure_is_kept(
+    research_erasure_connections, tmp_path, monkeypatch
+) -> None:
+    """The removal re-checks the rule instead of trusting the set it selected.
+
+    Candidates are read before the publication lock is taken. A paper another
+    researcher claims, or the deployment publishes, inside that window is no
+    longer the erased account's alone, and the delete has to see that.
+    """
+    from paper_ingestion.services import paper_content_reclaim
+
+    bootstrap, runtime = research_erasure_connections
+    user_id = uuid.uuid4().int % 1_000_000_000 + 1
+    survivor_id = user_id + 1
+    tag = uuid.uuid4().hex[:8]
+
+    for account in (user_id, survivor_id):
+        await bootstrap.execute(
+            "INSERT INTO platform.users (id, email) VALUES ($1, $2)",
+            account,
+            f"midflight-{account}@example.invalid",
+        )
+    claimed = await _seed_paper(bootstrap, f"claimed-{tag}", "private")
+    published = await _seed_paper(bootstrap, f"published-{tag}", "private")
+    for paper_id in (claimed, published):
+        await bootstrap.execute(
+            """INSERT INTO research.user_library (user_id, paper_id, added_via)
+               VALUES ($1, $2, 'manual_save')""",
+            user_id,
+            paper_id,
+        )
+
+    storage = tmp_path / "pdfs"
+    snapshots = tmp_path / "snapshots"
+    storage.mkdir()
+    snapshots.mkdir()
+    monkeypatch.setattr(paper_content_reclaim, "PDF_STORAGE_PATH", str(storage))
+    monkeypatch.setattr(paper_content_reclaim, "SNAPSHOT_STORAGE_PATH", str(snapshots))
+
+    remove_files = paper_content_reclaim._remove_stored_paper_files
+
+    async def _change_the_world_then_remove_files(paper_ids) -> None:
+        await bootstrap.execute(
+            """INSERT INTO research.user_library (user_id, paper_id, added_via)
+               VALUES ($1, $2, 'manual_save')""",
+            survivor_id,
+            claimed,
+        )
+        await bootstrap.execute(
+            "UPDATE research.papers SET visibility_scope = 'public' WHERE id = $1",
+            published,
+        )
+        await remove_files(paper_ids)
+
+    monkeypatch.setattr(
+        paper_content_reclaim,
+        "_remove_stored_paper_files",
+        _change_the_world_then_remove_files,
+    )
+
+    removed = await paper_content_reclaim.erase_orphaned_user_papers(runtime, user_id)
+
+    assert (
+        await bootstrap.fetchval("SELECT COUNT(*) FROM research.papers WHERE id = $1", claimed) == 1
+    ), "a paper another researcher claimed mid-erasure was deleted"
+    assert (
+        await bootstrap.fetchval("SELECT COUNT(*) FROM research.papers WHERE id = $1", published)
+        == 1
+    ), "a paper the deployment published mid-erasure was deleted"
+    assert removed == []
+
+    await bootstrap.execute(
+        "DELETE FROM research.papers WHERE id = ANY($1::int[])", [claimed, published]
+    )
+    await bootstrap.execute(
+        "DELETE FROM platform.users WHERE id = ANY($1::bigint[])", [user_id, survivor_id]
+    )

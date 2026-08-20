@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from paper_ingestion.deps import get_db_pool
 from paper_ingestion.jobs.data_purge import _purge_qdrant_for_user
+from paper_ingestion.services.paper_content_reclaim import erase_orphaned_user_papers
 
 router = APIRouter(prefix="/internal/domains", tags=["internal", "domains"])
 type DatabasePool = Annotated[asyncpg.Pool, Depends(get_db_pool)]
@@ -117,9 +118,15 @@ async def erase_user_vectors(
 async def erase_user_research_data(
     request_id: uuid.UUID, body: ErasureRequest, request: Request, db_pool: DatabasePool
 ) -> dict[str, object]:
-    """Run the fixed Research-owned relational erasure capability."""
+    """Run the fixed Research-owned relational erasure capability.
+
+    Papers the account was the only holder of are removed first, together with
+    their chunks and stored files. The order is load-bearing: the set is
+    derived from library membership, which the capability below deletes.
+    """
     _require_erasure_subject(request, body.user_id)
     async with db_pool.acquire() as conn:
+        await erase_orphaned_user_papers(conn, body.user_id)
         await conn.execute("SELECT research.erase_user_data($1)", body.user_id)
     return {"request_id": str(request_id), "acknowledged": True}
 
