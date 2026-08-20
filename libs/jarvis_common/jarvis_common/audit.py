@@ -123,6 +123,12 @@ def _immutable_resource(resource: str, user_id: str | None) -> str:
     ``milestone:137`` became ``milestone:subject37`` and ``paper:1001`` became
     ``paper:subject00subject`` — so distinct actions collapsed onto identical
     strings in a table that cannot be corrected afterwards.
+
+    The digest is deterministic on purpose: two audit rows naming the same
+    resource must collide, or the append-only trail cannot be correlated. A
+    salted password hash would defeat that, and nothing reaching here is key
+    material — callers pass a resource name, a path, or an already-computed
+    digest, never a stored value.
     """
     if user_id:
         parts = _RESOURCE_DELIMITER_RE.split(resource)
