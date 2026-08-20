@@ -3,7 +3,7 @@ name: Security
 # Supply-chain security CI.
 # Runs pip-audit + npm-audit (Python and JS dependency CVE scans), osv-scanner
 # (multi-ecosystem OSV database scan), and a docker-build smoke test to confirm
-# all service images build cleanly. SBOM generation on release is handled by
+# every published image builds cleanly. SBOM generation on release is handled by
 # .github/workflows/sbom.yml. Branch protection requires the terminal
 # `security-gate` job below.
 on:
@@ -116,47 +116,79 @@ jobs:
       - name: Run osv-scanner
         run: /tmp/osv-scanner scan --recursive .
 
+  # ---------------------------------------------------------------------------
+  # docker-build-smoke — one leg per image ghcr-publish.yml publishes.
+  #
+  # The matrix carries the same (context, file) pairs as that workflow's own
+  # `include:` list, deduplicated by image rather than by platform, so an image
+  # cannot be published without building here first. Hand-written per-image
+  # steps are what let platform_api and restore_uploader reach the registry
+  # ungated; `test_build_smoke_gates_every_published_image` compares the two
+  # lists and fails when they diverge again.
+  # ---------------------------------------------------------------------------
   docker-build-smoke:
     if: github.event.repository.private == false
-    name: Docker build smoke test
+    name: Docker build smoke test (${{ matrix.slug }})
     runs-on: ubuntu-latest
     env:
       # BuildKit (buildx is installed on the runner) — enables the
-      # `RUN --mount=type=cache` pip wheel cache in the 3 service Dockerfiles, so
+      # `RUN --mount=type=cache` pip wheel cache in the service Dockerfiles, so
       # a constraints.txt change re-uses downloaded wheels instead of re-fetching
       # the multi-GB torch/docling set (dep-bump rebuilds ~8min -> ~2min). Every
       # other consumer (docker compose build in update.sh) already defaults to
       # BuildKit, so the `# syntax`/`--mount` Dockerfiles build everywhere.
       DOCKER_BUILDKIT: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: platform-api
+            context: .
+            file: services/platform_api/Dockerfile
+          - slug: paper-ingestion
+            context: .
+            file: services/paper_ingestion/Dockerfile
+          - slug: learning-engine
+            context: .
+            file: services/learning_engine/Dockerfile
+          - slug: telegram-bot
+            context: .
+            file: services/telegram_bot/Dockerfile
+          - slug: dashboard
+            context: ./frontend
+            file: ./frontend/Dockerfile
+          - slug: restore-uploader
+            context: ./services/restore_uploader
+            file: ./services/restore_uploader/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Build paper_ingestion image
+      - name: Build the image
+        env:
+          SLUG: ${{ matrix.slug }}
+          CONTEXT: ${{ matrix.context }}
+          DOCKERFILE: ${{ matrix.file }}
         run: |
           docker build \
-            -t smoke-paper-ingestion:test \
-            -f services/paper_ingestion/Dockerfile \
-            .
+            -t "smoke-${SLUG}:test" \
+            -f "$DOCKERFILE" \
+            "$CONTEXT"
 
-      - name: Build learning_engine image
-        run: |
-          docker build \
-            -t smoke-learning-engine:test \
-            -f services/learning_engine/Dockerfile \
-            .
-
-      - name: Build telegram_bot image
-        run: |
-          docker build \
-            -t smoke-telegram-bot:test \
-            -f services/telegram_bot/Dockerfile \
-            .
-
-      - name: Build dashboard (frontend) image
-        run: |
-          docker build \
-            -t smoke-dashboard:test \
-            frontend/
+  # ---------------------------------------------------------------------------
+  # langfuse-build-smoke — the optional observability wrapper, which nothing
+  # publishes. It is a job of its own rather than a step appended to the matrix
+  # above because its rate-limit handling ends in `exit 0` inside a loop, which
+  # terminates the whole step successfully and would silently swallow any step
+  # placed after it.
+  # ---------------------------------------------------------------------------
+  langfuse-build-smoke:
+    if: github.event.repository.private == false
+    name: Langfuse wrapper build smoke test
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Build langfuse hardened wrapper image
         run: |
@@ -167,8 +199,9 @@ jobs:
           # the core product never needs a fresh pull. A transient Docker Hub rate
           # limit (HTTP 429) on this external base image is an infra condition, not a
           # code regression — so retry with backoff and SKIP (do not fail the security
-          # workflow) if Docker Hub keeps rate-limiting. The 4 core product images
-          # above still hard-gate; a genuine (non-429) wrapper build error still fails.
+          # workflow) if Docker Hub keeps rate-limiting. The published images still
+          # hard-gate in docker-build-smoke; a genuine (non-429) wrapper build error
+          # still fails.
           for attempt in 1 2 3; do
             if docker build \
                 --build-arg LANGFUSE_BASE_IMAGE="${LANGFUSE_IMAGE}" \
@@ -188,7 +221,7 @@ jobs:
             cat /tmp/langfuse_build.err
             exit 1
           done
-          echo "::warning::Skipping langfuse wrapper smoke — Docker Hub kept rate-limiting the optional observability base image (infra, not a code issue). Core product images built OK."
+          echo "::warning::Skipping langfuse wrapper smoke — Docker Hub kept rate-limiting the optional observability base image (infra, not a code issue). The published images are gated separately."
           exit 0
 
   # ---------------------------------------------------------------------------
@@ -263,7 +296,8 @@ jobs:
   security-gate:
     name: Security gate
     runs-on: ubuntu-latest
-    needs: [pip-audit, npm-audit, osv-scanner, docker-build-smoke, gitleaks, codeql]
+    needs:
+      [pip-audit, npm-audit, osv-scanner, docker-build-smoke, langfuse-build-smoke, gitleaks, codeql]
     # always() so the gate reports a definitive pass/fail even when codeql is
     # SKIPPED on a private repo (see the codeql job). Job results are read via env
     # and checked explicitly — a skipped codeql is acceptable, any failure is not.
@@ -275,13 +309,14 @@ jobs:
           NPM_AUDIT: ${{ needs.npm-audit.result }}
           OSV_SCANNER: ${{ needs.osv-scanner.result }}
           DOCKER_SMOKE: ${{ needs.docker-build-smoke.result }}
+          LANGFUSE_SMOKE: ${{ needs.langfuse-build-smoke.result }}
           GITLEAKS: ${{ needs.gitleaks.result }}
           CODEQL: ${{ needs.codeql.result }}
         run: |
           fail=0
           for pair in "pip-audit=$PIP_AUDIT" "npm-audit=$NPM_AUDIT" \
                       "osv-scanner=$OSV_SCANNER" "docker-build-smoke=$DOCKER_SMOKE" \
-                      "gitleaks=$GITLEAKS"; do
+                      "langfuse-build-smoke=$LANGFUSE_SMOKE" "gitleaks=$GITLEAKS"; do
             name="${pair%%=*}"; result="${pair##*=}"
             if [ "$result" != "success" ]; then
               echo "::error::required security job '$name' did not succeed (result=$result)"

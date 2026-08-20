@@ -361,27 +361,79 @@ keeps them and prints the safe resume command.
 
 JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a `_FILE`-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in `secrets/` at the repo root (gitignored); `setup.sh` creates and populates them on first run. Each file is mode `644` inside a mode `700` `secrets/` directory: the owner-only directory keeps the files private on the host, while the world-readable file bit lets the non-root service containers read them through the compose bind mount.
 
-**Operator-provisioned secrets** (create manually if not using `setup.sh`):
+Every credential below is created by `scripts/init-secrets.sh`, which `setup.sh`
+and `update.sh` both run before any container is started or replaced; the two
+Langfuse SDK keys are the exception and are written by
+`scripts/gen-langfuse-keys.sh`. Neither script ever overwrites a file that
+already exists, so re-running them is safe. Create a file by hand only if you
+are not using either script.
 
 The host SMTP fallback is `secrets/smtp_pass.txt`. It is separate from the
 deployment-wide encrypted SMTP row saved through Settings; the Settings value
 takes effect without a service restart, while changing the host fallback
 requires restarting its service consumers.
 
-| Secret name | `_FILE` env var | Purpose |
-|---|---|---|
-| `postgres_password` | `POSTGRES_PASSWORD_FILE` | PostgreSQL password for the `jarvis` user |
-| `litellm_master_key` | `LITELLM_MASTER_KEY_FILE` | LiteLLM master key (gateway auth) |
-| `jarvis_api_key` | `JARVIS_API_KEY_FILE` | JARVIS REST API key (frontend + Telegram) |
-| `jarvis_model_hmac_key` | `JARVIS_MODEL_HMAC_KEY_FILE` | HMAC-signs Pulse classifier pickle blobs (auto-generated; mandatory in production) |
-| `jarvis_config_key` | `JARVIS_CONFIG_KEY_FILE` | Fernet key for encrypted config values |
-| `litellm_salt_key` | `LITELLM_SALT_KEY` | Encrypts provider/model keys stored in LiteLLM's admin DB — **never rotate**: rotating orphans all stored model keys and requires re-entering them |
-| `telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (`telegram` profile only) |
-| `qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
-| `backup_encrypt_key` | `BACKUP_ENCRYPT_KEYFILE` | Encrypts backup archives at rest — required in every environment; backups refuse to run without it, though sets written by older releases without a key stay restorable |
+#### Database roles
 
-**Observability profile secrets** (auto-provisioned by `make observability-up`; only present when the `observability` profile is active):
-`langfuse_init_pk`, `langfuse_init_sk` — Langfuse SDK keys injected into app services. `langfuse_pg_password`, `langfuse_nextauth_secret`, `langfuse_salt` — internal Langfuse service credentials.
+Each service connects to PostgreSQL as its own least-privilege role with its own
+password, and owns its own schema. There is no shared application superuser: the
+`jarvis` role that earlier releases used for everything is `NOLOGIN` after
+upgrade, migrations run as a dedicated migrator role, and backup, restore and
+erasure each have a role of their own. That is why the inventory below lists
+eleven separate database passwords rather than one — losing any single file
+affects only the service that uses it, and no single credential can read
+another service's schema.
+
+`postgres_legacy_source_password` is the exception: its file is the
+`secrets/postgres_password.txt` from before the split. It is read during an
+upgrade so the pre-split database can be adopted, and is not a login credential
+for any running service.
+
+#### Secret inventory
+
+This table lists every secret `docker-compose.yml` declares. A parity check in
+`tests/test_docker_compose_invariants.py` fails if compose and this table
+disagree, so a new secret cannot ship undocumented.
+
+| Secret | Purpose |
+|---|---|
+| `postgres_platform_runtime_password` | Database login for `platform_api` — sign-in, sessions, accounts, configuration |
+| `postgres_research_runtime_password` | Database login for `paper_ingestion` |
+| `postgres_learning_runtime_password` | Database login for `learning_engine` |
+| `postgres_migrator_password` | Database login for the migration job that runs before the services start |
+| `postgres_cluster_bootstrap_password` | PostgreSQL superuser password, used to create the roles and schemas and then to finalize migration authority |
+| `postgres_legacy_rollback_password` | Database login used to adopt objects left behind by a pre-split installation |
+| `postgres_backup_reader_password` | Read-only database login for the scheduled backup sidecar |
+| `postgres_restore_operator_password` | Database login for the restore sidecar, which needs to drop and recreate databases |
+| `postgres_erasure_executor_password` | Database login for the account-erasure worker |
+| `litellm_runtime_password` | Database login for the LiteLLM gateway |
+| `litellm_migrator_password` | Database login for the LiteLLM gateway's own migrations |
+| `postgres_legacy_source_password` | The pre-split `secrets/postgres_password.txt`, read only while upgrading an older installation |
+| `platform_identity_private_key` | Ed25519 private key with which `platform_api` signs the identity assertion for each authorized request. It is mounted into that service alone |
+| `platform_identity_public_key` | The matching public key, mounted into `paper_ingestion` and `learning_engine` so they can verify an assertion instead of trusting a header |
+| `telegram_service_token` | Credential the Telegram service presents to `platform_api` to prove which service it is |
+| `research_service_token` | The same, for `paper_ingestion` |
+| `learning_service_token` | The same, for `learning_engine` |
+| `jarvis_setup_token` | One-time token that authorizes first-admin creation during the setup wizard |
+| `jarvis_api_key` | REST API key for operations routes and external clients (minimum 32 characters) |
+| `jarvis_model_hmac_key` | HMAC key that signs the Pulse classifier blobs, so a tampered model file is refused |
+| `jarvis_config_key` | Fernet key that encrypts integration settings at rest in the database |
+| `qdrant_api_key` | API key for the vector database, presented by every service that reads or writes it |
+| `litellm_master_key` | Admin credential for the LiteLLM gateway |
+| `litellm_salt_key` | Encrypts provider and model keys stored in the LiteLLM admin database — **never rotate**: rotating orphans every stored model key and requires re-entering them |
+| `telegram_bot_token` | Bot token from BotFather; created as an empty placeholder when Telegram is not configured |
+| `smtp_pass` | Host SMTP fallback password; created as an empty placeholder when SMTP is not configured |
+| `backup_encrypt_key` | Encrypts backup archives at rest — required in every environment; backups refuse to run without it, though sets written by older releases without a key stay restorable |
+| `cloudflare_tunnel_token` | Tunnel credential; present only when setup was completed with the Cloudflare Tunnel access mode |
+| `langfuse_pg_password` | Database password for the optional Langfuse observability service |
+| `langfuse_nextauth_secret` | Session signing secret for the optional Langfuse web interface |
+| `langfuse_salt` | Encryption salt for the optional Langfuse service |
+| `langfuse_init_pk` | Langfuse SDK public key injected into the application services |
+| `langfuse_init_sk` | Langfuse SDK secret key injected into the application services |
+
+The Langfuse entries are only used when the `observability` profile is active,
+which it is not by default. File permissions, rotation behavior and the
+`_FILE` fallback rules are in [`secrets/README.md`](../secrets/README.md).
 
 To rotate the JARVIS API key without exposing it in shell history, generate a
 replacement file and then restart every running consumer:
@@ -791,7 +843,7 @@ bash scripts/production-readiness-check.sh
 | Pulse generates 0 cards but job shows "done" | All enabled sources returned zero candidates, were rate-limited, or are unconfigured | Open Settings → Pulse → Diagnostics. For OpenAlex set `OPENALEX_API_KEY`; for arXiv wait `Retry-After` (≥30 s). |
 | Embedding dimension mismatch on startup | Qdrant collection dimension doesn't match the active embedding model | Stop and follow [Changing the embedding model](manual/changing-embedding-model.md). It covers the required snapshot, exact configuration alignment, deliberate collection recreation, and verification. |
 | Re-embedding too slow | `scripts/reembed.py` defaults to the HTTP-bound LiteLLM path | Benchmark before migrating and use the exact recovery guidance in [Changing the embedding model](manual/changing-embedding-model.md). The local backend requires sentence-transformers. |
-| `password authentication failed for user "jarvis"` after changing `POSTGRES_PASSWORD` | An existing database still uses the original password | Do not delete the database volume. Restore the matching secret from your backup or revert the accidental change, then run `jarvis-research doctor`. Use the guided restore if the original secret is unavailable. |
+| `password authentication failed` for a `jarvis_*` database role on startup | The file under `secrets/` no longer matches the password the database holds for that role | Do not delete the database volume. Each service has its own role and its own password file, so the failing role names the file to fix: restore that one file from your backup or revert the accidental change, then run `jarvis-research doctor`. Use the guided restore if the original secret is unavailable. The shared `jarvis` login of earlier releases is `NOLOGIN` after upgrade and is no longer used by any service. |
 | `docker compose build`/`up` fails with "no space left on device" during install | Docker's data root ran out of space | Default installs require about **27–54 GB** for images and tier-selected models; custom models may require more. Run `./setup.sh --check`, inspect the data-root path it reports, and free or add space through the host's Docker storage controls. Then re-run setup; already downloaded layers are reused. |
 | `docker compose build` prints `pull access denied for jarvis/paper_ingestion` (or a sibling service) before building | Cosmetic — Compose probes the registry for the pinned tag before falling back to a local build | Harmless; ignore it. From v1.1.0 the application images are prebuilt on GHCR and `docker-compose.yml` sets `pull_policy: missing` on them (only the locally-built Langfuse wrapper uses `pull_policy: build`), so this message is only seen on pre-1.1.0 installs or a `--build-local` build. |
 | The `telegram_bot` container restarts forever and the bot never answers | The published telegram-bot images for **v1.2.0 through v1.2.3** were missing a dependency the bot imports at startup | Confirm with `docker compose logs telegram_bot` — the affected images exit with `ModuleNotFoundError: No module named 'sentry_sdk'`. Upgrade to v1.2.4 or later with `./update.sh`; no configuration change is needed. |

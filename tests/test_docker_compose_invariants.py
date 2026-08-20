@@ -7,6 +7,7 @@ and that locally-built images carry explicit pull semantics.
 
 import json
 import os
+import posixpath
 import re
 import subprocess
 import tomllib
@@ -1083,3 +1084,76 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
             f"{runner} no longer runs scripts/init-secrets.sh, so 'update' secrets "
             "would not be provisioned before containers are touched"
         )
+
+
+def _workflow(name: str) -> dict[str, Any]:
+    return yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text())
+
+
+def _built_images(job: dict[str, Any]) -> set[tuple[str, str]]:
+    """Return the normalized (context, dockerfile) pairs a build matrix covers."""
+    return {
+        (posixpath.normpath(entry["context"]), posixpath.normpath(entry["file"]))
+        for entry in job["strategy"]["matrix"]["include"]
+    }
+
+
+def test_build_smoke_gates_every_published_image() -> None:
+    """A published image must be built by the merge gate before it can be pushed.
+
+    ghcr-publish.yml is the only thing that pushes to the registry, so its own
+    matrix is the definition of "published". The build smoke test enumerated its
+    images by hand and drifted, which let platform_api and restore_uploader be
+    published without ever building on a pull request.
+    """
+    published = _built_images(_workflow("ghcr-publish.yml")["jobs"]["build"])
+    gated = _built_images(_workflow("security.yml")["jobs"]["docker-build-smoke"])
+
+    assert published, "ghcr-publish.yml declares no images to publish"
+    ungated = sorted(published - gated)
+    assert not ungated, (
+        f"published but never built by docker-build-smoke: {ungated} — add each "
+        "(context, file) pair to the matrix in .github/workflows/security.yml"
+    )
+
+
+SECRET_INVENTORY_HEADING = "#### Secret inventory"
+SECRET_ROW = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|")
+
+
+def _documented_secrets() -> set[str]:
+    """Return the secret names listed in the deployment guide's inventory table."""
+    lines = (REPO_ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8").splitlines()
+    start = lines.index(SECRET_INVENTORY_HEADING)
+    documented: set[str] = set()
+    for line in lines[start + 1 :]:
+        if line.startswith("#"):
+            break
+        match = SECRET_ROW.match(line)
+        if match:
+            documented.add(match.group(1))
+    return documented
+
+
+def test_documented_secret_inventory_matches_compose(compose) -> None:
+    """Every credential an operator must hold is documented, and nothing else is.
+
+    The guide described a single database password long after the release split
+    it into eleven per-role logins, so an operator reading it could not tell
+    which files a deployment actually needs.
+    """
+    declared = set(compose.get("secrets") or {})
+    documented = _documented_secrets()
+
+    assert documented, (
+        f"no secret rows found under '{SECRET_INVENTORY_HEADING}' in docs/DEPLOYMENT.md"
+    )
+    undocumented = sorted(declared - documented)
+    assert not undocumented, (
+        f"compose secrets missing from the deployment guide: {undocumented} — add a "
+        f"row for each under '{SECRET_INVENTORY_HEADING}' in docs/DEPLOYMENT.md"
+    )
+    retired = sorted(documented - declared)
+    assert not retired, (
+        f"the deployment guide documents secrets compose no longer declares: {retired}"
+    )

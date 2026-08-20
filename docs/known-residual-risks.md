@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-08-03_
+_Last updated: 2026-08-19_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -53,9 +53,29 @@ Related docs:
 
 ### Backup-manifest HMAC trust boundary
 
-**Why accepted (2026-07-20):** after upgrade, signed manifest sidecars authenticate a complete archive set. This does not authenticate pre-upgrade legacy local sets, and cannot protect against an attacker who can replace both the archives and the backup secrets or signing key.
+**Current construction (v1.2.6):** `manifest_signature` in `scripts/backup.sh`
+keys the HMAC on the public label `jarvis-manifest-v1` and feeds the secret key
+file in on standard input as a message prefix, followed by a separator and the
+manifest. No key material derived from the backup secret reaches the command
+line on the signing path.
 
-**Reopen criteria:** the backup format, key custody model, or legacy-restore policy changes.
+**Why still accepted:** `legacy_manifest_signature`, in `scripts/restore.sh` and
+`scripts/backup-lifecycle.sh`, reconstructs the derived key the releases before
+v1.2.6 used and passes it to openssl as `-macopt hexkey:`, where it is briefly
+visible to anything that can read the process list on that host. It is reached
+only when the current construction fails to match a stored signature, which
+means only when verifying an archive set written before this release. It was
+kept deliberately: the pinned openssl offers no way to key an HMAC from a file,
+so removing the fallback would lock an operator out of every backup set
+predating v1.2.6. Signed manifests still do not authenticate an unsigned
+pre-upgrade set, and no construction protects against an attacker who can
+replace both the archives and the backup key.
+
+**Reopen criteria:** `-macopt hexkey:` appears anywhere outside
+`legacy_manifest_signature`; a signing path calls `legacy_manifest_signature`;
+verification reaches it other than after the current construction has already
+failed; or the pinned openssl gains a way to key an HMAC from a file, at which
+point the fallback can be re-keyed and the argv exposure removed entirely.
 
 ---
 
