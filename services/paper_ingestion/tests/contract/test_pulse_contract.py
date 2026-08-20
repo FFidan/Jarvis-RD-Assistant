@@ -1869,22 +1869,24 @@ async def test_pulse_generate_non_admin_returns_403(
     )
 
 
-# POST /api/pulse/generate: ops API-key caller (no admin session) passes the auth gate
+# POST /api/pulse/generate: an operations-key identity carries no admin authority
 # Verified: routers/pulse.py generate_pulse depends on get_current_user_id
-# and require_admin_or_api_key (auth.py:551-553 admits when the session role is absent).
+# and require_admin_or_api_key, which refuses the api-key principal.
 
 
-async def test_pulse_generate_accepts_api_key_caller_without_admin_session(
+async def test_pulse_generate_refuses_an_operations_key_identity(
     _pi_pulse_app,
     _configure_api_key,
     contract_two_users,
 ):
-    """POST /api/pulse/generate must not 401/403 an ops API-key caller.
+    """POST /api/pulse/generate must refuse a caller signed as the operations key.
 
-    The bot and cron reach this endpoint with an API key and no browser session,
-    so request.state.user_role is absent. The gate must be require_admin_or_api_key,
-    which admits a session-less ops caller. Identity resolves through
-    get_current_user_id, so that is the dependency the override supplies.
+    The gateway signs that identity without the account checks it applies when
+    minting a browser session from the same key, so it is not administrator
+    authority. The bot reaches this route as the paired Telegram principal and
+    the web app as an administrator session, so neither is affected. Identity
+    resolves through get_current_user_id, so that is the dependency the override
+    supplies.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -1902,8 +1904,8 @@ async def test_pulse_generate_accepts_api_key_caller_without_admin_session(
     finally:
         _pi_pulse_app.dependency_overrides.pop(get_current_user_id, None)
 
-    assert resp.status_code not in (401, 403), (
-        f"Session-less ops API-key caller must pass the auth gate on "
+    assert resp.status_code == 403, (
+        f"An operations-key identity must be refused on "
         f"POST /api/pulse/generate; got {resp.status_code}: {resp.text[:300]}"
     )
 

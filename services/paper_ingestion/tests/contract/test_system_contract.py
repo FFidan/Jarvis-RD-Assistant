@@ -59,7 +59,7 @@ async def pi_test_client(contract_conn):
 
     Also bypasses verify_api_key and disables the rate limiter.
     """
-    from jarvis_common import require_admin, verify_api_key
+    from jarvis_common import require_admin, require_admin_or_api_key, verify_api_key
     from jarvis_common.testing_contract_apps import (
         make_contract_client,
         patch_app_state,
@@ -78,13 +78,15 @@ async def pi_test_client(contract_conn):
             patch_app_state(app, {"db_pool": shared}),
             patch_dependency_overrides(
                 app,
-                # AUTHZ-03 gated get_setup_status with require_admin; this client exercises
-                # route logic, so override it (like verify_api_key). The admin gate itself
-                # is covered by test_system_authz / the AUTHZ-03 unit test.
+                # These clients exercise route logic, not the admin gates, so both
+                # gates are overridden the way verify_api_key already is. The gates
+                # themselves are covered by test_system_authz, the AUTHZ-03 unit test
+                # and the signed-identity admin tests in test_internal_auth.py.
                 set_overrides={
                     get_db_pool: lambda: shared,
                     verify_api_key: lambda: None,
                     require_admin: lambda: None,
+                    require_admin_or_api_key: lambda: None,
                 },
             ),
         ):
