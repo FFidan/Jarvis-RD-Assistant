@@ -116,14 +116,16 @@ test-shell-contracts:
 ## defects.
 ## Missing shellcheck is a hard failure -- a check that silently skips is not a
 ## check -- so shellcheck is invoked directly and never guarded by `command -v`.
-## Keep all eleven in ONE invocation: shellcheck resolves each `# shellcheck source=`
+## Keep all sixteen in ONE invocation: shellcheck resolves each `# shellcheck source=`
 ## against the other files on the command line, so splitting this into per-file
 ## runs would silently stop checking setup_lib.sh's helpers against their callers.
 shell-lint:
 	shellcheck --severity=warning setup.sh update.sh scripts/setup_lib.sh \
 	  scripts/backup.sh scripts/restore.sh scripts/init-secrets.sh \
 	  scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
-	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh
+	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh \
+	  scripts/postgres-role-bootstrap.sh scripts/litellm-entrypoint.sh \
+	  scripts/prune.sh scripts/profile.sh scripts/perf/loadgen.sh
 
 ## Reproduce the local subset of the hosted dependency and secret scanners.
 ## Pinned scanner artifacts live in the user cache and are hash-verified on
@@ -230,6 +232,13 @@ up-build: gen-langfuse-keys init-secrets
 profile:
 	bash scripts/profile.sh
 
-## Boot the local stack with profiling-only Postgres/ptrace overrides.
+## Boot the local stack with profiling-only Postgres/ptrace overrides. The probe
+## container runs as the invoking account so its bind-mounted output directory can
+## stay private to it rather than writable by everyone. The directory is created
+## here first: Compose would otherwise create it for the mount as root, and neither
+## side could then write the probe file.
 profile-stack-up:
-	$(COMPOSE_PERF) --profile perf up -d --no-deps postgres paper_ingestion dashboard
+	mkdir -p shared/perf
+	chmod 700 shared/perf
+	JARVIS_PERF_UID="$$(id -u)" JARVIS_PERF_GID="$$(id -g)" \
+	  $(COMPOSE_PERF) --profile perf up -d --no-deps postgres paper_ingestion dashboard

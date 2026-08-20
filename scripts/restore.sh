@@ -228,30 +228,45 @@ decrypt_or_passthrough() {
 # directory could swap an archive and rewrite its digest. These helpers verify the
 # signature backup.sh emitted, BEFORE that gate runs.
 #
-# The derivation is an exact mirror of backup.sh's, including its deliberate direction:
-# the PUBLIC domain label is the HMAC key and the SECRET key-file bytes are the message,
-# because openssl cannot be keyed on the secret without exposing it in argv. See
-# backup.sh for the full rationale. Duplicated rather than shared for the same reason
-# qdrant_http_body is: the two scripts are independently mounted into the sidecar and a
-# shared file would need a third mount.
-derive_manifest_hmac_key() {
-  openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r < "$ENC_KEYFILE" | cut -d' ' -f1
+# manifest_signature is an exact mirror of backup.sh's, including its deliberate
+# direction: the PUBLIC domain label is the HMAC key and the SECRET key-file bytes are
+# the message prefix, because openssl cannot be keyed on the secret without exposing it
+# in argv. See backup.sh for the full rationale. Duplicated rather than shared for the
+# same reason qdrant_http_body is: the two scripts are independently mounted into the
+# sidecar and a shared file would need a third mount.
+manifest_signature() {
+  { cat -- "$ENC_KEYFILE"; printf '\n%s\n' "$MANIFEST_HMAC_LABEL"; cat -- "$1"; } \
+    | openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r | cut -d' ' -f1
+}
+
+# legacy_manifest_signature <manifest> — the construction releases before 1.2.6 wrote,
+# which first derived a key from the label and the key file and then passed that key to
+# openssl as `-macopt hexkey:`. Accepted only when verifying, so an operator whose only
+# surviving backup set predates this release is not locked out of it; nothing signs this
+# way any more, so the derived key no longer reaches argv on the backup path.
+legacy_manifest_signature() {
+  local derived
+  derived="$(openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r < "$ENC_KEYFILE" | cut -d' ' -f1)"
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$1" | cut -d' ' -f1
 }
 
 # verify_manifest_signature <manifest> — recompute the MAC and compare it with the
-# stored <manifest>.hmac. The comparison is a plain byte-compare of two fixed-length
-# 64-hex digest files; it is NOT constant-time and does not need to be. A restore is an
-# offline one-shot operator action with no online timing oracle, so an attacker gets no
-# repeatable measurement to exploit. Returns non-zero on a missing signature, a
-# mismatch, or any compute failure.
+# stored <manifest>.hmac, accepting either construction. The comparison is a plain
+# byte-compare of two fixed-length 64-hex digest files; it is NOT constant-time and does
+# not need to be. A restore is an offline one-shot operator action with no online timing
+# oracle, so an attacker gets no repeatable measurement to exploit. Returns non-zero on
+# a missing signature, a mismatch under both constructions, or any compute failure.
 verify_manifest_signature() {
   local manifest="$1" stored="${1}.hmac" computed rc=1
   [ -s "$stored" ] || return 1
   computed="$(mktemp)" || return 1
   set +e
-  openssl dgst -sha256 -mac HMAC -macopt "hexkey:$(derive_manifest_hmac_key)" -r < "$manifest" \
-    2>/dev/null | cut -d' ' -f1 > "$computed"
+  manifest_signature "$manifest" 2>/dev/null > "$computed"
   if [ -s "$computed" ] && cmp -s "$computed" "$stored"; then rc=0; fi
+  if [ "$rc" != 0 ]; then
+    legacy_manifest_signature "$manifest" 2>/dev/null > "$computed"
+    if [ -s "$computed" ] && cmp -s "$computed" "$stored"; then rc=0; fi
+  fi
   set -e
   rm -f "$computed"
   return "$rc"
@@ -1924,6 +1939,13 @@ trap _cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
+# The durable .destructive sentinel outlives the process that wrote it, and every mode
+# below starts a fresh process where DROP_STARTED is 0. The EXIT trap lifts maintenance
+# whenever DROP_STARTED is 0, so the flag is read back here, before the dispatch: a
+# failure in any mode must leave the hold in place while the database is incomplete.
+# It cannot move below the case, because --complete-authority exits from inside it.
+if [ -f "$MAINTENANCE_DESTRUCTIVE" ]; then DROP_STARTED=1; fi
+
 case "${1:-}" in
   --complete-authority)
     if ! claim_restore_lifecycle_operation; then
@@ -1962,7 +1984,6 @@ fi
 if [ "${1:-}" = "--recover" ]; then
   CURRENT_STEP="Recovering an interrupted restore"
   PHASE="recover"
-  if [ -f "$MAINTENANCE_DESTRUCTIVE" ]; then DROP_STARTED=1; fi
   if [ -d "$(data_key_transaction_dir)" ]; then
     if recover_restored_data_keys; then
       STATE="failed"

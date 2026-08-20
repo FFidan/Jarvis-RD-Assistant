@@ -95,9 +95,13 @@ load_litellm_database_url() {
     python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
       "${POSTGRES_USER:-jarvis_litellm_runtime}"
   )"
+  # The password is read on stdin so it never appears in this container's process
+  # list. rstrip matches what a command substitution around `cat` used to do: the
+  # trailing newline of a secret file is not part of the password, and encoding it
+  # would put a %0A in DATABASE_URL and fail every login.
   postgres_password_encoded="$(
-    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
-      "$(cat "$postgres_password_file")"
+    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().rstrip("\n"), safe=""))' \
+      < "$postgres_password_file"
   )"
   export DATABASE_URL="postgresql://${postgres_user_encoded}:${postgres_password_encoded}@postgres:5432/litellm?connection_limit=${connection_limit}"
 }

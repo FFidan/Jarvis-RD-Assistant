@@ -50,19 +50,21 @@ set -euo pipefail
 # (rewriting a sha256 to match a swapped archive), so it is signed and restore.sh
 # verifies the signature before it trusts those checksums.
 #
-# derive_manifest_hmac_key computes HMAC with the PUBLIC domain label as the HMAC key
-# over the SECRET key-file bytes as the message. That is deliberate, and it is not the
-# textbook KDF direction: openssl offers no way to key on the secret without exposing it
-# in the process list (`-hmac <secret>` and `-macopt hexkey:<secret>` both land in argv),
-# and stdin is the only safe channel for the secret. The result still requires the key
-# file to compute, so an attacker without it cannot forge a signature, and distinct
-# labels yield independent sub-keys.
+# The signature is an HMAC keyed on the PUBLIC domain label over the SECRET key-file
+# bytes followed by the manifest. That is deliberate, and it is not the textbook
+# direction: openssl offers no way to key on the secret without exposing it in the
+# process list (`-hmac <secret>` and `-macopt hexkey:<secret>` both land in argv), and
+# stdin is the only safe channel for the secret. HMAC is not length-extendable, so a
+# secret message prefix still binds the manifest to the key file: nobody without that
+# file can forge a signature, and distinct labels yield independent sub-keys.
 MANIFEST_HMAC_LABEL="jarvis-manifest-v1"
 
+# manifest_signature <manifest> — the authentication code for one manifest, on stdout.
 # `-r` is openssl's stable machine format "<hex> *stdin", so field 1 is always the bare
 # hex regardless of the openssl version's default digest output format.
-derive_manifest_hmac_key() {
-  openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r < "$ENC_KEYFILE" | cut -d' ' -f1
+manifest_signature() {
+  { cat -- "$ENC_KEYFILE"; printf '\n%s\n' "$MANIFEST_HMAC_LABEL"; cat -- "$1"; } \
+    | openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r | cut -d' ' -f1
 }
 
 # promote_new_file <staged> <final> — atomically publish a staged file without
@@ -79,8 +81,7 @@ promote_new_file() {
 # partial signature behind (an absent signature is honest; a truncated one is not).
 sign_manifest() {
   local manifest="$1" tmp="${1}.hmac.tmp"
-  if ! openssl dgst -sha256 -mac HMAC -macopt "hexkey:$(derive_manifest_hmac_key)" -r < "$manifest" \
-       | cut -d' ' -f1 > "$tmp" || [ ! -s "$tmp" ]; then
+  if ! manifest_signature "$manifest" > "$tmp" || [ ! -s "$tmp" ]; then
     rm -f "$tmp"
     return 1
   fi

@@ -469,8 +469,21 @@ if grep -q 'mv -T -- "\$tmp" "\$OUTBOUND_QUARANTINE_SENTINEL"' "$RESTORE_SCRIPT"
 else
   pass "outbound quarantine publication has no replacing move"
 fi
-check "--recover holds maintenance when the durable .destructive sentinel is present" \
-  'if \[ -f "\$MAINTENANCE_DESTRUCTIVE" \]; then DROP_STARTED=1'
+# Every mode starts a fresh process with DROP_STARTED=0, and the EXIT trap lifts
+# maintenance whenever it is 0. The durable .destructive sentinel is therefore read
+# back into DROP_STARTED BEFORE the mode dispatch, so a failure in ANY mode after a
+# restore that did destroy data keeps the 503 up. Placing it inside one mode leaves
+# --complete-authority lifting maintenance on a database it never finished rebuilding.
+destr_rehydrate_line="$(line_of 'if \[ -f "\$MAINTENANCE_DESTRUCTIVE" \]; then DROP_STARTED=1')"
+mode_case_line="$(line_of '^case "\$\{1:-\}" in$')"
+if [ -n "$destr_rehydrate_line" ] && [ -n "$mode_case_line" ] \
+   && [ "$destr_rehydrate_line" -lt "$mode_case_line" ]; then
+  pass "the durable .destructive sentinel holds maintenance in every mode"
+else
+  printf 'FAIL: .destructive rehydration (%s) does not precede the mode dispatch (%s)\n' \
+    "$destr_rehydrate_line" "$mode_case_line" >&2
+  fail=1
+fi
 
 # S5. The revert path re-enables ALLOW_CONNECTIONS on the renamed-out pre_restore
 #     BEFORE renaming it back (it inherited ALLOW_CONNECTIONS=false from the swap).
