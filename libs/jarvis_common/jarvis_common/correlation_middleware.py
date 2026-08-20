@@ -3,11 +3,11 @@
 import uuid
 from time import perf_counter
 
-from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .logging_config import correlation_id_var
+from .request_id import set_response_headers
 from .telemetry import record_request, request_span, trace_headers, trace_id
 
 
@@ -70,10 +70,7 @@ class CorrelationIdMiddleware:
                     duration_s=perf_counter() - started,
                     route=route,
                 )
-                headers = MutableHeaders(scope=message)
-                for name, value in trace_headers().items():
-                    headers[name] = value
-                headers["X-Correlation-Id"] = str(corr)
+                set_response_headers(message, {**trace_headers(), "X-Correlation-Id": str(corr)})
             await send(message)
 
         try:

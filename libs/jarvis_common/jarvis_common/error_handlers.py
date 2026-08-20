@@ -26,24 +26,24 @@ _ERROR_EVENT_DEDUP_MAX = 512
 _last_error_event_emitted: dict[tuple[str, str], float] = {}
 
 
-def _request_identifiers(request: Request) -> tuple[str | None, str | None]:
-    """Return active identifiers, falling back to middleware request state."""
-    active_correlation_id = correlation_id()
-    active_trace_id = trace_id()
-    state = request.state
-    stored_correlation_id = getattr(state, "correlation_id", None)
-    stored_trace_id = getattr(state, "trace_id", None)
+def _stashed_identifier(request: Request, name: str) -> str | None:
+    """Return a string identifier the middleware stack left on the ASGI scope state."""
+    value = getattr(request.state, name, None)
+    return value if isinstance(value, str) else None
+
+
+def _request_identifiers(request: Request) -> tuple[str | None, str | None, str | None]:
+    """Return the correlation, trace and request identifiers for this request.
+
+    Each middleware that owns one of these resets its context variable while
+    unwinding, which happens before Starlette's outermost handler runs. The
+    values stashed on the scope state are therefore the only ones that survive
+    that far, and the active context is preferred only while it still holds one.
+    """
     return (
-        active_correlation_id
-        if active_correlation_id is not None
-        else stored_correlation_id
-        if isinstance(stored_correlation_id, str)
-        else None,
-        active_trace_id
-        if active_trace_id is not None
-        else stored_trace_id
-        if isinstance(stored_trace_id, str)
-        else None,
+        correlation_id() or _stashed_identifier(request, "correlation_id"),
+        trace_id() or _stashed_identifier(request, "trace_id"),
+        request_id_ctx.get("") or _stashed_identifier(request, "request_id"),
     )
 
 
@@ -194,8 +194,7 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
         HTTP 500 with ``{"detail": "An internal error occurred.", "request_id": ...}``.
 
     """
-    request_id = request_id_ctx.get("") or None
-    current_correlation_id, current_trace_id = _request_identifiers(request)
+    current_correlation_id, current_trace_id, request_id = _request_identifiers(request)
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     try:
         _record_unhandled_request(request)

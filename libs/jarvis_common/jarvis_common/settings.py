@@ -123,9 +123,6 @@ class CoreSettings(BaseSettings):
     # gateway represents a connection originating on the Docker host itself;
     # remote LAN addresses and sibling containers are intentionally excluded.
     trusted_local_client_cidrs: str = "127.0.0.0/8,::1/128,10.137.241.1/32"
-    # Comma-separated CIDRs allowed to POST to the infra-ingest endpoint.
-    # Default-deny: empty means infra-ingest is unprovisioned and _check_auth
-    # returns 503. Operator must explicitly opt in by setting the env var,
     # Advanced host override for deployment ownership. Keep the raw text here:
     # the owner resolver must distinguish a malformed authoritative value from
     # a missing value instead of making all CoreSettings consumers fail to load.

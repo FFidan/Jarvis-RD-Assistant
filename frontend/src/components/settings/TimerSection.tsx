@@ -1,7 +1,12 @@
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { usePomodoroStore } from '@/stores/pomodoro-store';
+import { TIMER_RANGES, usePomodoroStore } from '@/stores/pomodoro-store';
+
+const [WORK_MIN, WORK_MAX] = TIMER_RANGES.workMinutes;
+const [SHORT_BREAK_MIN, SHORT_BREAK_MAX] = TIMER_RANGES.shortBreakMinutes;
+const [LONG_BREAK_MIN, LONG_BREAK_MAX] = TIMER_RANGES.longBreakMinutes;
+const [CYCLES_MIN, CYCLES_MAX] = TIMER_RANGES.targetCycles;
 
 export function TimerSection() {
   const workMinutes = usePomodoroStore(s => s.workMinutes);
@@ -28,41 +33,41 @@ export function TimerSection() {
           <Label>Work duration: {workMinutes} min</Label>
           <Slider
             aria-label="Work duration"
-            min={15} max={60} step={5}
+            min={WORK_MIN} max={WORK_MAX} step={5}
             value={[workMinutes]}
             onValueChange={([v]) => usePomodoroStore.setState({ workMinutes: v })}
           />
-          <p className="text-xs text-muted-foreground">How long each focus session lasts (15–60 minutes)</p>
+          <p className="text-xs text-muted-foreground">How long each focus session lasts ({WORK_MIN}–{WORK_MAX} minutes)</p>
         </div>
         <div className="space-y-2">
           <Label>Short break: {shortBreakMinutes} min</Label>
           <Slider
             aria-label="Short break"
-            min={3} max={15} step={1}
+            min={SHORT_BREAK_MIN} max={SHORT_BREAK_MAX} step={1}
             value={[shortBreakMinutes]}
             onValueChange={([v]) => usePomodoroStore.setState({ shortBreakMinutes: v })}
           />
-          <p className="text-xs text-muted-foreground">Break between work sessions (3–15 minutes)</p>
+          <p className="text-xs text-muted-foreground">Break between work sessions ({SHORT_BREAK_MIN}–{SHORT_BREAK_MAX} minutes)</p>
         </div>
         <div className="space-y-2">
           <Label>Long break: {longBreakMinutes} min</Label>
           <Slider
             aria-label="Long break"
-            min={10} max={30} step={5}
+            min={LONG_BREAK_MIN} max={LONG_BREAK_MAX} step={5}
             value={[longBreakMinutes]}
             onValueChange={([v]) => usePomodoroStore.setState({ longBreakMinutes: v })}
           />
-          <p className="text-xs text-muted-foreground">Extended break after completing all cycles (10–30 minutes)</p>
+          <p className="text-xs text-muted-foreground">Extended break after completing all cycles ({LONG_BREAK_MIN}–{LONG_BREAK_MAX} minutes)</p>
         </div>
         <div className="space-y-2">
           <Label>Cycles before long break: {targetCycles}</Label>
           <Slider
             aria-label="Cycles before long break"
-            min={2} max={8} step={1}
+            min={CYCLES_MIN} max={CYCLES_MAX} step={1}
             value={[targetCycles]}
             onValueChange={([v]) => usePomodoroStore.setState({ targetCycles: v })}
           />
-          <p className="text-xs text-muted-foreground">Number of work sessions before a long break (2–8)</p>
+          <p className="text-xs text-muted-foreground">Number of work sessions before a long break ({CYCLES_MIN}–{CYCLES_MAX})</p>
         </div>
       </CardContent>
     </Card>

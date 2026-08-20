@@ -109,7 +109,18 @@ def test_register_tasks_handler_closure() -> None:
     assert default_b is handler_b, "task_b should be bound to handler_b"
 
 
-def _blocked_task(monkeypatch, reason: str):
+class _RecordingPool:
+    """Pool double that records the statements a terminal outcome write issues."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def execute(self, query: str, *args: object) -> str:
+        self.calls.append((query, args))
+        return "SELECT 1"
+
+
+def _blocked_task(monkeypatch, reason: str, *, pool: object | None = None):
     """Register one task whose maintenance check always reports *reason*."""
     import procrastinate
     from jarvis_common import task_registry
@@ -118,6 +129,7 @@ def _blocked_task(monkeypatch, reason: str):
     fresh_app = procrastinate.App(connector=AiopgConnector())
     handler = AsyncMock(return_value={"ok": True})
     registry = task_registry.TaskRegistry(fresh_app)
+    registry.set_dependencies(pool=pool, http_client=None)  # type: ignore[arg-type]
     monkeypatch.setattr(task_registry, "maintenance_skip_reason", lambda _label: reason)
     registry.register_tasks({"test.egress": handler}, queue="test_queue")
     return fresh_app.tasks["test.egress"], handler
@@ -125,7 +137,7 @@ def _blocked_task(monkeypatch, reason: str):
 
 def _context_with_attempts(attempts: int) -> SimpleNamespace:
     """Return a JobContext-shaped stub carrying the attempt counter."""
-    return SimpleNamespace(job=SimpleNamespace(attempts=attempts))
+    return SimpleNamespace(job=SimpleNamespace(attempts=attempts, task_kwargs={"job_id": "job-1"}))
 
 
 @pytest.mark.asyncio
@@ -197,6 +209,49 @@ async def test_quarantine_fails_the_job_once_the_bound_is_passed(monkeypatch) ->
     assert task.retry_strategy.retry_exceptions == {OutboundEgressBlockedError}
     assert _terminal_error_payload(raised.value) == {"message": str(raised.value)}
     handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_give_up_persists_the_acknowledgement_message(monkeypatch) -> None:
+    """The give-up writes its own terminal outcome, so the message reaches the user.
+
+    Only the handler path records outcomes, and the give-up never reaches it.
+    Without an outcome row the job fails with an empty error payload and the
+    instruction to acknowledge the restore is never displayed.
+    """
+    import json
+
+    from jarvis_common.jobs import JobError
+
+    pool = _RecordingPool()
+    task, handler = _blocked_task(monkeypatch, "quarantine", pool=pool)
+
+    with pytest.raises(JobError):
+        await task.func(_context_with_attempts(120), job_id="job-1")
+
+    outcome_calls = [call for call in pool.calls if "record_job_outcome_v1" in call[0]]
+    assert len(outcome_calls) == 1, f"expected one terminal outcome write, got {pool.calls}"
+    _query, args = outcome_calls[0]
+    job_id, result, error, is_error = args
+    assert job_id == "job-1"
+    assert result is None
+    assert is_error is True
+    assert "acknowledge the restore" in json.dumps(error)
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_retry_inside_the_bound_persists_no_outcome(monkeypatch) -> None:
+    """A retryable attempt stays non-terminal, so it must not write an outcome."""
+    from jarvis_common.maintenance import OutboundQuarantineBlockedError
+
+    pool = _RecordingPool()
+    task, _handler = _blocked_task(monkeypatch, "quarantine", pool=pool)
+
+    with pytest.raises(OutboundQuarantineBlockedError):
+        await task.func(_context_with_attempts(119), job_id="job-1")
+
+    assert pool.calls == []
 
 
 # ---------------------------------------------------------------------------

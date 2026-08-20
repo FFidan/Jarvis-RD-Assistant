@@ -69,6 +69,25 @@ def test_observation_values_are_bounded_without_object_repr():
     assert llm_client._bounded_observation_value(object()) == "<object>"
 
 
+def test_embedding_matrix_is_summarized_by_shape_not_by_a_prefix_of_floats():
+    """An embedding batch is recorded as its dimensions, not as truncated numbers.
+
+    Serializing the matrix builds the whole JSON string only to keep a 20,000
+    character prefix of coordinates, which is both the largest allocation on the
+    observed path and useless to read.
+    """
+    assert llm_client._bounded_observation_value([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]) == (
+        "<embedding matrix 2x3>"
+    )
+    # The chat-message and prompt forms carry meaning and stay verbatim.
+    assert llm_client._bounded_observation_value([{"role": "user", "content": "hi"}]) == (
+        '[{"role":"user","content":"hi"}]'
+    )
+    assert llm_client._bounded_observation_value(["first", "second"]) == '["first","second"]'
+    assert llm_client._bounded_observation_value([[1, "two"]]) == '[[1,"two"]]'
+    assert llm_client._bounded_observation_value([]) == "[]"
+
+
 def test_build_litellm_headers_returns_bearer_when_key_set(monkeypatch):
     """build_litellm_headers returns Authorization: Bearer <key> when LITELLM_MASTER_KEY is set."""
     monkeypatch.delenv("LITELLM_MASTER_KEY_FILE", raising=False)

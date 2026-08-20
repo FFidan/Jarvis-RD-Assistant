@@ -169,3 +169,48 @@ async def test_lifespans_and_failed_startup_leave_the_process_provider_available
     assert trace.get_tracer_provider() is provider
     assert flush_telemetry.call_count == 3
     assert all(call.kwargs == {"timeout_ms": 1} for call in flush_telemetry.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_trace_export_follows_the_collector_endpoint_not_the_langfuse_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployment running a collector without Langfuse still exports traces.
+
+    ``observability_enabled`` is documented as the Langfuse master gate. Reusing
+    it as the generic export switch means the only way to get spans out to a
+    collector is to also turn on a second, unrelated backend.
+    """
+    pool = SimpleNamespace(close=AsyncMock())
+    client = SimpleNamespace(aclose=AsyncMock())
+    settings = SimpleNamespace(
+        observability_enabled=False,
+        otel_exporter_otlp_traces_endpoint="http://collector.test:4318/v1/traces",
+        otel_export_timeout_ms=1,
+        postgres_user="test",
+        postgres_password_file="/tmp/test-password",
+    )
+    monkeypatch.setattr(app_factory, "validate_production_config", lambda: None)
+    monkeypatch.setattr(app_factory, "reload_fernet_on_sighup", lambda: None)
+    monkeypatch.setattr(app_factory, "get_jarvis_common_settings", lambda: settings)
+    monkeypatch.setattr(app_factory, "build_database_url", lambda **_: "postgresql://test")
+    monkeypatch.setattr(app_factory, "_resolve_db_pool_kwargs", lambda _: {})
+    monkeypatch.setattr(app_factory.asyncpg, "create_pool", AsyncMock(return_value=pool))
+    monkeypatch.setattr(app_factory, "check_migrations", AsyncMock(return_value=object()))
+    monkeypatch.setattr(app_factory, "validate_encrypted_config_rows", AsyncMock())
+    monkeypatch.setattr(app_factory.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(app_factory, "_log_auth_status", lambda: None)
+    monkeypatch.setattr(app_factory, "flush_telemetry", MagicMock())
+    configure = MagicMock(return_value=True)
+    monkeypatch.setattr(app_factory, "configure_telemetry", configure)
+
+    lifespan = app_factory.configure_lifespan(
+        app_factory.ServiceLifespanConfig(service_name="telemetry-test")
+    )
+    async with lifespan(FastAPI()):
+        pass
+
+    kwargs = configure.call_args.kwargs
+    assert kwargs["enabled"] is True
+    assert kwargs["otlp_endpoint"] == "http://collector.test:4318/v1/traces"
+    assert kwargs["timeout_ms"] == 1
