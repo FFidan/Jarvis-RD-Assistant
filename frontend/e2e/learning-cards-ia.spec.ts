@@ -213,7 +213,7 @@ test.describe('Learning Cards IA — library navigation', () => {
     await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
-    await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Learning Cards' })).toBeVisible({ timeout: 8000 });
     await expect(page.getByText('Total Cards')).toBeVisible({ timeout: 5000 });
     await expect(page.getByText('Due Now')).toBeVisible();
     await expect(page.getByText('Reviewed Today')).toBeVisible();
@@ -224,7 +224,7 @@ test.describe('Learning Cards IA — library navigation', () => {
     await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
-    await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Learning Cards' })).toBeVisible({ timeout: 8000 });
     await expect(page.getByText('RGS Thesis')).toBeVisible({ timeout: 5000 });
     await expect(page.getByText('Neural ODEs')).toBeVisible();
   });
@@ -234,7 +234,7 @@ test.describe('Learning Cards IA — library navigation', () => {
     await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
-    await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Learning Cards' })).toBeVisible({ timeout: 8000 });
     await expect(page.getByRole('button', { name: /generate/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /new card/i })).toBeVisible();
   });
@@ -244,7 +244,7 @@ test.describe('Learning Cards IA — library navigation', () => {
     await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
-    await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Learning Cards' })).toBeVisible({ timeout: 8000 });
     // RGS Thesis has 5 due cards — should show the specific "Review 5" button (exact title match)
     await expect(page.getByRole('button', { name: 'Review 5', exact: true })).toBeVisible({ timeout: 5000 });
   });
@@ -266,7 +266,7 @@ test.describe('Learning Cards IA — URL routing', () => {
     await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 5 });
     await page.goto('/cards?mode=library');
-    await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Learning Cards' })).toBeVisible({ timeout: 8000 });
   });
 
   test('no-due-cards defaults to Library view', async ({ page }) => {
@@ -274,6 +274,6 @@ test.describe('Learning Cards IA — URL routing', () => {
     await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
-    await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole('heading', { name: 'Learning Cards' })).toBeVisible({ timeout: 8000 });
   });
 });
