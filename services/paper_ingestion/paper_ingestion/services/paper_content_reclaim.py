@@ -87,6 +87,23 @@ async def _paper_content_is_still_discarded(conn: ConnLike, paper_id: int) -> bo
     return True
 
 
+async def _delete_stored_pdf(paper_id: int) -> None:
+    """Remove the paper's stored document, tolerating one that is already gone."""
+    pdf_path = secure_path(PDF_STORAGE_PATH, f"{paper_id}.pdf")
+    await asyncio.to_thread(pdf_path.unlink, missing_ok=True)
+
+
+async def _delete_stored_page_images(paper_id: int) -> None:
+    """Remove the paper's rendered page images, tolerating a paper that has none.
+
+    A re-derived document can be shorter than the one it replaces, so the
+    directory goes whole rather than page by page.
+    """
+    snapshot_dir = secure_path(SNAPSHOT_STORAGE_PATH, str(paper_id))
+    with contextlib.suppress(FileNotFoundError):
+        await asyncio.to_thread(shutil.rmtree, snapshot_dir)
+
+
 async def _reclaim_stored_files(conn: ConnLike, paper_id: int) -> None:
     """Free the paper's stored PDF and page images under the publication lock.
 
@@ -113,22 +130,18 @@ async def _reclaim_stored_files(conn: ConnLike, paper_id: int) -> None:
     the other.
 
     The two steps are independent: a failure is logged and the next still runs.
-    A re-derived document can be shorter than the one it replaces, so the image
-    directory goes whole rather than page by page.
+    That is the difference from the erasure path, which shares the deletions
+    below but must not absorb their failures.
     """
     async with pdf_publish_operation(Path(PDF_STORAGE_PATH)):
         if not await _paper_content_is_still_discarded(conn, paper_id):
             return
         try:
-            pdf_path = secure_path(PDF_STORAGE_PATH, f"{paper_id}.pdf")
-            await asyncio.to_thread(pdf_path.unlink, missing_ok=True)
+            await _delete_stored_pdf(paper_id)
         except Exception:  # noqa: BLE001 — best-effort; the file is unreferenced
             logger.warning("Stored PDF reclamation failed for paper %d", paper_id, exc_info=True)
         try:
-            snapshot_dir = secure_path(SNAPSHOT_STORAGE_PATH, str(paper_id))
-            await asyncio.to_thread(shutil.rmtree, snapshot_dir)
-        except FileNotFoundError:
-            pass  # no page images were ever rendered for this paper
+            await _delete_stored_page_images(paper_id)
         except Exception:  # noqa: BLE001 — best-effort; the images are unreferenced
             logger.warning("Page-image reclamation failed for paper %d", paper_id, exc_info=True)
 
@@ -260,11 +273,8 @@ _DELETE_ORPHANED_PAPERS_SQL = """
 async def _remove_stored_paper_files(paper_ids: Sequence[int]) -> None:
     """Delete the stored PDF and page images of each named paper."""
     for paper_id in paper_ids:
-        pdf_path = secure_path(PDF_STORAGE_PATH, f"{paper_id}.pdf")
-        await asyncio.to_thread(pdf_path.unlink, missing_ok=True)
-        snapshot_dir = secure_path(SNAPSHOT_STORAGE_PATH, str(paper_id))
-        with contextlib.suppress(FileNotFoundError):
-            await asyncio.to_thread(shutil.rmtree, snapshot_dir)
+        await _delete_stored_pdf(paper_id)
+        await _delete_stored_page_images(paper_id)
 
 
 async def erase_orphaned_user_papers(conn: ConnLike, user_id: int) -> list[int]:
