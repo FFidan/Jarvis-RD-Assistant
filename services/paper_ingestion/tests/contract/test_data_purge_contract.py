@@ -294,6 +294,64 @@ async def test_erasure_removes_sole_owned_private_papers_and_keeps_the_rest(
     )
 
 
+async def test_a_document_that_cannot_be_reclaimed_leaves_the_work_outstanding(
+    research_erasure_connections, tmp_path, monkeypatch
+) -> None:
+    """A failed reclaim unwinds the deletion instead of reporting a finished erasure.
+
+    If the rows were already gone the retry would find no candidates, the phase
+    would advance, and the request would reach its completed state with the
+    documents still on disk and nobody told.
+    """
+    from paper_ingestion.services import paper_content_reclaim
+
+    bootstrap, runtime = research_erasure_connections
+    user_id = uuid.uuid4().int % 1_000_000_000 + 1
+    tag = uuid.uuid4().hex[:8]
+
+    await bootstrap.execute(
+        "INSERT INTO platform.users (id, email) VALUES ($1, $2)",
+        user_id,
+        f"unreclaimable-{user_id}@example.invalid",
+    )
+    stranded = await _seed_paper(bootstrap, f"stranded-{tag}", "private")
+    await bootstrap.execute(
+        """INSERT INTO research.user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        user_id,
+        stranded,
+    )
+
+    storage = tmp_path / "pdfs"
+    snapshots = tmp_path / "snapshots"
+    storage.mkdir()
+    snapshots.mkdir()
+    monkeypatch.setattr(paper_content_reclaim, "PDF_STORAGE_PATH", str(storage))
+    monkeypatch.setattr(paper_content_reclaim, "SNAPSHOT_STORAGE_PATH", str(snapshots))
+
+    async def _refuse(paper_ids) -> None:
+        raise OSError("stored content could not be reclaimed")
+
+    monkeypatch.setattr(paper_content_reclaim, "_remove_stored_paper_files", _refuse)
+
+    with pytest.raises(OSError):
+        await paper_content_reclaim.erase_orphaned_user_papers(runtime, user_id)
+
+    assert (
+        await bootstrap.fetchval("SELECT COUNT(*) FROM research.papers WHERE id = $1", stranded)
+        == 1
+    ), "the record was deleted although its document could not be reclaimed"
+    assert (
+        await bootstrap.fetchval(
+            "SELECT COUNT(*) FROM research.user_library WHERE paper_id = $1", stranded
+        )
+        == 1
+    ), "the paper is no longer a candidate, so a retry would report a finished erasure"
+
+    await bootstrap.execute("DELETE FROM research.papers WHERE id = $1", stranded)
+    await bootstrap.execute("DELETE FROM platform.users WHERE id = $1", user_id)
+
+
 async def test_a_paper_another_account_is_still_discarding_is_kept(
     research_erasure_connections, tmp_path, monkeypatch
 ) -> None:

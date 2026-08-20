@@ -1040,6 +1040,11 @@ def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
         "ALTER ROLE ${nologin_role} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
         "NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD NULL" in source
     )
+    # The start-up guard is the only thing that would notice a rollback authority
+    # that regained a way to connect on an installation the bootstrap did not
+    # provision. Nothing else in the suite reads it, so it is pinned here.
+    assert "FROM pg_authid" in source
+    assert "AND (rolcanlogin OR rolpassword IS NOT NULL)" in source
 
 
 PROVISIONING_SCRIPTS = {

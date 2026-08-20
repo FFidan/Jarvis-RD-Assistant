@@ -221,6 +221,10 @@ async def reclaim_discarded_paper_content(paper_id: int, db_pool: asyncpg.Pool) 
         logger.warning("Reclamation failed for paper %d", paper_id, exc_info=True)
 
 
+_LOCK_CANDIDATE_PAPERS_SQL = """
+    SELECT paper.id FROM papers AS paper WHERE paper.id = ANY($1::int[]) FOR UPDATE
+"""
+
 _ORPHANED_PAPER_SQL = """
     SELECT paper.id
     FROM papers AS paper
@@ -301,19 +305,27 @@ async def erase_orphaned_user_papers(conn: ConnLike, user_id: int) -> list[int]:
 
     Rows go before files, and only the papers the delete actually removed have
     their files reclaimed. Unlinking first would destroy the stored document of
-    a paper the re-check then keeps, leaving a surviving row that points at a
-    file that is gone and that nothing ever revisits, because the paper is no
-    longer a candidate. The publication lock spans both so no publisher can
-    write the file in between.
+    a paper the re-check then keeps. Both happen inside one transaction, so a
+    file that cannot be reclaimed takes the row deletions down with it and the
+    papers become candidates again on the next attempt; without that, the rows
+    would already be gone, the retry would find nothing to do, and the erasure
+    would report itself complete with documents still on disk. The publication
+    lock spans the whole operation so no publisher can write a file in between.
+
+    The candidate rows are locked before the rule is re-applied. A library
+    insert that commits while the delete waits on the row lock is invisible to
+    the delete's own snapshot, so without the lock the paper would be removed
+    and the other account's newly saved row would go with it.
 
     Reclamation failures are not absorbed. An erasure that cannot remove a
-    stored file must not report success. A retry will not find the paper again,
-    so that file needs an operator, and failing loudly is what tells them.
+    stored document must not report success, and here it does not: the
+    transaction unwinds and the work is still outstanding.
     """
     candidates = [int(row["id"]) for row in await conn.fetch(_ORPHANED_PAPER_SQL, user_id)]
     if not candidates:
         return []
-    async with pdf_publish_operation(Path(PDF_STORAGE_PATH)):
+    async with pdf_publish_operation(Path(PDF_STORAGE_PATH)), conn.transaction():
+        await conn.execute(_LOCK_CANDIDATE_PAPERS_SQL, candidates)
         rows = await conn.fetch(_DELETE_ORPHANED_PAPERS_SQL, user_id, candidates)
         removed = [int(row["id"]) for row in rows]
         await _remove_stored_paper_files(removed)
