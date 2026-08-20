@@ -59,10 +59,21 @@ fi
 # and truncate any prior run's spans so this artifact reflects only this run.
 PROBE_HOST_DIR="${REPO_ROOT}/shared/perf"
 PROBE_HOST_FILE="${PROBE_HOST_DIR}/perf-probe.jsonl"
-mkdir -p "${PROBE_HOST_DIR}"
-chmod 777 "${PROBE_HOST_DIR}" 2>/dev/null || true
-: > "${PROBE_HOST_FILE}" 2>/dev/null || true
-chmod 666 "${PROBE_HOST_FILE}" 2>/dev/null || true
+# The probe container runs as JARVIS_PERF_UID:JARVIS_PERF_GID (docker-compose.perf.yml
+# reads them; the profile-stack-up target exports the same pair), which is this shell's
+# own account. The mount therefore stays private instead of being opened to every
+# account on the host, and the container can still write it.
+JARVIS_PERF_UID="$(id -u)"
+JARVIS_PERF_GID="$(id -g)"
+export JARVIS_PERF_UID JARVIS_PERF_GID
+if mkdir -p "${PROBE_HOST_DIR}" && chmod 700 "${PROBE_HOST_DIR}" \
+   && : > "${PROBE_HOST_FILE}" && chmod 600 "${PROBE_HOST_FILE}"; then
+  log "Probe output ready at ${PROBE_HOST_FILE}"
+else
+  log "WARN: cannot write ${PROBE_HOST_FILE} — no in-process spans will be captured."
+  log "      Remove ${PROBE_HOST_DIR} and re-run 'make profile-stack-up' if an earlier"
+  log "      run left it owned by another account."
+fi
 
 # ---------------------------------------------------------------------------
 # 0. GPU probe — start in background (best-effort)
@@ -99,10 +110,15 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Backend endpoint wall-clock timings
 # ---------------------------------------------------------------------------
+# The deployment key rides in on stdin as a curl config line; passing it as -H would
+# publish it in the process list for the lifetime of the request.
 profile_auth_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
   -X POST "${JARVIS_BASE_URL}/api/auth/api-key-session" \
-  -H "X-API-Key: ${API_KEY}" -H "Content-Type: application/json" \
-  -c "${PROFILE_COOKIE_JAR}" -d '{}' 2>/dev/null || echo "000")
+  -H "Content-Type: application/json" --config - \
+  -c "${PROFILE_COOKIE_JAR}" -d '{}' <<EOF 2>/dev/null || echo "000"
+header = "X-API-Key: ${API_KEY}"
+EOF
+)
 if [[ "${profile_auth_code}" == "200" ]] && \
    grep -q 'jarvis_session' "${PROFILE_COOKIE_JAR}" 2>/dev/null; then
   log "Timing authenticated gateway GET endpoints (3x each)"
@@ -207,10 +223,14 @@ LOADGEN_SCRIPT="${REPO_ROOT}/scripts/perf/loadgen.sh"
 
 if [[ -f "${LOADGEN_SCRIPT}" ]]; then
   log "Running load-gen (PERF_CONCURRENCY=${PERF_CONCURRENCY:-10})"
+  # Resolved before the assignment list: a prefix assignment is not visible to the
+  # expansions beside it, so referring to OUT_DIR there would read the outer value
+  # only by accident.
+  LOADGEN_PROBE_PATH="${PERF_PROBE_PATH:-${OUT_DIR}/perf-probe.jsonl}"
   OUT_DIR="${OUT_DIR}" \
   PERF_CONCURRENCY="${PERF_CONCURRENCY:-10}" \
   PERF_PROBE_ENABLED="${PERF_PROBE_ENABLED:-0}" \
-  PERF_PROBE_PATH="${PERF_PROBE_PATH:-${OUT_DIR}/perf-probe.jsonl}" \
+  PERF_PROBE_PATH="${LOADGEN_PROBE_PATH}" \
   JARVIS_BASE_URL="${JARVIS_BASE_URL}" \
   bash "${LOADGEN_SCRIPT}" || log "WARN: loadgen exited non-zero — concurrency metrics may be partial"
 else

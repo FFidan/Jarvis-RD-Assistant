@@ -26,6 +26,8 @@ HOST_RESERVATION="${LOCK_DIR}/host.reservation"
 HOST_CONTROL="${LOCK_DIR}/host.control"
 HOST_RESERVATION_LOCK="${LOCK_DIR}/host-reservation.lock"
 UPDATE_PIN="${LOCK_DIR}/update-backup-pin.json"
+# Mirror of backup.sh's manifest domain label; all three scripts must agree byte-for-byte.
+MANIFEST_HMAC_LABEL="jarvis-manifest-v1"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; return 1; }
 
@@ -1037,8 +1039,24 @@ clear_pin() {
   rm -f "$UPDATE_PIN"
 }
 
+# Mirrors backup.sh's signing construction: the PUBLIC label keys the HMAC and the
+# SECRET key-file bytes are the message prefix, so the key never reaches argv.
+manifest_signature() {
+  { cat -- "$BACKUP_KEY_FILE"; printf '\n%s\n' "$MANIFEST_HMAC_LABEL"; cat -- "$1"; } \
+    | openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r 2>/dev/null | cut -d' ' -f1
+}
+
+# The construction releases before 1.2.6 wrote, kept for verification only so a backup
+# set taken by an older release still authenticates. Nothing signs this way any more.
+legacy_manifest_signature() {
+  local derived
+  derived="$(openssl dgst -sha256 -hmac "$MANIFEST_HMAC_LABEL" -r < "$BACKUP_KEY_FILE" 2>/dev/null | cut -d' ' -f1)"
+  printf '%s' "$derived" | grep -Eq '^[0-9a-f]{64}$' || return 1
+  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$1" 2>/dev/null | cut -d' ' -f1
+}
+
 verify_manifest_hmac() {
-  local manifest="$1" stored derived computed
+  local manifest="$1" stored computed
   [ -f "$BACKUP_KEY_FILE" ] && [ ! -L "$BACKUP_KEY_FILE" ] \
     || { fail "backup authentication key is missing or unsafe"; return 1; }
   [ -f "${manifest}.hmac" ] && [ ! -L "$manifest" ] && [ ! -L "${manifest}.hmac" ] \
@@ -1046,11 +1064,13 @@ verify_manifest_hmac() {
   stored="$(cat "${manifest}.hmac" 2>/dev/null || true)"
   printf '%s' "$stored" | grep -Eq '^[0-9a-f]{64}$' \
     || { fail "backup manifest signature is malformed"; return 1; }
-  derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$BACKUP_KEY_FILE" 2>/dev/null | cut -d' ' -f1)"
-  printf '%s' "$derived" | grep -Eq '^[0-9a-f]{64}$' \
-    || { fail "could not derive the backup authentication key"; return 1; }
-  computed="$(openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$manifest" 2>/dev/null | cut -d' ' -f1)"
-  [ "$stored" = "$computed" ] || { fail "backup manifest failed authentication"; return 1; }
+  computed="$(manifest_signature "$manifest")"
+  printf '%s' "$computed" | grep -Eq '^[0-9a-f]{64}$' \
+    || { fail "could not compute the backup manifest signature"; return 1; }
+  if [ "$stored" != "$computed" ]; then
+    computed="$(legacy_manifest_signature "$manifest" || true)"
+    [ "$stored" = "$computed" ] || { fail "backup manifest failed authentication"; return 1; }
+  fi
 }
 
 verify_backup_set() {

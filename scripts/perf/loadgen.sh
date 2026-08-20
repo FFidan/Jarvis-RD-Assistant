@@ -210,11 +210,15 @@ if ! curl -s -o /dev/null --max-time 10 "${JARVIS_BASE_URL}/health/live" \
 fi
 
 # Exchange the deployment API key once for the same owner session used by a
-# browser. User-scoped routes intentionally reject the raw key.
+# browser. User-scoped routes intentionally reject the raw key. The key rides in on
+# stdin as a curl config line; passing it as -H would publish it in the process list.
 auth_code=$(curl -s -o "${TMPDIR_LG}/auth_resp.json" -w '%{http_code}' \
               --max-time 15 -X POST "${JARVIS_BASE_URL}/api/auth/api-key-session" \
-              -H "X-API-Key: ${API_KEY}" -H "Content-Type: application/json" \
-              -c "${COOKIE_JAR}" -d '{}' 2>/dev/null || echo "000")
+              -H "Content-Type: application/json" --config - \
+              -c "${COOKIE_JAR}" -d '{}' <<EOF 2>/dev/null || echo "000"
+header = "X-API-Key: ${API_KEY}"
+EOF
+)
 if [[ "${auth_code}" != "200" ]] || ! grep -q 'jarvis_session' "${COOKIE_JAR}" 2>/dev/null; then
   log "WARN: api-key-session → HTTP ${auth_code} (need single-tenant + an admin"
   log "      user, or API_KEY_LOGIN_ENABLED). Skipping authenticated load."

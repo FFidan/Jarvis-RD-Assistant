@@ -43,19 +43,30 @@ connect_as() {
     psql -X -v ON_ERROR_STOP=1 -h "$host" -U "$connect_role" -d "$database" "$@"
 }
 
-escaped_secret() {
-  read_secret "$1" "$2" | sed "s/'/''/g"
+# A password reaches PostgreSQL inside a single-quoted literal, so every quote in
+# it is doubled here. read_secret is never run inside a pipeline: its exit would
+# end only the subshell and hand the caller an empty password to provision with.
+quoted_secret() {
+  secret_value="$(read_secret "$1" "$2")" || exit 1
+  if [ -z "$secret_value" ]; then
+    echo "[cluster-bootstrap] password file for $2 holds no password." >&2
+    exit 1
+  fi
+  printf '%s' "$secret_value" | sed "s/'/''/g"
 }
 
+# The catalog answer is captured before it is compared. Reading it through a pipe
+# would report a failed query as "the role is absent" and drive a needless CREATE.
 role_exists() {
-  connect_as "$bootstrap_role" "$bootstrap_password_file" -At \
-    -c "SELECT 1 FROM pg_roles WHERE rolname = '$1'" | grep -qx 1
+  role_present="$(connect_as "$bootstrap_role" "$bootstrap_password_file" -At \
+    -c "SELECT 1 FROM pg_roles WHERE rolname = '$1'")" || exit 1
+  [ "$role_present" = "1" ]
 }
 
 provision_login() {
   login_role="$1"
   login_password_file="$2"
-  login_password="$(escaped_secret "$login_password_file" "$login_role")"
+  login_password="$(quoted_secret "$login_password_file" "$login_role")" || exit 1
   printf 'DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '\''%s'\'') THEN CREATE ROLE %s LOGIN; END IF; END $$;\nALTER ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD '\''%s'\'';\n' \
     "$login_role" "$login_role" "$login_role" "$login_password" \
     | connect_as "$bootstrap_role" "$bootstrap_password_file"
@@ -400,7 +411,7 @@ fi
 # retained without LOGIN after its ownership is transferred below.
 if ! connect_as "$bootstrap_role" "$bootstrap_password_file" -c 'SELECT 1' >/dev/null 2>&1; then
   legacy_source_password_file="postgres_legacy_source_password"
-  bootstrap_password="$(escaped_secret "$bootstrap_password_file" "$bootstrap_role")"
+  bootstrap_password="$(quoted_secret "$bootstrap_password_file" "$bootstrap_role")" || exit 1
   echo "[cluster-bootstrap] establishing isolated bootstrap authority for upgrade." >&2
   printf 'DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '\''%s'\'') THEN CREATE ROLE %s LOGIN SUPERUSER NOINHERIT; END IF; END $$;\nALTER ROLE %s WITH LOGIN SUPERUSER NOINHERIT PASSWORD '\''%s'\'';\n' \
     "$bootstrap_role" "$bootstrap_role" "$bootstrap_role" "$bootstrap_password" \
@@ -476,13 +487,14 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
   "ALTER DATABASE ${database} OWNER TO jarvis_legacy_rollback"
 
 # The bootstrap login remains the only persistent cluster-level superuser.
-bootstrap_password="$(escaped_secret "$bootstrap_password_file" "$bootstrap_role")"
+bootstrap_password="$(quoted_secret "$bootstrap_password_file" "$bootstrap_role")" || exit 1
 printf "ALTER ROLE %s WITH LOGIN SUPERUSER NOINHERIT PASSWORD '%s';\n" \
   "$bootstrap_role" "$bootstrap_password" \
   | connect_as "$bootstrap_role" "$bootstrap_password_file"
 
-if ! connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -At \
-  -c "SELECT 1 FROM pg_database WHERE datname = 'litellm'" | grep -qx 1; then
+litellm_database_present="$(connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -At \
+  -c "SELECT 1 FROM pg_database WHERE datname = 'litellm'")" || exit 1
+if [ "$litellm_database_present" != "1" ]; then
   connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -c \
     'CREATE DATABASE litellm OWNER jarvis_litellm_migrator'
 fi
