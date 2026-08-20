@@ -35,6 +35,7 @@ class _OwnerTarget:
     origin: str
     path: str
     user_id: int
+    request_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +56,14 @@ async def _owner_command(
     *,
     target: _OwnerTarget,
 ) -> dict[str, object]:
-    """Send one exact signed owner command and validate its object response."""
-    command_request_id = str(uuid.uuid4())
+    """Send one exact signed owner command and validate its object response.
+
+    The request identifier is the erasure request itself, not a fresh one: the
+    owner routes bind the command to the request named in their own path, so a
+    per-call identifier is refused there. Reusing it also gives all three phases
+    of one erasure a single correlation identifier.
+    """
+    command_request_id = target.request_id
     assertion = signer.issue(
         audience=target.audience,
         subject="service:platform",
@@ -182,6 +189,7 @@ async def _advance_phases(
                         origin=origin,
                         path=f"/internal/domains/erasure/{context.request_id}{step.path_suffix}",
                         user_id=context.record.user_id,
+                        request_id=str(context.request_id),
                     ),
                 )
                 await erasure.acknowledge(

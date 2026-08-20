@@ -207,6 +207,11 @@ async def test_resume_after_learning_outage_does_not_repeat_completed_owners(
     assert state is erasure.ErasureState.READY
     client.post.assert_awaited_once()
     assert client.post.await_args.args[0].endswith(f"/internal/domains/erasure/{request_id}")
+    # The owner route binds the command to the request its own path names and
+    # refuses anything else, so a per-call identifier here would 403 every
+    # Learning erasure and strand the account half-erased.
+    assert client.post.await_args.kwargs["headers"]["X-Request-Id"] == str(request_id)
+    assert app.state.identity_signer.issue.call_args.kwargs["request_id"] == str(request_id)
 
 
 async def test_due_pass_isolates_a_concurrent_restore(

@@ -256,6 +256,21 @@ legacy_manifest_signature() {
 # not need to be. A restore is an offline one-shot operator action with no online timing
 # oracle, so an attacker gets no repeatable measurement to exploit. Returns non-zero on
 # a missing signature, a mismatch under both constructions, or any compute failure.
+# manifest_predates_run_id <manifest> — true only for the manifest shape written
+# before v1.2.6, which carries no run_id. This decides whether the legacy MAC may
+# be attempted at all. Reading the field before authenticating the file is safe:
+# the answer only ever narrows which construction is tried, and a manifest that
+# claims to be current can then never be validated by the weaker key.
+manifest_predates_run_id() {
+  local manifest="$1"
+  [ -f "$manifest" ] && [ ! -L "$manifest" ] || return 1
+  perl -MJSON::PP -e '
+    use strict; use warnings;
+    local $/; my $d = decode_json(<>);
+    exit((ref($d) eq "HASH" && !exists($d->{run_id})) ? 0 : 1);
+  ' "$manifest" 2>/dev/null
+}
+
 verify_manifest_signature() {
   local manifest="$1" stored="${1}.hmac" computed rc=1
   [ -s "$stored" ] || return 1
@@ -263,7 +278,7 @@ verify_manifest_signature() {
   set +e
   manifest_signature "$manifest" 2>/dev/null > "$computed"
   if [ -s "$computed" ] && cmp -s "$computed" "$stored"; then rc=0; fi
-  if [ "$rc" != 0 ]; then
+  if [ "$rc" != 0 ] && manifest_predates_run_id "$manifest"; then
     legacy_manifest_signature "$manifest" 2>/dev/null > "$computed"
     if [ -s "$computed" ] && cmp -s "$computed" "$stored"; then rc=0; fi
   fi

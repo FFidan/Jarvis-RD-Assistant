@@ -63,19 +63,20 @@ line on the signing path.
 `scripts/backup-lifecycle.sh`, reconstructs the derived key the releases before
 v1.2.6 used and passes it to openssl as `-macopt hexkey:`, where it is briefly
 visible to anything that can read the process list on that host. It is reached
-only when the current construction fails to match a stored signature, which
-means only when verifying an archive set written before this release. It was
-kept deliberately: the pinned openssl offers no way to key an HMAC from a file,
-so removing the fallback would lock an operator out of every backup set
+only for a manifest that carries no `run_id`, which is the shape written before
+v1.2.6 — a manifest claiming to be current is never checked against the legacy
+key, so a tampered current set cannot force the old key onto the command line.
+It was kept deliberately: the pinned openssl offers no way to key an HMAC from a
+file, so removing the fallback would lock an operator out of every backup set
 predating v1.2.6. Signed manifests still do not authenticate an unsigned
 pre-upgrade set, and no construction protects against an attacker who can
 replace both the archives and the backup key.
 
 **Reopen criteria:** `-macopt hexkey:` appears anywhere outside
 `legacy_manifest_signature`; a signing path calls `legacy_manifest_signature`;
-verification reaches it other than after the current construction has already
-failed; or the pinned openssl gains a way to key an HMAC from a file, at which
-point the fallback can be re-keyed and the argv exposure removed entirely.
+verification reaches it for a manifest that carries a `run_id`; or the pinned
+openssl gains a way to key an HMAC from a file, at which point the fallback can
+be re-keyed and the argv exposure removed entirely.
 
 ---
 

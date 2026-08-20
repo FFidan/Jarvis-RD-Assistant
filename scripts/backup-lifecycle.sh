@@ -1055,6 +1055,20 @@ legacy_manifest_signature() {
   openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$1" 2>/dev/null | cut -d' ' -f1
 }
 
+# manifest_predates_run_id <manifest> — true only for the manifest shape written
+# before v1.2.6, which carries no run_id. This decides whether the legacy MAC may
+# be attempted at all, so a tampered current manifest cannot be validated by the
+# weaker key and cannot force the old key onto the command line on demand.
+manifest_predates_run_id() {
+  local manifest="$1"
+  [ -f "$manifest" ] && [ ! -L "$manifest" ] || return 1
+  perl -MJSON::PP -e '
+    use strict; use warnings;
+    local $/; my $d = decode_json(<>);
+    exit((ref($d) eq "HASH" && !exists($d->{run_id})) ? 0 : 1);
+  ' "$manifest" 2>/dev/null
+}
+
 verify_manifest_hmac() {
   local manifest="$1" stored computed
   [ -f "$BACKUP_KEY_FILE" ] && [ ! -L "$BACKUP_KEY_FILE" ] \
@@ -1068,6 +1082,8 @@ verify_manifest_hmac() {
   printf '%s' "$computed" | grep -Eq '^[0-9a-f]{64}$' \
     || { fail "could not compute the backup manifest signature"; return 1; }
   if [ "$stored" != "$computed" ]; then
+    manifest_predates_run_id "$manifest" \
+      || { fail "backup manifest failed authentication"; return 1; }
     computed="$(legacy_manifest_signature "$manifest" || true)"
     [ "$stored" = "$computed" ] || { fail "backup manifest failed authentication"; return 1; }
   fi
