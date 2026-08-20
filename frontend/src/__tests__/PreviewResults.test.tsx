@@ -66,4 +66,50 @@ describe('PreviewResults — library-match message (FEE-2)', () => {
       screen.getByText(/all results in this preview are already in your library/i),
     ).toBeInTheDocument();
   });
+
+  it('shows counts and degraded details in source rows', () => {
+    render(
+      <MemoryRouter>
+        <PreviewResults
+          papers={[makePaper('new-1', false)]}
+          onSave={vi.fn()}
+          onClear={vi.fn()}
+          isSaving={false}
+          perSourceCounts={{ arxiv: 1 }}
+          sourceErrors={{
+            semantic_scholar: {
+              kind: 'rate_limit',
+              message: 'Semantic Scholar rate limit reached. Retry later.',
+              status_code: 429,
+              retry_after_s: 3,
+              settings_hint: null,
+            },
+            openalex: {
+              kind: 'api_error',
+              message: 'OpenAlex search was skipped because no API key is configured.',
+              status_code: null,
+              retry_after_s: null,
+              settings_hint: 'Add an OpenAlex API key in Settings > Sources.',
+            },
+          }}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('source-summary-arxiv')).toHaveTextContent('1 result');
+    expect(screen.getByTestId('source-summary-semantic_scholar')).toHaveTextContent(
+      'Semantic Scholar rate limit reached. Retry later.',
+    );
+    expect(screen.getByTestId('source-summary-openalex')).toHaveTextContent(
+      'Add an OpenAlex API key in Settings > Sources.',
+    );
+    // A source that failed was never searched, so it must not report "0 results"
+    // as though it had looked and found nothing.
+    expect(screen.getByTestId('source-summary-openalex')).toHaveTextContent('not searched');
+    expect(screen.getByTestId('source-summary-openalex')).not.toHaveTextContent('0 results');
+    expect(screen.getByTestId('source-summary-semantic_scholar')).not.toHaveTextContent(
+      '0 results',
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

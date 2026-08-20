@@ -1,4 +1,4 @@
-"""Integration-style tests for SSE stream endpoint user_id ownership filter.
+"""Integration-style tests for Platform SSE ownership filtering.
 
 Verifies that GET /api/jobs/{id}/stream returns 404 when the job's user_id
 doesn't match the caller's user_id, and allows access when user_id is NULL
@@ -74,7 +74,7 @@ def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicM
 
 
 # ---------------------------------------------------------------------------
-# Fixture: paper_ingestion app with auth + rate-limiting bypassed
+# Fixture: Platform facade with auth + rate-limiting bypassed
 # ---------------------------------------------------------------------------
 
 
@@ -86,8 +86,8 @@ def _app_with_pool():
     from fastapi import HTTPException
 
     from jarvis_common import current_user_id_strict, verify_api_key
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool, limiter, verify_platform_request
+    from platform_api.main import app
 
     with ExitStack() as stack:
 
@@ -114,10 +114,11 @@ def _app_with_pool():
                     get_db_pool=get_db_pool,
                     limiter=limiter,
                     options=PITestAppOptions(
-                        remove_owner_override=False,
+                        remove_identity_overrides=False,
                         disable_limiter=True,
                         dependency_overrides={
                             verify_api_key: lambda: None,
+                            verify_platform_request: lambda: None,
                             current_user_id_strict: _caller_override,
                         },
                     ),

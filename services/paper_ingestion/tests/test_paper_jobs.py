@@ -38,6 +38,8 @@ _pdf_proc_stub.resolve_safe_pdf_path = _real_resolve_safe_pdf_path
 
 _main_stub = MagicMock()
 _workflow_stub = MagicMock()
+_bibliography_stub = MagicMock()
+_analysis_call_order: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -65,11 +67,17 @@ def _install_stubs(monkeypatch):
     _workflow_stub.PDFRebuildNotPermittedError = _real_pdf_workflow.PDFRebuildNotPermittedError
     _workflow_stub.PDFUserFacingError = _real_pdf_workflow.PDFUserFacingError
     _workflow_stub.download_and_store_pdf = AsyncMock()
+    _bibliography_stub.reset_mock()
+    _analysis_call_order.clear()
+    _bibliography_stub.process_uploaded_document_citations = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: _analysis_call_order.append("citations")
+    )
 
     monkeypatch.setitem(sys.modules, "paper_ingestion.pdf_processor", _pdf_proc_stub)
     monkeypatch.setitem(sys.modules, "paper_ingestion.main", _main_stub)
     monkeypatch.setitem(sys.modules, "paper_ingestion.services", MagicMock())
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.bibliography", _bibliography_stub)
     # Force re-import of paper_jobs so it resolves against the freshly installed stubs.
     monkeypatch.delitem(sys.modules, "paper_ingestion.paper_jobs", raising=False)
     # Also clear _state module so svc starts fresh each test.
@@ -687,7 +695,9 @@ async def _run_analyze_job_with_process_result(tmp_path, monkeypatch, process_re
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
     _workflow_stub.run_process_pdf = AsyncMock(return_value=process_result)
     _summ_stub = MagicMock()
-    _summ_stub.generate_paper_summary = AsyncMock()
+    _summ_stub.generate_paper_summary = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: _analysis_call_order.append("summary")
+    )
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
 
     # Populate svc so the handler resolves pdf_processor/embedder/verifier.
@@ -696,6 +706,8 @@ async def _run_analyze_job_with_process_result(tmp_path, monkeypatch, process_re
     svc.pdf_processor = MagicMock()
     svc.embedder = MagicMock()
     svc.verifier = MagicMock()
+    svc.sources = {"semantic_scholar": MagicMock()}
+    svc.openai_client = MagicMock()
 
     # Override PDF_STORAGE_PATH to tmp_path so the path-traversal check passes.
     monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
@@ -706,6 +718,22 @@ async def _run_analyze_job_with_process_result(tmp_path, monkeypatch, process_re
         payload={"paper_id": 7},  # user_id absent → None → single-user mode
         ctx=_make_ctx(),
     )
+
+
+@pytest.mark.asyncio
+async def test_local_analysis_runs_citation_identification_before_summary(tmp_path, monkeypatch):
+    await _run_analyze_job_with_process_result(
+        tmp_path,
+        monkeypatch,
+        {"paper_id": 7, "chunk_count": 5, "status": "processed"},
+    )
+
+    _bibliography_stub.process_uploaded_document_citations.assert_awaited_once()
+    call_args = _bibliography_stub.process_uploaded_document_citations.await_args
+    assert call_args.args[1] == 7
+    assert call_args.kwargs["s2_source"] is not None
+    assert call_args.kwargs["openai_client"] is not None
+    assert _analysis_call_order == ["citations", "summary"]
 
 
 @pytest.mark.asyncio
@@ -1468,7 +1496,7 @@ def _worker_task(handler, pool, outcome: list) -> MagicMock:
 
 
 def _jobs_app(pool, *, user_id: int):
-    """Return a FastAPI app serving the jobs router against mocked dependencies."""
+    """Return the Research owner-command app with a verified Platform identity."""
     from fastapi import FastAPI  # noqa: PLC0415
     from jarvis_common.auth import current_user_id_strict  # noqa: PLC0415
 
@@ -1482,7 +1510,19 @@ def _jobs_app(pool, *, user_id: int):
     app.include_router(_jobs_router_module.router)
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[current_user_id_strict] = lambda: user_id
-    return app
+
+    class _PlatformIdentity:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+
+        async def __call__(self, scope, receive, send):
+            forwarded = dict(scope)
+            state = dict(scope.get("state", {}))
+            state.update(user_id=user_id, identity_principal="platform")
+            forwarded["state"] = state
+            await self.wrapped(forwarded, receive, send)
+
+    return _PlatformIdentity(app)
 
 
 def _jobs_client(app):
@@ -1514,7 +1554,7 @@ async def test_jobs_endpoint_analyze_force_wins_no_rebuild_for_non_holder(tmp_pa
     with patch.dict(task_registry._TASK_MAP, {"paper.analyze": task}):
         async with _jobs_client(_jobs_app(pool, user_id=_NON_HOLDER_ID)) as client:
             resp = await client.post(
-                "/api/jobs",
+                "/api/jobs/dispatch",
                 json={
                     "kind": "paper.analyze",
                     "payload": {"paper_id": _REBUILD_PAPER_ID, "force": True},
@@ -1547,7 +1587,7 @@ async def test_jobs_endpoint_batch_force_wins_no_rebuild_for_non_holder(tmp_path
     with patch.dict(task_registry._TASK_MAP, {"papers.batch_process": task}):
         async with _jobs_client(_jobs_app(pool, user_id=_NON_HOLDER_ID)) as client:
             resp = await client.post(
-                "/api/jobs",
+                "/api/jobs/dispatch",
                 json={
                     "kind": "papers.batch_process",
                     "payload": {"paper_ids": [_REBUILD_PAPER_ID], "force": True},

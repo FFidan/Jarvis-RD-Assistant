@@ -6,35 +6,33 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.testing import make_pool_and_conn
 
 pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
 def mock_deps():
-    """Stock asyncpg.Pool / Bot / httpx.AsyncClient / BotConfig fixtures."""
-    # list_user_pairings (the only db_pool consumer that runs before the guard)
-    # is patched in each test, so db_pool.fetch is never reached — but keep it
-    # awaitable as a defensive default.
-    db_pool, _conn = make_pool_and_conn(fetch_return=[], direct_methods=True)
+    """Return stock Platform, Bot, HTTP, and configuration test doubles."""
+    platform_client = AsyncMock()
     bot = AsyncMock()
     http_client = AsyncMock()
     config = MagicMock()
     config.jarvis_api_key = None
     config.paper_ingestion_url = "http://paper_ingestion:8000"
     config.learning_engine_url = "http://learning_engine:8001"
-    return db_pool, bot, http_client, config
+    return platform_client, bot, http_client, config
 
 
 async def _assert_skips_with_warning(run_fn, caplog, mock_deps) -> None:
-    db_pool, bot, http_client, config = mock_deps
-    # run_* functions call `owner.list_user_pairings(...)` via a module-level
-    # `from telegram_bot import owner as _owner`, so patching the attribute on the
-    # owner module — the canonical source location — is intercepted at the call site.
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
+    platform_client, bot, http_client, config = mock_deps
+    with patch(f"{run_fn.__module__}.list_user_pairings", AsyncMock(return_value=[])):
         caplog.set_level(logging.WARNING)
-        await run_fn(http_client=http_client, db_pool=db_pool, bot=bot, config=config)
+        await run_fn(
+            http_client=http_client,
+            platform_client=platform_client,
+            bot=bot,
+            config=config,
+        )
     # Real invariant: no message delivered when there are no pairings.
     bot.send_message.assert_not_called()
     # Soft check: at least one warning was logged (exact text is implementation detail).

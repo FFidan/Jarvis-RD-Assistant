@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from paper_ingestion.services.config_validators import _validate_bool, _validate_timezone
+from jarvis_common.config_validators import _validate_bool, _validate_timezone
 
 
 # ---------------------------------------------------------------------------

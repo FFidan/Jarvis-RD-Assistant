@@ -46,6 +46,12 @@ pytestmark = [
 ]
 
 
+@pytest_asyncio.fixture(autouse=True, loop_scope="session")
+async def _platform_runtime_identity(contract_conn):
+    """Run each route contract under the real Platform runtime identity."""
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -68,22 +74,22 @@ _client = partial(make_contract_client, base_url="http://localhost")
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _auth_app(contract_conn):
-    """paper_ingestion app with db_pool wired to the contract connection.
+    """Platform app with its database wired to the contract connection.
 
     Limiter is disabled so rate limits do not interfere with the creation
     flow being tested here.
     """
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
-    from paper_ingestion.routers.auth import router as auth_router  # noqa: F401
+    from platform_api.deps import get_db_pool, limiter
+    from platform_api.main import app
+    from platform_api.routers.auth import router as auth_router  # noqa: F401
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
     with patch_pi_test_app(
         shared,
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=False, disable_limiter=True),
+        options=PITestAppOptions(remove_identity_overrides=False, disable_limiter=True),
     ) as wired_app:
         yield wired_app
 
@@ -112,7 +118,7 @@ async def test_request_link_creates_token_row(
         intercepted.append(link.split("token=", 1)[-1])
 
     with patch(
-        "paper_ingestion.routers.auth.send_magic_link",
+        "platform_api.routers.auth.send_magic_link",
         side_effect=_fake_send,
     ):
         async with _client(_auth_app, None) as c:

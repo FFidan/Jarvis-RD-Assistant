@@ -81,10 +81,7 @@ async def dismiss_banner(
     # available from require_admin — omit from context rather than invent.
     async with pool.acquire() as conn:
         await conn.execute(
-            """
-            INSERT INTO system_events (level, category, source, message, context)
-            VALUES ($1, $2, $3, $4, $5::jsonb)
-            """,
+            "SELECT platform.append_system_event_v1($1, $2, $3, $4, $5::jsonb, NULL)",
             "info",
             "config",
             "settings_ai",

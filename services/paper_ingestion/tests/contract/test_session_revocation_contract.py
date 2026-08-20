@@ -52,13 +52,16 @@ async def admin_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     _admin_id, admin_cookie = await _seed_user_with_session(
         contract_conn, "session-revocation-admin@example.com", "admin"
     )
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -68,7 +71,7 @@ async def admin_client(contract_conn):
                 set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
             ),
             patch(
-                "paper_ingestion.routers.admin.send_magic_link",
+                "platform_api.routers.admin.send_magic_link",
                 new=AsyncMock(return_value=None),
             ),
         ):

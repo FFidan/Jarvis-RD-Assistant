@@ -27,7 +27,7 @@ def app_with_pool():
     """
     from jarvis_common.auth import (
         current_user_id_strict,
-        get_current_user_id_or_bot,
+        get_current_user_id,
         require_admin,
         require_admin_or_api_key,
         verify_api_key,
@@ -43,17 +43,44 @@ def app_with_pool():
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             # The pulse_app factory below adds per-test overrides for these
             # two seams; declaring them here removes any in-test write again
             # on exit so it cannot leak past the fixture.
-            dependency_absent=(get_current_user_id_or_bot, require_admin_or_api_key),
+            dependency_absent=(get_current_user_id, require_admin_or_api_key),
             dependency_overrides={
                 verify_api_key: lambda: None,
                 current_user_id_strict: lambda: 42,
                 require_admin: lambda: None,
+            },
+        ),
+    ):
+        yield app, pool
+
+
+@pytest.fixture()
+def platform_jobs_app():
+    """Create the Platform-owned public jobs facade with test auth seams."""
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
+    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
+    from platform_api.deps import get_db_pool, limiter
+    from platform_api.main import app
+
+    pool, _conn = make_pool_and_conn()
+    with patch_pi_test_app(
+        pool,
+        app=app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(
+            remove_identity_overrides=False,
+            override_db_dependency=True,
+            disable_limiter=True,
+            dependency_overrides={
+                verify_api_key: lambda: None,
+                current_user_id_strict: lambda: 42,
             },
         ),
     ):
@@ -187,9 +214,9 @@ async def test_scan_local_pdfs_non_admin_gets_403(app_with_pool):
 # ---------------------------------------------------------------------------
 
 
-async def test_create_job_rejects_unknown_kind(app_with_pool):
-    """POST /api/jobs with an unknown kind returns 422."""
-    app, _pool = app_with_pool
+async def test_create_job_rejects_unknown_kind(platform_jobs_app):
+    """Platform POST /api/jobs rejects an unknown kind with 422."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -211,9 +238,9 @@ async def test_create_job_rejects_unknown_kind(app_with_pool):
     )
 
 
-async def test_create_job_rejects_missing_paper_id_for_paper_process(app_with_pool):
-    """POST /api/jobs kind=paper.process with empty payload returns 422."""
-    app, _pool = app_with_pool
+async def test_create_job_rejects_missing_paper_id_for_paper_process(platform_jobs_app):
+    """Platform POST /api/jobs rejects a paper job lacking its paper id."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -228,9 +255,9 @@ async def test_create_job_rejects_missing_paper_id_for_paper_process(app_with_po
     assert "paper_id" in errors_str
 
 
-async def test_create_job_rejects_string_paper_id(app_with_pool):
-    """POST /api/jobs kind=paper.process with paper_id as string returns 422."""
-    app, _pool = app_with_pool
+async def test_create_job_rejects_string_paper_id(platform_jobs_app):
+    """Platform POST /api/jobs rejects a non-integer paper id."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -254,9 +281,9 @@ _BATCH_KINDS = ("papers.batch_process", "papers.batch_summarize", "extraction.ba
 
 
 @pytest.mark.parametrize("kind", _BATCH_KINDS)
-async def test_batch_payload_rejects_more_than_fifty_paper_ids(app_with_pool, kind):
-    """One request may not enqueue an unbounded amount of per-paper work."""
-    app, _pool = app_with_pool
+async def test_batch_payload_rejects_more_than_fifty_paper_ids(platform_jobs_app, kind):
+    """Platform refuses an unbounded batch before owner dispatch."""
+    app, _pool = platform_jobs_app
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -271,29 +298,22 @@ async def test_batch_payload_rejects_more_than_fifty_paper_ids(app_with_pool, ki
 
 
 @pytest.mark.parametrize("kind", _BATCH_KINDS)
-async def test_batch_payload_accepts_fifty_paper_ids(app_with_pool, kind):
-    """The bound is 50, not 49 — the largest legitimate batch still enqueues."""
-    import jarvis_common.task_registry as task_registry
-    from paper_ingestion.deps import get_db_pool
-
-    app, _pool = app_with_pool
+async def test_batch_payload_accepts_fifty_paper_ids(platform_jobs_app, kind, monkeypatch):
+    """Platform forwards the largest valid batch to its exact owner command."""
+    app, _pool = platform_jobs_app
     paper_ids = list(range(1, 51))
-    pool, conn = make_pool_and_conn()
-    conn.fetch = AsyncMock(return_value=[{"id": pid, "is_visible": True} for pid in paper_ids])
-    app.dependency_overrides[get_db_pool] = lambda: pool
-
-    mock_task = MagicMock(defer_async=AsyncMock())
-    with patch.dict(task_registry._TASK_MAP, {kind: mock_task}):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post(
-                "/api/jobs",
-                json={"kind": kind, "payload": {"paper_ids": paper_ids}},
-            )
+    dispatch = AsyncMock(return_value="owner-job-id")
+    monkeypatch.setattr("platform_api.routers.jobs._dispatch_to_owner", dispatch)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/jobs",
+            json={"kind": kind, "payload": {"paper_ids": paper_ids}},
+        )
 
     assert resp.status_code == 202, resp.text
-    mock_task.defer_async.assert_awaited_once()
+    dispatch.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +410,7 @@ class _AdvisoryLockPool:
 @pytest.fixture()
 def pulse_app(app_with_pool):
     """The pulse app wired to a lock-modelling pool, with audit writes stubbed."""
-    from jarvis_common.auth import get_current_user_id_or_bot, require_admin_or_api_key
+    from jarvis_common.auth import get_current_user_id, require_admin_or_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.routers import pulse as pulse_router
 
@@ -401,7 +421,7 @@ def pulse_app(app_with_pool):
 
         pool = _AdvisoryLockPool(held_elsewhere=held_elsewhere, in_flight_id=in_flight_id)
         app.dependency_overrides[get_db_pool] = lambda: pool
-        app.dependency_overrides[get_current_user_id_or_bot] = lambda: _PULSE_UID
+        app.dependency_overrides[get_current_user_id] = lambda: _PULSE_UID
         app.dependency_overrides[require_admin_or_api_key] = lambda: None
 
         async def _defer(**_kwargs):
@@ -495,3 +515,84 @@ async def test_enqueue_gate_leaves_the_run_lock_free_for_the_worker(app_with_poo
     assert pool.locks_held_at_defer == [{(_ENQUEUE_LOCK, _PULSE_UID)}], (
         "the deferred job must be able to take pulse.generate immediately"
     )
+
+
+async def _get_generate_status(app, job_id: str):
+    """Read the job-status route through a signed Research identity.
+
+    The route requires an identity scope, and the verifier is normally loaded
+    by the application's startup hook, which an in-process ASGI transport never
+    runs. ``SignedIdentityMiddleware`` installs an ephemeral signer/verifier
+    pair so the request reaches the handler.
+    """
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
+
+    signed = SignedIdentityMiddleware(app, audience="research", user_id=_PULSE_UID)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=signed), base_url="http://test"
+    ) as client:
+        return await client.get(f"/api/pulse/generate/{job_id}")
+
+
+def _patch_job_lookup(row):
+    """Patch the router's job-store read with a fixed row or exception."""
+    from paper_ingestion.routers import pulse as pulse_router
+
+    if isinstance(row, Exception):
+        return patch.object(pulse_router, "get_unified", AsyncMock(side_effect=row))
+    return patch.object(pulse_router, "get_unified", AsyncMock(return_value=row))
+
+
+async def test_pulse_generate_status_reports_the_callers_own_job(app_with_pool, pulse_app):
+    """The caller can follow the generation job they started."""
+    app, _ = app_with_pool
+    pulse_app()
+    row = {"id": "job-1", "kind": "pulse.generate", "user_id": _PULSE_UID, "status": "running"}
+
+    with _patch_job_lookup(row):
+        resp = await _get_generate_status(app, "job-1")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"job_id": "job-1", "status": "running"}
+
+
+@pytest.mark.parametrize(
+    ("row", "reason"),
+    [
+        (None, "no such job"),
+        (
+            {"id": "job-1", "kind": "pulse.generate", "user_id": _PULSE_UID + 1, "status": "done"},
+            "another user's job",
+        ),
+        (
+            {"id": "job-1", "kind": "papers.process_library", "user_id": _PULSE_UID, "status": "x"},
+            "a job of another kind",
+        ),
+    ],
+)
+async def test_pulse_generate_status_hides_every_job_that_is_not_the_callers(
+    app_with_pool, pulse_app, row, reason
+):
+    """Unknown, foreign, and unrelated jobs are indistinguishable from outside."""
+    app, _ = app_with_pool
+    pulse_app()
+
+    with _patch_job_lookup(row):
+        resp = await _get_generate_status(app, "job-1")
+
+    assert resp.status_code == 404, f"{reason} must read as 404; got {resp.status_code}"
+
+
+async def test_pulse_generate_status_reports_an_unreadable_job_store_as_unavailable(
+    app_with_pool, pulse_app
+):
+    """A job-store outage must not be reported as a missing job."""
+    from jarvis_common.jobs import JobLookupUnavailable
+
+    app, _ = app_with_pool
+    pulse_app()
+
+    with _patch_job_lookup(JobLookupUnavailable("store down")):
+        resp = await _get_generate_status(app, "job-1")
+
+    assert resp.status_code == 503, resp.text

@@ -13,6 +13,7 @@ Verified identifiers:
 from __future__ import annotations
 
 import hashlib
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.settings import get_secrets_settings
@@ -168,3 +169,73 @@ def test_hmac_key_single_user_nonprod_allows_derivation_fallback(monkeypatch):
     from paper_ingestion.pulse.training import _hmac_key
 
     assert _hmac_key() == _expected_digest_from_raw_env("single-user-dev-key")
+
+
+@pytest.mark.asyncio
+async def test_training_job_enables_classifier_only_once() -> None:
+    """A successful training result writes once, then respects the existing row."""
+    from paper_ingestion.pulse.training import _pulse_train_classifier_job
+    from tests.conftest import _make_pool_and_conn
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchval.side_effect = [False, True]
+    ctx = MagicMock(update_progress=AsyncMock())
+    trained = {"trained": True, "available": True, "sample_count": 30}
+
+    with patch(
+        "paper_ingestion.pulse.training.train_classifier_model",
+        AsyncMock(return_value=trained),
+    ):
+        await _pulse_train_classifier_job(pool, None, {"user_id": 42}, ctx)
+        await _pulse_train_classifier_job(pool, None, {"user_id": 42}, ctx)
+
+    assert conn.execute.await_count == 1
+    assert conn.execute.await_args.args[-1] == 42
+
+
+@pytest.mark.asyncio
+async def test_training_job_preserves_user_opt_out() -> None:
+    """An existing false row is the user's durable choice and is never rewritten."""
+    from paper_ingestion.pulse.training import _pulse_train_classifier_job
+    from tests.conftest import _make_pool_and_conn
+
+    stored_opt_in = False
+    pool, conn = _make_pool_and_conn()
+    conn.fetchval.return_value = stored_opt_in is not None
+    ctx = MagicMock(update_progress=AsyncMock())
+    trained = {"trained": True, "available": True, "sample_count": 45}
+
+    with patch(
+        "paper_ingestion.pulse.training.train_classifier_model",
+        AsyncMock(return_value=trained),
+    ):
+        await _pulse_train_classifier_job(pool, None, {"user_id": 42}, ctx)
+
+    conn.execute.assert_not_awaited()
+    assert stored_opt_in is False
+
+
+@pytest.mark.asyncio
+async def test_training_job_does_not_enable_classifier_below_threshold() -> None:
+    """An available but untrained model leaves the user's config untouched."""
+    from paper_ingestion.pulse.training import _pulse_train_classifier_job
+    from tests.conftest import _make_pool_and_conn
+
+    pool, conn = _make_pool_and_conn()
+    ctx = MagicMock(update_progress=AsyncMock())
+    below_threshold = {
+        "trained": False,
+        "available": True,
+        "sample_count": 29,
+        "degradation_reason": "need at least 30 ratings",
+    }
+
+    with patch(
+        "paper_ingestion.pulse.training.train_classifier_model",
+        AsyncMock(return_value=below_threshold),
+    ):
+        result = await _pulse_train_classifier_job(pool, None, {"user_id": 42}, ctx)
+
+    conn.fetchval.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+    assert result == below_threshold

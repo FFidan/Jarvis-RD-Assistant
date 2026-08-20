@@ -35,24 +35,32 @@ async def _pi_app_admin(contract_conn):
     """PI app wired to contract conn + require_admin bypassed (admin-gated template writes)."""
     from jarvis_common.auth import require_admin
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
     async def _allow_admin():
         return None
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=True,
+            remove_identity_overrides=True,
             dependency_overrides={require_admin: _allow_admin},
         ),
     ) as wired_app:
-        yield wired_app
+        yield SignedIdentityMiddleware(
+            wired_app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 # ---------------------------------------------------------------------------

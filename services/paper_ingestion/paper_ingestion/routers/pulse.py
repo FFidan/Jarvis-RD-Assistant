@@ -22,11 +22,11 @@ from jarvis_common import (
     ErrorResponse,
     current_user_id_strict,
     get_current_user_id,
-    get_current_user_id_or_bot,
     log_audit,
     require_admin_or_api_key,
 )
 from jarvis_common.advisory_lock import _kind_lock_key
+from jarvis_common.jobs import JobLookupUnavailable, get_unified
 from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.settings import get_core_settings
 from jarvis_common.task_registry import KIND_TO_TASK
@@ -41,6 +41,7 @@ from paper_ingestion.models import (
     PulseDeckResponse,
     PulseExplainResponse,
     PulseGenerateResponse,
+    PulseGenerateStatusResponse,
     PulseRateRequest,
     PulseRateResponse,
     PulseStatsResponse,
@@ -82,7 +83,7 @@ router = APIRouter(
 async def generate_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    current_uid: int = Depends(get_current_user_id_or_bot),
+    current_uid: int = Depends(get_current_user_id),
     _admin: None = Depends(require_admin_or_api_key),
 ) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
@@ -155,6 +156,67 @@ async def generate_pulse(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/pulse/generate/{job_id}
+# ---------------------------------------------------------------------------
+
+
+#: Procrastinate task name fragment identifying a Pulse generation job. A caller
+#: may only read the progress of the kind of job this router enqueues.
+_PULSE_GENERATE_TASK_FRAGMENT = "pulse.generate"
+
+
+@router.get("/generate/{job_id}", response_model=PulseGenerateStatusResponse)
+@limiter.limit("60/minute")
+async def get_generate_status(
+    request: Request,
+    job_id: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
+) -> PulseGenerateStatusResponse:
+    """Report the progress of one Pulse generation job the caller started.
+
+    Parameters
+    ----------
+    request : Request
+        Required by the shared rate limiter.
+    job_id : str
+        Identifier returned by ``POST /api/pulse/generate``.
+    db_pool : asyncpg.Pool
+        Database pool.
+    user_id : int
+        Authenticated caller.
+
+    Returns
+    -------
+    PulseGenerateStatusResponse
+        The job identifier and its current status (``queued``, ``running``,
+        ``succeeded``, ``failed`` or ``cancelled``).
+
+    Raises
+    ------
+    HTTPException
+        404 when no Pulse generation job with this identifier belongs to the
+        caller, 503 when the job store cannot be read.
+    """
+    _ = request  # required by slowapi limiter — pyright suppression idiom
+    try:
+        row = await get_unified(db_pool, job_id)
+    except JobLookupUnavailable:
+        raise HTTPException(
+            status_code=503, detail="Pulse job status is temporarily unavailable"
+        ) from None
+    # One 404 for "no such job", "not yours", and "not a Pulse job": the reply
+    # must not disclose that another user's job id exists.
+    if (
+        row is None
+        or row.get("user_id") != user_id
+        or _PULSE_GENERATE_TASK_FRAGMENT not in (row.get("kind") or "")
+    ):
+        raise HTTPException(status_code=404, detail="Pulse generation job not found")
+    return PulseGenerateStatusResponse(job_id=job_id, status=row["status"])
+
+
+# ---------------------------------------------------------------------------
 # GET /api/pulse/today
 # ---------------------------------------------------------------------------
 
@@ -164,7 +226,7 @@ async def generate_pulse(
 async def get_today(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> PulseDeckResponse | None:
     """Fetch today's Pulse deck, falling back to the last non-empty deck within 7 days.
 

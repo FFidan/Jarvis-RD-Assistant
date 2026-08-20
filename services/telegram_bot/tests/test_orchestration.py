@@ -1,10 +1,13 @@
 """Orchestration workflow tests.
 
 Covers:
-- author_alerts: alerts when new papers by tracked authors are found
 - daily_briefing: morning briefing message sent to owner
 - deadline_warning: milestone deadline warnings within next 3 days
 - review_reminder: spaced repetition due-cards reminder
+
+author_alerts is covered by ``test_author_alerts.py``, and the sends-nothing-
+without-a-pairing case for every orchestration by
+``test_orchestration_no_pairings.py``.
 """
 
 from __future__ import annotations
@@ -18,101 +21,27 @@ from jarvis_common.testing import make_bot_config
 from jarvis_common.testing_telegram import make_http_response
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
-from telegram_bot.orchestration import author_alerts as author_alerts_mod
 from telegram_bot.orchestration import daily_briefing as daily_briefing_mod
 from telegram_bot.orchestration import deadline_warning as deadline_warning_mod
 from telegram_bot.orchestration import review_reminder as review_reminder_mod
-
-# ---------------------------------------------------------------------------
-# test_author_alerts
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_author_alerts_sends_message_when_new_paper_found():
-    """run_author_alerts sends an HTML alert when a tracked author has a new paper.
-
-    The bot now delegates matching + dedup to the Paper Ingestion service via
-    ``services_client.check_authors`` (POST /api/authors/check) and renders one
-    message per ``match`` in the response, so the test mocks at the http_client
-    boundary.
-    """
-    bot = AsyncMock()
-    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
-    pool = AsyncMock()
-
-    tracked_name = "Alice Smith"
-    check_resp = make_http_response(
-        {
-            "matches": [
-                {
-                    "author_name": tracked_name,
-                    "papers": [
-                        {
-                            "id": 42,
-                            "title": "Paper by Alice",
-                            "url": "https://example.com/paper",
-                        }
-                    ],
-                }
-            ],
-            "new_papers": 1,
-            "authors_checked": 1,
-        }
-    )
-    http_client = AsyncMock(spec=httpx.AsyncClient)
-    http_client.post.return_value = check_resp
-
-    from telegram_bot.owner import UserPairing
-
-    with patch(
-        "telegram_bot.owner.list_user_pairings",
-        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
-    ):
-        await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
-
-    # One POST per pairing to the authors/check endpoint with canonical headers.
-    http_client.post.assert_awaited_once()
-    post_args, post_kwargs = http_client.post.await_args
-    assert post_args[0].endswith("/api/authors/check")
-    assert post_kwargs["headers"]["X-Owner-User-Id"] == "1"
-    assert post_kwargs["headers"]["X-API-Key"] == "secret"
-
-    bot.send_message.assert_awaited_once()
-    _, kwargs = bot.send_message.await_args
-    assert kwargs["chat_id"] == 9999
-    assert kwargs["parse_mode"] == "HTML"
-    assert tracked_name in kwargs["text"]
-
-
-@pytest.mark.asyncio
-async def test_author_alerts_skips_when_no_owner():
-    """run_author_alerts returns early and sends nothing when no pairings exist."""
-    bot = AsyncMock()
-    http_client = AsyncMock(spec=httpx.AsyncClient)
-    pool = AsyncMock()
-
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
-        await author_alerts_mod.run_author_alerts(
-            http_client,
-            pool,
-            bot,
-            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
-        )
-
-    bot.send_message.assert_not_awaited()
-
+from telegram_bot.platform_client import UserPairing
 
 # ---------------------------------------------------------------------------
 # test_daily_briefing
 # ---------------------------------------------------------------------------
 
 
-def _briefing_get_router(*, due_now, total, tasks, milestones):
-    """Route briefing GETs by URL: feed→total, stats→due_now, tasks, milestones/upcoming."""
+def _briefing_get_router(*, due_now, total, tasks, milestones, inbox_total=0):
+    """Route briefing GETs by URL: feed→total, stats→due_now, tasks, milestones/upcoming.
 
-    async def _get(url, *_args, **_kwargs):
+    The briefing reads the feed twice — once for papers added today, once for
+    the inbox view — so the feed branch splits on the ``view`` parameter.
+    """
+
+    async def _get(url, *_args, **kwargs):
         if url.endswith("/api/papers/feed"):
+            if kwargs.get("params", {}).get("view") == "inbox":
+                return make_http_response({"total": inbox_total})
             return make_http_response({"total": total})
         if url.endswith("/api/stats"):
             return make_http_response({"due_now": due_now})
@@ -141,7 +70,8 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
     http_client.get.side_effect = _briefing_get_router(
         due_now=5,
         total=2,
-        tasks=[{"title": "Write paper", "project_name": "ResearchX"}],
+        inbox_total=11,
+        tasks=[{"title": "Write paper", "project_name": "ResearchX", "status": "todo"}],
         milestones=[
             {
                 "name": "Submit draft",
@@ -151,10 +81,8 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
         ],
     )
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.daily_briefing.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
@@ -165,8 +93,46 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
     assert kwargs["parse_mode"] == "HTML"
     # Message should reference paper count and cards
     text = kwargs["text"]
-    assert "2" in text  # new_papers_count
-    assert "5" in text  # due cards
+    assert "2</b> papers added to your library since midnight UTC" in text
+    assert "11</b> waiting in your inbox" in text
+    assert "5</b> cards due for review right now" in text
+    assert "Write paper" in text
+
+
+@pytest.mark.asyncio
+async def test_daily_briefing_reports_unavailable_counts_rather_than_zero():
+    """The scheduled briefing states a count it could not read instead of sending a zero."""
+    bot = AsyncMock()
+    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
+    pool = AsyncMock()
+
+    async def _get(url, *_args, **_kwargs):
+        if url.endswith("/api/tasks"):
+            return make_http_response([{"title": "Write paper", "status": "todo"}])
+        if url.endswith("/api/milestones/upcoming"):
+            return make_http_response([])
+        # Both count endpoints — the paper feed and the stats read — are down.
+        return make_http_response(None, status=500)
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.side_effect = _get
+
+    with patch(
+        "telegram_bot.orchestration.daily_briefing.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
+        await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
+
+    bot.send_message.assert_awaited_once()
+    text = bot.send_message.await_args.kwargs["text"]
+    assert "0</b> papers added to your library since midnight UTC" not in text
+    assert "0</b> waiting in your inbox" not in text
+    assert "0</b> cards due for review right now" not in text
+    assert "Papers added to your library since midnight UTC are unavailable right now" in text
+    assert "Your inbox count is unavailable right now" in text
+    assert "Cards due for review are unavailable right now" in text
+    # The sections that were read still render.
+    assert "Write paper" in text
 
 
 @pytest.mark.asyncio
@@ -179,38 +145,18 @@ async def test_daily_briefing_passes_owner_headers_on_every_call():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.get.side_effect = _briefing_get_router(due_now=1, total=0, tasks=[], milestones=[])
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.daily_briefing.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=42, chat_id=9999)]),
     ):
         await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
 
-    # Four gathers: feed, stats, tasks, milestones/upcoming — all owner-scoped.
-    assert http_client.get.await_count == 4
+    # Five gathers: feed, inbox feed, stats, tasks, milestones/upcoming.
+    assert http_client.get.await_count == 5
     for call in http_client.get.await_args_list:
         headers = call.kwargs["headers"]
-        assert headers["X-API-Key"] == "secret"
-        assert headers["X-Owner-User-Id"] == "42"
-
-
-@pytest.mark.asyncio
-async def test_daily_briefing_skips_when_no_owner():
-    """run_daily_briefing returns early and sends nothing when no pairings exist."""
-    bot = AsyncMock()
-    http_client = AsyncMock(spec=httpx.AsyncClient)
-    pool = AsyncMock()
-
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
-        await daily_briefing_mod.run_daily_briefing(
-            http_client,
-            pool,
-            bot,
-            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
-        )
-
-    bot.send_message.assert_not_awaited()
+        assert "X-API-Key" not in headers
+        assert headers["X-Jarvis-Paired-User-Id"] == "42"
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +188,8 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
         ]
     )
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.deadline_warning.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await deadline_warning_mod.run_deadline_warning(http_client, pool, bot, config)
@@ -254,7 +198,7 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
     http_client.get.assert_awaited_once()
     get_args, get_kwargs = http_client.get.await_args
     assert get_args[0].endswith("/api/milestones/upcoming")
-    assert get_kwargs["headers"]["X-Owner-User-Id"] == "1"
+    assert get_kwargs["headers"]["X-Jarvis-Paired-User-Id"] == "1"
 
     bot.send_message.assert_awaited_once()
     _, kwargs = bot.send_message.await_args
@@ -271,10 +215,8 @@ async def test_deadline_warning_silent_when_no_milestones():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.get.return_value = make_http_response([])
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.deadline_warning.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await deadline_warning_mod.run_deadline_warning(
@@ -305,10 +247,8 @@ async def test_review_reminder_sends_message_for_due_cards():
     resp.json.return_value = {"due_now": 3}
     http_client.get.return_value = resp
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.review_reminder.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await review_reminder_mod.run_review_reminder(http_client, pool, bot, config)
@@ -333,10 +273,8 @@ async def test_review_reminder_silent_when_no_cards_due():
     resp.json.return_value = {"due_now": 0}
     http_client.get.return_value = resp
 
-    from telegram_bot.owner import UserPairing
-
     with patch(
-        "telegram_bot.owner.list_user_pairings",
+        "telegram_bot.orchestration.review_reminder.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
         await review_reminder_mod.run_review_reminder(
@@ -356,7 +294,7 @@ async def test_review_reminder_skips_when_no_owner():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
+    with patch.object(review_reminder_mod, "list_user_pairings", AsyncMock(return_value=[])):
         await review_reminder_mod.run_review_reminder(
             http_client,
             pool,
@@ -402,9 +340,9 @@ def test_owner_headers_are_confined_to_the_canonical_client():
     # Smoke-test that the canonical helper produces correct output.
     config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
     headers_with_user = _owner_headers(config, 42)
-    assert headers_with_user["X-API-Key"] == "secret"
-    assert headers_with_user["X-Owner-User-Id"] == "42"
+    assert "X-API-Key" not in headers_with_user
+    assert headers_with_user["X-Jarvis-Paired-User-Id"] == "42"
 
     headers_no_user = _owner_headers(config, None)
-    assert headers_no_user["X-API-Key"] == "secret"
-    assert "X-Owner-User-Id" not in headers_no_user
+    assert "X-API-Key" not in headers_no_user
+    assert "X-Jarvis-Paired-User-Id" not in headers_no_user

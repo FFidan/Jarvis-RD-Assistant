@@ -215,7 +215,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
             <div>
               <p className="font-medium">Generate your first Pulse</p>
               <p className="text-xs text-muted-foreground mt-1 max-w-xs">
-                Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
+                Your daily AI-curated paper recommendations, personalized to your reading history and research interests.
               </p>
             </div>
           </div>

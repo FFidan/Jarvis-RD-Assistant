@@ -97,7 +97,7 @@ with patch_pi_test_app(
     app=pi_app,
     get_db_pool=get_db_pool,
     limiter=limiter,
-    options=PITestAppOptions(remove_owner_override=True),
+    options=PITestAppOptions(remove_identity_overrides=True),
 ) as app:
     yield app
 ```

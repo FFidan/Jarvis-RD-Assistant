@@ -5,10 +5,7 @@ from typing import Any, Literal
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import assert_paper_ownership, delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import (
-    current_user_id_strict,
-    current_user_id_strict_with_owner_override,
-)
+from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
@@ -48,7 +45,7 @@ async def list_tasks(
     project_id: int,
     status: str | None = Query(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[TaskResponse]:
     """List tasks for a project, optionally filtered by status."""
     if status is not None and status not in _VALID_TASK_STATUSES:
@@ -95,7 +92,7 @@ async def list_all_tasks(
     project_id: int | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[TaskResponse]:
     """List the caller's tasks across all projects.
 
@@ -196,7 +193,7 @@ async def update_task(
     task_id: int,
     body: TaskUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> TaskResponse:
     """Update a task. Auto-sets completed_at when status changes to done."""
     async with db_pool.acquire() as conn:

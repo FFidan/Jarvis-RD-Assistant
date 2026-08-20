@@ -16,7 +16,8 @@ from httpx import ASGITransport
 
 from jarvis_common.testing import FakeRecord, make_pool_and_conn
 
-_NOW = datetime.now(UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 _PROJECT_ROW = FakeRecord(
     id=7,
@@ -26,8 +27,8 @@ _PROJECT_ROW = FakeRecord(
     deadline=None,
     color=None,
     user_id=10,
-    created_at=_NOW,
-    updated_at=_NOW,
+    created_at=_FIXED_NOW,
+    updated_at=_FIXED_NOW,
 )
 
 _COUNTS_ROW = FakeRecord(

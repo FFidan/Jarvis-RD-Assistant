@@ -40,7 +40,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
+from slowapi.middleware import SlowAPIASGIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -48,7 +48,6 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from jarvis_common.auth import (
     RAW_CLIENT_SCOPE_KEY,
     invalidate_api_key_login_cache,
-    refresh_allowed_networks_cache,
     refresh_api_key_cache,
     validate_production_config,
 )
@@ -68,10 +67,11 @@ from jarvis_common.maintenance import (
     maintenance_active,
     secrets_rotated_since,
 )
-from jarvis_common.migrations import run_migrations
+from jarvis_common.migrations import check_migrations
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, PinnedAsyncTransport
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.settings import get_core_settings, get_secrets_settings
+from jarvis_common.telemetry import configure_telemetry, flush_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -79,52 +79,72 @@ logger = logging.getLogger(__name__)
 STRUCTURED_DECODING_MODE = "JSON_SCHEMA"
 
 
-def build_database_url() -> str:
+def build_database_url(
+    *,
+    user: str | None = None,
+    password_file: str | os.PathLike[str] | None = None,
+) -> str:
     """Construct the PostgreSQL DSN without embedding a password in any env var.
 
-    Resolution order:
-    1. ``/run/secrets/postgres_password`` (Docker Secret mount — preferred; avoids
-       leaking the password via ``/proc/<pid>/environ`` or ``docker inspect``).
-    2. ``DATABASE_URL`` environment variable (legacy / test fallback).
+    Runtime callers must provide both ``user`` and ``password_file``. This
+    prevents an API process from silently reconnecting with the legacy database
+    owner after role-specific credentials are deployed. ``DATABASE_URL`` remains
+    the established direct fallback for local development and tests.
 
     The DSN is built as ``postgresql://<user>:<pass>@postgres:5432/<db>``
-    using ``POSTGRES_USER`` and ``POSTGRES_DB`` env vars (both default to
-    ``jarvis`` matching ``docker-compose.yml``). ``<user>``, ``<pass>`` and
-    ``<db>`` are percent-encoded so values containing DSN-reserved
+    using the configured user, password file, host, port, and database.
+    ``<user>``, ``<pass>`` and ``<db>`` are percent-encoded so values containing DSN-reserved
     characters (``@ : / ? # %``) do not corrupt the URL.
 
     Raises
     ------
     RuntimeError
-        If neither the secret file nor ``DATABASE_URL`` can be read.
+        If the explicit runtime credential is incomplete, unreadable, or empty
+        and no direct test/local ``DATABASE_URL`` is configured.
 
     """
     from pathlib import Path  # noqa: PLC0415
 
+    settings = get_jarvis_common_settings()
+    if user is not None or password_file is not None:
+        if password_file is None and settings.database_url:
+            return settings.database_url
+        if not user or password_file is None:
+            raise RuntimeError("PostgreSQL runtime credentials require user and password file")
+        secret_file = Path(password_file)
+        if not secret_file.is_file():
+            raise RuntimeError(f"PostgreSQL password file is unavailable: {secret_file}")
+        password = secret_file.read_text().strip()
+        if not password:
+            raise RuntimeError("PostgreSQL password file is empty")
+        encoded_user = quote(user, safe="")
+        password = quote(password, safe="")
+        db = quote(settings.postgres_db, safe="")
+        return (
+            f"postgresql://{encoded_user}:{password}@{settings.postgres_host}:"
+            f"{settings.postgres_port}/{db}"
+        )
+
+    # Compatibility for direct utility/test callers. Application lifespans
+    # always pass their configured role and password file above.
     secret_file = Path(POSTGRES_PASSWORD_SECRET_PATH)
     if secret_file.is_file():
         password = secret_file.read_text().strip()
         if not password:
-            raise RuntimeError(
-                f"FATAL: {POSTGRES_PASSWORD_SECRET_PATH} exists but is empty — "
-                "cannot construct DATABASE_URL"
-            )
-        settings = get_jarvis_common_settings()
-        user = quote(settings.postgres_user, safe="")
-        password = quote(password, safe="")
+            raise RuntimeError(f"FATAL: {POSTGRES_PASSWORD_SECRET_PATH} exists but is empty")
+        legacy_user = quote(settings.postgres_user or "jarvis", safe="")
+        encoded_password = quote(password, safe="")
         db = quote(settings.postgres_db, safe="")
-        return f"postgresql://{user}:{password}@postgres:5432/{db}"
+        return f"postgresql://{legacy_user}:{encoded_password}@postgres:5432/{db}"
 
     # Fallback: tests and local dev set DATABASE_URL directly.
-    url = get_jarvis_common_settings().database_url
+    url = settings.database_url
     if url:
         return url
 
     raise RuntimeError(
-        f"Cannot build DATABASE_URL: {POSTGRES_PASSWORD_SECRET_PATH} is absent and "
-        "DATABASE_URL is not set. "
-        "In Docker, ensure the postgres_password secret is mounted. "
-        "In tests, set the DATABASE_URL env var."
+        "Cannot build DATABASE_URL: runtime credentials are not configured and "
+        "DATABASE_URL is not set"
     )
 
 
@@ -342,17 +362,10 @@ def _resolve_db_pool_kwargs(overrides: dict[str, Any]) -> dict[str, Any]:
 def _log_auth_status() -> None:
     """Log the API-key/DEV_MODE configuration once at startup.
 
-    Also refreshes the module-level caches so that any key/CIDR rotation that
-    happened between import time and startup (e.g. Docker secret mount settling)
-    takes effect without a service restart.
+    Refreshes the API-key cache so a secret mount that settles after import is
+    observed without a service restart.
     """
     refresh_api_key_cache()
-    try:
-        refresh_allowed_networks_cache()
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            "refresh_allowed_networks_cache failed at startup (invalid CIDR?)", exc_info=True
-        )
     dev_mode = get_core_settings().dev_mode
     secret = get_secrets_settings().jarvis_api_key
     api_key = secret.get_secret_value() if secret else ""
@@ -401,11 +414,58 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
         # successfully acquired are cleaned up — there is no double-execution
         # risk and no need for a manual compensating-teardown path.
         async with AsyncExitStack() as stack:
-            database_url = build_database_url()
+            settings = get_jarvis_common_settings()
+            otlp_endpoint = settings.otel_exporter_otlp_traces_endpoint
+            # Generic trace export is switched by the collector endpoint alone.
+            # observability_enabled is the Langfuse master gate, and reusing it
+            # here would make a second, unrelated backend a prerequisite for
+            # sending spans to a collector.
+            configure_telemetry(
+                service=config.service_name,
+                enabled=otlp_endpoint is not None,
+                otlp_endpoint=otlp_endpoint,
+                timeout_ms=settings.otel_export_timeout_ms,
+            )
+            # The SDK owns final provider shutdown at process exit. Each app
+            # lifecycle only gets a bounded flush, including failed startup.
+            stack.callback(flush_telemetry, timeout_ms=settings.otel_export_timeout_ms)
+            database_url = build_database_url(
+                user=settings.postgres_user,
+                password_file=settings.postgres_password_file,
+            )
             pool_kwargs = _resolve_db_pool_kwargs(config.db_pool_settings)
             db_pool = await asyncpg.create_pool(database_url, **pool_kwargs)
             stack.push_async_callback(db_pool.close)
             app.state.db_pool = db_pool
+            app.state.database_url = database_url
+            app.state.service_name = config.service_name
+
+            # Runtime roles only inspect the completed schema. DDL belongs to
+            # the one-shot migrator, which must have completed before APIs run.
+            migration_check_started = time.monotonic()
+            try:
+                app.state.migration_check = await check_migrations(db_pool)
+            except asyncpg.InsufficientPrivilegeError:
+                duration_ms = int((time.monotonic() - migration_check_started) * 1000)
+                logger.error(
+                    "runtime schema check denied service=%s "
+                    "capability=schema_integrity_read duration_ms=%d",
+                    config.service_name,
+                    duration_ms,
+                )
+                raise
+            except Exception as exc:
+                duration_ms = int((time.monotonic() - migration_check_started) * 1000)
+                logger.error(
+                    "runtime schema check failed service=%s error_type=%s duration_ms=%d",
+                    config.service_name,
+                    type(exc).__name__,
+                    duration_ms,
+                )
+                raise
+            app.state.migration_check_duration_ms = int(
+                (time.monotonic() - migration_check_started) * 1000
+            )
 
             http_kwargs = {
                 **_HTTP_CLIENT_DEFAULTS,
@@ -419,14 +479,14 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
             stack.push_async_callback(http_client.aclose)
             app.state.http_client = http_client
 
-            # Validate encrypted config rows BEFORE custom hooks so a bad
-            # schema fails fast and hooks never see a partially-initialized DB.
+            # Validate encrypted config rows after the read-only schema check so
+            # a completed one-shot migration never produces a misleading
+            # fresh-schema warning.
             try:
                 await validate_encrypted_config_rows(db_pool)
             except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
                 logger.warning(
-                    "validate_encrypted_config_rows skipped: user_config table not yet available"
-                    " (fresh DB before migrations run)"
+                    "validate_encrypted_config_rows skipped: user_config table not available"
                 )
 
             # Equal-length contract: each init hook MUST have a corresponding
@@ -470,10 +530,8 @@ class RawClientStashMiddleware:
     actual socket peer — and stashes it under
     :data:`jarvis_common.auth.RAW_CLIENT_SCOPE_KEY` before
     ProxyHeadersMiddleware overwrites ``scope["client"]`` in place from
-    X-Forwarded-For. The X-Owner-User-Id guard in :mod:`jarvis_common.auth`
-    requires BOTH this raw peer AND the rewritten client to be allowlisted, so
-    a forged XFF from a non-allowlisted source can no longer spoof its way
-    onto the owner-override path.
+    X-Forwarded-For. The rate limiter uses both values to distinguish the
+    transport peer from forwarded client metadata.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -532,7 +590,7 @@ def configure_middleware_and_errors(
     # 2. SlowAPIMiddleware -- pre-auth global cap.
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]
-    app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(SlowAPIASGIMiddleware)
 
     # 3. CORSMiddleware
     if cors_origins is None:
@@ -570,8 +628,7 @@ def configure_middleware_and_errors(
     # 5. RawClientStashMiddleware -- added AFTER ProxyHeadersMiddleware so it runs
     # OUTSIDE it (Starlette: later-added = more outer = runs first), snapshotting
     # the raw socket peer BEFORE ProxyHeadersMiddleware mutates scope["client"]
-    # from X-Forwarded-For. The X-Owner-User-Id guard (jarvis_common.auth) requires
-    # BOTH the stashed raw peer AND the rewritten client to be allowlisted (M5).
+    # from X-Forwarded-For for rate-limit keying.
     app.add_middleware(RawClientStashMiddleware)
 
     # 6. MaintenanceMiddleware -- added last in the shared stack so it runs ahead
@@ -695,9 +752,9 @@ def make_procrastinate_worker_hook(
         register_fn(procrastinate_app)
 
         # The connector built at task_registry import time has no DSN — replace it
-        # with one bound to the same DSN the app_factory pool uses (reads from
-        # /run/secrets/postgres_password; falls back to DATABASE_URL in tests).
-        procrastinate_app.connector = AiopgConnector(dsn=build_database_url())
+        # Bind jobs to the exact runtime-role DSN used for the lifespan pool.
+        database_url = getattr(app.state, "database_url", None) or build_database_url()
+        procrastinate_app.connector = AiopgConnector(dsn=database_url)
         procrastinate_app.job_manager.connector = procrastinate_app.connector
         await procrastinate_app.open_async()
 
@@ -714,17 +771,17 @@ def make_procrastinate_worker_hook(
 
 
 async def _resume_after_maintenance(app: FastAPI, queues: list[str]) -> None:
-    """Reconcile a restored (possibly older) schema, then resume background writers.
+    """Verify a restored schema before resuming background writers.
 
     Ordered so writers never observe a stale schema or stale DB-derived cache:
-    forward-migrate first (lock-42-serialized, idempotent), drop the in-process
+    verify the one-shot migrator's completed schema first, drop the in-process
     caches whose backing ``user_config`` rows a restore may have rolled back, then
     restart the worker loop. Only reached when the secrets were NOT rotated — the
     watcher step self-restarts BEFORE calling this on a rotation, because the DB
     ops here would auth-fail against the rebound role until that restart. Kept a
     discrete function so the watcher can gate it cleanly.
     """
-    await run_migrations(app.state.db_pool)
+    app.state.migration_check = await check_migrations(app.state.db_pool)
     invalidate_api_key_login_cache()
     invalidate_effective_num_ctx_cache()
     await _reclaim_stalled_jobs(app)
@@ -764,9 +821,9 @@ async def _maintenance_watcher_step(
     elif was_active and not now_active:
         # A cross-host (inbox) restore rebinds the postgres role and rotates
         # ./secrets while this process still holds the pre-rotation password in
-        # its pool, so any DB op here (``run_migrations``' ``pool.acquire``) would
+        # its pool, so the runtime schema check's ``pool.acquire`` would
         # auth-fail until we restart. Signal the restart BEFORE reconciling — the
-        # revived process reloads the rotated secret and runs migrations at boot;
+        # revived process reloads the rotated secret and checks its schema at boot;
         # sequencing it after the resume would deadlock (the failing acquire raises
         # before the restart could fire). A same-host restore (no rotation) has a
         # still-valid pool, so it falls through to the in-place resume.

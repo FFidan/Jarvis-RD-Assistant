@@ -184,7 +184,7 @@ describe('HomePage', () => {
 
     it('describes preparation without claiming one action downloads, processes, and summarizes', async () => {
       renderHomePage();
-      expect(await screen.findByText('Prepare library')).toBeInTheDocument();
+      expect(await screen.findByText('Prepare your papers')).toBeInTheDocument();
       expect(screen.getByText(/Queue PDF processing and summaries/i)).toBeInTheDocument();
       expect(screen.queryByText('Analyze all new papers')).not.toBeInTheDocument();
       expect(screen.queryByText(/downloads, processes, and summarizes each one/i)).not.toBeInTheDocument();
@@ -194,7 +194,7 @@ describe('HomePage', () => {
       renderHomePage();
       const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
-      expect(screen.getByText('Process library PDFs?')).toBeInTheDocument();
+      expect(screen.getByText('Process your saved PDFs?')).toBeInTheDocument();
       expect(
         screen.getByText(
           'This will queue PDF text extraction for papers that already have local PDFs. Continue?',
@@ -209,7 +209,7 @@ describe('HomePage', () => {
       renderHomePage();
       const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
-      expect(screen.getByText('Process library PDFs?')).toBeInTheDocument();
+      expect(screen.getByText('Process your saved PDFs?')).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(batchProcessPapers).toHaveBeenCalledTimes(1));
     });
@@ -239,15 +239,15 @@ describe('HomePage', () => {
       expect(trackExternalJobMock).not.toHaveBeenCalled();
     });
 
-    it('Process whole library tracks the returned durable job id', async () => {
+    it('Process all papers tracks the returned durable job id', async () => {
       vi.mocked(processLibrary).mockResolvedValue({ job_id: 'job-lib', status: 'queued' });
       renderHomePage();
-      const button = screen.getByRole('button', { name: /Process whole library/i });
+      const button = screen.getByRole('button', { name: /Process all papers/i });
       await userEvent.click(button);
-      expect(screen.getByText('Process your whole library?')).toBeInTheDocument();
+      expect(screen.getByText('Process all of your papers?')).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(processLibrary).toHaveBeenCalledWith(true));
-      expect(await screen.findByText('Processing your library')).toBeInTheDocument();
+      expect(await screen.findByText('Processing your papers')).toBeInTheDocument();
       expect(trackExternalJobMock).toHaveBeenCalledWith({
         jobId: 'job-lib',
         kind: 'papers.process_library',
@@ -256,12 +256,12 @@ describe('HomePage', () => {
       });
     });
 
-    it('Process whole library does not track a job when the library is already up to date', async () => {
+    it('Process all papers does not track a job when the library is already up to date', async () => {
       vi.mocked(processLibrary).mockResolvedValue({ job_id: null, status: 'skipped', reason: 'library_already_processed' });
       renderHomePage();
-      await userEvent.click(screen.getByRole('button', { name: /Process whole library/i }));
+      await userEvent.click(screen.getByRole('button', { name: /Process all papers/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
-      expect(await screen.findByText('Library already up to date')).toBeInTheDocument();
+      expect(await screen.findByText('Papers already up to date')).toBeInTheDocument();
       expect(trackExternalJobMock).not.toHaveBeenCalled();
     });
   });
@@ -273,14 +273,14 @@ describe('HomePage', () => {
 
     it('sub-step buttons are absent when disclosure is collapsed', async () => {
       renderHomePage();
-      expect(await screen.findByText('Prepare library')).toBeInTheDocument();
+      expect(await screen.findByText('Prepare your papers')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Summarize/i })).toBeNull();
       expect(screen.queryByRole('button', { name: /Extract Entities/i })).toBeNull();
     });
 
     it('expanding disclosure reveals summarization but not admin-only extraction for regular users', async () => {
       renderHomePage();
-      await screen.findByText('Prepare library');
+      await screen.findByText('Prepare your papers');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       expect(screen.getByRole('button', { name: /Summarize/i })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Extract Entities/i })).toBeNull();
@@ -294,7 +294,7 @@ describe('HomePage', () => {
         authTime: Date.now(),
       });
       renderHomePage();
-      await screen.findByText('Prepare library');
+      await screen.findByText('Prepare your papers');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       expect(screen.getByRole('button', { name: /Extract Entities/i })).toBeInTheDocument();
     });
@@ -302,7 +302,7 @@ describe('HomePage', () => {
     it('Summarize tracks the returned durable job id', async () => {
       vi.mocked(batchSummarizePapers).mockResolvedValue({ total_unsummarized: 3, job_id: 'job-sum' });
       renderHomePage();
-      await screen.findByText('Prepare library');
+      await screen.findByText('Prepare your papers');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       await userEvent.click(screen.getByRole('button', { name: /Summarize/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
@@ -318,7 +318,7 @@ describe('HomePage', () => {
     it('Summarize does not track a job when nothing is queued', async () => {
       vi.mocked(batchSummarizePapers).mockResolvedValue({ total_unsummarized: 0, job_id: null });
       renderHomePage();
-      await screen.findByText('Prepare library');
+      await screen.findByText('Prepare your papers');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       await userEvent.click(screen.getByRole('button', { name: /Summarize/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
@@ -334,7 +334,7 @@ describe('HomePage', () => {
       });
       vi.mocked(batchExtractEntities).mockResolvedValue({ extracted: 4, failed: 0, total: 4 });
       renderHomePage();
-      await screen.findByText('Prepare library');
+      await screen.findByText('Prepare your papers');
       await userEvent.click(screen.getByRole('button', { name: /Advanced/i }));
       await userEvent.click(screen.getByRole('button', { name: /Extract Entities/i }));
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));

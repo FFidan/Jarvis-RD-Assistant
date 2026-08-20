@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jarvis_common import get_current_user_id, get_current_user_id_or_bot, verify_api_key
+from jarvis_common import get_current_user_id, verify_api_key
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -22,12 +22,8 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 # Helpers
 # ---------------------------------------------------------------------------
 
-TODAY = date.today()
-YESTERDAY = TODAY - timedelta(days=1)
-THREE_DAYS_AGO = TODAY - timedelta(days=3)
 
-
-def _make_deck(card_count: int = 2, deck_date: date = TODAY) -> PulseDeckResponse:
+def _make_deck(card_count: int, deck_date: date) -> PulseDeckResponse:
     """Build a minimal PulseDeckResponse for patching."""
     cards = [
         PulseCardResponse(
@@ -55,11 +51,6 @@ def _make_deck(card_count: int = 2, deck_date: date = TODAY) -> PulseDeckRespons
     )
 
 
-def _make_fallback_row(deck_date: date = YESTERDAY, card_count: int = 3) -> PulseDeckResponse:
-    """Build a fallback PulseDeckResponse (load_last_nonempty_deck returns a full deck)."""
-    return _make_deck(card_count=card_count, deck_date=deck_date)
-
-
 def _make_health_rows() -> list[FakeRecord]:
     """Build sample source_health FakeRecord rows."""
     return [
@@ -80,6 +71,16 @@ def _make_health_rows() -> list[FakeRecord]:
             }
         ),
     ]
+
+
+@pytest.fixture()
+def today() -> date:
+    """Today's date read when the test starts.
+
+    The handler measures staleness against ``date.today()`` at request time, so a
+    date captured at import time disagrees with it on any run crossing midnight.
+    """
+    return date.today()
 
 
 @pytest.fixture()
@@ -108,7 +109,7 @@ def client():
     # Add it here so the converted ``Depends(get_current_user_id)`` pulse routes
     # default to user 1 (identical to the pre-conversion symbol-stub behaviour).
     app.dependency_overrides[get_current_user_id] = lambda: 1
-    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 1
+    app.dependency_overrides[get_current_user_id] = lambda: 1
 
     with TestClient(app, raise_server_exceptions=False, backend_options={"use_uvloop": True}) as tc:
         yield tc, pool, conn
@@ -122,10 +123,10 @@ def client():
 # ---------------------------------------------------------------------------
 
 
-def test_get_today_returns_today_when_card_count_positive(client):
+def test_get_today_returns_today_when_card_count_positive(client, today):
     """When today's deck has cards, return it as-is with is_stale=False."""
     tc, _pool, _conn = client
-    deck = _make_deck(card_count=3)
+    deck = _make_deck(card_count=3, deck_date=today)
 
     with patch("paper_ingestion.routers.pulse.load_today", AsyncMock(return_value=deck)):
         resp = tc.get("/api/pulse/today")
@@ -139,12 +140,12 @@ def test_get_today_returns_today_when_card_count_positive(client):
     assert body["empty_reason"] is None
 
 
-def test_get_today_returns_yesterday_with_is_stale_when_today_empty(client):
+def test_get_today_returns_yesterday_with_is_stale_when_today_empty(client, today):
     """When today's deck has 0 cards and a recent non-empty deck exists, return stale=True."""
     tc, pool, conn = client
 
-    empty_today = _make_deck(card_count=0)
-    fallback_row = _make_fallback_row(deck_date=YESTERDAY, card_count=2)
+    empty_today = _make_deck(card_count=0, deck_date=today)
+    fallback_row = _make_deck(card_count=2, deck_date=today - timedelta(days=1))
 
     # conn.fetch is called for source_health in the stale path
     conn.fetch.return_value = []
@@ -161,14 +162,14 @@ def test_get_today_returns_yesterday_with_is_stale_when_today_empty(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_stale"] is True
-    assert body["stale_age_days"] == 1  # YESTERDAY is 1 day ago
+    assert body["stale_age_days"] == 1  # the fallback deck is one day old
     assert body["empty_reason"] is None  # not set when a fallback was found
 
 
-def test_get_today_returns_empty_with_no_data_yet_when_no_recent_decks(client):
+def test_get_today_returns_empty_with_no_data_yet_when_no_recent_decks(client, today):
     """When today's deck is empty and no recent non-empty deck exists, set empty_reason."""
     tc, _pool, _conn = client
-    empty_today = _make_deck(card_count=0)
+    empty_today = _make_deck(card_count=0, deck_date=today)
 
     with (
         patch("paper_ingestion.routers.pulse.load_today", AsyncMock(return_value=empty_today)),
@@ -187,12 +188,12 @@ def test_get_today_returns_empty_with_no_data_yet_when_no_recent_decks(client):
     assert body["stale_diagnostics"] is None
 
 
-def test_get_today_includes_source_diagnostics_in_stale_response(client):
+def test_get_today_includes_source_diagnostics_in_stale_response(client, today):
     """Stale response carries stale_diagnostics from source_health rows."""
     tc, pool, conn = client
 
-    empty_today = _make_deck(card_count=0)
-    fallback_row = _make_fallback_row(deck_date=THREE_DAYS_AGO, card_count=5)
+    empty_today = _make_deck(card_count=0, deck_date=today)
+    fallback_row = _make_deck(card_count=5, deck_date=today - timedelta(days=3))
     health_rows = _make_health_rows()
 
     # conn.fetch is used for the source_health query inside the handler
@@ -228,10 +229,10 @@ def test_get_today_includes_source_diagnostics_in_stale_response(client):
 # setup (patch load_today → None) and assertion (resp.status_code == 404).
 
 
-def test_load_last_nonempty_deck_not_called_when_today_has_cards(client):
+def test_load_last_nonempty_deck_not_called_when_today_has_cards(client, today):
     """load_last_nonempty_deck is never invoked when today's deck is non-empty."""
     tc, _pool, _conn = client
-    deck = _make_deck(card_count=2)
+    deck = _make_deck(card_count=2, deck_date=today)
 
     with (
         patch("paper_ingestion.routers.pulse.load_today", AsyncMock(return_value=deck)),
@@ -255,7 +256,7 @@ async def test_stale_deck_count_matches_filtered_cards_and_excludes_recent_negat
     conn.fetchrow.return_value = FakeRecord(
         {
             "id": 7,
-            "deck_date": YESTERDAY,
+            "deck_date": date(2026, 7, 25),
             "card_count": 4,
             "generated_at": datetime(2026, 7, 25, 4, 0, tzinfo=UTC),
             "stats": {},

@@ -411,13 +411,17 @@ class ArxivSource(PaperSource):
         if _ARXIV_FIELD_PREFIX.search(raw_query):
             return raw_query
 
-        # Clean up user input
-        safe = raw_query.replace('"', "").strip()
+        stripped = raw_query.strip()
+        exact_phrase = len(stripped) >= 2 and stripped.startswith('"') and stripped.endswith('"')
+        safe = stripped.replace('"', "").strip()
         if not safe:
             return f"all:{raw_query}"
 
-        # Search title OR abstract with the full phrase — much more relevant than all:
-        return f'(ti:"{safe}" OR abs:"{safe}")'
+        terms = safe.split()
+        if exact_phrase or len(terms) == 1:
+            return f'(ti:"{safe}" OR abs:"{safe}")'
+
+        return " AND ".join(f'(ti:"{term}" OR abs:"{term}")' for term in terms)
 
     async def search(
         self,

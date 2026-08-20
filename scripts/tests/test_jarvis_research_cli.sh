@@ -25,8 +25,8 @@ fail=0
 pass_n=0
 pass() { pass_n=$((pass_n + 1)); printf 'PASS: %s\n' "$1"; }
 check_fail() { printf 'FAIL: %s\n' "$1" >&2; fail=1; }
-has()  { printf '%s' "$1" | grep -q -- "$2"; }
-hasF() { printf '%s' "$1" | grep -qF -- "$2"; }
+has()  { grep -q -- "$2" <<<"$1"; }
+hasF() { grep -qF -- "$2" <<<"$1"; }
 want() { if has "$1" "$2"; then pass "$3"; else check_fail "$3 :: missing /$2/ in <<<$1>>>"; fi; }
 lack() { if has "$1" "$2"; then check_fail "$3 :: unexpected /$2/ in <<<$1>>>"; else pass "$3"; fi; }
 
@@ -42,7 +42,7 @@ for recovery_fn in _rollback_pin_lines _schema_not_safe_notice _failure_epilogue
   eval "$recovery_src"
 done
 REPO=/srv/jarvis-family
-PUBLISHED_SERVICES_BASE=(paper_ingestion learning_engine dashboard restore-uploader)
+PUBLISHED_SERVICES_BASE=(platform_api paper_ingestion learning_engine dashboard restore-uploader)
 PUBLISHED_SERVICE_TELEGRAM=telegram_bot
 TXN_FROM_VERSION=1.1.2
 MIGRATIONS_RAN=1
@@ -56,7 +56,7 @@ out="$(_failure_epilogue v1.1.3 2>&1)"
 data_line="$(printf '%s\n' "$out" | grep -nF 'Admin > Backups' | cut -d: -f1)"
 image_line="$(printf '%s\n' "$out" | grep -nF 'Application-image recovery (not a full release rollback)' | cut -d: -f1)"
 if has "$out" 'JARVIS_IMAGE_TAG=1.1.2 docker compose --profile tunnel --profile telegram pull' \
-   && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
+   && has "$out" 'platform_api paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
    && has "$out" 'Repository: /srv/jarvis-family' \
    && has "$out" 'do not move the Git checkout or restore stored data' \
    && has "$out" 'A data-changing migration may have run' \
@@ -406,7 +406,7 @@ health_sample() {
 running_svc() {
   case "$1" in
     postgres|ollama|qdrant|litellm|cloudflared|postgres-backup) return 0 ;;
-    paper_ingestion|learning_engine|dashboard|restore-uploader|telegram_bot) return 0 ;;
+    platform_api|paper_ingestion|learning_engine|dashboard|restore-uploader|telegram_bot) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -631,14 +631,37 @@ case "${1:-}" in
         case "$run_script" in
           *"> /backup-trigger/.restore_request.json"*)
             cat > "$STUB_TRIGGER_DIR/.restore_request.json"
+            cp "$STUB_TRIGGER_DIR/.restore_request.json" \
+              "$STUB_BACKUP_DIR/.captured_restore_request.json"
             exit 0 ;;
           *"rm -f /backup-trigger/.restore_request.json"*)
             rm -f "$STUB_TRIGGER_DIR/.restore_request.json"
+            exit 0 ;;
+          *"cat /backup-trigger/.restore_request.json"*)
+            cat "$STUB_TRIGGER_DIR/.restore_request.json" 2>/dev/null || true
             exit 0 ;;
           *"cat /backup-trigger/.restore_status.json"*)
             cat "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null || printf '{}\n'
             exit 0 ;;
         esac
+        if printf '%s\n' "${raw_args[@]}" | grep -qx -- '--complete-authority'; then
+          restore_id="$(grep -oE '"restore_id":"[0-9a-f]{32}"' "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          source="$(grep -oE '"source":"(local|inbox)"' "$STUB_TRIGGER_DIR/.restore_status.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          printf '{"state":"done","current_step":"Finishing up","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":"2","error":null,"manual_steps_required":false,"phase":"finalize","restore_id":"%s","source":"%s"}\n' \
+            "$restore_id" "$source" > "$STUB_TRIGGER_DIR/.restore_status.json"
+          exit 0
+        fi
+        if printf '%s\n' "${raw_args[@]}" | grep -qx -- '--run-request' \
+           || printf '%s\n' "${raw_args[@]}" | grep -qx -- '/usr/local/bin/restore.sh'; then
+          [ "${STUB_RESTORE_LEGACY_RC:-0}" = 0 ] || exit "${STUB_RESTORE_LEGACY_RC}"
+          restore_id="$(grep -oE '"restore_id":"[0-9a-f]{32}"' "$STUB_TRIGGER_DIR/.restore_request.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          source="$(grep -oE '"source":"(local|inbox)"' "$STUB_TRIGGER_DIR/.restore_request.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+          state="${STUB_RESTORE_STATUS_AFTER_REQUEST:-running}"
+          printf '{"state":"%s","current_step":"Reconstructing database authority","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":null,"error":null,"manual_steps_required":false,"phase":"database_authority","restore_id":"%s","source":"%s"}\n' \
+            "$state" "$restore_id" "$source" > "$STUB_TRIGGER_DIR/.restore_status.json"
+          rm -f "$STUB_TRIGGER_DIR/.restore_request.json"
+          exit 0
+        fi
         if printf '%s\n' "${raw_args[@]}" | grep -qx -- '/usr/local/bin/restore.sh'; then
           exit "${STUB_RESTORE_LEGACY_RC:-0}"
         fi
@@ -770,7 +793,7 @@ new_env() {
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
         STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
         STUB_COMPOSE_PS_FAIL STUB_FREEZE_STATE_DIR \
-        STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC BACKUP_COMPOSE_TIMEOUT_SECONDS \
+        STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC STUB_RESTORE_STATUS_AFTER_REQUEST BACKUP_COMPOSE_TIMEOUT_SECONDS \
         CLI_STDIN_FILE RUN_CLI_PATH \
         JARVIS_UPDATE_GUARD_TIMEOUT JARVIS_UPDATE_GUARD_READY_ATTEMPTS \
         JARVIS_UPDATE_GUARD_READY_INTERVAL RUN_CLI_EXEC 2>/dev/null || true
@@ -838,6 +861,7 @@ run_cli() {
     "STUB_STACK_DOWN=${STUB_STACK_DOWN:-0}"
     "STUB_NO_CONTAINERS=${STUB_NO_CONTAINERS:-0}"
     "STUB_RESTORE_LEGACY_RC=${STUB_RESTORE_LEGACY_RC:-0}"
+    "STUB_RESTORE_STATUS_AFTER_REQUEST=${STUB_RESTORE_STATUS_AFTER_REQUEST:-}"
     "STUB_FREEZE_STATE_DIR=${STUB_FREEZE_STATE_DIR:-}"
     "STUB_SIDECAR_STATE_FILE=$STUB_SIDECAR_STATE_FILE"
     "STUB_QUARANTINE_REPLACE_ON_ACK=${STUB_QUARANTINE_REPLACE_ON_ACK:-}"
@@ -1122,9 +1146,18 @@ seed_fresh_backup() {
     printf '%064d\n' 0 > "$dir/manifest_${ts}.json.hmac"
     return 0
   fi
-  derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$REPO/secrets/backup_encrypt_key.txt" | cut -d' ' -f1)"
-  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$dir/manifest_${ts}.json" \
-    | cut -d' ' -f1 > "$dir/manifest_${ts}.json.hmac"
+  # Sign the way the shape being simulated actually signs. Only the pre-1.2.6
+  # manifest, which carries no run_id, is still verified against the derived key.
+  if [ "$mode" = "legacy" ]; then
+    derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$REPO/secrets/backup_encrypt_key.txt" | cut -d' ' -f1)"
+    openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$dir/manifest_${ts}.json" \
+      | cut -d' ' -f1 > "$dir/manifest_${ts}.json.hmac"
+  else
+    { cat -- "$REPO/secrets/backup_encrypt_key.txt"; printf '\n%s\n' 'jarvis-manifest-v1'; \
+      cat -- "$dir/manifest_${ts}.json"; } \
+      | openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r | cut -d' ' -f1 \
+      > "$dir/manifest_${ts}.json.hmac"
+  fi
 }
 
 respond_to_backup() {
@@ -1943,7 +1976,7 @@ USAGE_SITES=(
   "owner bogus@@owner: unknown subcommand 'bogus'.@@Run: jarvis-research owner status   (or: jarvis-research owner set <email>)"
   "restore acknowledge@@restore acknowledge takes exactly one restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
   "restore acknowledge short@@restore acknowledge requires one lowercase 32-hex restore ID.@@Run: jarvis-research restore acknowledge <restore-id>"
-  "restore bogus@@restore: unknown subcommand 'bogus'.@@Run: jarvis-research restore status   (or: restore legacy|request <timestamp>, restore acknowledge <restore-id>)"
+  "restore bogus@@restore: unknown subcommand 'bogus'.@@Run: jarvis-research restore status   (or: restore run|legacy|request <timestamp>, restore acknowledge <restore-id>)"
   "restore legacy@@restore legacy takes exactly one backup timestamp.@@Run: jarvis-research restore legacy <timestamp>"
   "restore legacy nonsense@@restore legacy requires one backup timestamp in YYYYMMDD_HHMMSS form.@@Run: jarvis-research restore legacy <timestamp>"
   "restore legacy --bogus@@restore legacy: unknown option '--bogus'.@@Run: jarvis-research restore legacy <timestamp> [--allow-unknown-schema]"
@@ -2075,31 +2108,84 @@ fi
 # =============================================================================
 # Recovery commands: break-glass restore, restore progress, off-host request.
 # =============================================================================
-# The backup service polls the trigger volume every five seconds and consumes a
-# restore request before anything else, so the request may only be written after
-# the service has been stopped. The ordering IS the correctness property here.
+# Scheduled backup never consumes restore requests. The explicit host command
+# starts a no-listener, transient restore job with the exceptional credential.
 new_env; register_repo
-out="$(BACKUP_COMPOSE_TIMEOUT_SECONDS=7 run_cli restore legacy 20260101_010101)"; rc=$?
-legacy_stop="$(grep -n 'compose stop postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_write="$(grep -n 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_run="$(grep -n 'compose-run .*restore\.sh' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_start="$(grep -n 'compose start postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
-legacy_write_argv="$(grep 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1)"
-legacy_run_argv="$(grep 'compose-run .*restore\.sh' "$STUB_LOG" | head -1)"
-legacy_request="$(cat "$TRIG/.restore_request.json" 2>/dev/null || true)"
+printf '{"source":"local","timestamp":"20260101_010101","restore_id":"0123456789abcdef0123456789abcdef","requested_at":"2026-07-21T20:00:00Z"}\n' \
+  > "$TRIG/.restore_request.json"
+out="$(run_cli restore run)"; rc=$?
+restore_run_argv="$(grep 'compose-run .*postgres-restore' "$STUB_LOG" | head -1)"
 if [ "$rc" -eq 0 ] \
-   && [ -n "$legacy_stop" ] && [ -n "$legacy_write" ] \
-   && [ -n "$legacy_run" ] && [ -n "$legacy_start" ] \
-   && [ "$legacy_stop" -lt "$legacy_write" ] \
-   && [ "$legacy_write" -lt "$legacy_run" ] \
-   && [ "$legacy_run" -lt "$legacy_start" ]; then
-  pass "restore_legacy_stops_the_backup_service_before_it_writes_the_request"
+   && has "$out" 'completed after authority reconstruction and migrations' \
+   && hasF "$restore_run_argv" '--rm' \
+   && hasF "$restore_run_argv" '--no-deps' \
+   && hasF "$restore_run_argv" 'postgres-restore' \
+   && grep -q 'compose-run .*cluster-bootstrap restore-prepare' "$STUB_LOG" \
+   && grep -q 'compose-run .*jarvis-migrator' "$STUB_LOG" \
+   && grep -q 'compose-run .*litellm-migrator' "$STUB_LOG" \
+   && grep -q 'compose-run .*cluster-bootstrap restore-finalize' "$STUB_LOG" \
+   && grep -q 'compose-run .*postgres-restore --complete-authority' "$STUB_LOG"; then
+  pass "restore_run_is_fail_fast_and_completes_authority_in_the_required_order"
 else
-  check_fail "restore legacy ordering: rc=$rc stop=$legacy_stop write=$legacy_write run=$legacy_run start=$legacy_start log=$(cat "$STUB_LOG")"
+  check_fail "restore run: rc=$rc argv=<<<$restore_run_argv>>> out=<<<$out>>>"
 fi
 
-# Both one-offs must skip the dependency chain and override the service's own
-# entrypoint (an infinite poll loop that takes no command arguments).
+new_env; register_repo
+printf '{"state":"running","current_step":"Reconstructing database authority","steps":[],"safety_backup_ts":null,"started_at":"1","finished_at":null,"error":null,"manual_steps_required":false,"phase":"database_authority","restore_id":"0123456789abcdef0123456789abcdef","source":"local"}\n' \
+  > "$TRIG/.restore_status.json"
+out="$(run_cli restore run)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$out" 'interrupted restore completed after authority reconstruction and migrations' \
+   && ! grep -q 'compose-run .*postgres-restore --run-request' "$STUB_LOG" \
+   && grep -q 'compose-run .*cluster-bootstrap restore-prepare' "$STUB_LOG" \
+   && grep -q 'compose-run .*postgres-restore --complete-authority' "$STUB_LOG"; then
+  pass "restore_run_resumes_pending_authority_without_replaying_the_data_swap"
+else
+  check_fail "restore run authority resume: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+out="$(run_cli restore run)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'No valid restore request is queued' \
+   && ! grep -q 'compose-run .*postgres-restore --run-request' "$STUB_LOG"; then
+  pass "restore_run_refuses_a_missing_request_without_claiming_success"
+else
+  check_fail "restore run missing request: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+printf '{"source":"local","timestamp":"20260101_010101","restore_id":"0123456789abcdef0123456789abcdef","requested_at":"2026-07-21T20:00:00Z"}\n' \
+  > "$TRIG/.restore_request.json"
+STUB_RESTORE_STATUS_AFTER_REQUEST=failed
+out="$(run_cli restore run)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'did not reach database authority reconstruction' \
+   && ! grep -q 'compose-run .*cluster-bootstrap restore-prepare' "$STUB_LOG"; then
+  pass "restore_run_refuses_a_failed_durable_status_without_finalizing"
+else
+  check_fail "restore run failed status: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
+fi
+
+new_env; register_repo
+out="$(BACKUP_COMPOSE_TIMEOUT_SECONDS=7 run_cli restore legacy 20260101_010101)"; rc=$?
+legacy_write="$(grep -n 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_run="$(grep -n 'compose-run .*restore\.sh' "$STUB_LOG" | head -1 | cut -d: -f1)"
+legacy_write_argv="$(grep 'compose-run .*restore_request\.json' "$STUB_LOG" | head -1)"
+legacy_run_argv="$(grep 'compose-run .*restore\.sh' "$STUB_LOG" | head -1)"
+legacy_request="$(cat "$BK/.captured_restore_request.json" 2>/dev/null || true)"
+if [ "$rc" -eq 0 ] \
+   && [ -n "$legacy_write" ] && [ -n "$legacy_run" ] \
+   && [ "$legacy_write" -lt "$legacy_run" ] \
+   && hasF "$legacy_run_argv" 'postgres-restore' \
+   && ! grep -q 'compose \(stop\|start\) postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_uses_the_transient_restore_job_without_stopping_backups"
+else
+  check_fail "restore legacy ordering: rc=$rc write=$legacy_write run=$legacy_run log=$(cat "$STUB_LOG")"
+fi
+
+# Both one-offs skip dependencies; the direct legacy run overrides the restore
+# job's request-consuming entrypoint so its typed acknowledgement reaches stdin.
 if hasF "$legacy_write_argv" '--no-deps' && hasF "$legacy_write_argv" '--entrypoint sh' \
    && hasF "$legacy_run_argv" '--no-deps' \
    && hasF "$legacy_run_argv" '--entrypoint /usr/local/bin/restore.sh'; then
@@ -2139,7 +2225,7 @@ else
 fi
 new_env; register_repo
 run_cli restore legacy 20260101_010101 --allow-unknown-schema >/dev/null 2>&1
-legacy_ack_request="$(cat "$TRIG/.restore_request.json" 2>/dev/null || true)"
+legacy_ack_request="$(cat "$BK/.captured_restore_request.json" 2>/dev/null || true)"
 if printf '%s' "$legacy_ack_request" | grep -Eq '"allow_unknown_schema":true' \
    && printf '%s' "$legacy_ack_request" | grep -Eq '"timestamp":"20260101_010101"'; then
   pass "restore_legacy_allow_unknown_schema_flag_sets_the_acknowledgement"
@@ -2147,26 +2233,16 @@ else
   check_fail "restore legacy --allow-unknown-schema request: <<<$legacy_ack_request>>>"
 fi
 
-# The service loop must resume even when the restore itself fails, or a failed
-# break-glass attempt leaves the install with no scheduled backups.
+# A failed break-glass restore never changes the scheduled backup service.
 new_env; register_repo
 STUB_RESTORE_LEGACY_RC=1
 out="$(run_cli restore legacy 20260101_010101)"; rc=$?
 if [ "$rc" -eq 1 ] \
    && has "$out" 'restore status' \
-   && grep -q 'compose start postgres-backup' "$STUB_LOG"; then
-  pass "restore_legacy_resumes_the_backup_service_after_a_failed_restore"
+   && ! grep -q 'compose \(stop\|start\) postgres-backup' "$STUB_LOG"; then
+  pass "restore_legacy_failure_leaves_scheduled_backup_untouched"
 else
-  check_fail "restore legacy failure resume: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
-fi
-
-# ...and clears the request first, so the resumed service cannot consume a
-# request the operator abandoned and report a failure they never started.
-if [ ! -e "$TRIG/.restore_request.json" ] \
-   && grep -q 'rm -f /backup-trigger/.restore_request.json' "$STUB_LOG"; then
-  pass "restore_legacy_clears_an_unconsumed_request_before_resuming_the_service"
-else
-  check_fail "restore legacy request cleanup: log=$(cat "$STUB_LOG")"
+  check_fail "restore legacy failure isolation: rc=$rc log=$(cat "$STUB_LOG") out=<<<$out>>>"
 fi
 
 # restore status reads the sidecar's status file through its own one-off.
@@ -2306,18 +2382,51 @@ for control_cmd in start stop restart repair; do
   fi
 done
 
-# doctor warns on a GPU overlay with no DRI render node, exit unchanged.
+# doctor probes each accelerator overlay by the route that overlay actually uses.
+# run_cli cannot carry these host-path overrides, so the three cases share one
+# invocation helper that adds them to the same stub environment.
+run_cli_doctor_host() {
+  env "PATH=$STUB:$PATH" "STUB_LOG=$STUB_LOG" \
+    "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$CFG/bin" \
+    "JARVIS_DRI_DIR=$1" "JARVIS_DEV_DIR=$2" \
+    bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" doctor </dev/null 2>&1
+}
+
+# doctor warns on a ROCm/Vulkan overlay with no DRI render node, exit unchanged.
 new_env; register_repo
 printf 'JARVIS_VERSION=1.1.2\nJARVIS_IMAGE_TAG=1.1.2\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.vulkan.yml\n' > "$REPO/.env"
 EMPTY_DRI="$ROOT/dri.$RANDOM"; mkdir -p "$EMPTY_DRI"
-out="$( run_cli_dri() { env "PATH=$STUB:$PATH" "STUB_LOG=$STUB_LOG" \
-  "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$CFG/bin" \
-  "JARVIS_DRI_DIR=$EMPTY_DRI" \
-  bash "$REPO/scripts/jarvis-research.sh" --repo "$REPO" doctor </dev/null 2>&1; }; run_cli_dri )"; rc=$?
+EMPTY_DEV="$ROOT/dev.$RANDOM"; mkdir -p "$EMPTY_DEV"
+out="$(run_cli_doctor_host "$EMPTY_DRI" "$EMPTY_DEV")"; rc=$?
 if has "$out" 'render node\|/dev/dri\|render' && [ "$rc" -ne 2 ]; then
   pass "doctor_warns_overlay_without_dri: render-node WARN emitted, exit unchanged"
 else
   check_fail "doctor_warns_overlay_without_dri: rc=$rc out=<<<$out>>>"
+fi
+
+# WSL2 + NVIDIA is a supported install path and exposes /dev/dxg instead of a DRI
+# render node. Its CUDA overlay must not be told the accelerator is unavailable.
+new_env; register_repo
+printf 'JARVIS_VERSION=1.1.3\nJARVIS_IMAGE_TAG=1.1.3\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml\n' > "$REPO/.env"
+WSL_DEV="$ROOT/dev.$RANDOM"; mkdir -p "$WSL_DEV"; : > "$WSL_DEV/dxg"
+out="$(run_cli_doctor_host "$EMPTY_DRI" "$WSL_DEV")"; rc=$?
+if [ "$rc" -ne 2 ] && ! has "$out" 'render node' \
+   && ! has "$out" 'accelerator will be unavailable'; then
+  pass "doctor_cuda_overlay_without_render_node_is_not_warned"
+else
+  check_fail "doctor_cuda_overlay_without_render_node: rc=$rc out=<<<$out>>>"
+fi
+
+# When the CUDA overlay really has no NVIDIA route, the warning names the paths
+# that were probed rather than a render node that was never looked for.
+new_env; register_repo
+printf 'JARVIS_VERSION=1.1.3\nJARVIS_IMAGE_TAG=1.1.3\nTORCH_VARIANT=cpu\nCOMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml\n' > "$REPO/.env"
+out="$(run_cli_doctor_host "$EMPTY_DRI" "$EMPTY_DEV")"; rc=$?
+if [ "$rc" -ne 2 ] && hasF "$out" "${EMPTY_DEV}/dxg" \
+   && has "$out" 'NVIDIA Container Toolkit' && ! has "$out" 'render node'; then
+  pass "doctor_cuda_overlay_warning_names_the_nvidia_paths_it_probed"
+else
+  check_fail "doctor_cuda_overlay_warning_text: rc=$rc out=<<<$out>>>"
 fi
 
 # doctor answers the question both update refusals send the user here to ask.
@@ -2366,6 +2475,41 @@ else
   check_fail "doctor_container_warning_names_repair: rc=$rc out=<<<$out>>>"
 fi
 
+# A recorded version that disagrees with the checkout, with no update journal to
+# explain it, used to make doctor and update report different installed versions
+# and offer no way out. Both must now print the same reconciliation message.
+new_env; register_repo
+RECONCILE_MSG='This install records version 1.1.2 in .env, but the checkout is version 1.1.3'
+doctor_out="$(run_cli doctor)"; rc=$?
+printf '%s\n' "$TARGET_SHA" > "$STUB_HEAD_FILE"
+update_out="$(run_cli update --yes)"; urc=$?
+if [ "$rc" -eq 0 ] && [ "$urc" -eq 0 ] \
+   && hasF "$doctor_out" "$RECONCILE_MSG" && hasF "$update_out" "$RECONCILE_MSG" \
+   && hasF "$doctor_out" "cd $REPO && ./update.sh --yes" \
+   && hasF "$update_out" "cd $REPO && ./update.sh --yes" \
+   && has "$update_out" 'Already up to date'; then
+  pass "version_mismatch_gets_one_reconciliation_message_from_doctor_and_update"
+else
+  check_fail "version reconciliation: rc=$rc urc=$urc doctor=<<<$doctor_out>>> update=<<<$update_out>>>"
+fi
+
+# The message is a mismatch report, not decoration: agreement silences it, and a
+# pending journal means the update path owns the difference.
+new_env; register_repo
+printf 'JARVIS_VERSION=1.1.3\nJARVIS_IMAGE_TAG=1.1.3\nTORCH_VARIANT=cpu\n' > "$REPO/.env"
+matched_out="$(run_cli doctor)"; rc=$?
+new_env; register_repo
+: > "$PENDING_FILE"
+journal_out="$(run_cli doctor)"; jrc=$?
+rm -f "$PENDING_FILE"
+if [ "$rc" -eq 0 ] && [ "$jrc" -eq 0 ] \
+   && ! has "$matched_out" 'no update is in progress' \
+   && ! has "$journal_out" 'no update is in progress'; then
+  pass "version_reconciliation_is_silent_when_matched_or_journalled"
+else
+  check_fail "version reconciliation silence: rc=$rc jrc=$jrc matched=<<<$matched_out>>> journal=<<<$journal_out>>>"
+fi
+
 # A transaction-journal write that fails after the update has already started
 # must stop cleanly and name the record it could not write, rather than letting
 # the failure surface later as an unrelated error.
@@ -2402,7 +2546,7 @@ if [ "$rc" -ne 0 ] \
    && grep -q '"from_version":"1.1.2"' "$PENDING_FILE" \
    && has "$out" 'Repository:' && has "$out" "$REPO" \
    && has "$out" 'JARVIS_IMAGE_TAG=1.1.2 docker compose --profile tunnel --profile telegram pull' \
-   && has "$out" 'paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
+   && has "$out" 'platform_api paper_ingestion learning_engine dashboard restore-uploader telegram_bot' \
    && has "$out" 'do not move the Git checkout or restore stored data' \
    && has "$out" 'A data-changing migration may have run' \
    && [ -n "$data_line" ] && [ -n "$image_line" ] && [ "$data_line" -lt "$image_line" ] \

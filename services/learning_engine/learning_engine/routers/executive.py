@@ -6,7 +6,7 @@ from typing import Any
 
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.auth import current_user_id_strict, current_user_id_strict_with_owner_override
+from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 
@@ -264,7 +264,7 @@ async def get_my_day(
     request: Request,
     db_pool: Pool = Depends(get_db_pool),
     limit_recommendations: int = Query(3, ge=1, le=10),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> MyDayResponse:
     """Fetch aggregated daily execution plan (tasks, cards, recommended papers).
 
@@ -382,7 +382,7 @@ async def get_my_day_bundle(
         le=840,
         description="Caller UTC offset in minutes east of UTC (JS -getTimezoneOffset()).",
     ),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> MyDayBundleResponse:
     """One-round-trip superset of the My-Day page's ~11 calls.
 
@@ -502,7 +502,7 @@ async def quick_add_task(
 async def get_active_focus_session(
     request: Request,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ActiveFocusSessionResponse | None:
     """Return the caller's interval, completing an elapsed active interval once."""
     async with db_pool.acquire() as conn:
@@ -529,7 +529,7 @@ async def get_active_focus_session(
 async def get_pending_telegram_focus_completion(
     request: Request,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ActiveFocusSessionResponse | None:
     """Return one completed Telegram interval until its delivery is acknowledged.
 
@@ -569,12 +569,15 @@ async def start_focus_session(
     request: Request,
     payload: FocusSessionStartRequest,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ActiveFocusSessionResponse:
     """Start one interval; any existing open interval is the sole conflict rule."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            await conn.fetchval("SELECT id FROM users WHERE id = $1 FOR UPDATE", user_id)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('learning.focus_session'), $1)",
+                user_id,
+            )
             existing = await conn.fetchrow(
                 "SELECT * FROM focus_sessions WHERE user_id = $1 AND state IN ('active', 'paused')",
                 user_id,
@@ -621,7 +624,7 @@ async def pause_focus_session(
     request: Request,
     session_id: int,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> FocusSessionTransitionResponse:
     """Pause an active interval; repeated pauses are idempotent."""
     async with db_pool.acquire() as conn:
@@ -658,7 +661,7 @@ async def resume_focus_session(
     request: Request,
     session_id: int,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> FocusSessionTransitionResponse:
     """Resume a paused interval while retaining its accumulated pause time."""
     async with db_pool.acquire() as conn:
@@ -689,7 +692,7 @@ async def complete_focus_session(
     session_id: int,
     payload: FocusSessionCompleteRequest,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> FocusSessionTransitionResponse:
     """Complete exactly once and add the measured interval to My Day exactly once."""
     async with db_pool.acquire() as conn:
@@ -722,7 +725,7 @@ async def acknowledge_telegram_focus_completion(
     request: Request,
     session_id: int,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> FocusSessionTransitionResponse:
     """Acknowledge successful delivery of a completed Telegram interval."""
     async with db_pool.acquire() as conn:
@@ -752,7 +755,7 @@ async def log_focus_session(
     request: Request,
     payload: FocusSessionRequest,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> FocusSessionResponse:
     """Log a completed focus session.
 

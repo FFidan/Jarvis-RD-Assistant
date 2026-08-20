@@ -4,7 +4,7 @@
  * Accessible at /admin/backups (admin role; AdminOnlyRoute guards the route).
  * Shows sidecar status, restore points grouped from GET /api/admin/backups/restore-points,
  * allows an on-demand backup (confirm), per-file download (expandable per card),
- * a guided one-click restore (typed-RESTORE confirm + polled progress that degrades
+ * a host-started restore request (typed-RESTORE confirmation plus progress that degrades
  * gracefully while the app is briefly unreachable mid-restore), an in-browser
  * off-host upload that stages another server's backup in the restore inbox, and
  * the manual host runbook as the advanced fallback.
@@ -38,6 +38,8 @@ import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
 import { GuidedRecoveryView } from '@/components/admin/GuidedRecoveryView';
 import { TypedConfirmDialog } from '@/components/admin/TypedConfirmDialog';
 import { QueryErrorState } from '@/components/shared/QueryErrorState';
+import { formatRelativeTime } from '@/lib/relative-time';
+import { formatDateTime } from '@/lib/utils';
 
 const STORE_LABELS: Record<string, string> = {
   jarvis: 'Main database',
@@ -56,13 +58,6 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
-
-function formatAge(iso: string): string {
-  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 /** Parse a backup's %Y%m%d_%H%M%S key into a Date (local time); null if malformed. */
@@ -155,7 +150,7 @@ function InboxRestoreSection({
               >
                 <div className="space-y-1">
                   <div className="text-sm font-medium">
-                    {parseBackupTs(p.timestamp)?.toLocaleString() ?? p.timestamp}
+                    {formatDateTime(parseBackupTs(p.timestamp), p.timestamp)}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <InboxBadge ok={p.complete} okLabel="Complete" badLabel="Incomplete" />
@@ -179,7 +174,7 @@ function InboxRestoreSection({
                   disabled={disabled}
                   onClick={() => onRestore(p.timestamp, legacyMissingPdfs)}
                 >
-                  Restore to this point
+                  Request host restore
                 </button>
               </li>
             );
@@ -229,9 +224,9 @@ function RestorePointCard({
     <div className="rounded-md border p-4 space-y-3" data-testid="restore-point-card">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <div className="text-sm font-medium">{formatAge(point.created_at)}</div>
+          <div className="text-sm font-medium">{formatRelativeTime(point.created_at)}</div>
           <div className="text-xs text-muted-foreground">
-            {new Date(point.created_at).toLocaleString()} · {formatBytes(point.total_size_bytes)}
+            {formatDateTime(point.created_at)} · {formatBytes(point.total_size_bytes)}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -321,7 +316,7 @@ function RestorePointCard({
             disabled={restoreDisabled}
             onClick={() => onRestore(point.timestamp, legacyMissingPdfs, unknownSchema)}
           >
-            {isThisRestoring ? 'Restoring…' : 'Restore to this point'}
+            {isThisRestoring ? 'Restore requested…' : 'Request host restore'}
           </button>
           <button
             type="button"
@@ -490,15 +485,15 @@ export function AdminBackupsPage() {
           ) : status?.last_run_succeeded === false ? (
             <span className="text-amber-700 dark:text-amber-400">
               Last backup attempt failed — check the backup service.
-              {status.last_attempt_at ? ` (${formatAge(status.last_attempt_at)})` : ''}
+              {status.last_attempt_at ? ` (${formatRelativeTime(status.last_attempt_at)})` : ''}
             </span>
           ) : status?.last_run_succeeded && incompleteCapture ? (
             <span className="text-amber-700 dark:text-amber-400">
               {`Last backup completed, but ${incompleteCapture}.`}
-              {status.last_run_at ? ` (${formatAge(status.last_run_at)})` : ''}
+              {status.last_run_at ? ` (${formatRelativeTime(status.last_run_at)})` : ''}
             </span>
           ) : status?.last_run_at ? (
-            `Last backup ${formatAge(status.last_run_at)} · ${points.length} restore point${points.length !== 1 ? 's' : ''}`
+            `Last backup ${formatRelativeTime(status.last_run_at)} · ${points.length} restore point${points.length !== 1 ? 's' : ''}`
           ) : (
             'No backups yet.'
           )}
@@ -650,7 +645,23 @@ export function AdminBackupsPage() {
         )}
       </div>
 
-      {restoreController.showRestorePanel && (
+      {restoreController.showRestorePanel && restoreController.status?.state === 'pending' && (
+        <div
+          data-testid="restore-requested"
+          role="status"
+          aria-live="polite"
+          className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4 space-y-2"
+        >
+          <div className="text-sm font-medium">Restore requested; host action required</div>
+          <p className="text-sm text-muted-foreground">
+            Nothing has been restored yet. On the deployment host, run{' '}
+            <code>jarvis-research restore run</code> to start the one-shot restore job. This
+            browser request cannot start a restore itself.
+          </p>
+        </div>
+      )}
+
+      {restoreController.showRestorePanel && restoreController.status?.state !== 'pending' && (
         <GuidedRecoveryView
           restoringTimestamp={restoreController.restoringTimestamp}
           pollError={restoreController.pollError}
@@ -706,10 +717,10 @@ export function AdminBackupsPage() {
         }}
         title={
           confirmAllowMissingPdfs
-            ? 'Restore this older backup without PDFs?'
-            : 'Restore from this backup?'
+            ? 'Request host restore of this older backup without PDFs?'
+            : 'Request host restore from this backup?'
         }
-        confirmLabel="Restore"
+        confirmLabel="Request host restore"
         description={
           <>
             {confirmSchemaUncheckable && (
@@ -732,11 +743,12 @@ export function AdminBackupsPage() {
                 This replaces the current JARVIS data, saved database settings and credentials,
                 data keys, search index, and PDF files with the contents of this backup
                 {confirmPoint
-                  ? ` from ${new Date(confirmPoint.created_at).toLocaleString()}`
+                  ? ` from ${formatDateTime(confirmPoint.created_at)}`
                   : ''}
-                . A safety backup is taken first. This host&apos;s infrastructure credentials
-                stay unchanged; off-host outbound connections remain blocked until reviewed. The
-                app is briefly unavailable while it restores. Type{' '}
+                . A safety backup is taken first after the host starts the restore. This host&apos;s
+                infrastructure credentials stay unchanged; off-host outbound connections remain
+                blocked until reviewed. This request does not start the restore: after requesting,
+                run <code>jarvis-research restore run</code> on the deployment host. Type{' '}
                 <span className="font-mono font-semibold">RESTORE</span> to confirm.
               </span>
             )}
@@ -789,7 +801,7 @@ export function AdminBackupsPage() {
           <span>
             This permanently deletes every archive in this restore point
             {deleteConfirmPoint
-              ? ` from ${new Date(deleteConfirmPoint.created_at).toLocaleString()}`
+              ? ` from ${formatDateTime(deleteConfirmPoint.created_at)}`
               : ''}
             . This cannot be undone. Type{' '}
             <span className="font-mono font-semibold">DELETE</span> to confirm.

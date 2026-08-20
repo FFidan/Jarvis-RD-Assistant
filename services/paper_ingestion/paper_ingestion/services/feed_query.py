@@ -8,9 +8,14 @@ from datetime import date
 from typing import Any, cast
 
 import asyncpg
-from jarvis_common.paper_visibility import paper_visibility_sql
 
-from paper_ingestion.queries.predicates import VIEW_PREDICATES
+from paper_ingestion.queries.predicates import (
+    VIEW_PREDICATES,
+    paper_topic_id_sql,
+    paper_untagged_sql,
+    paper_visible_sql,
+    source_types_sql,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +233,7 @@ def build_feed_queries(
     params.append(user_id)
     param_idx += 1
     if scope == "corpus" and user_id is not None:
-        conditions.append(paper_visibility_sql(1, alias="p"))
+        conditions.append(paper_visible_sql(1, alias="p"))
 
     note_query_param: int | None = None
     if q:
@@ -276,8 +281,7 @@ def build_feed_queries(
 
     source_list = split_csv_filter(source_types)
     if source_list:
-        placeholders = ", ".join(f"${param_idx + i}" for i in range(len(source_list)))
-        conditions.append(f"p.source_type IN ({placeholders})")
+        conditions.append(source_types_sql(param_idx, len(source_list)))
         params.extend(source_list)
         param_idx += len(source_list)
 
@@ -292,14 +296,12 @@ def build_feed_queries(
         param_idx += 1
 
     if topic_id is not None:
-        conditions.append(
-            f"p.id IN (SELECT pt.paper_id FROM paper_topics pt WHERE pt.topic_id = ${param_idx})"
-        )
+        conditions.append(paper_topic_id_sql(param_idx))
         params.append(topic_id)
         param_idx += 1
 
     if untagged:
-        conditions.append("NOT EXISTS (SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id)")
+        conditions.append(paper_untagged_sql())
 
     if date_from:
         conditions.append(f"p.created_at >= ${param_idx}")
@@ -398,108 +400,135 @@ def derive_feed_search_mode(q: str | None) -> str:
 # UI v3 facet-count helpers (§ Source / § Topic in the facet rail)
 # ---------------------------------------------------------------------------
 
-_SQL_BY_SOURCE_USER = """
-    SELECT p.source_type, COUNT(*)::int AS cnt
-      FROM papers p
-      JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-     GROUP BY p.source_type
-"""
 
-_SQL_BY_SOURCE_CORPUS = """
-    SELECT p.source_type, COUNT(*)::int AS cnt
-      FROM papers p
-     GROUP BY p.source_type
-"""
+def _facet_scope_parts(
+    user_id: int | None,
+    scope: str,
+) -> tuple[str, list[str], list[object]]:
+    if scope not in {"library", "corpus"}:
+        raise ValueError(f"Unknown scope {scope!r}. Valid values: ['corpus', 'library']")
+    if user_id is None:
+        return (
+            " LEFT JOIN paper_user_state pus ON pus.paper_id = p.id AND pus.user_id IS NULL",
+            [],
+            [],
+        )
 
-_SQL_BY_SOURCE_VISIBLE = f"""
-    SELECT p.source_type, COUNT(*)::int AS cnt
-      FROM papers p
-     WHERE {paper_visibility_sql(1, alias="p")}
-     GROUP BY p.source_type
-"""
+    state_join = " LEFT JOIN paper_user_state pus ON pus.paper_id = p.id AND pus.user_id = $1"
+    if scope == "library":
+        return (
+            " JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1" + state_join,
+            [],
+            [user_id],
+        )
+    return state_join, [paper_visible_sql(1, alias="p")], [user_id]
 
-_SQL_BY_TOPIC_USER = """
-    SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
-      FROM topics t
-      JOIN paper_topics pt ON pt.topic_id = t.id
-      JOIN user_library ul ON ul.paper_id = pt.paper_id AND ul.user_id = $1
-     GROUP BY t.id, t.name
-     ORDER BY cnt DESC, t.name
-"""
 
-_SQL_BY_TOPIC_CORPUS = """
-    SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
-      FROM topics t
-      JOIN paper_topics pt ON pt.topic_id = t.id
-     GROUP BY t.id, t.name
-     ORDER BY cnt DESC, t.name
-"""
+def _where_sql(conditions: list[str]) -> str:
+    return " WHERE " + " AND ".join(conditions) if conditions else ""
 
-_SQL_BY_TOPIC_VISIBLE = f"""
-    SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
-      FROM topics t
-      JOIN paper_topics pt ON pt.topic_id = t.id
-      JOIN papers p ON p.id = pt.paper_id
-     WHERE {paper_visibility_sql(1, alias="p")}
-     GROUP BY t.id, t.name
-     ORDER BY cnt DESC, t.name
-"""
 
-_SQL_UNTAGGED_USER = """
-    SELECT COUNT(*)::int AS cnt
-      FROM papers p
-      JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-     WHERE NOT EXISTS (
-         SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id
-     )
-"""
-
-_SQL_UNTAGGED_CORPUS = """
-    SELECT COUNT(*)::int AS cnt
-      FROM papers p
-     WHERE NOT EXISTS (
-         SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id
-     )
-"""
-
-_SQL_UNTAGGED_VISIBLE = f"""
-    SELECT COUNT(*)::int AS cnt
-      FROM papers p
-     WHERE {paper_visibility_sql(1, alias="p")}
-       AND NOT EXISTS (
-         SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id
-     )
-"""
+def _filtered_count_sql(expression: str, conditions: list[str]) -> str:
+    if not conditions:
+        return f"COUNT({expression})::int"
+    return f"COUNT({expression}) FILTER (WHERE {' AND '.join(conditions)})::int"
 
 
 async def fetch_feed_facet_counts(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     user_id: int | None,
     scope: str = "library",
+    *,
+    view: str | None = None,
+    source: str | None = None,
+    topic_id: int | None = None,
+    untagged: bool = False,
 ) -> tuple[dict[str, int], list[dict[str, Any]], int]:
     """Return (by_source, by_topic_rows, untagged) facet counts.
 
-    Authenticated corpus scope counts public rows plus the caller's private
-    library rows. Library scope remains exact membership. A `None` caller uses
-    the trusted internal corpus path.
+    Each group is restricted by active filters from the other groups, never by
+    its own selection. Authenticated corpus scope counts public rows plus the
+    caller's private library rows. Library scope remains exact membership. A
+    ``None`` caller uses the trusted internal corpus path.
+
+    Parameters
+    ----------
+    conn : asyncpg.Connection
+        Active database connection or pool proxy.
+    user_id : int | None
+        Authenticated caller ID, or ``None`` for the trusted corpus path.
+    scope : str
+        ``"library"`` for exact membership or ``"corpus"`` for visible papers.
+    view : str | None
+        Active status selection, excluded from status counts.
+    source : str | None
+        Active source selection, excluded from source counts.
+    topic_id : int | None
+        Active topic selection, excluded from topic and untagged counts.
+    untagged : bool
+        Active no-topic selection, excluded from topic and untagged counts.
 
     Returns
     -------
     tuple[dict[str, int], list[dict[str, Any]], int]
         Source counts, topic counts, and the untagged-paper count.
     """
-    if scope == "corpus" and user_id is not None:
-        source_rows = await conn.fetch(_SQL_BY_SOURCE_VISIBLE, user_id)
-        topic_rows = await conn.fetch(_SQL_BY_TOPIC_VISIBLE, user_id)
-        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_VISIBLE, user_id)
-    elif user_id is None:
-        source_rows = await conn.fetch(_SQL_BY_SOURCE_CORPUS)
-        topic_rows = await conn.fetch(_SQL_BY_TOPIC_CORPUS)
-        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_CORPUS)
-    else:
-        source_rows = await conn.fetch(_SQL_BY_SOURCE_USER, user_id)
-        topic_rows = await conn.fetch(_SQL_BY_TOPIC_USER, user_id)
-        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_USER, user_id)
+    if view is not None and view not in VIEW_PREDICATES:
+        raise ValueError(f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}")
+
+    joins, scope_conditions, scope_params = _facet_scope_parts(user_id, scope)
+
+    source_conditions: list[str] = []
+    source_params = list(scope_params)
+    if view is not None:
+        source_conditions.append(f"({VIEW_PREDICATES[view]})")
+    if topic_id is not None:
+        source_conditions.append(paper_topic_id_sql(len(source_params) + 1))
+        source_params.append(topic_id)
+    if untagged:
+        source_conditions.append(paper_untagged_sql())
+    source_count_sql = _filtered_count_sql("*", source_conditions)
+    source_sql = (
+        f"SELECT p.source_type, {source_count_sql} AS cnt"
+        f" FROM papers p{joins}{_where_sql(scope_conditions)}"
+        " GROUP BY p.source_type"
+    )
+    source_rows = await conn.fetch(source_sql, *source_params)
+
+    topic_conditions: list[str] = []
+    topic_params = list(scope_params)
+    if view is not None:
+        topic_conditions.append(f"({VIEW_PREDICATES[view]})")
+    if source is not None:
+        topic_conditions.append(source_types_sql(len(topic_params) + 1, 1))
+        topic_params.append(source)
+    topic_count_sql = _filtered_count_sql("DISTINCT p.id", topic_conditions)
+    topic_sql = (
+        "SELECT t.id AS topic_id, t.name,"
+        f" {topic_count_sql} AS cnt"
+        " FROM papers p"
+        " JOIN paper_topics pt ON pt.paper_id = p.id"
+        " JOIN topics t ON t.id = pt.topic_id"
+        f"{joins}{_where_sql(scope_conditions)}"
+        " GROUP BY t.id, t.name ORDER BY cnt DESC, t.name"
+    )
+    topic_rows = await conn.fetch(topic_sql, *topic_params)
+
+    # Own parameter list rather than borrowing the topic query's: binding by
+    # another query's length is correct only while `source` happens to be the
+    # last value appended there, and mis-binds silently the day that changes.
+    untagged_conditions = list(scope_conditions)
+    untagged_params = list(scope_params)
+    if view is not None:
+        untagged_conditions.append(f"({VIEW_PREDICATES[view]})")
+    if source is not None:
+        untagged_conditions.append(source_types_sql(len(untagged_params) + 1, 1))
+        untagged_params.append(source)
+    untagged_conditions.append(paper_untagged_sql())
+    untagged_sql = (
+        f"SELECT COUNT(*)::int AS cnt FROM papers p{joins}{_where_sql(untagged_conditions)}"
+    )
+    untagged_row = await conn.fetchrow(untagged_sql, *untagged_params)
 
     by_source: dict[str, int] = {row["source_type"]: row["cnt"] for row in source_rows}
     by_topic: list[dict[str, Any]] = [
@@ -510,6 +539,6 @@ async def fetch_feed_facet_counts(
         }
         for row in topic_rows
     ]
-    untagged: int = untagged_row["cnt"] if untagged_row is not None else 0
+    untagged_count: int = untagged_row["cnt"] if untagged_row is not None else 0
 
-    return by_source, by_topic, untagged
+    return by_source, by_topic, untagged_count

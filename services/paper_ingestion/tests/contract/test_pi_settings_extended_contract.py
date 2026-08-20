@@ -16,8 +16,6 @@ land here, 8 deferred to rot-on-touch):
 
 DEFERRED (rot-on-touch — require complex carve-out wiring or non-test infra):
   test_set_config_invalid_cron_returns_400      (scheduler validator setup)
-  test_set_fetch_interval_persists_and_reschedules (scheduler dep mock)
-  test_set_fetch_interval_rejects_invalid_values
   test_set_config_does_not_persist_when_litellm_update_fails (LiteLLM carve-out)
 """
 
@@ -100,8 +98,8 @@ async def test_s03_nudge_update_persists_to_db(
 ):
     """PUT /api/nudges/{id} updates the row; re-fetch reflects new state.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/settings.py:280
-    # (update_nudge: admin-only; cron validation; dynamic_update).
+    # Verified: services/paper_ingestion/paper_ingestion/routers/settings_sources.py:67
+    # (update_nudge: admin-only; cron validation; owner-defined capability).
     """
     await _promote_user_to_admin(contract_conn, contract_two_users.user_a_id)
     # Use an existing seeded nudge row (UNIQUE constraint on nudge_type prevents inserts).

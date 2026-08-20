@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /settings?section=integrations&item=telegram, /settings?section=integrations&item=bot-token -->
+<!-- verified-against-UI: 2026-08-19 | routes: /settings?section=integrations&item=telegram -->
 
 # Telegram
 
@@ -20,38 +20,46 @@ an operator must enable the profile and start the service on the JARVIS host.
 
 ---
 
-## Pairing your account — Settings → Integrations → Telegram
+## One settings page
 
-To connect your Telegram account:
+Everything Telegram lives on a single page: **Settings → Integrations →
+Telegram**. It opens with **Your Telegram**, the personal pairing controls
+every account has. Administrators see a second block below it, **Instance bot
+(admin)**, holding the BotFather token for the whole deployment. Bookmarks to
+the old separate Bot Token item land on this same page.
 
-1. Navigate to **Settings → Integrations → Telegram** (visible to all users).
-2. The panel shows your current pairing status. If you are not yet paired, a **Generate pairing code** button is available.
-3. Click **Generate pairing code**. A short one-time code is displayed on screen.
-4. Open Telegram and start a conversation with the JARVIS bot (your administrator will have shared the bot username with you).
-5. In the chat, send the command `/pair <code>` — replace `<code>` with the code from step 3 (for example, `/pair AB12CD`).
-6. Return to Settings. The panel will update to show your account as **Paired**, along with your Telegram username.
+The division is worth keeping in mind: the block at the top is *your* chat, the
+block at the bottom is *the instance's* bot, and the two are configured
+independently.
 
-Pairing is also offered as an optional step during the onboarding wizard (step 8 — Pair Telegram). If you skipped it there, you can complete it here at any time.
+---
+
+## Pairing your account
+
+1. Open **Settings → Integrations → Telegram**.
+2. **Your Telegram** shows your current pairing state. If you are not paired, it offers **Generate pairing code**.
+3. Click it. A one-time code appears, valid for 15 minutes; the panel then waits for the bot to confirm. **Regenerate token** gets you a fresh one if it expires first.
+4. Open Telegram and start a conversation with your instance's bot — your administrator will have shared its username.
+5. Send `/pair <code>`, replacing `<code>` with the code on screen, for example `/pair 8f2c1d9ab4e07356…`. It has to be a private one-to-one chat: in a group every member shares the chat identity, so pairing there would hand your account to all of them, and the bot refuses.
+6. The settings panel updates to **Paired** with your Telegram username. `/whoami` in the chat confirms the same thing.
+
+A chat can belong to only one account, and an account to only one chat. Pairing an account to a new chat displaces the old one, and the previous chat is notified that this happened.
+
+Pairing is also offered as an optional step in the onboarding wizard. The wizard step and this panel do the same thing; if you skipped it there, do it here.
 
 ### Unpairing
 
-To remove the connection, click **Unpair** in the Integrations → Telegram panel. Your library data is unaffected; only the Telegram link is removed.
+Click **Unpair** in the same panel, or send `/unpair` in the chat. Your library data is unaffected — only the link between the chat and your account is removed.
 
 ---
 
-## Telegram onboarding wizard step
+## Admin: the instance bot token — Settings → Integrations → Telegram
 
-If you did not complete the Telegram pairing step during the initial [Getting Started](getting-started.md) onboarding wizard, you can complete it here. The Settings panel and the wizard step are equivalent — pairing via either one links your account to the bot.
+The **Instance bot (admin)** block on that page is visible only to accounts with the **Admin** role.
 
----
+The bot token is the server-level credential that authorises JARVIS to send and receive messages through the Telegram Bot API. To change it:
 
-## Admin: configuring the bot token — Settings → Integrations → Bot Token
-
-This section is only available to users with the **Admin** role.
-
-The bot token is the server-level credential that authorises JARVIS to send and receive messages through the Telegram Bot API. To change the token:
-
-1. Navigate to **Settings → Integrations → Bot Token** (admin only).
+1. Open **Settings → Integrations → Telegram** and scroll to **Instance bot (admin)**.
 2. Enter the new bot token from the Telegram BotFather.
 3. Save. The value is encrypted in the deployment database and is never shown
    again.
@@ -75,29 +83,51 @@ required.
 
 | Command | What it does |
 |---------|--------------|
-| `/papers [query]` | List recent papers, or search when a query is supplied |
+| `/papers [query]` | List recent library papers, or search your library when a query is supplied |
+| `/discover <query>` | Search arXiv, Semantic Scholar, OpenAlex and PubMed, and save the results to your library |
 | `/briefing` | Show the current briefing |
-| `/next` | Show the first recommendation from the current Pulse deck |
+| `/next` | Show the next Pulse card you have not acted on |
 | `/inbox` | Show unread saved papers for triage |
 | `/pulse_now` | Queue Pulse generation now |
 | `/review` | Start a flashcard review |
 | `/stats` | Show learning statistics |
 | `/cancel` | Cancel the active flashcard review; this conversation-only command is intentionally absent from Telegram's global menu |
-| `/projects` | List active projects |
+| `/projects` | List your projects, except archived ones, up to 10 per run with a header naming the full count |
 | `/newproject <name>` | Create a project |
 | `/tasks` | List in-progress tasks |
 | `/done <id>` | Mark a task complete |
-| `/focus [minutes]` | Start a shared focus session; the default is 25 minutes and the accepted range is 1–480 |
+| `/focus [start [minutes] / pause / resume / stop]` | Show the focus timer, or start, pause, resume, or stop it; a started session defaults to your saved focus length and accepts 1–480 minutes |
 | `/pair <code>` | Pair this Telegram chat to a JARVIS account |
 | `/unpair` | Unlink this chat from its account |
 | `/whoami` | Show the paired account |
 | `/help` | Show this command help in Telegram |
 | `/start` | Show the welcome message, or pairing guidance for an unpaired chat |
 
+`/next` walks the deck. Cards arrive ranked, and each one carries its own state
+for your account, so `/next` skips whatever you have already saved, read, or
+rated — including from the web deck — and hands you the highest-ranked card
+still untouched. Nothing is remembered between calls, so the two clients cannot
+drift apart. When you have acted on every card it says so and links to the full
+deck.
+
 `/pulse_now` acknowledges that generation was queued; it does not claim the deck
 is already finished. The job appears in the Web jobs indicator for the same
 account, even when Telegram started it or it completes between browser polls.
 Use `/next` or open Pulse after the job completes.
+
+Where a command prints a project's status, it uses the same words the web app
+does: **In progress**, **Draft**, **Completed**, and **Archived**. `/projects`
+lists everything except Archived, because archiving is the one status that means
+"put away deliberately". Each project arrives as its own message, so the run
+stops after ten and opens with a header saying how many there are — the same
+"showing 10 of 23" line `/papers` and `/inbox` print. Open the web project list
+to see the rest.
+
+`/briefing` states the window and the view behind each number rather than
+printing bare counts: papers added to your library since midnight UTC, papers
+currently waiting in the Inbox view, and cards due right now. Its open-task
+count uses the same not-done rule as My Day — to do, in progress, or blocked —
+so the two surfaces cannot disagree about how much is outstanding.
 
 ### Inline actions
 
@@ -134,9 +164,12 @@ feedback are unchanged; daily novelty is not guaranteed.
 
 ## Shared focus sessions
 
-`/focus [minutes]` starts the same per-user focus interval shown by the Web
-TopBar timer. The Web interface observes Telegram starts and can pause, resume,
-or stop that session. Starting another interval while one is active is refused,
+`/focus` reports the same per-user focus interval shown by the Web TopBar
+timer: its state and remaining time, today's focused minutes against your
+daily target, and your streak. `/focus start` begins an interval at your saved
+focus length unless you pass an explicit number of minutes, and `/focus pause`,
+`/focus resume`, and `/focus stop` drive the running one. Either client can
+drive the session. Starting another interval while one is active is refused,
 and completion time is recorded once even if both clients observe it.
 
 While the interval is active or paused, JARVIS suppresses scheduled morning
@@ -145,14 +178,15 @@ and author alerts for that user. The focus-completion notice and operator-error
 messages remain available. If the bot cannot confirm focus state, scheduled
 delivery stays suppressed rather than breaking the pause promise.
 
-Work and break durations, break cycles, and browser notification permission are
-device-local preferences. The active focus interval and its accounting are
-shared server state.
+Timer durations and the daily cycle target are account preferences, so
+Telegram uses the same values as the Web timer; browser notification permission
+stays device-local. The active focus interval and its accounting are shared
+server state.
 
 ---
 
 ## Related pages
 
 - [Settings](settings.md) — full settings reference including the Integrations section.
-- [Getting Started](getting-started.md) — onboarding wizard step 8 covers Telegram pairing.
+- [Getting Started](getting-started.md) — the onboarding wizard offers Telegram pairing as its last optional step.
 - [Pulse](pulse.md) — Pulse digests are delivered via Telegram to paired accounts.

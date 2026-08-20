@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint security-scan check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
+.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint security-scan check docs-build ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -116,14 +116,16 @@ test-shell-contracts:
 ## defects.
 ## Missing shellcheck is a hard failure -- a check that silently skips is not a
 ## check -- so shellcheck is invoked directly and never guarded by `command -v`.
-## Keep all eleven in ONE invocation: shellcheck resolves each `# shellcheck source=`
+## Keep all sixteen in ONE invocation: shellcheck resolves each `# shellcheck source=`
 ## against the other files on the command line, so splitting this into per-file
 ## runs would silently stop checking setup_lib.sh's helpers against their callers.
 shell-lint:
 	shellcheck --severity=warning setup.sh update.sh scripts/setup_lib.sh \
 	  scripts/backup.sh scripts/restore.sh scripts/init-secrets.sh \
 	  scripts/update-bootstrap.sh scripts/backup-lifecycle.sh \
-	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh
+	  scripts/jarvis-research.sh scripts/uninstall.sh scripts/lifecycle-smoke.sh \
+	  scripts/postgres-role-bootstrap.sh scripts/litellm-entrypoint.sh \
+	  scripts/prune.sh scripts/profile.sh scripts/perf/loadgen.sh
 
 ## Reproduce the local subset of the hosted dependency and secret scanners.
 ## Pinned scanner artifacts live in the user cache and are hash-verified on
@@ -131,7 +133,7 @@ shell-lint:
 security-scan:
 	python3 scripts/security-scan.py
 
-## Run all local quality checks (mirrors CI lint-test + frontend and adds the
+## Run all local quality checks (mirrors CI lint-test, docs and frontend, and adds the
 ## optional Docker-backed swap/recovery matrix when Docker is available).
 ##
 ## Ordered fast → slow:
@@ -146,7 +148,8 @@ security-scan:
 ##   9. Optional Docker-backed swap/recovery matrix
 ##  10. Shell lint (shellcheck)
 ##  11. Fast pytest suite (excludes live_pg / integration / slow)
-##  12. Frontend lint + typecheck + tests + build
+##  12. Documentation build (strict — the hosted docs job rejects any warning)
+##  13. Frontend lint + typecheck + tests + build
 ##
 ## Live-Postgres checks run separately in CI and are opt-in locally:
 ##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m "contract and not live_qdrant" -v
@@ -167,7 +170,15 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/tests/test_restore_swap_recovery.sh
 	$(MAKE) shell-lint
 	uv run pytest
+	$(MAKE) docs-build
 	$(MAKE) frontend-check
+
+## Build the documentation the way the hosted docs job does: strict, so a link
+## that cannot be resolved fails here instead of after a push. The docs
+## dependencies are pinned in requirements-docs.txt and stay out of the project
+## environment, so this needs no local install.
+docs-build:
+	uv run --with-requirements requirements-docs.txt mkdocs build --strict
 
 ## Bring up Langfuse + JARVIS services with observability tracing enabled.
 ## Keys are loaded from .env (written by gen-langfuse-keys.sh) so they never
@@ -180,8 +191,11 @@ check: no-tracked-secrets secure-secrets deps-check lint
 # while paper_ingestion/learning_engine are published and pull. Forcing --build here
 # would rebuild the multi-GB torch images from a cold cache.
 observability-up: gen-langfuse-keys
-	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
-	  $(COMPOSE) --profile observability up -d langfuse paper_ingestion learning_engine
+	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 LOG_FORWARD_ADDRESS=vector:9000 \
+	  $(COMPOSE) --profile observability up -d langfuse vector platform_api paper_ingestion learning_engine dashboard
+	# nginx resolves service names when it starts. Refresh it after profile-driven
+	# application recreation so it cannot retain a replaced container address.
+	$(COMPOSE) restart dashboard
 
 ## Docker shortcuts
 up: gen-langfuse-keys init-secrets
@@ -207,17 +221,20 @@ rebuild-dashboard:
 	$(COMPOSE) build --build-arg CACHE_BUST=$(shell date +%s) dashboard
 	$(COMPOSE) up -d dashboard
 
+## The compose service is `platform_api`; `erasure-executor` runs the same image
+## without a build context, so naming it here would recreate a container that
+## nothing rebuilt.
 rebuild-backend:
-	$(COMPOSE) build paper_ingestion learning_engine
-	$(COMPOSE) up -d paper_ingestion learning_engine
+	$(COMPOSE) build platform_api paper_ingestion learning_engine
+	$(COMPOSE) up -d platform_api paper_ingestion learning_engine
 
 rebuild-telegram:
 	$(COMPOSE) build telegram_bot
 	$(COMPOSE) up -d telegram_bot
 
-rebuild-local:
-	$(COMPOSE) build paper_ingestion learning_engine dashboard
-	$(COMPOSE) up -d paper_ingestion learning_engine dashboard
+## Backend plus the dashboard. Composed from the two targets rather than a third
+## literal service list, which is how it came to omit a backend service.
+rebuild-local: rebuild-backend rebuild-dashboard
 
 up-build: gen-langfuse-keys init-secrets
 	$(COMPOSE) up -d --build
@@ -227,6 +244,13 @@ up-build: gen-langfuse-keys init-secrets
 profile:
 	bash scripts/profile.sh
 
-## Boot the local stack with profiling-only Postgres/ptrace overrides.
+## Boot the local stack with profiling-only Postgres/ptrace overrides. The probe
+## container runs as the invoking account so its bind-mounted output directory can
+## stay private to it rather than writable by everyone. The directory is created
+## here first: Compose would otherwise create it for the mount as root, and neither
+## side could then write the probe file.
 profile-stack-up:
-	$(COMPOSE_PERF) --profile perf up -d --no-deps postgres paper_ingestion dashboard
+	mkdir -p shared/perf
+	chmod 700 shared/perf
+	JARVIS_PERF_UID="$$(id -u)" JARVIS_PERF_GID="$$(id -g)" \
+	  $(COMPOSE_PERF) --profile perf up -d --no-deps postgres paper_ingestion dashboard

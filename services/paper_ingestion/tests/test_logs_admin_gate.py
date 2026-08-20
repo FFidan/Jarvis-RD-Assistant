@@ -48,11 +48,11 @@ def _event_row(*, id: int = 1) -> dict:
 
 @pytest.fixture()
 def _base_app(mock_db):
-    """Return (app, pool, conn) with rate-limiter + verify_api_key bypassed."""
+    """Return (app, pool, conn) with the rate limiter and request authentication bypassed."""
     from jarvis_common.auth import verify_api_key
     from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool, limiter, verify_platform_request
+    from platform_api.main import app
 
     pool, conn = mock_db
     with patch_pi_test_app(
@@ -61,10 +61,13 @@ def _base_app(mock_db):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
-            dependency_overrides={verify_api_key: lambda: None},
+            dependency_overrides={
+                verify_platform_request: lambda: None,
+                verify_api_key: lambda: None,
+            },
         ),
     ):
         yield app, pool, conn
@@ -168,7 +171,7 @@ async def test_summary_admin_returns_200(_base_app):
 
 @pytest.mark.asyncio
 async def test_sources_admin_returns_200(_base_app):
-    import paper_ingestion.routers.logs as logs_module
+    import platform_api.routers.logs as logs_module
 
     app, _pool, conn = _base_app
     logs_module._sources_cache = None

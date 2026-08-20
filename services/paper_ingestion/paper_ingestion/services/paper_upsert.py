@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING
 
 import asyncpg
+from jarvis_common.db_helpers import lock_paper_content_generation
 from jarvis_common.paper_visibility import (
     PRIVATE_VISIBILITY_SCOPE,
     PUBLIC_VISIBILITY_SCOPE,
@@ -159,7 +160,7 @@ async def upsert_paper(
 
 # Pre-image: the source URL as it stood inside the promotion transaction,
 # read before the upsert overwrites it.
-_PRE_PROMOTION_STATE_SQL = "SELECT pdf_url FROM papers WHERE external_id = $1 FOR UPDATE"
+_PRE_PROMOTION_STATE_SQL = "SELECT id, pdf_url FROM papers WHERE external_id = $1 FOR UPDATE"
 _DELETE_DERIVED_CHUNKS_SQL = "DELETE FROM paper_chunks WHERE paper_id = $1"
 # `is_insert` is re-projected so the returned record keeps the shape callers get
 # from the upsert itself; this statement only ever runs on an existing row.
@@ -300,6 +301,8 @@ async def upsert_verified_public_paper(
     discarded_id: int | None = None
     async with conn.transaction():
         prior = await conn.fetchrow(_PRE_PROMOTION_STATE_SQL, paper.external_id)
+        if prior is not None and (prior["pdf_url"] or None) != (paper.pdf_url or None):
+            await lock_paper_content_generation(conn, int(prior["id"]))
         row = await _run_paper_upsert(
             conn,
             paper,
@@ -308,6 +311,8 @@ async def upsert_verified_public_paper(
             on_conflict=_TRUSTED_REFRESH_CONFLICT,
         )
         if _promotion_supersedes_derived_content(prior, row, paper.pdf_url):
+            if prior is None:
+                await lock_paper_content_generation(conn, int(row["id"]))
             status = await conn.execute(_DELETE_DERIVED_CHUNKS_SQL, row["id"])
             logger.info(
                 "Promotion discarded %d derived chunk row(s) for paper %d (%s)",

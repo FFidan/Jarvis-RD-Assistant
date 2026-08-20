@@ -11,7 +11,8 @@ from unittest.mock import patch
 from jarvis_common.verify import QuoteVerifier
 from paper_ingestion.models import ChunkResponse
 
-_NOW = datetime.now(tz=UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def _make_chunk(
@@ -28,7 +29,7 @@ def _make_chunk(
         chunk_index=chunk_index if chunk_index is not None else chunk_id,
         content=content,
         page_number=page_number,
-        created_at=_NOW,
+        created_at=_FIXED_NOW,
     )
 
 
@@ -71,6 +72,7 @@ class TestFuzzyBestMatch:
         assert result.verified is True
         assert result.match_type == "fuzzy"
         assert result.chunk_id == 20, "Should select chunk_1 (best match), not chunk_0"
+        assert result.chunk_index == 1
         assert result.page_number == 5
         assert result.match_score == 1.0  # 100 / 100
 
@@ -133,6 +135,7 @@ class TestQuoteFormattingNoise:
         assert result.match_type == "exact"
         assert result.quote == quote
         assert result.chunk_id == 30
+        assert result.chunk_index == 30
         assert result.page_number == 3
 
     def test_rejects_below_threshold_paraphrase(self) -> None:

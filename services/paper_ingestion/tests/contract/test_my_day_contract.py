@@ -4,7 +4,10 @@ Survivor-of: (all NONE — no prior contract coverage).
 
 Rows covered:
   A57  GET  /api/my-day/journal?date=  — today's journal returned scoped to user
-  A58  POST /api/my-day/journal        — upsert idempotent; row persists in DB
+  A58  POST /api/my-day/journal        — body accepted, write delegated to Learning
+       Research owns the route shape and the error mapping only. The persisted
+       journal row is covered live in
+       services/learning_engine/tests/test_internal_domain_commands.py.
   A59  GET  /api/my-day/yesterday      — yesterday rollup scoped to user
 
   A156 GET  /api/my-day/threads        — list returns open threads for current user
@@ -25,7 +28,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from jarvis_common.testing_contract_apps import (
-    make_contract_client as _make_client,
+    make_contract_client,
 )
 
 pytestmark = [
@@ -57,7 +60,7 @@ async def test_a57_get_journal_returns_own_entry(
     today = datetime.now(UTC).date().isoformat()
 
     # contract_two_users seeds a journal entry for user A (see _seed_resources)
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get(f"/api/my-day/journal?date={today}")
 
     assert resp.status_code == 200, resp.text[:300]
@@ -67,7 +70,7 @@ async def test_a57_get_journal_returns_own_entry(
 
     # User B requesting user A's journal date should not see A's entry
     # (they'll get 404 since no entry for B on this date was seeded)
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
         resp_b = await c.get(f"/api/my-day/journal?date={today}")
     # B may or may not have an entry; what matters is the response is not A's data.
     if resp_b.status_code == 200:
@@ -92,7 +95,7 @@ async def test_a57_get_journal_empty_returns_200_null_for_missing_date(
     is a pure empty-state case (no separate ownership 404 to preserve).
     """
     far_future = "2099-01-01"
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get(f"/api/my-day/journal?date={far_future}")
 
     assert resp.status_code == 200, (
@@ -104,46 +107,36 @@ async def test_a57_get_journal_empty_returns_200_null_for_missing_date(
 
 
 # ---------------------------------------------------------------------------
-# A58: POST /api/my-day/journal — upsert idempotent; persists to DB
+# A58: POST /api/my-day/journal — write delegated to Learning, never local
 # ---------------------------------------------------------------------------
 
 
-async def test_a58_upsert_journal_creates_and_idempotent(
+async def test_a58_upsert_journal_delegates_the_write_to_learning(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
-    """Covers map row A58: POST /api/my-day/journal upserts correctly.
+    """Covers map row A58: Research delegates the journal write and keeps no local copy.
 
-    Verified: my_day.py:71-98 upsert_journal_entry — ON CONFLICT DO UPDATE.
+    This harness runs Research with no live Learning owner, so the accepted body
+    can only reach the documented unavailable mapping. The persisted row is
+    asserted in learning_engine's test_internal_domain_commands.py.
     """
     test_date = date.today() + timedelta(days=30)  # far future to avoid seed collision
     payload = {"date": test_date.isoformat(), "prompts": {"first_move": "contract test win"}}
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp1 = await c.post("/api/my-day/journal", json=payload)
 
-    assert resp1.status_code == 200, resp1.text[:300]
-    body1 = resp1.json()
-    assert body1["prompts"]["first_move"] == "contract test win"
-
-    # Upsert with updated content
-    payload2 = {"date": test_date.isoformat(), "prompts": {"first_move": "updated win"}}
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp2 = await c.post("/api/my-day/journal", json=payload2)
-
-    assert resp2.status_code == 200, resp2.text[:300]
-    body2 = resp2.json()
-    assert body2["prompts"]["first_move"] == "updated win", "Upsert did not update prompts"
-
-    # Exactly one row in DB for this user+date
+    assert resp1.status_code == 503, resp1.text[:300]
+    assert resp1.json()["detail"] == "Journal update is temporarily unavailable"
     count = await contract_conn.fetchval(
         "SELECT COUNT(*) FROM journal_entries WHERE user_id = $1 AND date = $2::date",
         contract_two_users.user_a_id,
         test_date,
     )
-    assert count == 1, f"Expected 1 journal row after upsert, got {count}"
+    assert count == 0, "Research must not retain a foreign-write fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +153,7 @@ async def test_a59_get_yesterday_returns_scoped_summary(
 
     Verified: my_day.py:117-187 get_yesterday — tasks + daily_log rollup scoped to user.
     """
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/my-day/yesterday")
 
     assert resp.status_code == 200, resp.text[:300]
@@ -201,7 +194,7 @@ async def test_a156_list_threads_returns_own_open_threads(
         "B-Thread-Contract-Test",
     )
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/my-day/threads")
 
     assert resp.status_code == 200, resp.text[:300]
@@ -232,12 +225,12 @@ async def test_a157_get_thread_owner_200_non_owner_404(
         contract_two_users.user_a_id,
     )
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp_a = await c.get(f"/api/my-day/threads/{thread_id}")
     assert resp_a.status_code == 200, resp_a.text[:300]
     assert resp_a.json()["id"] == thread_id
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
         resp_b = await c.get(f"/api/my-day/threads/{thread_id}")
     assert resp_b.status_code in (403, 404), (
         f"Expected 403/404 for non-owner, got {resp_b.status_code}"
@@ -261,7 +254,7 @@ async def test_a158_create_thread_inserts_row_with_correct_user_id(
     """
     payload = {"title": "New Contract Thread", "anchor": None}
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.post("/api/my-day/threads", json=payload)
 
     assert resp.status_code == 201, resp.text[:300]
@@ -275,50 +268,40 @@ async def test_a158_create_thread_inserts_row_with_correct_user_id(
 
 
 # ---------------------------------------------------------------------------
-# note round-trip: POST /api/my-day/journal with note → GET confirms persisted
+# the free-form note stays part of the accepted journal body
 # ---------------------------------------------------------------------------
 
 
-async def test_journal_note_round_trips(
+async def test_journal_note_is_part_of_the_accepted_body(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
 ):
-    """note field in JournalPrompts round-trips through the real upsert route.
+    """The free-form note is accepted and forwarded, while a bad note is rejected.
 
-    Strictly stronger than the deleted .__wrapped__ mock-binding assertion:
-    drives the actual HTTP handler end-to-end via live-PG and confirms both
-    the POST response and a subsequent GET return the same note value.
-
-    Covers: my_day.py upsert_journal_entry + get_journal_entry, JSONB note key.
+    The rejected body is what makes the accepted one meaningful: a 503 here is
+    "body accepted, owner unreachable", not "everything fails".
     """
     # Use a far-future date to avoid colliding with _seed_resources data.
     test_date = (datetime.now(UTC).date() + timedelta(days=60)).isoformat()
     note_text = "contract: anything else here round-trip"
-    payload = {
-        "date": test_date,
-        "prompts": {"worked": "shipped contract", "note": note_text},
-    }
 
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp_post = await c.post("/api/my-day/journal", json=payload)
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_post = await c.post(
+            "/api/my-day/journal",
+            json={
+                "date": test_date,
+                "prompts": {"worked": "shipped contract", "note": note_text},
+            },
+        )
+        resp_invalid = await c.post(
+            "/api/my-day/journal",
+            json={"date": test_date, "prompts": {"note": ["not", "a", "note"]}},
+        )
 
-    assert resp_post.status_code == 200, resp_post.text[:300]
-    post_body = resp_post.json()
-    assert post_body["prompts"]["note"] == note_text, (
-        f"POST response prompts.note mismatch: {post_body['prompts']}"
-    )
-    assert post_body["prompts"]["worked"] == "shipped contract"
-
-    # GET must return the same note value (persisted in JSONB).
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp_get = await c.get(f"/api/my-day/journal?date={test_date}")
-
-    assert resp_get.status_code == 200, resp_get.text[:300]
-    get_body = resp_get.json()
-    assert get_body["prompts"]["note"] == note_text, (
-        f"GET response prompts.note mismatch after upsert: {get_body['prompts']}"
-    )
+    assert resp_post.status_code == 503, resp_post.text[:300]
+    assert resp_post.json()["detail"] == "Journal update is temporarily unavailable"
+    assert resp_invalid.status_code == 422, resp_invalid.text[:300]
 
 
 # ---------------------------------------------------------------------------
@@ -342,13 +325,13 @@ async def test_a159_update_thread_persists_and_404_for_non_owner(
     )
 
     # Owner can update
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.patch(f"/api/my-day/threads/{thread_id}", json={"title": "Updated Title"})
     assert resp.status_code == 200, resp.text[:300]
     assert resp.json()["title"] == "Updated Title"
 
     # Non-owner gets 404
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+    async with make_contract_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
         resp_b = await c.patch(f"/api/my-day/threads/{thread_id}", json={"title": "Hacked"})
     assert resp_b.status_code in (403, 404), (
         f"Expected 403/404 for non-owner, got {resp_b.status_code}"

@@ -11,19 +11,24 @@
  *   <AdminBreadcrumb page="System logs" />
  */
 
+import { Link } from 'react-router-dom';
+
 interface AdminBreadcrumbProps {
   page: string;
 }
 
 export function AdminBreadcrumb({ page }: AdminBreadcrumbProps) {
   return (
-    <div
+    <nav
+      aria-label="breadcrumb"
       className="flex items-center gap-1.5 text-xs font-mono uppercase tracking-widest text-muted-foreground mb-1"
       data-testid="admin-breadcrumb"
     >
-      <span className="text-foreground/60">Ⅴ Admin</span>
+      <Link to="/admin/system-health" className="text-foreground/60 hover:text-foreground hover:underline">
+        Admin
+      </Link>
       <span aria-hidden="true" className="opacity-40">/</span>
       <span>{page}</span>
-    </div>
+    </nav>
   );
 }

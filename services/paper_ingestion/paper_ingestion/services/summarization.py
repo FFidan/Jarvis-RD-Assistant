@@ -29,6 +29,7 @@ from jarvis_common.verify import Confidence as QuoteConfidence
 from jarvis_common.verify import QuoteVerifier, VerificationReport
 
 from paper_ingestion._state import svc
+from paper_ingestion.citations import _refresh_stale_citations
 from paper_ingestion.converters import (
     deduplicate_by_paper_id,
     filter_current_cross_references,
@@ -126,6 +127,26 @@ Respond in this exact JSON format:
     ]
 }
 """
+
+_BODY_FINDINGS_RULE = """\
+6. For key_findings, use supporting quotes from body sections, not the abstract.
+   Prefer Results and Methods. If the excerpt contains no body-section evidence,
+   return an empty key_findings list.
+"""
+
+_JSON_RESPONSE_MARKER = "Respond in this exact JSON format:"
+
+
+def _findings_system_prompt(system: str, chunks: list[ChunkResponse]) -> str:
+    """Apply the body-evidence rule only when a paper has chunks after its abstract."""
+    if not any(chunk.chunk_index > 0 for chunk in chunks):
+        return system
+    return system.replace(
+        _JSON_RESPONSE_MARKER,
+        f"{_BODY_FINDINGS_RULE}\n{_JSON_RESPONSE_MARKER}",
+        1,
+    )
+
 
 _SYSTEM_CONDENSE = """\
 You are a research assistant. Merge the following digests of consecutive sections
@@ -515,6 +536,7 @@ async def _map_reduce_summary(
     verified_count = 0
     results = []
     offset = 0
+    findings_system = _findings_system_prompt(_SYSTEM_DIGEST, chunks)
     for window in windows:
         window_chunks = chunks[offset : offset + len(window)]
         offset += len(window)
@@ -531,7 +553,7 @@ async def _map_reduce_summary(
             prompt=SUMMARIZE_PROMPT_TEMPLATE.format(
                 title=safe_title, authors=safe_authors, text=block
             ),
-            system=_SYSTEM_DIGEST,
+            system=findings_system,
             max_tokens=_DIGEST_OUTPUT_TOKENS,
             model=model,
             paper_id=paper_id,
@@ -592,12 +614,12 @@ _CROSS_REFERENCE_CANDIDATES = 15
 _UNSCOPED_CANDIDATE_MULTIPLIER = 3
 
 
-async def _visible_cross_reference_generations(
+async def _visible_cross_reference_papers(
     conn: ConnLike,
     candidate_ids: list[int],
     requester_id: int | None,
-) -> dict[int, int]:
-    """Return visible candidate IDs mapped to their current content generation.
+) -> dict[int, asyncpg.Record]:
+    """Return visible candidate IDs mapped to their current paper rows.
 
     Parameters
     ----------
@@ -611,23 +633,25 @@ async def _visible_cross_reference_generations(
 
     Returns
     -------
-    dict[int, int]
-        Visible candidate IDs and the source generation each reference names.
+    dict[int, asyncpg.Record]
+        Visible candidate IDs and the related-paper fields used by the response.
     """
     if requester_id is None:
         rows = await conn.fetch(
-            f"SELECT p.id, p.content_generation FROM papers p"
+            f"SELECT p.id, p.title, p.content_generation,"
+            f" EXTRACT(YEAR FROM p.published_date)::int AS published_year FROM papers p"
             f" WHERE p.id = ANY($1::int[]) AND {_PUBLIC_PAPER_SQL}",
             candidate_ids,
         )
     else:
         rows = await conn.fetch(
-            f"SELECT p.id, p.content_generation FROM papers p"
+            f"SELECT p.id, p.title, p.content_generation,"
+            f" EXTRACT(YEAR FROM p.published_date)::int AS published_year FROM papers p"
             f" WHERE p.id = ANY($1::int[]) AND {paper_visible_sql(2)}",
             candidate_ids,
             requester_id,
         )
-    return {row["id"]: int(row["content_generation"]) for row in rows}
+    return {int(row["id"]): row for row in rows}
 
 
 async def _find_cross_references(
@@ -694,19 +718,21 @@ async def _find_cross_references(
     # Qdrant is only a candidate source. Reapply the relational visibility
     # authority before persisting cross-references.
     if sorted_results:
-        visible_generations = await _visible_cross_reference_generations(
+        visible_papers = await _visible_cross_reference_papers(
             conn, [r["paper_id"] for r in sorted_results], requester_id
         )
-        sorted_results = [r for r in sorted_results if r["paper_id"] in visible_generations]
+        sorted_results = [r for r in sorted_results if r["paper_id"] in visible_papers]
     else:
-        visible_generations = {}
+        visible_papers = {}
 
     return [
         CrossReference(
             related_paper_id=r["paper_id"],
+            related_title=visible_papers[r["paper_id"]].get("title"),
+            related_year=visible_papers[r["paper_id"]].get("published_year"),
             relationship="semantic_similarity",
             explanation=f"Semantic similarity score: {r['score']:.3f}",
-            content_generation=visible_generations[r["paper_id"]],
+            content_generation=int(visible_papers[r["paper_id"]]["content_generation"]),
         )
         for r in sorted_results[:5]
     ]
@@ -753,7 +779,7 @@ async def _load_paper_for_summary(
                     )
                     if existing:
                         current_cross_references = await filter_current_cross_references(
-                            conn, list(existing["cross_references"] or [])
+                            conn, list(existing["cross_references"] or []), user_id
                         )
                         return SummaryGenerationResult(
                             summary=row_to_summary_response(
@@ -822,7 +848,7 @@ async def _resolve_persisted_summary(
                 f"summary persistence lost its concurrent winner for paper {paper_id}"
             )
     cross_references = await filter_current_cross_references(
-        conn, list(row["cross_references"] or [])
+        conn, list(row["cross_references"] or []), user_id
     )
     return row, cross_references
 
@@ -933,8 +959,7 @@ async def _persist_generated_summary(
             )
 
 
-@observe()
-async def generate_paper_summary(
+async def _generate_paper_summary(
     paper_id: int,
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -1003,7 +1028,7 @@ async def generate_paper_summary(
             client,
             response_model=SummarizationOutput,
             prompt=prompt,
-            system=_SYSTEM_SUMMARIZE,
+            system=_findings_system_prompt(_SYSTEM_SUMMARIZE, chunks),
             max_tokens=_SUMMARY_OUTPUT_TOKENS,
             model=llm_model_name,
             paper_id=paper_id,
@@ -1098,3 +1123,75 @@ async def generate_paper_summary(
         coverage=gen_coverage,
         passes=passes,
     )
+
+
+async def _sync_citations_after_summary(db_pool: asyncpg.Pool, paper_id: int) -> None:
+    """Synchronize citations without changing a successful summary outcome.
+
+    Routed through the shared staleness check so re-summarizing a paper — an
+    idempotent early return, or a batch job over many papers — cannot turn into
+    a burst of redundant requests to a rate-limited API.
+    """
+    s2_source = (svc.sources or {}).get("semantic_scholar")
+    if s2_source is None:
+        return
+    try:
+        await _refresh_stale_citations(db_pool, s2_source, [paper_id])
+    except Exception:
+        logger.warning(
+            "Citation synchronization failed after summarizing paper %d",
+            paper_id,
+            exc_info=True,
+        )
+
+
+@observe()
+async def generate_paper_summary(
+    paper_id: int,
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    verifier: "QuoteVerifier",
+    embedder,
+    *,
+    user_id: int | None = None,
+    openai_client: "openai.AsyncOpenAI | None" = None,
+    force: bool = False,
+) -> SummaryGenerationResult:
+    """Generate a paper summary, then synchronize its citation relationships.
+
+    Parameters
+    ----------
+    paper_id : int
+        Paper to summarize.
+    db_pool : asyncpg.Pool
+        Database pool used for summary persistence and citation synchronization.
+    http_client : httpx.AsyncClient
+        Shared HTTP client retained by the summarization interface.
+    verifier : QuoteVerifier
+        Verifier for evidence quoted by the generated summary.
+    embedder : Embedder
+        Semantic search collaborator used for cross-references.
+    user_id : int | None
+        Caller whose summary and visible cross-references are generated.
+    openai_client : openai.AsyncOpenAI | None
+        Optional structured-output client override.
+    force : bool
+        Regenerate an existing current summary when true.
+
+    Returns
+    -------
+    SummaryGenerationResult
+        The stored current summary and generation coverage metadata.
+    """
+    result = await _generate_paper_summary(
+        paper_id,
+        db_pool,
+        http_client,
+        verifier,
+        embedder,
+        user_id=user_id,
+        openai_client=openai_client,
+        force=force,
+    )
+    await _sync_citations_after_summary(db_pool, paper_id)
+    return result

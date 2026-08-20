@@ -19,7 +19,7 @@ export async function ensureAuthenticated(page: Page): Promise<void> {
   }
 
   await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible({ timeout: 10000 });
-  await expect(page.getByRole('link', { name: 'Library' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Papers' })).toBeVisible();
 }
 
 export async function skipWhenAuthBypassed(page: Page, reason: string): Promise<void> {

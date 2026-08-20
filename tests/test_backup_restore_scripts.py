@@ -11,11 +11,13 @@ uses their OpenSSL invocations and restore decisions directly.
 
 import base64
 import hashlib
+import hmac
 import http.client
 import io
 import json
 import os
 import pty
+import re
 import socket
 import subprocess
 import tarfile
@@ -33,8 +35,13 @@ BACKUP_SH = REPO_ROOT / "scripts" / "backup.sh"
 RESTORE_SH = REPO_ROOT / "scripts" / "restore.sh"
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 LITELLM_ENTRYPOINT = REPO_ROOT / "scripts" / "litellm-entrypoint.sh"
+ROLE_BOOTSTRAP = REPO_ROOT / "scripts" / "postgres-role-bootstrap.sh"
+BACKUP_LIFECYCLE = REPO_ROOT / "scripts" / "backup-lifecycle.sh"
+INIT_SQL = REPO_ROOT / "db" / "init.sql"
+_ROLE_SEARCH_PATH = re.compile(r"ALTER ROLE (\w+) SET search_path TO ([^;]+);")
 
 BREAK_GLASS_PHRASE = "I-ACCEPT-UNVERIFIED-BACKUP"
+MANIFEST_HMAC_LABEL = "jarvis-manifest-v1"
 TS = "20260719_120000"
 # Written by the openssl shim `_gate` installs; its presence is the evidence that the
 # gate actually recomputed a MAC rather than short-circuiting past the signature.
@@ -49,6 +56,142 @@ def backup_src() -> str:
 @pytest.fixture(scope="module")
 def restore_src() -> str:
     return RESTORE_SH.read_text()
+
+
+@pytest.fixture(scope="module")
+def role_bootstrap_src() -> str:
+    return ROLE_BOOTSTRAP.read_text()
+
+
+def test_schema_113_authority_normalizes_all_public_object_owners(
+    role_bootstrap_src: str,
+) -> None:
+    """Predecessor upgrades must not depend on one historical object owner."""
+    assert (
+        role_bootstrap_src.count(
+            'transfer_schema_objects "$database" public jarvis_legacy_rollback'
+        )
+        == 2
+    )
+    assert 'transfer_owned_objects "$database" jarvis jarvis_legacy_rollback' not in (
+        role_bootstrap_src
+    )
+    assert (
+        'transfer_owned_objects "$database" jarvis_restore_operator jarvis_legacy_rollback'
+    ) not in role_bootstrap_src
+
+
+def _mode_branch(source: str, mode: str) -> str:
+    """Return the body of the top-level branch guarding one bootstrap mode."""
+    start = source.index(f'if [ "$mode" = "{mode}" ]; then')
+    return source[start : source.index("\nfi\n", start)]
+
+
+def test_both_finalization_modes_install_the_per_role_search_paths(
+    role_bootstrap_src: str,
+) -> None:
+    """Only the bootstrap superuser may set another role's default search path.
+
+    Every relation lives in an owned schema, so a role whose default was never
+    stored resolves unqualified names against an empty ``public``. This pins the
+    wiring; ``scripts/tests/test_restore_roundtrip.sh`` proves it against a cluster.
+
+    The schema lists are compared against ``db/init.sql`` rather than restated
+    here. Presence alone would still pass if a role's default named the wrong
+    schemas, which resolves unqualified names exactly as badly as no default at
+    all — and an upgraded deployment has to resolve them as a fresh install does.
+    """
+    assert role_bootstrap_src.count("set_role_search_paths() {") == 1
+    for mode in ("finalize", "restore-finalize"):
+        assert "set_role_search_paths" in _mode_branch(role_bootstrap_src, mode), mode
+
+    definition = role_bootstrap_src.split("set_role_search_paths() {", 1)[1].split("\n}\n", 1)[0]
+    fresh_install = _ROLE_SEARCH_PATH.findall(INIT_SQL.read_text())
+    assert len(fresh_install) == 9, fresh_install
+    upgrade = _ROLE_SEARCH_PATH.findall(definition)
+    assert [(role, " ".join(path.split())) for role, path in upgrade] == [
+        (role, " ".join(path.split())) for role, path in fresh_install
+    ]
+
+
+def _shell_function(source: str, name: str) -> str:
+    """Return one top-level shell function definition, verbatim, from a script."""
+    body = source.split(f"\n{name}() {{", 1)[1].split("\n}\n", 1)[0]
+    return f"{name}() {{{body}\n}}\n"
+
+
+def _provision_login(tmp_path: Path, password: bytes | None) -> tuple[int, str, str]:
+    """Provision one login role from the real helpers, against a stand-in psql.
+
+    ``password`` is the content of the runtime role's password file; ``None`` leaves
+    that file absent. Returns the exit status, the combined output, and everything
+    the stand-in psql was handed on stdin.
+    """
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(exist_ok=True)
+    (secrets / "postgres_cluster_bootstrap_password").write_bytes(b"bootstrap-secret\n")
+    if password is not None:
+        (secrets / "postgres_platform_runtime_password").write_bytes(password)
+    statements = tmp_path / "psql-input"
+    source = ROLE_BOOTSTRAP.read_text()
+    body = (
+        "set -eu\n"
+        f'secret_dir="{secrets}"\n'
+        'bootstrap_role="jarvis_cluster_bootstrap"\n'
+        'bootstrap_password_file="postgres_cluster_bootstrap_password"\n'
+        'host="localhost"\n'
+        'database="jarvis"\n'
+        f'psql() {{ cat >> "{statements}"; printf "1\\n"; }}\n'
+        + "".join(
+            _shell_function(source, name)
+            for name in ("read_secret", "connect_as", "quoted_secret", "provision_login")
+        )
+        + "provision_login jarvis_platform_runtime postgres_platform_runtime_password\n"
+        "echo PROVISIONED\n"
+    )
+    result = subprocess.run(
+        ["sh", "-c", body],
+        cwd=REPO_ROOT,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    issued = statements.read_text() if statements.exists() else ""
+    return result.returncode, result.stdout + result.stderr, issued
+
+
+def test_provisioning_aborts_when_the_password_file_is_absent(tmp_path: Path) -> None:
+    """A password read must never be swallowed into an empty PASSWORD literal.
+
+    read_secret exits on an unusable file, so it may not be piped: the exit would
+    end only the subshell and the caller would provision a passwordless login.
+    """
+    status, output, issued = _provision_login(tmp_path, None)
+    assert "PASSWORD ''" not in issued
+    assert "ALTER ROLE jarvis_platform_runtime" not in issued
+    assert status != 0
+    assert "PROVISIONED" not in output
+    assert "missing or unsafe password file" in output
+
+
+def test_provisioning_aborts_when_the_password_file_holds_only_a_newline(
+    tmp_path: Path,
+) -> None:
+    """A file that is non-empty on disk can still resolve to no password."""
+    status, output, issued = _provision_login(tmp_path, b"\n")
+    assert "PASSWORD ''" not in issued
+    assert status != 0
+    assert "PROVISIONED" not in output
+    assert "holds no password" in output
+
+
+def test_provisioning_escapes_quotes_in_a_present_password(tmp_path: Path) -> None:
+    """The refusal must not cost the escaping the deleted helper used to do."""
+    status, output, issued = _provision_login(tmp_path, b"pa'ss\n")
+    assert status == 0, output
+    assert "PROVISIONED" in output
+    assert "PASSWORD 'pa''ss'" in issued
 
 
 def _run_bash(body: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -360,6 +503,128 @@ def test_backup_signature_permission_failure_is_fatal(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert not (tmp_path / f"manifest_{TS}.json.hmac").exists()
     assert not (tmp_path / f"manifest_{TS}.json.hmac.tmp").exists()
+
+
+def _hmac_hex(key: bytes, message: bytes) -> str:
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def _current_signature(key_bytes: bytes, manifest_bytes: bytes) -> str:
+    """The manifest signature this release writes, restated independently.
+
+    The public domain label is the HMAC key and the secret key file is the start of
+    the message, so the key never becomes a command-line argument.
+    """
+    label = MANIFEST_HMAC_LABEL.encode()
+    return _hmac_hex(label, key_bytes + b"\n" + label + b"\n" + manifest_bytes)
+
+
+def _earlier_signature(key_bytes: bytes, manifest_bytes: bytes) -> str:
+    """The manifest signature earlier releases wrote: a derived key, then used as one."""
+    derived = _hmac_hex(MANIFEST_HMAC_LABEL.encode(), key_bytes)
+    return _hmac_hex(bytes.fromhex(derived), manifest_bytes)
+
+
+def _lifecycle_verifies(archive_dir: Path) -> bool:
+    """Run backup-lifecycle.sh's own manifest check over a prepared archive set."""
+    source = BACKUP_LIFECYCLE.read_text()
+    body = (
+        "set -euo pipefail\n"
+        f'BACKUP_KEY_FILE="{archive_dir}/backup_key"\n'
+        f'MANIFEST_HMAC_LABEL="{MANIFEST_HMAC_LABEL}"\n'
+        'fail() { echo "$*" >&2; return 1; }\n'
+        + "".join(
+            _shell_function(source, name)
+            for name in (
+                "manifest_signature",
+                "legacy_manifest_signature",
+                "manifest_predates_run_id",
+                "verify_manifest_hmac",
+            )
+        )
+        + f'verify_manifest_hmac "{archive_dir}/manifest_{TS}.json"\n'
+    )
+    return _run_bash(body).returncode == 0
+
+
+def test_the_three_scripts_share_one_manifest_domain_label() -> None:
+    """A signature only travels between them while all three name the same label."""
+    declaration = f'MANIFEST_HMAC_LABEL="{MANIFEST_HMAC_LABEL}"'
+    for script in (BACKUP_SH, RESTORE_SH, BACKUP_LIFECYCLE):
+        assert declaration in script.read_text(), script.name
+
+
+def test_signing_keeps_the_backup_key_out_of_the_process_list(signed_set: Path) -> None:
+    """openssl can only be keyed on a secret by putting it in argv, so it is not.
+
+    The key file becomes the message prefix instead. HMAC is not length-extendable,
+    so a manifest still cannot be signed without the key file.
+    """
+    key = (signed_set / "backup_key").read_bytes()
+    manifest = (signed_set / f"manifest_{TS}.json").read_bytes()
+    written = (signed_set / f"manifest_{TS}.json.hmac").read_text().strip()
+    assert written == _current_signature(key, manifest)
+    assert written != _earlier_signature(key, manifest)
+    executable_lines = [
+        line for line in BACKUP_SH.read_text().splitlines() if not line.lstrip().startswith("#")
+    ]
+    assert not [line for line in executable_lines if "macopt" in line]
+
+
+def test_a_backup_set_from_an_earlier_release_still_verifies(signed_set: Path) -> None:
+    """Restoring is the only place the change of construction could be discovered.
+
+    An absent signature is fatal and a present one is always checked, so refusing
+    the older construction would lock an operator out of their own backup set.
+    """
+    key = (signed_set / "backup_key").read_bytes()
+    manifest = (signed_set / f"manifest_{TS}.json").read_bytes()
+    (signed_set / f"manifest_{TS}.json.hmac").write_text(_earlier_signature(key, manifest) + "\n")
+    assert _verify(signed_set)
+    assert _lifecycle_verifies(signed_set)
+
+
+def test_a_current_manifest_is_not_accepted_under_the_earlier_construction(
+    signed_set: Path,
+) -> None:
+    """The weaker key must not authenticate a manifest claiming to be current.
+
+    Trying both constructions on every manifest would fix manifest
+    authentication at the weaker of the two, and would let anyone who can write
+    the backup directory force the earlier key onto the command line on demand
+    by corrupting a current signature.
+    """
+    key = (signed_set / "backup_key").read_bytes()
+    manifest = signed_set / f"manifest_{TS}.json"
+    manifest.write_text(
+        f'{{"timestamp":"{TS}","run_id":"{"a" * 32}","schema_version":104,"archives":[]}}'
+    )
+    (signed_set / f"manifest_{TS}.json.hmac").write_text(
+        _earlier_signature(key, manifest.read_bytes()) + "\n"
+    )
+
+    assert not _verify(signed_set)
+    assert not _lifecycle_verifies(signed_set)
+
+
+def test_a_signature_matching_neither_construction_is_refused(signed_set: Path) -> None:
+    """Accepting two constructions must not amount to accepting anything."""
+    (signed_set / f"manifest_{TS}.json.hmac").write_text("0" * 64 + "\n")
+    assert not _verify(signed_set)
+    assert not _lifecycle_verifies(signed_set)
+
+
+def test_a_manifest_edited_after_signing_is_refused(signed_set: Path) -> None:
+    """The signature exists to bind the archive digests the manifest carries."""
+    manifest = signed_set / f"manifest_{TS}.json"
+    manifest.write_text(manifest.read_text().replace("104", "105"))
+    assert not _verify(signed_set)
+    assert not _lifecycle_verifies(signed_set)
+
+
+def test_the_current_signature_is_accepted_by_the_lifecycle_checker(signed_set: Path) -> None:
+    """Update and rollback read the same signature the backup service writes."""
+    assert _lifecycle_verifies(signed_set)
 
 
 def test_backup_retention_prunes_manifest_signatures(backup_src: str) -> None:
@@ -675,6 +940,7 @@ def test_auth_purge_is_transactional_conditional_and_fails_closed(tmp_path: Path
     for table in ephemeral_tables:
         assert table in query
         assert "to_regclass" in query
+    assert "ARRAY['platform', 'public']" in query
     for table in ("users", "webauthn_credentials", "telegram_user_pairings"):
         assert table not in query
 
@@ -706,8 +972,9 @@ def test_vector_visibility_checkpoint_rotation_records_qdrant_outcome(
         "source scripts/restore.sh --functions-only\n"
         f"STEP_QDRANT={step_status}\n"
         f"openssl() {{ printf '{generation}'; }}\n"
-        'psql() { printf \'%s\\n\' "$*" > "$CHECKPOINT_ARGS_LOG"; '
-        'cat > "$CHECKPOINT_SQL_LOG"; }\n'
+        'psql() { case " $* " in *" -c "*) printf platform ;; '
+        '*) printf \'%s\\n\' "$*" > "$CHECKPOINT_ARGS_LOG"; '
+        'cat > "$CHECKPOINT_SQL_LOG" ;; esac; }\n'
         'rotate_vector_visibility_checkpoint "$STEP_QDRANT"\n'
         "printf 'GENERATION=%s\\n' \"$VECTOR_VISIBILITY_GENERATION\"\n"
     )
@@ -724,6 +991,7 @@ def test_vector_visibility_checkpoint_rotation_records_qdrant_outcome(
     assert f"GENERATION={generation}" in result.stdout
     assert f"visibility_generation={generation}" in args_log.read_text()
     assert f"qdrant_recovery={recorded_outcome}" in args_log.read_text()
+    assert "config_schema=platform" in args_log.read_text()
     sql = sql_log.read_text()
     assert "BEGIN" in sql and "COMMIT" in sql
     assert "vector_visibility.checkpoint" in sql
@@ -803,6 +1071,46 @@ def test_litellm_healthcheck_allows_dependents_during_restore_review(tmp_path: P
     assert result.returncode == 0, result.stderr
 
 
+def test_litellm_database_url_has_a_bounded_runtime_pool(tmp_path: Path) -> None:
+    """The runtime URL must carry the configured Prisma connection limit."""
+    password_file = tmp_path / "litellm-password"
+    password_file.write_text("test-pass@word", encoding="utf-8")
+
+    result = _run_bash(
+        "source scripts/litellm-entrypoint.sh --functions-only\n"
+        "load_litellm_database_url\n"
+        "printf '%s' \"$DATABASE_URL\"\n",
+        env={"POSTGRES_PASSWORD_FILE": str(password_file)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "postgresql://jarvis_litellm_runtime:test-pass%40word@postgres:5432/litellm"
+        "?connection_limit=5"
+    )
+
+
+@pytest.mark.parametrize("connection_limit", ["0", "00", "-1", "1.5", "many"])
+def test_litellm_database_url_rejects_invalid_connection_limits(
+    tmp_path: Path,
+    connection_limit: str,
+) -> None:
+    """Invalid pool limits must stop LiteLLM before it receives a database URL."""
+    password_file = tmp_path / "litellm-password"
+    password_file.write_text("test-password", encoding="utf-8")
+
+    result = _run_bash(
+        "source scripts/litellm-entrypoint.sh --functions-only\nload_litellm_database_url\n",
+        env={
+            "LITELLM_DB_CONNECTION_LIMIT": connection_limit,
+            "POSTGRES_PASSWORD_FILE": str(password_file),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "must be a positive integer" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("contents", "expected"),
     [("42\n", "42"), ("42\n43\n", "0"), ("not-an-epoch\n", "0")],
@@ -872,7 +1180,7 @@ def test_litellm_entrypoint_holds_start_and_stops_a_faux_provider(tmp_path: Path
 
         (secrets / "litellm_master_key").write_text("development-master-key")
         (secrets / "litellm_salt_key").write_text("development-salt-key")
-        (secrets / "postgres_password").write_text("development-postgres-password")
+        (secrets / "litellm_runtime_password").write_text("development-postgres-password")
         (trigger / ".maintenance").unlink()
         assert _wait_for_tcp(port, accepting=True)
 
@@ -1141,9 +1449,12 @@ def test_off_host_quarantine_is_written_before_clean_completion(restore_src: str
     quarantine = restore_src.index(
         'write_outbound_quarantine "$RESTORE_ID" "$SOURCE" "$REQUESTED_AT"'
     )
-    clean = restore_src.index("RESTORE_CLEAN=1", quarantine)
+    authority_handoff = restore_src.index("write_authority_state", quarantine)
+    complete = restore_src.index("complete_authority()")
+    clean = restore_src.index("RESTORE_CLEAN=1", complete)
 
-    assert quarantine < clean
+    assert quarantine < authority_handoff
+    assert clean > complete
 
 
 def test_restore_refuses_a_request_while_outbound_review_is_pending(
@@ -1354,6 +1665,48 @@ def _run_inbox_manifest(inbox: Path, trigger: Path) -> list[dict[str, object]]:
     )
     assert result.returncode == 0, result.stderr
     return json.loads((trigger / ".inbox_manifest.json").read_text())
+
+
+def test_scheduled_backup_publishes_uploaded_inbox_inventory_before_restore_job(
+    tmp_path: Path,
+) -> None:
+    """The non-restoring backup worker makes a complete upload API-visible."""
+    inbox = tmp_path / "inbox"
+    trigger = tmp_path / "trigger"
+    inbox.mkdir()
+    trigger.mkdir()
+    _write_current_manifest(inbox, include_pdfs=True)
+    (inbox / "operator_key").write_bytes((inbox / "backup_key").read_bytes())
+    password = tmp_path / "backup-reader-password"
+    password.write_text("fixture-password")
+
+    result = subprocess.run(
+        ["bash", str(BACKUP_SH), "--inbox-manifest"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "RESTORE_INBOX_DIR": str(inbox),
+            "BACKUP_TRIGGER_DIR": str(trigger),
+            "POSTGRES_PASSWORD_FILE": str(password),
+            "BACKUP_DIR": str(tmp_path / "backups"),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads((trigger / ".inbox_manifest.json").read_text()) == [
+        {
+            "timestamp": TS,
+            "complete": True,
+            "has_pdfs": True,
+            "legacy_missing_pdfs": False,
+            "has_secrets": True,
+            "has_key": True,
+        }
+    ]
 
 
 def test_inbox_inventory_marks_only_authenticated_pre_v12_sets_as_legacy_pdf_omissions(
@@ -2323,3 +2676,69 @@ def test_break_glass_never_accepts_an_off_host_set(signed_set: Path) -> None:
     )
     assert "PROCEED" not in out
     assert "no authenticated manifest" in out
+
+
+def _restore_mode_dispatch() -> str:
+    """The trap installation and mode dispatch, taken verbatim from restore.sh."""
+    source = RESTORE_SH.read_text()
+    start = source.index("\ntrap _cleanup EXIT\n") + 1
+    return source[start : source.index("\nesac\n", start) + len("\nesac\n")]
+
+
+def _complete_authority(tmp_path: Path, *, verifies: bool) -> tuple[int, bool, bool]:
+    """Run the host-side authority completion after a restore that did destroy data.
+
+    Returns its exit status and whether each maintenance sentinel outlived it.
+    """
+    trigger = tmp_path / "trigger"
+    trigger.mkdir()
+    (trigger / ".maintenance").touch()
+    (trigger / ".destructive").touch()
+    (tmp_path / "backups" / ".lifecycle").mkdir(parents=True)
+    outcome = 'STATE="done"; RESTORE_CLEAN=1; return 0' if verifies else "return 1"
+    body = (
+        "set -euo pipefail\n"
+        f'source "{RESTORE_SH}" --functions-only\n'
+        "claim_restore_lifecycle_operation() { return 0; }\n"
+        f"complete_authority() {{ {outcome}; }}\n" + _restore_mode_dispatch()
+    )
+    result = subprocess.run(
+        ["bash", "-c", body, "restore", "--complete-authority"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "BACKUP_TRIGGER_DIR": str(trigger),
+            "BACKUP_DIR": str(tmp_path / "backups"),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return (
+        result.returncode,
+        (trigger / ".maintenance").exists(),
+        (trigger / ".destructive").exists(),
+    )
+
+
+def test_a_failed_authority_completion_keeps_the_stack_in_maintenance(tmp_path: Path) -> None:
+    """Roles, grants and row-level security were never rebuilt, so nothing may serve.
+
+    This runs as a fresh process, so the flag that records the destructive window
+    comes from the durable sentinel rather than from this run.
+    """
+    status, maintenance, destructive = _complete_authority(tmp_path, verifies=False)
+    assert maintenance
+    assert destructive
+    assert status != 0
+
+
+def test_a_successful_authority_completion_returns_the_stack_to_service(
+    tmp_path: Path,
+) -> None:
+    """The hold is rehydrated, not made permanent: a verified rebuild still lifts it."""
+    status, maintenance, destructive = _complete_authority(tmp_path, verifies=True)
+    assert not maintenance
+    assert not destructive
+    assert status == 0

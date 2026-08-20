@@ -216,3 +216,61 @@ async def test_a29_batch_fetch_citations_enqueues_202(
     assert body.get("queued") == 1, f"Expected queued=1: {body}"
     assert "message" in body, f"Missing 'message' key: {body}"
     mock_task.defer_async.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# filter_current_cross_references — stored links re-check visibility on read
+# ---------------------------------------------------------------------------
+
+
+async def test_cross_reference_titles_exclude_papers_the_caller_cannot_see(contract_conn):
+    """A stored cross-reference cannot disclose the title of an unreachable paper.
+
+    Visibility is asserted at read time rather than trusted from when the link
+    was written, so a paper that has since become private stops naming itself
+    while a public one still does. Exercised at the contract layer because the
+    behavior lives in the visibility predicate, which an AsyncMock'd fetch
+    cannot evaluate. Verified: converters.py filter_current_cross_references.
+    """
+    from paper_ingestion.converters import filter_current_cross_references
+
+    stranger_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                               visibility_scope, citation_count, metadata)
+           VALUES ('s2:stranger', 'arxiv', 'Private Neighbour', ARRAY['Stranger'],
+                   'https://example.test/stranger', 'private', 0, '{}'::jsonb)
+           RETURNING id""",
+    )
+    public_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url,
+                               visibility_scope, citation_count, metadata)
+           VALUES ('s2:shared', 'arxiv', 'Public Neighbour', ARRAY['Author'],
+                   'https://example.test/shared', 'public', 0, '{}'::jsonb)
+           RETURNING id""",
+    )
+    outsider_user_id = 987654
+
+    enriched = await filter_current_cross_references(
+        contract_conn,
+        [
+            {
+                "related_paper_id": stranger_id,
+                "relationship": "semantic_similarity",
+                "explanation": "private",
+                "content_generation": 0,
+            },
+            {
+                "related_paper_id": public_id,
+                "relationship": "semantic_similarity",
+                "explanation": "public",
+                "content_generation": 0,
+            },
+        ],
+        outsider_user_id,
+    )
+
+    by_id = {ref["related_paper_id"]: ref for ref in enriched}
+    assert by_id[stranger_id]["related_title"] is None, "a private paper must not name itself"
+    assert by_id[public_id]["related_title"] == "Public Neighbour", (
+        "a visible paper must still resolve, so the check is not vacuously hiding everything"
+    )

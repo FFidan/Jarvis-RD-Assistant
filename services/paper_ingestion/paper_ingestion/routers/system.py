@@ -16,7 +16,6 @@ from jarvis_common import (
 )
 from jarvis_common.app_factory import STRUCTURED_DECODING_MODE
 from jarvis_common.audit import log_audit
-from jarvis_common.config_flags import coerce_bool
 from jarvis_common.model_catalog import Role
 from pydantic import BaseModel, Field
 
@@ -81,62 +80,63 @@ _TAG_RE = re.compile(r"^[a-zA-Z0-9_./:@-]{1,200}$")
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 
-class SetupStatus(BaseModel):
-    setup_completed: bool
+class ResearchSetupStatus(BaseModel):
+    """Research-owned setup readiness returned to Platform.
+
+    Parameters
+    ----------
+    models_ready : bool
+        Whether the required local model families are installed.
+    models_downloading : list[str]
+        Required model families that are not ready yet.
+    topics_count : int
+        Number of Research-owned discovery topics.
+    model_warnings : list[str], optional
+        Active model-routing warnings.
+    """
+
     models_ready: bool
     models_downloading: list[str]
     topics_count: int
-    telegram_configured: bool
-    telegram_paired: bool
     model_warnings: list[str] = Field(default_factory=list)
 
 
-@router.get("/setup-status", response_model=SetupStatus, dependencies=[Depends(require_admin)])
+@router.get(
+    "/setup-status/research",
+    response_model=ResearchSetupStatus,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("30/minute")
-async def get_setup_status(
+async def get_research_setup_status(
     request: Request,
     pool: asyncpg.Pool = Depends(get_db_pool),
-) -> SetupStatus:
-    """Return a point-in-time snapshot of setup wizard readiness signals."""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT key, value FROM user_config WHERE key = ANY($1::text[]) AND user_id IS NULL",
-            ["setup.completed"],
-        )
-        topics_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM topics")
-        paired_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM telegram_user_pairings")
-        telegram_token_row = await conn.fetchrow(
-            "SELECT value, encrypted_value FROM user_config "
-            "WHERE key = 'telegram.bot_token' AND user_id IS NULL",
-        )
+) -> ResearchSetupStatus:
+    """Return Research-owned setup readiness to the Platform API.
 
-    config: dict[str, Any] = {r["key"]: r["value"] for r in rows}
-    setup_completed = coerce_bool(config.get("setup.completed"), default=False)
-    telegram_paired = int(paired_row["n"]) > 0 if paired_row else False
+    Parameters
+    ----------
+    request : Request
+        Authenticated request used by the rate limiter.
+    pool : asyncpg.Pool
+        Research database pool.
+
+    Returns
+    -------
+    ResearchSetupStatus
+        Topic and model readiness without Platform-owned configuration state.
+    """
+    del request
+    async with pool.acquire() as conn:
+        topics_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM topics")
     topics_count = int(topics_row["n"]) if topics_row else 0
 
-    # A token saved through the web interface (stored in user_config) takes
-    # priority over the environment value at bot startup — see
-    # telegram_bot/config.py's DB-first token resolution. Either source having
-    # a value makes the bot "configured" once it next starts.
-    telegram_token_stored = telegram_token_row is not None and (
-        telegram_token_row["value"] is not None or telegram_token_row["encrypted_value"] is not None
-    )
-    telegram_configured = (
-        bool(get_paper_ingestion_settings().telegram_bot_token) or telegram_token_stored
-    )
-
     models_ready, models_downloading = await _probe_ollama()
-
     model_warnings = await _compute_model_warnings()
 
-    return SetupStatus(
-        setup_completed=setup_completed,
+    return ResearchSetupStatus(
         models_ready=models_ready,
         models_downloading=models_downloading,
         topics_count=topics_count,
-        telegram_configured=telegram_configured,
-        telegram_paired=telegram_paired,
         model_warnings=model_warnings,
     )
 

@@ -5,6 +5,30 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class DatabaseRuntimeDiagnostics(BaseModel):
+    """Read-only database role, schema, and pool details for operators."""
+
+    current_user: str | None = None
+    packaged_schema_version: int | None = None
+    live_schema_version: int | None = None
+    integrity: str | None = None
+    migration_check_outcome: str | None = None
+    migration_check_duration_ms: int | None = None
+    pool_size: int | None = None
+    pool_idle: int | None = None
+    pool_max: int | None = None
+    pool_wait_pressure: bool | None = None
+
+
+class HealthDiagnostics(BaseModel):
+    """Authenticated operational details that do not require observability."""
+
+    correlation_id: str | None = None
+    trace_id: str | None = None
+    database: DatabaseRuntimeDiagnostics | None = None
+    telemetry: dict[str, int] | None = None
+
+
 class HealthCheckResponse(BaseModel):
     """Standard health check response for all services.
 
@@ -17,6 +41,7 @@ class HealthCheckResponse(BaseModel):
     checks: dict[str, str]
     maintenance: bool = False
     version: str | None = None
+    diagnostics: HealthDiagnostics | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -29,6 +54,8 @@ class ErrorResponse(BaseModel):
 
     detail: str
     request_id: str | None = None
+    correlation_id: str | None = None
+    trace_id: str | None = None
 
 
 class JobCreateResponse(BaseModel):

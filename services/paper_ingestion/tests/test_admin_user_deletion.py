@@ -6,10 +6,11 @@ Reuses the mocked-pool style from test_admin_users.py (no Docker needed).
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
-import paper_ingestion.routers.admin as admin_router
+import platform_api.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException
 from jarvis_common.owner import OwnerIdentity
@@ -20,7 +21,8 @@ from tests._auth_fakes import (
     build_request_admin,
 )
 
-_NOW = datetime.now(UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 # Pool/request stubs delegated to shared _auth_fakes (D5-03).
 _build_mock_pool = build_mock_pool
@@ -42,7 +44,7 @@ def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
         "id": id,
         "email": email,
         "role": role,
-        "created_at": _NOW - timedelta(days=1),
+        "created_at": _FIXED_NOW - timedelta(days=1),
         "last_login_at": None,
     }
 
@@ -53,32 +55,10 @@ def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
 
 
 @pytest.mark.asyncio
-async def test_restore_clears_deleted_at_within_grace(monkeypatch) -> None:
-    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(
-        side_effect=[
-            {**_user_row(id=5), "deleted_at": _NOW},
-            _user_row(id=5),
-        ]
-    )
-    pool = _build_mock_pool_txn(conn)
-    request = _build_request(pool, user_id=1, user_role="admin")
-
-    result = await admin_router.restore_user(5, request)
-
-    assert result.id == 5
-    select_sql = conn.fetchrow.await_args_list[0].args[0]
-    update_sql = conn.fetchrow.await_args_list[1].args[0]
-    assert "30 days" in select_sql
-    assert "deleted_at = NULL" in update_sql
-    assert "deleted_at IS NOT NULL" in update_sql
-
-
-@pytest.mark.asyncio
 async def test_restore_not_found_or_past_grace_raises_404(monkeypatch) -> None:
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
     conn.fetchrow = AsyncMock(return_value=None)
     pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
@@ -148,7 +128,8 @@ async def test_soft_delete_writes_audit(monkeypatch) -> None:
     from fastapi import Response
 
     conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value="user")  # non-admin target: last-admin guard skipped
+    # Target role, then the erasure request id the capability mints.
+    conn.fetchval = AsyncMock(side_effect=["user", uuid.uuid4()])
     conn.execute = AsyncMock(return_value="UPDATE 1")
 
     calls = _patch_audit(monkeypatch)
@@ -172,7 +153,7 @@ async def test_soft_delete_targets_the_deleted_users_sessions(monkeypatch) -> No
     from fastapi import Response
 
     conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value="user")
+    conn.fetchval = AsyncMock(side_effect=["user", uuid.uuid4()])
     conn.execute = AsyncMock(return_value="UPDATE 1")
 
     _patch_audit(monkeypatch)

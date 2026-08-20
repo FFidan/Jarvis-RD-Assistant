@@ -96,9 +96,17 @@ test.describe('Analytics IA (mocked)', () => {
     await installMockedApiDefaults(page);
     await mockAnalyticsRoutes(page);
     // Mock the setup config endpoint so the app doesn't block on setup gate
-    await page.route('**/api/config/**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ value: true }) }),
-    );
+    await page.route('**/api/config/**', async (route) => {
+      if (new URL(route.request().url()).pathname.startsWith('/api/config/ui.')) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ value: true }),
+      });
+    });
     // Mock any user/account endpoints
     await page.route('**/api/auth/**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true }) }),
@@ -114,7 +122,7 @@ test.describe('Analytics IA (mocked)', () => {
   test('breadcrumb shows Learn / Analytics', async ({ page }) => {
     // h1 is the page name "Analytics"; the breadcrumb group is the real sidebar group "Learn".
     await expect(page.getByRole('heading', { name: 'Analytics' })).toBeVisible();
-    await expect(page.locator('main nav')).toContainText('Learn');
+    await expect(page.locator('main nav').getByRole('link', { name: 'Learn' })).toBeVisible();
     // The breadcrumb link "Analytics" is in the main content area nav
     await expect(page.locator('main nav').getByRole('link', { name: 'Analytics' })).toBeVisible();
   });

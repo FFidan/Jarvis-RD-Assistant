@@ -120,8 +120,10 @@ export function AnalyticsPage() {
   return (
     <div className="space-y-6 p-6">
       {/* ── Breadcrumb ─────────────────────────────────────────────────── */}
-      <nav className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
-        <span>Learn</span>
+      <nav aria-label="breadcrumb" className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
+        <Link to="/cards?mode=library" className="transition-colors hover:text-strong">
+          Learn
+        </Link>
         <span>/</span>
         <Link to="/analytics" className="text-meta hover:text-strong transition-colors">
           Analytics

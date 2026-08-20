@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { APIRequestContext, Page, Route } from '@playwright/test';
 
 /**
  * Helpers for driving the first-run setup wizard in e2e tests.
@@ -58,6 +58,114 @@ const SETUP_STATUS = {
   telegram_paired: false,
 };
 
+export const NAV_PREFS_KEY = 'jarvis-nav-prefs';
+export const ONBOARDING_DISMISSED_KEY = 'jarvis-onboarding-dismissed';
+export const RETURNING_USER_PREFERENCES = [
+  {
+    key: 'ui.appearance',
+    value: { theme: 'system', accent: 'ink-blue', type: 'serif-calm', density: 'default' },
+  },
+  {
+    key: 'ui.timer',
+    value: { workMinutes: 25, shortBreakMinutes: 5, longBreakMinutes: 15, targetCycles: 4 },
+  },
+  { key: 'ui.nav_mode', value: 'full' },
+] as const;
+
+const preferenceState = new WeakMap<Page, Map<string, unknown>>();
+const preferenceRoutesInstalled = new WeakSet<Page>();
+
+function preferencesFor(page: Page): Map<string, unknown> {
+  let preferences = preferenceState.get(page);
+  if (preferences === undefined) {
+    preferences = new Map(RETURNING_USER_PREFERENCES.map(({ key, value }) => [key, value]));
+    preferenceState.set(page, preferences);
+  }
+  return preferences;
+}
+
+async function fulfillPreferenceRequest(route: Route, page: Page): Promise<boolean> {
+  const request = route.request();
+  const path = new URL(request.url()).pathname;
+  const method = request.method();
+  const preferences = preferencesFor(page);
+
+  if (method === 'GET' && path === '/api/config') {
+    await route.fulfill(
+      jsonResponse(Array.from(preferences, ([key, value]) => ({ key, value }))),
+    );
+    return true;
+  }
+
+  const key = path.startsWith('/api/config/') ? decodeURIComponent(path.slice(12)) : null;
+  if (key?.startsWith('ui.') && method === 'PUT') {
+    const body = request.postDataJSON() as { value?: unknown } | null;
+    if (body === null || !Object.hasOwn(body, 'value')) {
+      await route.fulfill(jsonResponse({ detail: 'Missing preference value' }, 400));
+      return true;
+    }
+    preferences.set(key, body.value);
+    await route.fulfill(jsonResponse({ key, value: body.value }));
+    return true;
+  }
+
+  if (key?.startsWith('ui.') && method === 'GET') {
+    if (!preferences.has(key)) {
+      await route.fulfill(jsonResponse({ detail: 'Preference not found' }, 404));
+      return true;
+    }
+    await route.fulfill(jsonResponse({ key, value: preferences.get(key) }));
+    return true;
+  }
+
+  return false;
+}
+
+async function ensurePreferenceRoutes(page: Page): Promise<void> {
+  if (preferenceRoutesInstalled.has(page)) return;
+  preferenceRoutesInstalled.add(page);
+  await page.route(/\/api\/config(?:\/ui\.(?:appearance|timer|nav_mode))?(?:\?|$)/, async (route) => {
+    if (!(await fulfillPreferenceRequest(route, page))) await route.fallback();
+  });
+}
+
+/**
+ * Seed the shell state a returning researcher has: the grouped ("full") nav
+ * through the account endpoint and a dismissed onboarding tour.
+ *
+ * The product default is the short `simple` rail for everyone, so specs that
+ * assert group labels or non-essential destinations must opt into the grouped
+ * nav; and the tour would otherwise cover the app for a zero-paper account.
+ * `installMockedApiDefaults` applies this, so every mocked spec starts here.
+ */
+export async function seedReturningUserShell(page: Page): Promise<void> {
+  preferencesFor(page).set('ui.nav_mode', 'full');
+  await ensurePreferenceRoutes(page);
+  await page.addInitScript(
+    (tourKey) => {
+      window.localStorage.setItem(tourKey, 'true');
+    },
+    ONBOARDING_DISMISSED_KEY,
+  );
+}
+
+/**
+ * Undo `seedReturningUserShell` for the specs that exercise first use itself:
+ * no stored nav preference (so the simple rail applies) and no dismissed tour.
+ * Init scripts run in registration order, so call this after the defaults.
+ */
+export async function seedFirstRunShell(page: Page): Promise<void> {
+  preferencesFor(page).delete('ui.nav_mode');
+  await ensurePreferenceRoutes(page);
+  await page.addInitScript(
+    ([navKey, tourKey]) => {
+      window.localStorage.removeItem(navKey);
+      window.localStorage.removeItem(tourKey);
+    },
+    [NAV_PREFS_KEY, ONBOARDING_DISMISSED_KEY] as const,
+  );
+}
+
 /**
  * Register common mocked API defaults for app-shell/background requests.
  *
@@ -66,6 +174,8 @@ const SETUP_STATUS = {
  * defaults. Any other /api/** request returns 501 to make missing mocks obvious.
  */
 export async function installMockedApiDefaults(page: Page): Promise<void> {
+  await seedReturningUserShell(page);
+
   await page.route(/^https?:\/\/[^/]+\/health\/(paper_ingestion|learning_engine)(?:\/|\?|$)/, async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/internal')) {
@@ -91,6 +201,8 @@ export async function installMockedApiDefaults(page: Page): Promise<void> {
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
+
+    if (await fulfillPreferenceRequest(route, page)) return;
 
     if (method === 'GET' && path === '/api/setup/status') {
       await route.fulfill(jsonResponse({ configured: true, setup_completed: true }));
@@ -190,6 +302,6 @@ export async function seedAuthedSession(page: Page): Promise<void> {
       version: 0,
     };
     window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
-    window.localStorage.setItem('jarvis-onboarding-dismissed', 'true');
   });
+  await seedReturningUserShell(page);
 }

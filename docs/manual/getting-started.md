@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-07-25 | routes: /onboarding, /auth/verify, /admin/users -->
+<!-- verified-against-UI: 2026-08-19 | routes: /onboarding, /auth/verify, /admin/users -->
 
 # First sign-in and setup
 
@@ -98,10 +98,10 @@ explicitly; see [Admin Pages](admin.md#instance-ownership-and-recovery).
 ## Add the first paper
 
 Open **Discover** and search by title or keyword across your enabled sources,
-then choose **Save to library** on the result you want — or use **Upload PDF**
-to add a file directly. Choose **Analyze** on the paper to download and parse
-the PDF, create search embeddings, and generate the configured research
-outputs.
+then choose **Save to your papers** on the result you want — or use **Upload
+PDF** to add a file directly. Then open the paper and choose **Analyze Paper**
+to download and parse the PDF, create search embeddings, and generate the
+configured research outputs.
 
 GPU analysis usually takes a few minutes. CPU analysis can take considerably
 longer, especially for a long paper. The job panel reports each stage and keeps
@@ -109,10 +109,11 @@ partial failures separate from completed work.
 
 After analysis:
 
-- the paper page shows its summary and source-linked findings;
+- the paper page shows its summary, and each finding links back to the page and
+  passage it came from;
 - **Ask** can retrieve from analyzed papers in your library;
-- generated learning cards appear under **Learning → Cards**;
+- cards generated from the paper appear under **Learning Cards**;
 - extracted entities can appear in the Knowledge Graph.
 
-Continue with [Research Feed & Library](research-feed.md), or read
+Continue with [Papers & Discover](research-feed.md), or read
 [Navigation](navigation.md) for a tour of the workspace.

@@ -167,13 +167,13 @@ describe('OnboardingTour', () => {
       'Discover Papers|[data-tour-id="sidebar-discover"]',
     );
     expect(screen.getByTestId('joyride-step-contract')).toHaveTextContent(
-      'Save to Your Library|[data-tour-id~="sidebar-library"]',
+      'Save to Papers|[data-tour-id~="sidebar-library"]',
     );
     expect(screen.getByTestId('joyride-step-contract')).toHaveTextContent(
       'Analyze a Paper|[data-tour-id~="sidebar-analyze"]',
     );
     expect(screen.getByTestId('joyride-step-contract')).toHaveTextContent(
-      'Ask Across Your Library|[data-tour-id="sidebar-ask"]',
+      'Ask Across Your Papers|[data-tour-id="sidebar-ask"]',
     );
   });
 
@@ -268,7 +268,7 @@ describe('OnboardingTour', () => {
     const next = await screen.findByTestId('joyride-next', {}, { timeout: 2000 });
     expect(next).toHaveFocus();
     await user.click(next);
-    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Save to Your Library');
+    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Save to Papers');
 
     await user.click(screen.getByTestId('joyride-back'));
     expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Discover Papers');
@@ -276,7 +276,7 @@ describe('OnboardingTour', () => {
     await user.click(screen.getByTestId('joyride-next'));
     await user.click(screen.getByTestId('joyride-next'));
     await user.click(screen.getByTestId('joyride-next'));
-    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Ask Across Your Library');
+    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Ask Across Your Papers');
     await user.click(screen.getByTestId('joyride-next'));
 
     await waitFor(() => {
@@ -292,7 +292,7 @@ describe('OnboardingTour', () => {
     await screen.findByTestId('joyride-next', {}, { timeout: 2000 });
     await user.click(screen.getByTestId('joyride-target-not-found'));
 
-    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Save to Your Library');
+    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Save to Papers');
   });
 
   it('uses always-visible body targets on narrow layouts', async () => {

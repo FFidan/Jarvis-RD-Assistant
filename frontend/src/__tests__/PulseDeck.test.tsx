@@ -21,6 +21,7 @@ vi.mock('@/stores/job-store', () => ({
 vi.mock('@/lib/api', () => ({
   fetchPulseToday: vi.fn(),
   fetchPulseStats: vi.fn().mockResolvedValue({ has_learned_model: true }),
+  fetchConfig: vi.fn(),
   ratePulseCard: vi.fn(),
   explainPulseCard: vi.fn().mockResolvedValue({
     card_id: 1,
@@ -31,7 +32,7 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchPulseToday, fetchPulseStats } = await import(
+const { fetchPulseToday, fetchPulseStats, fetchConfig } = await import(
   '@/lib/api'
 );
 
@@ -109,6 +110,7 @@ function renderDeck() {
 describe('PulseDeck', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fetchConfig).mockResolvedValue([]);
   });
 
   it('shows loading skeleton initially', () => {
@@ -127,6 +129,19 @@ describe('PulseDeck', () => {
     expect(
       screen.getByRole('button', { name: /generate now/i }),
     ).toBeInTheDocument();
+  });
+
+  it('links to Settings instead of offering generation when Pulse is turned off', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(null);
+    vi.mocked(fetchConfig).mockResolvedValue([{ key: 'pulse.enabled', value: false }]);
+    renderDeck();
+
+    expect(await screen.findByText('Pulse is turned off in Settings.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Settings' })).toHaveAttribute(
+      'href',
+      '/settings?section=system&item=pulse',
+    );
+    expect(screen.queryByRole('button', { name: /generate now/i })).not.toBeInTheDocument();
   });
 
   it('calls startJob when generate button clicked in empty state', async () => {

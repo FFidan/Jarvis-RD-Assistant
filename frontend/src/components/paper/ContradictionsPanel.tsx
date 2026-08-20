@@ -105,7 +105,7 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
         ) : (
           <ScanSearch className="mr-2 h-4 w-4" />
         )}
-        {pending ? 'Scanning...' : 'Scan contradictions'}
+        {pending ? 'Scanning...' : 'Scan for contradictions'}
       </Button>
 
       {scanMutation.isError && (

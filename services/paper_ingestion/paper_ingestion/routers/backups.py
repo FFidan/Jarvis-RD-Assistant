@@ -6,9 +6,9 @@ restore-session token so it remains available while restored session rows are
 replaced. Off-host quarantine acknowledgement requires that token or the current
 configured-owner session and consumes the token before outbound access resumes.
 
-Backup and restore requests are published to a shared trigger volume for the
-dedicated sidecar, keeping database tools and container control out of this
-service.
+Backup requests are published to a scheduled sidecar; restore requests remain
+queued until a host operator starts the separate one-shot job. Database tools
+and container control stay out of this service.
 """
 
 from __future__ import annotations
@@ -84,9 +84,9 @@ router = APIRouter(prefix="/api/admin/backups", tags=["admin", "backups"])
 
 # Sentinel flag-file in a small RW volume the sidecar loop polls each iteration.
 _TRIGGER_SENTINEL = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".backup_now"
-# Restore request sentinel (this service writes it) + status file (the sidecar's
-# restore.sh writes it). Same RW volume as the backup trigger; the app only ever
-# writes a JSON request and reads a JSON status — it never runs the restore.
+# Restore request sentinel (this service writes it) + status file (the one-shot
+# restore job writes it). Same RW volume as the backup trigger; the app only ever
+# writes a JSON request and reads a JSON status — it never starts the restore.
 _RESTORE_SENTINEL = (
     Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".restore_request.json"
 )
@@ -208,11 +208,11 @@ async def list_restore_points(request: Request) -> RestorePointsResponse:
 @router.get("/inbox", response_model=list[InboxRestorePoint], dependencies=[Depends(require_admin)])
 @limiter.limit("30/minute")
 async def list_inbox_restore_points(request: Request) -> list[InboxRestorePoint]:
-    """List off-host restore points staged in the restore_inbox (sidecar-authored).
+    """List off-host restore points staged in the restore inbox (job-authored).
 
     The app never mounts /restore-inbox; it reads only the sanitized
-    ``.inbox_manifest.json`` (names + booleans) the postgres-backup sidecar refreshes
-    each loop iteration, so it gains no new destructive privilege. A missing or
+    ``.inbox_manifest.json`` (names + booleans) the host-started restore job refreshes,
+    so it gains no new destructive privilege. A missing or
     malformed manifest degrades to ``[]`` (e.g. the operator has not dropped an
     archive set yet) rather than erroring.
     """
@@ -459,12 +459,13 @@ def _remove_current_token_record(restore_id: str) -> None:
 )
 @limiter.limit("3/minute")
 async def request_restore(req: RestoreRequest, request: Request) -> dict[str, str]:
-    """Schedule a sidecar restore with one bound restore-session token.
+    """Record a host-started restore request with one bound session token.
 
     The app gains no new privilege: it only writes a JSON request file into the
-    shared trigger volume; the postgres-backup sidecar's ``restore.sh`` performs
-    the destructive restore. Only the validated ``timestamp`` selects the archive
-    set — a client filename is never accepted, closing path traversal.
+    shared trigger volume. The host operator must run the separate one-shot
+    restore job; this route never starts destructive work. Only the validated
+    ``timestamp`` selects the archive set — a client filename is never accepted,
+    closing path traversal.
 
     Pending and quarantine state is refused before audit. After audit succeeds,
     the route repeats the check under the shared lock, persists the hashed
@@ -483,7 +484,7 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
     Returns
     -------
     dict[str, str]
-        Scheduled state, raw restore-session token, restore ID, and source.
+        Requested state, raw restore-session token, restore ID, and source.
 
     Raises
     ------
@@ -584,12 +585,11 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "Restore sidecar trigger is unavailable. "
-                "Ensure the postgres-backup service is running."
+                "Restore request storage is unavailable. Ensure the backup service is running."
             ),
         ) from exc
     return {
-        "status": "scheduled",
+        "status": "requested",
         "status_token": status_token,
         "restore_id": restore_id,
         "source": req.source,

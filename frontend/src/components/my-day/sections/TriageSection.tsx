@@ -139,7 +139,9 @@ export function TriageSection() {
     queryFn: fetchMissingFoundationalPapers,
   });
 
-  const actionItems: FeedPaper[] = actionData?.papers ?? [];
+  const actionItems: FeedPaper[] = (actionData?.papers ?? []).filter(
+    (paper) => paper.has_chunks === false,
+  );
   const foundational: MissingFoundationalPaper[] = foundationalData;
 
   // Mutation for foundational "Add & process"

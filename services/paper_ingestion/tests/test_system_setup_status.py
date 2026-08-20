@@ -1,4 +1,4 @@
-"""Tests for GET /api/system/setup-status (A1 setup wizard backend)."""
+"""Tests for Research-owned setup readiness."""
 
 from __future__ import annotations
 
@@ -9,15 +9,7 @@ from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
-
-def _user_config_rows(
-    *,
-    setup_completed=False,
-) -> list[FakeRecord]:
-    rows: list[FakeRecord] = [
-        FakeRecord(key="setup.completed", value=setup_completed),
-    ]
-    return rows
+_RESEARCH_SETUP_PATH = "/api/system/setup-status/research"
 
 
 @pytest.fixture(autouse=True)
@@ -43,8 +35,6 @@ def _isolate_probe_caches():
 
 @pytest.fixture()
 def _app(monkeypatch):
-    # Ensure TELEGRAM_BOT_TOKEN is deterministically absent by default.
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama-mock:11434")
     # With the TTL caches flushed around every test, each endpoint test really
     # runs the model-warnings probe. Point it at a connection-refused address
@@ -63,7 +53,7 @@ def _app(monkeypatch):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             # AUTHZ-03 added require_admin to get_setup_status; these tests
@@ -95,19 +85,9 @@ def _patch_probe(monkeypatch, *, models_ready: bool, downloading=None):
 def _install_user_config(
     conn,
     *,
-    setup_completed=False,
-    telegram_paired: bool = False,
     topics_count: int = 0,
-    telegram_token_stored: bool = False,
 ):
-    conn.fetch.return_value = _user_config_rows(setup_completed=setup_completed)
-    # get_setup_status calls fetchrow three times: topics count, then
-    # telegram_user_pairings count, then the stored telegram.bot_token row.
-    conn.fetchrow.side_effect = [
-        FakeRecord(n=topics_count),
-        FakeRecord(n=1 if telegram_paired else 0),
-        FakeRecord(value=None, encrypted_value=b"ciphertext") if telegram_token_stored else None,
-    ]
+    conn.fetchrow.return_value = FakeRecord(n=topics_count)
 
 
 # ---------------------------------------------------------------------------
@@ -116,69 +96,22 @@ def _install_user_config(
 
 
 @pytest.mark.asyncio
-async def test_setup_status_reads_user_config(_app, monkeypatch):
+async def test_research_setup_status_exposes_only_owner_local_state(_app, monkeypatch):
     app, conn = _app
-    _install_user_config(conn, setup_completed=True, telegram_paired=True, topics_count=3)
+    _install_user_config(conn, topics_count=3)
     _patch_probe(monkeypatch, models_ready=False)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/system/setup-status")
+        resp = await client.get(_RESEARCH_SETUP_PATH)
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["setup_completed"] is True
-    assert body["telegram_paired"] is True
     assert body["topics_count"] == 3
-
-
-@pytest.mark.asyncio
-async def test_setup_status_telegram_configured_reads_env(_app, monkeypatch):
-    app, conn = _app
-    _install_user_config(conn)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "dummy:secret")
-    _patch_probe(monkeypatch, models_ready=False)
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/system/setup-status")
-
-    assert resp.status_code == 200
-    assert resp.json()["telegram_configured"] is True
-
-
-@pytest.mark.asyncio
-async def test_setup_status_telegram_configured_reads_stored_token(_app, monkeypatch):
-    """A token saved through the web interface (no env token) marks the bot configured."""
-    app, conn = _app
-    _install_user_config(conn, telegram_token_stored=True)
-    _patch_probe(monkeypatch, models_ready=False)
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/system/setup-status")
-
-    assert resp.status_code == 200
-    assert resp.json()["telegram_configured"] is True
-
-
-@pytest.mark.asyncio
-async def test_setup_status_telegram_configured_false_when_nothing_configured(_app, monkeypatch):
-    """False when neither the environment nor stored configuration has a token."""
-    app, conn = _app
-    _install_user_config(conn)
-    _patch_probe(monkeypatch, models_ready=False)
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/system/setup-status")
-
-    assert resp.status_code == 200
-    assert resp.json()["telegram_configured"] is False
+    assert "setup_completed" not in body
+    assert "telegram_configured" not in body
+    assert "telegram_paired" not in body
 
 
 @pytest.mark.asyncio
@@ -190,7 +123,7 @@ async def test_setup_status_models_ready_true_when_ollama_ok(_app, monkeypatch):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/system/setup-status")
+        resp = await client.get(_RESEARCH_SETUP_PATH)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -207,7 +140,7 @@ async def test_setup_status_models_ready_false_on_ollama_error(_app, monkeypatch
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/system/setup-status")
+        resp = await client.get(_RESEARCH_SETUP_PATH)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -224,25 +157,10 @@ async def test_setup_status_topics_count_from_db(_app, monkeypatch):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/system/setup-status")
+        resp = await client.get(_RESEARCH_SETUP_PATH)
 
     assert resp.status_code == 200
     assert resp.json()["topics_count"] == 17
-
-
-@pytest.mark.asyncio
-async def test_setup_status_telegram_paired_false_when_null(_app, monkeypatch):
-    app, conn = _app
-    _install_user_config(conn, telegram_paired=False)
-    _patch_probe(monkeypatch, models_ready=False)
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/system/setup-status")
-
-    assert resp.status_code == 200
-    assert resp.json()["telegram_paired"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +286,7 @@ async def test_setup_status_model_warnings_when_routed_model_not_pulled(_app, mo
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/system/setup-status")
+        resp = await client.get(_RESEARCH_SETUP_PATH)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -399,7 +317,7 @@ async def test_setup_status_model_warnings_empty_when_all_pulled(_app, monkeypat
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/system/setup-status")
+        resp = await client.get(_RESEARCH_SETUP_PATH)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -423,7 +341,7 @@ async def test_setup_status_model_warnings_empty_and_200_when_litellm_down(_app,
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/system/setup-status")
+        resp = await client.get(_RESEARCH_SETUP_PATH)
 
     assert resp.status_code == 200
     body = resp.json()

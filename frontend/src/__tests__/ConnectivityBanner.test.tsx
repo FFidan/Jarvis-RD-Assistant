@@ -114,6 +114,39 @@ describe('InstallAffordance (inside ConnectivityBanner)', () => {
     expect(mockPromptInstall).toHaveBeenCalledTimes(1);
   });
 
+  it('gives both install controls a 24px mouse target through padding', () => {
+    _canInstall = true;
+    render(<ConnectivityBanner />);
+    const install = screen.getByTestId('install-affordance-button');
+    const dismiss = screen.getByTestId('install-affordance-dismiss');
+    const icon = dismiss.querySelector('svg');
+    expect(icon).not.toBeNull();
+
+    const installPaddingClass = [...install.classList].find((name) => /^py-\d+(?:\.\d+)?$/.test(name));
+    const dismissPaddingClass = [...dismiss.classList].find((name) => /^p-\[\d+px\]$/.test(name));
+    const iconHeightClass = [...icon!.classList].find((name) => /^h-\d+(?:\.\d+)?$/.test(name));
+    const installMarginClass = [...install.classList].find((name) => /^-my-\d+(?:\.\d+)?$/.test(name));
+    const dismissMarginClass = [...dismiss.classList].find((name) => /^-m-\[\d+px\]$/.test(name));
+    expect(installPaddingClass).toBeDefined();
+    expect(dismissPaddingClass).toBeDefined();
+    expect(iconHeightClass).toBeDefined();
+    expect(installMarginClass).toBeDefined();
+    expect(dismissMarginClass).toBeDefined();
+
+    const installPadding = Number(installPaddingClass!.slice(3)) * 4;
+    const dismissPadding = Number(dismissPaddingClass!.match(/\d+/)?.[0]);
+    const iconHeight = Number(iconHeightClass!.slice(2)) * 4;
+    const installMargin = Number(installMarginClass!.slice(4)) * 4;
+    const dismissMargin = Number(dismissMarginClass!.match(/\d+/)?.[0]);
+    const installHeight = 16 + installPadding * 2;
+    const dismissHeight = iconHeight + dismissPadding * 2;
+    expect(installHeight).toBeGreaterThanOrEqual(24);
+    expect(dismissHeight).toBeGreaterThanOrEqual(24);
+    expect(iconHeight).toBe(14);
+    expect(installHeight - installMargin * 2).toBe(20);
+    expect(dismissHeight - dismissMargin * 2).toBe(18);
+  });
+
   it('is dismissed when X button clicked', () => {
     _canInstall = true;
     render(<ConnectivityBanner />);

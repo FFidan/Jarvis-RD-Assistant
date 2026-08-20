@@ -44,19 +44,16 @@ def _clear_rate_limit_state() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _patch_log_event():
-    """Suppress all log_event calls in unit tests.
+def _patch_platform_event():
+    """Suppress Platform event delivery in unit tests.
 
-    log_event requires a live asyncpg pool; unit tests use lightweight mocks
-    that do not implement the full pool protocol.  Patching here prevents
-    spurious TypeErrors from pool.acquire() returning a coroutine instead of
-    an async context manager.
+    Unit tests use lightweight clients that do not expose a Platform transport.
 
-    Tests that specifically need to assert on log_event calls should override
+    Tests that specifically need to assert on event calls should override
     this patch within their own ``with patch(...)`` context.
     """
     with patch(
-        "telegram_bot.handlers.commands._auth.log_event",
+        "telegram_bot.handlers.commands._auth.record_event",
         new_callable=AsyncMock,
     ):
         yield

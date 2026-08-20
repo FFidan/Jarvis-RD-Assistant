@@ -71,7 +71,7 @@ const EMPTY_STATE: Record<string, EmptyStateCopy> = {
   starred: {
     icon: Star,
     title: 'No starred papers',
-    description: 'Star papers to keep track of your favourites.',
+    description: 'Star papers to keep track of your favorites.',
   },
   reading: {
     icon: BookOpen,
@@ -346,7 +346,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
 
   return (
     <>
-      <BulkToolbar surface={surface} papersOnPage={papers.map((p) => p.id)} />
+      <BulkToolbar surface={surface} scope={scope} papersOnPage={papers.map((p) => p.id)} />
 
       <div className="space-y-4 pt-4">
         {papers.length === 0 ? (

@@ -154,7 +154,7 @@ export function HomePage() {
       done: hasPapers,
       label: 'Fetch your first papers',
       description: 'Search arXiv and Semantic Scholar',
-      actionLabel: 'Open Library',
+      actionLabel: 'Open Papers',
       actionHref: '/feed?surface=library',
       disabled: !hasTopics,
     },
@@ -162,7 +162,7 @@ export function HomePage() {
       done: hasProcessedPapers,
       label: 'Analyze a paper',
       description: 'Download, process, and summarize',
-      actionLabel: 'Open Library',
+      actionLabel: 'Open Papers',
       actionHref: '/feed?surface=library',
       disabled: !hasPapers,
     },
@@ -218,7 +218,7 @@ export function HomePage() {
                 })}
               </div>
               <p className="mt-6 text-xs text-muted-foreground">
-                Once you have papers, you can ask questions across your library, build citation
+                Once you have papers, you can ask questions across all of them, build citation
                 and knowledge graphs, generate flashcards, and extract structured data.
               </p>
             </CardContent>
@@ -230,21 +230,21 @@ export function HomePage() {
 
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
-          <CardTitle className="text-lg">Prepare library</CardTitle>
+          <CardTitle className="text-lg">Prepare your papers</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="mb-4 text-sm text-muted-foreground">
-            Queue PDF processing and summaries for papers that are already in your library. New
-            jobs appear in the jobs panel while they run.
+            Queue PDF processing and summaries for papers you have already saved. New jobs appear
+            in the jobs panel while they run.
           </p>
           <BatchButton
-            label="Process whole library"
+            label="Process all papers"
             icon={Cog}
             mutationFn={() => processLibrary(true)}
-            formatResult={(d) => (d.job_id ? 'Processing your library' : 'Library already up to date')}
+            formatResult={(d) => (d.job_id ? 'Processing your papers' : 'Papers already up to date')}
             onSuccessResult={(d) => trackBatchJob(d, 'papers.process_library')}
-            confirmMessage="This queues download, PDF processing, and summaries for every library paper that still needs them. Continue?"
-            confirmTitle="Process your whole library?"
+            confirmMessage="This queues download, PDF processing, and summaries for every saved paper that still needs them. Continue?"
+            confirmTitle="Process all of your papers?"
           />
           <div className="mt-3">
             <BatchButton
@@ -254,7 +254,7 @@ export function HomePage() {
               formatResult={(d) => (d.job_id ? `Queued ${d.queued} PDFs` : 'No PDFs to process')}
               onSuccessResult={(d) => trackBatchJob(d, 'papers.batch_process')}
               confirmMessage="This will queue PDF text extraction for papers that already have local PDFs. Continue?"
-              confirmTitle="Process library PDFs?"
+              confirmTitle="Process your saved PDFs?"
             />
           </div>
           <div className="mt-4">

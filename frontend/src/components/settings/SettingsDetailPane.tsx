@@ -23,6 +23,7 @@ import { TopicSection } from './TopicSection';
 import { AuthorSection } from './AuthorSection';
 import { SourceDetailPane } from './SourceDetailPane';
 import { SourcesList } from './SourcesList';
+import { Link } from 'react-router-dom';
 import { SmtpSection } from './SmtpSection';
 import { TelegramBotTokenSection } from './TelegramBotTokenSection';
 import { AccessModeSection } from './AccessModeSection';
@@ -69,13 +70,14 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
   },
   integrations: {
     telegram: 'Telegram',
-    'bot-token': 'Telegram bot key',
+    // Legacy deep link into the merged Telegram page.
+    'bot-token': 'Telegram',
     zotero: 'Zotero',
   },
   research: {
     topics: 'Topics',
     authors: 'Authors',
-    'spaced-repetition': 'Spaced Repetition',
+    'spaced-repetition': 'Learning Cards',
   },
 };
 
@@ -84,17 +86,21 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
 // ---------------------------------------------------------------------------
 
 function Breadcrumb({
+  section,
   sectionTitle,
   itemLabel,
 }: {
+  section: string;
   sectionTitle: string;
   itemLabel: string;
 }) {
   return (
     <nav aria-label="breadcrumb" className="flex items-center gap-1.5 text-xs text-muted-foreground mb-4">
-      <span>Settings</span>
+      <Link to="/settings" className="hover:text-foreground hover:underline">Settings</Link>
       <span aria-hidden>/</span>
-      <span>{sectionTitle}</span>
+      <Link to={`/settings?section=${section}`} className="hover:text-foreground hover:underline">
+        {sectionTitle}
+      </Link>
       <span aria-hidden>/</span>
       <span className="text-foreground font-medium">{itemLabel}</span>
     </nav>
@@ -170,13 +176,27 @@ function DetailContent({
   }
 
   if (section === 'integrations') {
-    if (item === 'telegram') {
-      return <TelegramPairingSection />;
-    }
-    if (item === 'bot-token') {
-      return isAdmin
-        ? <TelegramBotTokenSection />
-        : <div className="p-6 text-sm text-destructive">Admin access required.</div>;
+    // One Telegram page. Pairing (every user) and the instance bot token
+    // (admin) were two rail items describing one integration; they now stack
+    // on a single page, and old bot-token URLs land here too.
+    if (item === 'telegram' || item === 'bot-token') {
+      return (
+        <div className="space-y-8">
+          <TelegramPairingSection />
+          {isAdmin && (
+            <div className="space-y-3 border-t border-hair pt-6">
+              <div>
+                <h3 className="text-base font-semibold">Instance bot (admin)</h3>
+                <p className="text-sm text-muted-foreground">
+                  The BotFather token that lets this instance send and receive Telegram
+                  messages for every paired user.
+                </p>
+              </div>
+              <TelegramBotTokenSection />
+            </div>
+          )}
+        </div>
+      );
     }
     if (item === 'zotero') return <ZoteroSection />;
   }
@@ -216,7 +236,7 @@ export function SettingsDetailPane({ section, item, modelPickerRequest, provider
 
   return (
     <div className="flex-1 overflow-y-auto p-6 min-w-0">
-      <Breadcrumb sectionTitle={sectionTitle} itemLabel={itemLabel} />
+      <Breadcrumb section={section} sectionTitle={sectionTitle} itemLabel={itemLabel} />
       <h2 className="font-serif text-3xl tracking-tight text-strong mb-6">{itemLabel}</h2>
       <DetailContent
         section={section}

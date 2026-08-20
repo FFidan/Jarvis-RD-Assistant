@@ -20,20 +20,51 @@ from jarvis_common.config import JarvisCommonSettings, get_jarvis_common_setting
 
 
 class TestJarvisCommonSettings:
-    def test_defaults(self) -> None:
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Root conftest disables the gateway boundary for direct-app tests.
+        # Remove that explicit test override to verify the production default.
+        monkeypatch.delenv("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", raising=False)
         s = JarvisCommonSettings()
         assert s.database_url == ""
-        assert s.postgres_user == "jarvis"
+        assert s.postgres_user == ""
+        assert s.postgres_password_file is None
+        assert s.postgres_host == "postgres"
+        assert s.postgres_port == 5432
         assert s.postgres_db == "jarvis"
         assert s.db_pool_min is None
         assert s.db_pool_max is None
         assert s.cors_origins == "https://localhost:3001"
         assert s.litellm_base_url == "http://litellm:4000"
         assert s.langfuse_host is None
+        assert s.otel_exporter_otlp_traces_endpoint is None
+        assert s.otel_export_timeout_ms == 5_000
+        assert s.log_forward_address is None
         assert s.trusted_proxy_cidrs == ""
         assert s.trust_cf_connecting_ip is False
         assert s.migration_lock_contended_ok is False
         assert s.observability_enabled is False
+        assert s.identity_assertions_required is True
+        assert s.identity_issuer == "jarvis-platform"
+        assert s.identity_public_key_files == (s.identity_current_public_key_file,)
+
+    def test_identity_rotation_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", "true")
+        monkeypatch.setenv("JARVIS_IDENTITY_CURRENT_PUBLIC_KEY_FILE", "/keys/current.pem")
+        monkeypatch.setenv("JARVIS_IDENTITY_PREVIOUS_PUBLIC_KEY_FILE", "/keys/previous.pem")
+        monkeypatch.setenv(
+            "JARVIS_IDENTITY_PREVIOUS_KEY_ACCEPT_UNTIL",
+            "2026-08-17T12:00:00+00:00",
+        )
+
+        settings = JarvisCommonSettings()
+
+        assert settings.identity_assertions_required is True
+        assert tuple(str(path) for path in settings.identity_public_key_files) == (
+            "/keys/current.pem",
+            "/keys/previous.pem",
+        )
+        assert settings.identity_previous_key_accept_until is not None
+        assert settings.identity_previous_key_accept_until.utcoffset() is not None
 
     def test_database_url_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host/db")
@@ -44,6 +75,14 @@ class TestJarvisCommonSettings:
         monkeypatch.setenv("POSTGRES_USER", "testuser")
         s = JarvisCommonSettings()
         assert s.postgres_user == "testuser"
+
+    def test_postgres_password_file_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The service-specific password file is read from explicit configuration."""
+        monkeypatch.setenv("POSTGRES_PASSWORD_FILE", "/run/secrets/research_runtime_password")
+
+        settings = JarvisCommonSettings()
+
+        assert str(settings.postgres_password_file) == "/run/secrets/research_runtime_password"
 
     def test_db_pool_min_max(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DB_POOL_MIN", "3")
@@ -102,6 +141,25 @@ class TestJarvisCommonSettings:
         s = JarvisCommonSettings()
         assert s.migration_lock_contended_ok is True
 
+    def test_observability_export_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://otel:4318/v1/traces")
+        monkeypatch.setenv("OTEL_EXPORT_TIMEOUT_MS", "1200")
+        monkeypatch.setenv("LOG_FORWARD_ADDRESS", "vector:9000")
+
+        settings = JarvisCommonSettings()
+
+        assert settings.otel_exporter_otlp_traces_endpoint == "http://otel:4318/v1/traces"
+        assert settings.otel_export_timeout_ms == 1200
+        assert settings.log_forward_address == "vector:9000"
+
+    @pytest.mark.parametrize("address", ["vector", "vector:0", "vector:65536", "vector:not-a-port"])
+    def test_log_forward_address_rejects_invalid_values(
+        self, monkeypatch: pytest.MonkeyPatch, address: str
+    ) -> None:
+        monkeypatch.setenv("LOG_FORWARD_ADDRESS", address)
+        with pytest.raises(ValueError, match="LOG_FORWARD_ADDRESS"):
+            JarvisCommonSettings()
+
     def test_factory_returns_fresh_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LITELLM_BASE_URL", "http://custom:9999")
         s = get_jarvis_common_settings()
@@ -125,7 +183,6 @@ class TestPaperIngestionSettings:
             "QDRANT_URL",
             "QDRANT_API_KEY",
             "OLLAMA_BASE_URL",
-            "VECTOR_API_URL",
             "EMBEDDING_MODEL",
             "EMBEDDING_MODEL_NAME",
             "EMBEDDING_DIMENSION",
@@ -135,7 +192,6 @@ class TestPaperIngestionSettings:
         assert s.qdrant_url == "http://qdrant:6333"
         assert s.qdrant_api_key is None
         assert s.ollama_base_url == "http://ollama:11434"
-        assert s.vector_api_url == "http://vector:8686"
         assert s.embedding_model == "embed"
         assert s.embedding_model_name == "qwen3-embedding:4b"
         assert s.embedding_dimension == 2560
@@ -152,9 +208,7 @@ class TestPaperIngestionSettings:
         assert s.semantic_scholar_api_key is None
         assert s.pubmed_api_key is None
         assert s.openalex_api_key is None
-        assert s.infra_ingest_key is None
-        assert s.infra_ingest_key_file is None
-        assert s.telegram_bot_token is None
+        assert not hasattr(s, "telegram_bot_token")
 
     def test_inherits_common_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from paper_ingestion.config import PaperIngestionSettings

@@ -13,17 +13,24 @@ Callers are responsible for:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from telegram_bot.config import BotConfig, _owner_headers
 from telegram_bot.focus_contract import FocusSession, FocusTransition
-from telegram_bot.pulse_contract import PulseDeck, PulseGenerateJob
+from telegram_bot.pulse_contract import PulseDeck, PulseGenerateJob, PulseGenerateStatus
+
+#: Largest page ``GET /api/tasks`` accepts. Used when a caller has to filter
+#: the rows itself, because the endpoint takes only one status at a time.
+MAX_TASK_PAGE_SIZE = 200
 
 __all__ = [
+    "MAX_TASK_PAGE_SIZE",
+    "MyDayFocusSummary",
     "PulsePayloadError",
     "fetch_projects",
     "fetch_project",
@@ -38,28 +45,101 @@ __all__ = [
     "fetch_next_review_card",
     "submit_review_rating",
     "fetch_active_focus_session",
+    "fetch_my_day_focus",
     "fetch_pending_telegram_focus_completion",
     "start_focus_session",
     "pause_focus_session",
     "resume_focus_session",
     "complete_focus_session",
     "acknowledge_telegram_focus_completion",
-    "log_focus_session",
     "fetch_new_paper_count",
+    "fetch_inbox_count",
     "check_authors",
+    "acknowledge_author_alerts",
     "search_papers",
     "fetch_papers_feed",
+    "search_papers_feed",
     "get_paper",
     "update_paper_action",
     "record_paper_feedback",
     "fetch_pulse_today",
     "trigger_pulse_generation",
+    "fetch_pulse_generation_status",
     "fetch_weekly_digest",
+    "ScheduledNudgePayload",
+    "acknowledge_scheduled_nudge",
+    "fetch_scheduled_nudges",
 ]
 
 
 class PulsePayloadError(ValueError):
     """Sanitized boundary error for a malformed Pulse response."""
+
+
+class ScheduledNudgePayload(BaseModel):
+    """Learning-owned enabled nudge schedule returned to Telegram."""
+
+    id: int
+    nudge_type: str
+    cron_expression: str
+
+
+async def fetch_scheduled_nudges(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> list[ScheduledNudgePayload]:
+    """Return enabled nudge schedules from Learning.
+
+    Parameters
+    ----------
+    http : httpx.AsyncClient
+        Scoped backend client.
+    config : BotConfig
+        Runtime service origins.
+    user_id : int
+        Platform-verified paired owner used for the service assertion.
+
+    Returns
+    -------
+    list[ScheduledNudgePayload]
+        Validated enabled schedules.
+    """
+    response = await http.get(
+        f"{config.learning_engine_url}/internal/telegram/nudges",
+        headers=_owner_headers(config, user_id),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise RuntimeError("Learning returned an invalid nudge list")
+    return [ScheduledNudgePayload.model_validate(item) for item in payload]
+
+
+async def acknowledge_scheduled_nudge(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    nudge_id: int,
+) -> None:
+    """Record one successful nudge execution in Learning.
+
+    Parameters
+    ----------
+    http : httpx.AsyncClient
+        Scoped backend client.
+    config : BotConfig
+        Runtime service origins.
+    user_id : int
+        Platform-verified paired owner used for the service assertion.
+    nudge_id : int
+        Learning-owned schedule identifier.
+    """
+    response = await http.post(
+        f"{config.learning_engine_url}/internal/telegram/nudges/{nudge_id}/ack",
+        headers=_owner_headers(config, user_id),
+    )
+    response.raise_for_status()
 
 
 # ---------------------------------------------------------------------------
@@ -354,26 +434,33 @@ async def submit_review_rating(
     return result
 
 
-async def log_focus_session(
+class MyDayFocusSummary(BaseModel):
+    """The focus totals the executive My Day view reports for today."""
+
+    today_focus_hours: float
+    focus_streak_days: int
+
+
+async def fetch_my_day_focus(
     http: httpx.AsyncClient,
     config: BotConfig,
-    user_id: int | None,
-    duration_hours: float,
-) -> None:
-    """POST {learning_engine}/api/executive/focus/log body {"duration_hours": ...}.
+    user_id: int,
+) -> MyDayFocusSummary:
+    """GET {learning_engine}/api/executive/my-day → today's focus totals.
 
-    Fire-and-forget (best-effort scheduled-job callback); the caller only
-    needs success/failure, never the response body.  Unlike other functions
-    here, *user_id* accepts ``None`` — the scheduled job's stored data may not
-    carry an owner id.
+    Only the two focus fields are parsed; the rest of the My Day payload
+    belongs to the web dashboard and is deliberately ignored here.
     """
-    resp = await http.post(
-        f"{config.learning_engine_url}/api/executive/focus/log",
-        json={"duration_hours": duration_hours},
+    resp = await http.get(
+        f"{config.learning_engine_url}/api/executive/my-day",
         headers=_owner_headers(config, user_id),
         timeout=10.0,
     )
     resp.raise_for_status()
+    try:
+        return MyDayFocusSummary.model_validate(resp.json())
+    except ValidationError as exc:
+        raise ValueError("Learning Engine returned an invalid my-day payload") from exc
 
 
 def _parse_focus_session(payload: object) -> FocusSession:
@@ -516,27 +603,48 @@ async def fetch_new_paper_count(
     http: httpx.AsyncClient,
     config: BotConfig,
     user_id: int,
-    *,
-    hours: int = 24,
 ) -> int:
-    """GET {paper_ingestion}/api/papers/feed?date_from=<ISO date>&limit=1 → resp["total"].
+    """GET {paper_ingestion}/api/papers/feed?date_from=<today, UTC>&limit=1 → resp["total"].
 
-    **R6 — day-granularity note:** the cutoff is computed as a datetime
-    (UTC now − *hours*) but sent as an ISO **date** (the endpoint's
-    ``date_from`` is a DATE param), so the effective window is day-granular.
-    This is acceptable for a briefing stat.
+    The endpoint's ``date_from`` is a DATE param, so the window is a whole UTC
+    day and the cutoff is today's UTC date — exactly the "since midnight UTC"
+    the briefing tells the user, and the same UTC day boundary the My Day view
+    counts against.
 
     Returns
     -------
     int
-        Total count of new papers found since ``now - hours``.
+        Papers added to the caller's library since midnight UTC today.
     """
-    since = datetime.now(UTC) - timedelta(hours=hours)
     resp = await http.get(
         f"{config.paper_ingestion_url}/api/papers/feed",
-        # /api/papers/feed's date_from is a DATE param — send a date string
-        # (day granularity); a full datetime ISO string is rejected with 422.
-        params={"date_from": since.date().isoformat(), "limit": 1},
+        # A full datetime ISO string is rejected with 422; send a date string.
+        params={"date_from": datetime.now(UTC).date().isoformat(), "limit": 1},
+        headers=_owner_headers(config, user_id),
+    )
+    resp.raise_for_status()
+    data: dict[str, Any] = resp.json()
+    return int(data["total"])
+
+
+async def fetch_inbox_count(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+) -> int:
+    """GET {paper_ingestion}/api/papers/feed?view=inbox&limit=1 → resp["total"].
+
+    ``total`` counts the whole view rather than the requested page, so the
+    one-row page is only there to keep the response small.
+
+    Returns
+    -------
+    int
+        Papers currently in the caller's Inbox view, whenever they arrived.
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/papers/feed",
+        params={"view": "inbox", "limit": 1},
         headers=_owner_headers(config, user_id),
     )
     resp.raise_for_status()
@@ -551,6 +659,11 @@ async def check_authors(
 ) -> dict[str, Any]:
     """POST {paper_ingestion}/api/authors/check.
 
+    The bot relays every match to Telegram, so it asks for the matches without
+    them being recorded and confirms each one through
+    ``acknowledge_author_alerts``. An alert whose send fails is then still on
+    offer at the next check instead of being lost.
+
     Returns
     -------
     dict
@@ -559,10 +672,42 @@ async def check_authors(
     resp = await http.post(
         f"{config.paper_ingestion_url}/api/authors/check",
         headers=_owner_headers(config, user_id),
+        json={"acknowledges_delivery": True},
     )
     resp.raise_for_status()
     result: dict[str, Any] = resp.json()
     return result
+
+
+async def acknowledge_author_alerts(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    *,
+    tracked_author_id: int,
+    paper_ids: list[int],
+) -> None:
+    """POST {paper_ingestion}/api/authors/alerts/ack.
+
+    Records one delivered author alert so the next check no longer offers it.
+    """
+    resp = await http.post(
+        f"{config.paper_ingestion_url}/api/authors/alerts/ack",
+        headers=_owner_headers(config, user_id),
+        json={"tracked_author_id": tracked_author_id, "paper_ids": paper_ids},
+    )
+    resp.raise_for_status()
+
+
+#: Sources an external discovery search fans out to.  The endpoint's request
+#: model defaults to arXiv alone, so omitting the field silently searches one
+#: source; sources that are disabled or failing are the server's concern and
+#: come back in ``degraded_sources``.
+DISCOVERY_SOURCE_TYPES = ("arxiv", "semantic_scholar", "openalex", "pubmed")
+
+#: External discovery fans out to four upstream APIs and persists what it
+#: finds; 70.5 s has been observed end to end, so the client waits longer.
+DISCOVERY_TIMEOUT_SECONDS = 90.0
 
 
 async def search_papers(
@@ -570,15 +715,44 @@ async def search_papers(
     config: BotConfig,
     user_id: int,
     query: str,
-) -> Any:
-    """POST {paper_ingestion}/api/search body {"query": query}.
+) -> dict[str, Any]:
+    """POST {paper_ingestion}/api/search — external discovery across all sources.
 
-    Returns the raw parsed JSON (a list, or a dict wrapping ``"papers"``
-    depending on backend version); callers narrow the shape themselves.
+    The endpoint also writes what it finds into the caller's library, so
+    callers must tell the user about that side effect.
+
+    Returns
+    -------
+    dict
+        A ``MultiSourceSearchResponse``: ``results`` (everything the sources
+        returned), ``total``, ``per_source_counts``, ``degraded_sources``,
+        ``saved`` (rows persisted into the caller's library) and ``failed``.
     """
     resp = await http.post(
         f"{config.paper_ingestion_url}/api/search",
-        json={"query": query},
+        json={"query": query, "source_types": list(DISCOVERY_SOURCE_TYPES)},
+        headers=_owner_headers(config, user_id),
+        timeout=DISCOVERY_TIMEOUT_SECONDS,
+    )
+    resp.raise_for_status()
+    result: dict[str, Any] = resp.json()
+    return result
+
+
+async def _get_papers_feed(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    params: dict[str, Any],
+) -> Any:
+    """GET {paper_ingestion}/api/papers/feed with pre-built query params.
+
+    *params* is the whole feed query (``view``, ``limit`` and optionally ``q``)
+    so the public wrappers below stay small and share one transport.
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/papers/feed",
+        params=params,
         headers=_owner_headers(config, user_id),
         timeout=30.0,
     )
@@ -597,18 +771,28 @@ async def fetch_papers_feed(
 ) -> Any:
     """GET {paper_ingestion}/api/papers/feed?view=&limit=.
 
-    Returns the raw parsed JSON (a list, or a dict wrapping ``"papers"``
-    depending on backend version); callers narrow the shape themselves.
+    Returns the raw parsed JSON envelope (``{papers, total, search_mode}``);
+    callers narrow the shape themselves.
     """
-    resp = await http.get(
-        f"{config.paper_ingestion_url}/api/papers/feed",
-        params={"view": view, "limit": limit},
-        headers=_owner_headers(config, user_id),
-        timeout=30.0,
+    return await _get_papers_feed(http, config, user_id, {"view": view, "limit": limit})
+
+
+async def search_papers_feed(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    query: str,
+    *,
+    limit: int = 10,
+) -> Any:
+    """Full-text search the caller's own library via the feed endpoint.
+
+    Unlike :func:`search_papers` this reads existing papers only; it never
+    reaches an external source and never writes to the library.
+    """
+    return await _get_papers_feed(
+        http, config, user_id, {"view": "library", "limit": limit, "q": query}
     )
-    resp.raise_for_status()
-    result: Any = resp.json()
-    return result
 
 
 async def get_paper(
@@ -726,6 +910,29 @@ async def trigger_pulse_generation(
         return PulseGenerateJob.model_validate(resp.json())
     except ValidationError:
         raise PulsePayloadError("Pulse job response did not match the expected contract") from None
+
+
+async def fetch_pulse_generation_status(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    job_id: str,
+) -> PulseGenerateStatus:
+    """GET {paper_ingestion}/api/pulse/generate/{job_id}.
+
+    Return the validated progress of a generation job this user started, so a
+    caller can wait for the deck instead of guessing when it is ready.
+    """
+    resp = await http.get(
+        f"{config.paper_ingestion_url}/api/pulse/generate/{quote(job_id, safe='')}",
+        headers=_owner_headers(config, user_id),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    try:
+        return PulseGenerateStatus.model_validate(resp.json())
+    except ValidationError:
+        raise PulsePayloadError("Pulse job status did not match the expected contract") from None
 
 
 async def fetch_weekly_digest(

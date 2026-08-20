@@ -2,7 +2,6 @@
 
 import hashlib
 import hmac
-import ipaddress
 import logging
 import os
 import re
@@ -16,7 +15,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
 from jarvis_common.audit import log_audit
-from jarvis_common.config import POSTGRES_PASSWORD_SECRET_PATH
+from jarvis_common.config import POSTGRES_PASSWORD_SECRET_PATH, get_jarvis_common_settings
 from jarvis_common.event_log import log_event
 from jarvis_common.paths import read_regular_json_file
 from jarvis_common.settings import get_core_settings
@@ -44,6 +43,10 @@ _AUTH_MISSING_AUDIT_SKIP_PATHS = frozenset(
 # and the readiness script agree.
 _LITELLM_MASTER_KEY_MIN_LEN = 16
 _POSTGRES_PASSWORD_MIN_LEN = 16
+
+# ASGI scope key where RawClientStashMiddleware records the transport peer for
+# rate-limit keying before ProxyHeadersMiddleware rewrites ``scope["client"]``.
+RAW_CLIENT_SCOPE_KEY = "jarvis.raw_client"
 
 # Known placeholder / known-weak secret values rejected in production. This is a
 # verbatim port of the `_is_weak_secret` shell helper in
@@ -119,9 +122,9 @@ def api_key_matches(presented: str | None, configured: str) -> bool:
     -----
     Callers keep their own "is a key configured?" guard, because they disagree
     about what an unconfigured key means: :func:`verify_api_key` falls through
-    to the ``DEV_AUTH_BYPASS`` check, while the owner-override path and the
-    API-key-to-session exchange fail closed. Answering that question here would
-    silently make all three fail closed.
+    to the ``DEV_AUTH_BYPASS`` check, while the API-key-to-session exchange
+    fails closed. Answering that question here would silently make both fail
+    closed.
 
     """
     return hmac.compare_digest(
@@ -454,9 +457,6 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     core = get_core_settings()
     if request.url.path in _HEALTH_PATHS:
         return
-    # Infrastructure events authenticate with their dedicated X-Infra-Key.
-    if request.url.path == "/infra-events" or request.url.path.startswith("/infra-events/"):
-        return
     # Sign-in, verification, and logout routes perform their own authentication.
     # These endpoints have their own validation (token TTL + single-use).
     if request.url.path.startswith("/api/auth/"):
@@ -568,14 +568,22 @@ async def require_admin_or_api_key(request: Request) -> None:
     Raises
     ------
     HTTPException
-        If an authenticated browser session has a non-administrator role.
+        If an authenticated browser session has a non-administrator role, or if
+        the request reached this service on the operations key alone.
 
     Notes
     -----
     :func:`verify_api_key` validates API-key callers before this dependency.
     User-data routes use :func:`current_user_id_strict` instead.
 
+    The gateway signs an identity for the operations key without the account
+    checks that minting a browser session from that same key applies, so that
+    identity is deliberately not administrator authority. A caller presenting
+    the key directly, carrying no signed identity, is unaffected.
+
     """
+    if getattr(request.state, "identity_principal", None) == "api-key":
+        raise HTTPException(status_code=403, detail="Admin role required")
     role = getattr(request.state, "user_role", None)
     if role is not None and role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
@@ -642,275 +650,6 @@ async def current_user_id_strict(request: Request) -> int:
     return uid
 
 
-# ---------------------------------------------------------------------------
-# X-Owner-User-Id override — Telegram per-user orchestration
-# ---------------------------------------------------------------------------
-
-_OWNER_OVERRIDE_HEADER = "X-Owner-User-Id"
-
-# ASGI scope key under which app_factory.RawClientStashMiddleware snapshots the
-# ORIGINAL ``scope["client"]`` (the real transport peer) BEFORE uvicorn's
-# ProxyHeadersMiddleware rewrites ``scope["client"]`` in place from
-# X-Forwarded-For. By the time a route dependency runs, ``request.client``
-# already reflects the (caller-controllable) XFF chain — only this stash still
-# holds the actual socket peer for authorization and audit.
-RAW_CLIENT_SCOPE_KEY = "jarvis.raw_client"
-
-
-def _raw_socket_ip(request: Request) -> tuple[str | None, bool]:
-    """Return ``(raw_peer_ip, stashed)`` from the RawClientStashMiddleware snapshot.
-
-    ``stashed`` is True when the middleware ran for this request — i.e. the
-    scope KEY is present, even if the transport reported no client (then
-    ``raw_peer_ip`` is None and the allowlist check fails safe). When the key
-    is absent, the app was built without
-    :func:`jarvis_common.app_factory.configure_middleware_and_errors`
-    (e.g. a bare test app); such apps install no ProxyHeadersMiddleware either,
-    so the caller may safely fall back to ``request.client``.
-    """
-    scope = getattr(request, "scope", None)
-    if not isinstance(scope, dict) or RAW_CLIENT_SCOPE_KEY not in scope:
-        return None, False
-    raw = scope[RAW_CLIENT_SCOPE_KEY]
-    if isinstance(raw, tuple | list) and raw and isinstance(raw[0], str):
-        return raw[0], True
-    return None, True
-
-
-def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-    """Parse ``OWNER_OVERRIDE_ALLOWED_CIDRS`` env var into network objects.
-
-    Falls back to loopback-only (``127.0.0.0/8``) by default when the variable
-    is unset or empty; containerized/bridge callers must set
-    ``OWNER_OVERRIDE_ALLOWED_CIDRS``.
-    """
-    raw = get_core_settings().owner_override_allowed_cidrs
-    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for part in raw.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            networks.append(ipaddress.ip_network(part, strict=False))
-        except ValueError:
-            logger.warning("OWNER_OVERRIDE_ALLOWED_CIDRS: invalid CIDR %r — skipping", part)
-    return networks
-
-
-# Parsed once on first use (or on explicit refresh); avoids re-parsing CIDRs per request.
-_CACHED_ALLOWED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
-
-# Deny-by-default code value (mirrors CoreSettings.owner_override_allowed_cidrs).
-# When the resolved setting still equals this, the operator has not widened the
-# allowlist, so only loopback callers can use X-Owner-User-Id.
-_LOOPBACK_ONLY_DEFAULT = "127.0.0.0/8"
-# Guards the startup warning so it fires at most once per process.
-_LOOPBACK_DEFAULT_WARNED = False
-
-
-def refresh_allowed_networks_cache() -> None:
-    """Re-parse ``OWNER_OVERRIDE_ALLOWED_CIDRS`` and update the module-level cache.
-
-    Mirror of :func:`refresh_api_key_cache`.  Call this at app lifespan startup
-    (or in tests that monkeypatch ``OWNER_OVERRIDE_ALLOWED_CIDRS``) so the
-    cached value reflects the current environment.
-
-    Emits a one-time warning when the allowlist is still the loopback-only
-    default — a non-loopback caller (e.g. a containerized bot on a bridge
-    network) would then be denied unless the operator widens it.
-    """
-    global _CACHED_ALLOWED_NETWORKS, _LOOPBACK_DEFAULT_WARNED
-    _CACHED_ALLOWED_NETWORKS = _parse_allowed_networks()
-    if (
-        not _LOOPBACK_DEFAULT_WARNED
-        and get_core_settings().owner_override_allowed_cidrs.strip() == _LOOPBACK_ONLY_DEFAULT
-    ):
-        _LOOPBACK_DEFAULT_WARNED = True
-        logger.warning(
-            "OWNER_OVERRIDE_ALLOWED_CIDRS is the loopback-only default (%s): "
-            "X-Owner-User-Id override is restricted to loopback. Non-loopback "
-            "callers (e.g. a containerized bot on a bridge network) must set "
-            "OWNER_OVERRIDE_ALLOWED_CIDRS to include their source range.",
-            _LOOPBACK_ONLY_DEFAULT,
-        )
-
-
-def _ip_in_allowlist(ip_str: str | None) -> bool:
-    """Return True when *ip_str* falls within one of the allowed CIDRs."""
-    global _CACHED_ALLOWED_NETWORKS
-    if not ip_str:
-        return False
-    try:
-        addr = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return False
-    if _CACHED_ALLOWED_NETWORKS is None:
-        _CACHED_ALLOWED_NETWORKS = _parse_allowed_networks()
-    for net in _CACHED_ALLOWED_NETWORKS:
-        if addr in net:
-            return True
-    return False
-
-
-async def current_user_id_with_owner_override(
-    request: Request,
-    api_key: str | None = Depends(_api_key_header),
-) -> int | None:
-    """Resolve the effective user ID for Telegram-bot orchestrator calls.
-
-    Priority order:
-    1. ``request.state.user_id`` set by session middleware (browser session).
-    2. ``X-Owner-User-Id`` header — trusted **only** when ALL three guards pass:
-       a. The request bears a valid ``JARVIS_API_KEY`` (same check as
-          :func:`verify_api_key`).
-       b. BOTH the raw transport peer (stashed by
-          ``app_factory.RawClientStashMiddleware`` before ProxyHeadersMiddleware
-          rewrites ``scope["client"]`` from X-Forwarded-For) AND
-          ``request.client`` are within the allowlist (loopback-only
-          (``127.0.0.0/8``) by default; containerized/bridge callers must set
-          ``OWNER_OVERRIDE_ALLOWED_CIDRS``).
-       c. The supplied ``user_id`` value is an integer that exists in the
-          ``users`` table.
-
-    Returns ``None`` when no identity can be resolved (caller may be an
-    unauthenticated health-check or a bot call without a pairing).
-
-    Raises ``HTTPException(403)`` when the header is present but any of the
-    three guards fails — this surfaces a misconfiguration loudly rather than
-    silently falling back to ``None``.
-    """
-    # 1. Session-authenticated caller wins.
-    uid = _resolve_request_user_id(request)
-    if uid is not None:
-        return uid
-
-    # 2. X-Owner-User-Id override path.
-    raw_override = request.headers.get(_OWNER_OVERRIDE_HEADER)
-    if raw_override is None:
-        return None
-
-    # Guard (a): valid API key required.
-    jarvis_api_key = _CACHED_API_KEY
-    if not jarvis_api_key or not api_key_matches(api_key, jarvis_api_key):
-        logger.warning(
-            "X-Owner-User-Id header present but API key check failed from %s",
-            request.client.host if request.client else "unknown",
-        )
-        raise HTTPException(
-            status_code=403,
-            detail="X-Owner-User-Id requires a valid X-API-Key",
-        )
-
-    # Guard (b): source IP must be in the allowlist — required for BOTH:
-    #   * request.client, which uvicorn's ProxyHeadersMiddleware has ALREADY
-    #     rewritten in place from X-Forwarded-For by the time this dependency
-    #     runs (on its own it can reflect a caller-forged header), AND
-    #   * the raw transport peer stashed by RawClientStashMiddleware BEFORE
-    #     that rewrite (the real socket address — unforgeable).
-    # Requiring BOTH keeps the bridge bot working (no XFF → both values are the
-    # bridge IP → allowed) while rejecting a forged X-Forwarded-For from a
-    # non-allowlisted peer (raw peer = attacker IP) AND the nginx-relayed
-    # browser path (rewritten client = public browser IP). Strictly tighter
-    # than either check alone.
-    client_ip = request.client.host if request.client else None
-    raw_ip, raw_stashed = _raw_socket_ip(request)
-    if not raw_stashed:
-        # Stash absent ⇒ app built without configure_middleware_and_errors
-        # (no RawClientStashMiddleware — e.g. minimal test apps). Those apps
-        # install no ProxyHeadersMiddleware either, so request.client IS the
-        # raw socket peer: fall back to the single direct-peer check on it.
-        raw_ip = client_ip
-    if not (_ip_in_allowlist(client_ip) and _ip_in_allowlist(raw_ip)):
-        logger.warning(
-            "X-Owner-User-Id header rejected: client IP %s / raw socket peer %s "
-            "not both in allowlist",
-            client_ip,
-            raw_ip,
-        )
-        raise HTTPException(
-            status_code=403,
-            detail="X-Owner-User-Id not allowed from this source IP",
-        )
-
-    # Parse the user_id value.
-    try:
-        override_uid = int(raw_override)
-    except (ValueError, TypeError):
-        raise HTTPException(
-            status_code=403,
-            detail="X-Owner-User-Id must be an integer",
-        ) from None
-
-    # Guard (c): user_id must exist in the users table.
-    try:
-        pool = _request_db_pool(request)
-        if pool is None:
-            raise HTTPException(
-                status_code=503,
-                detail="DB pool unavailable for X-Owner-User-Id validation",
-            )
-        exists = await pool.fetchval(
-            "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL",
-            override_uid,
-        )
-        if not exists:
-            logger.warning(
-                "X-Owner-User-Id user_id=%d does not exist or is deleted",
-                override_uid,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="X-Owner-User-Id references unknown user",
-            )
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("DB error during X-Owner-User-Id validation")
-        raise HTTPException(
-            status_code=503,
-            detail="DB error validating X-Owner-User-Id",
-        ) from None
-
-    # Emit an audit event on every successful override so the
-    # operator can detect unexpected per-user identity substitution.  Best-effort:
-    # a transient pool failure must never block the request.
-    try:
-        audit_pool = _request_db_pool(request)
-        if audit_pool is not None:
-            await log_audit(
-                audit_pool,
-                action="auth.owner_override.used",
-                resource=request.url.path,
-                user_id=str(override_uid),
-                metadata={
-                    "client_ip": client_ip or "unknown",
-                    # Record the raw socket peer so the audit trail distinguishes
-                    # the transport source from the XFF-rewritable client address.
-                    "raw_client_ip": raw_ip or "unknown",
-                },
-            )
-    except Exception:  # noqa: BLE001
-        logger.debug("auth.owner_override audit log failed (non-fatal)", exc_info=True)
-
-    return override_uid
-
-
-async def current_user_id_strict_with_owner_override(
-    request: Request,
-    api_key: str | None = Depends(_api_key_header),
-) -> int:
-    """Like :func:`current_user_id_with_owner_override` but 401 instead of None.
-
-    Reuses the existing guard logic verbatim (session → X-Owner-User-Id with
-    the three guards). When neither a session nor a valid owner override
-    resolves an identity, raise 401 rather than returning ``None``.
-    """
-    uid = await current_user_id_with_owner_override(request, api_key=api_key)
-    if uid is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return uid
-
-
 async def get_current_user_id(
     user_id: int = Depends(current_user_id_strict),
 ) -> int:
@@ -928,42 +667,6 @@ async def get_current_user_id(
 
     Notes
     -----
-    The default identity dependency for user-data routes. It deliberately does
-    NOT honour the ``X-Owner-User-Id`` override: in ``paper_ingestion`` only the
-    routes the Telegram bot actually calls declare
-    :func:`get_current_user_id_or_bot`, and an exact-set test pins that surface.
-    ``learning_engine`` routes still declare
-    :func:`current_user_id_strict_with_owner_override` directly, so the header
-    resolves there on a wider surface than the bot uses; the address allowlist,
-    not this dependency, is what bounds it.
-
-    """
-    return user_id
-
-
-async def get_current_user_id_or_bot(
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
-) -> int:
-    """Return the caller identity, honouring the ``X-Owner-User-Id`` override.
-
-    Parameters
-    ----------
-    user_id : int
-        Identity supplied by
-        :func:`current_user_id_strict_with_owner_override`.
-
-    Returns
-    -------
-    int
-        Authenticated caller identity — possibly the user the
-        service-authenticated Telegram bot is acting for.
-
-    Notes
-    -----
-    Reserved for the routes the Telegram bot calls on a user's behalf.
-    Declaring it through ``Depends`` exposes the API-key security scheme in
-    OpenAPI while preserving session and owner-override resolution.
-
     """
     return user_id
 
@@ -984,8 +687,9 @@ def validate_production_config() -> None:
       fallback from the API key).
     * ``JARVIS_CONFIG_KEY`` must be set in production (Fernet row-level encrypt).
     * ``LITELLM_MASTER_KEY`` must be strong (rejects known placeholders).
-    * ``POSTGRES_PASSWORD`` must be strong (mirrored from readiness-check).
+    * The PostgreSQL password env value or configured role-scoped file must be strong.
     * ``APP_BASE_URL`` must be set (prevents magic-link host-header poisoning).
+    * ``JARVIS_IDENTITY_ASSERTIONS_REQUIRED`` must stay enabled in production.
 
     Raises
     ------
@@ -1098,8 +802,9 @@ def validate_production_config() -> None:
         # placeholder, and short passwords.
         postgres_password = os.environ.get("POSTGRES_PASSWORD", "")
         if not postgres_password:
+            password_file = os.environ.get("POSTGRES_PASSWORD_FILE", POSTGRES_PASSWORD_SECRET_PATH)
             try:
-                postgres_password = Path(POSTGRES_PASSWORD_SECRET_PATH).read_text().strip()
+                postgres_password = Path(password_file).read_text().strip()
             except OSError:
                 postgres_password = ""
         if not postgres_password:
@@ -1123,6 +828,16 @@ def validate_production_config() -> None:
         if not app_base_url:
             raise RuntimeError(
                 "APP_BASE_URL must be set in production (prevents magic-link host-header poisoning)"
+            )
+
+        # Signed-identity gate. Research and Learning read this setting while
+        # importing their application, so by the time this runs the middleware
+        # decision is already made: the gate refuses to serve a process
+        # configured without it rather than installing it late.
+        if not get_jarvis_common_settings().identity_assertions_required:
+            raise RuntimeError(
+                "JARVIS_IDENTITY_ASSERTIONS_REQUIRED must stay enabled in production — "
+                "protected Research and Learning routes would accept unsigned requests"
             )
 
 

@@ -16,6 +16,7 @@ import {
   fetchFeedCounts,
   getJournalEntry,
 } from '@/lib/api';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useMaintenanceStore } from '@/stores/maintenance-store';
 
 const emptyFeedCounts = {
@@ -960,7 +961,7 @@ describe('fetchFeedCounts', () => {
     vi.restoreAllMocks();
   });
 
-  it('hits /api/papers/feed/counts with no params when scope is undefined', async () => {
+  it('hits /api/papers/feed/counts with no params when the selection is empty', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(emptyFeedCounts), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
@@ -971,25 +972,72 @@ describe('fetchFeedCounts', () => {
     );
   });
 
-  it('hits /api/papers/feed/counts?scope=library when scope=library', async () => {
+  it('hits /api/papers/feed/counts?scope=library when library scope is selected', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(emptyFeedCounts), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
-    await fetchFeedCounts('library');
+    await fetchFeedCounts({ scope: 'library' });
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/papers/feed/counts?scope=library',
       expect.anything(),
     );
   });
 
-  it('hits /api/papers/feed/counts?scope=corpus when scope=corpus', async () => {
+  it('hits /api/papers/feed/counts?scope=corpus when corpus scope is selected', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(emptyFeedCounts), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
-    await fetchFeedCounts('corpus');
+    await fetchFeedCounts({ scope: 'corpus' });
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/papers/feed/counts?scope=corpus',
       expect.anything(),
     );
   });
+
+  it('changes the request when the active facet selection changes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(emptyFeedCounts), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    await fetchFeedCounts({
+      scope: 'library',
+      view: 'library',
+      source: 'pubmed',
+      untagged: true,
+    });
+    await fetchFeedCounts({
+      scope: 'library',
+      view: 'library',
+      source: 'pubmed',
+      topicId: 17,
+      untagged: false,
+    });
+
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/papers/feed/counts?scope=library&view=library&source=pubmed&untagged=true',
+      expect.anything(),
+    );
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/papers/feed/counts?scope=library&view=library&source=pubmed&topic_id=17',
+      expect.anything(),
+    );
+  });
+
+  it('uses every active facet value in the counts cache key', () => {
+    const base = QUERY_KEYS.feed.counts('library', 'library', 'pubmed', null, false);
+    const alternatives = [
+      QUERY_KEYS.feed.counts('corpus', 'library', 'pubmed', null, false),
+      QUERY_KEYS.feed.counts('library', 'inbox', 'pubmed', null, false),
+      QUERY_KEYS.feed.counts('library', 'library', 'arxiv', null, false),
+      QUERY_KEYS.feed.counts('library', 'library', 'pubmed', 17, false),
+      QUERY_KEYS.feed.counts('library', 'library', 'pubmed', null, true),
+    ];
+
+    for (const alternative of alternatives) {
+      expect(alternative).not.toEqual(base);
+    }
+  });
 });
+

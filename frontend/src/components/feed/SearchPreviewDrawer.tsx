@@ -73,7 +73,7 @@ export function SearchPreviewDrawer({
               }}
               disabled={!isSaved && isSaving}
             >
-              {isSaved ? 'Open Paper Detail' : 'Save to Library'}
+              {isSaved ? 'Open Paper Detail' : 'Save to your papers'}
             </Button>
             {isValidUrl && (
               <Button variant="outline" asChild>

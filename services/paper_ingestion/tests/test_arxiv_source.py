@@ -139,6 +139,50 @@ def test_consolidate_topics_is_deterministic():
     assert r1 == r2
 
 
+def test_curated_topic_query_keeps_phrase_clauses():
+    source = _make_source()
+    topic = _make_topic(
+        "Graph learning",
+        ["graph neural networks", "message passing"],
+    )
+
+    result = source.consolidate_topics([topic])
+
+    assert result[0].extra_params["search_query"] == (
+        '(ti:"graph neural networks" OR abs:"graph neural networks") OR '
+        '(ti:"message passing" OR abs:"message passing")'
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw_query", "expected"),
+    [
+        ("cat:cs.AI AND ti:transformer", "cat:cs.AI AND ti:transformer"),
+        (
+            '"graph neural networks"',
+            '(ti:"graph neural networks" OR abs:"graph neural networks")',
+        ),
+        (
+            "machine learning interpretability",
+            '(ti:"machine" OR abs:"machine") AND '
+            '(ti:"learning" OR abs:"learning") AND '
+            '(ti:"interpretability" OR abs:"interpretability")',
+        ),
+        (
+            "graph neural networks",
+            '(ti:"graph" OR abs:"graph") AND '
+            '(ti:"neural" OR abs:"neural") AND '
+            '(ti:"networks" OR abs:"networks")',
+        ),
+        ("transformer", '(ti:"transformer" OR abs:"transformer")'),
+    ],
+)
+def test_search_query_preserves_user_intent(raw_query: str, expected: str):
+    source = _make_source()
+
+    assert source._build_search_query(raw_query) == expected
+
+
 # ---------------------------------------------------------------------------
 # Task B: fetch_new_since — PersistentSourceRateLimiter integration
 # ---------------------------------------------------------------------------

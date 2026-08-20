@@ -20,7 +20,7 @@ from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_pulse_card
 from telegram_bot.orchestration import research_pulse
-from telegram_bot.owner import UserPairing
+from telegram_bot.platform_client import UserPairing
 
 _DEFAULT_PAIRING = [UserPairing(user_id=1, chat_id=1234)]
 
@@ -100,7 +100,9 @@ async def test_fetches_pulse_today_and_sends_cards():
     http_client.get.return_value = _ok_response(_make_deck(3))
     db_pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
         await research_pulse.run_research_pulse(
             http_client,
             db_pool,
@@ -112,7 +114,7 @@ async def test_fetches_pulse_today_and_sends_cards():
     http_client.get.assert_awaited_once()
     _, kwargs = http_client.get.await_args
     assert "/api/pulse/today" in http_client.get.await_args[0][0]
-    assert kwargs["headers"]["X-API-Key"] == "secret"
+    assert "X-API-Key" not in kwargs["headers"]
 
     # Three per-card messages (optional header message is allowed but not
     # required; we only assert that every card produced at least one send).
@@ -140,7 +142,9 @@ async def test_stale_degraded_deck_is_labelled_without_internal_diagnostic():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.get.return_value = _ok_response(deck)
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
         await research_pulse.run_research_pulse(
             http_client,
             AsyncMock(),
@@ -164,7 +168,9 @@ async def test_empty_current_deck_explains_that_no_papers_are_available_yet():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.get.return_value = _ok_response(deck)
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
         await research_pulse.run_research_pulse(
             http_client,
             AsyncMock(),
@@ -189,7 +195,9 @@ async def test_empty_deck_sends_fallback_message():
     )
     db_pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
         await research_pulse.run_research_pulse(
             http_client,
             db_pool,
@@ -213,7 +221,9 @@ async def test_null_body_sends_fallback_message():
     http_client.get.return_value = _ok_response(None)  # 200 + JSON null
     db_pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
         await research_pulse.run_research_pulse(
             http_client,
             db_pool,
@@ -236,7 +246,9 @@ async def test_api_failure_sends_diagnostic(caplog):
 
     with (
         caplog.at_level("WARNING"),
-        patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)),
+        patch.object(
+            research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+        ),
     ):
         await research_pulse.run_research_pulse(
             http_client,
@@ -280,7 +292,9 @@ async def test_card_message_has_three_inline_buttons(monkeypatch):
     http_client.get.return_value = _ok_response(_make_deck(2))
     db_pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
         await research_pulse.run_research_pulse(
             http_client,
             db_pool,
@@ -312,6 +326,54 @@ async def test_card_message_has_three_inline_buttons(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_header_states_the_delivered_slice_and_links_the_web_deck():
+    """The header must say how much of the deck arrived and where the rest is."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = _ok_response(_make_deck(20))
+
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
+        await research_pulse.run_research_pulse(
+            http_client,
+            AsyncMock(),
+            bot,
+            make_bot_config(
+                BotConfig,
+                jarvis_api_key=SecretStr("secret"),
+                jarvis_base_url="https://jarvis.example.test",
+            ),
+        )
+
+    header = bot.send_message.await_args_list[0].kwargs["text"]
+    assert "Top 5 of 20" in header
+    assert 'href="https://jarvis.example.test/pulse"' in header
+
+
+@pytest.mark.asyncio
+async def test_header_omits_the_deck_link_without_a_public_base_url():
+    """Telegram cannot render a relative href, so no base URL means no link."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = _ok_response(_make_deck(3))
+
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
+        await research_pulse.run_research_pulse(
+            http_client,
+            AsyncMock(),
+            bot,
+            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
+        )
+
+    header = bot.send_message.await_args_list[0].kwargs["text"]
+    assert "Top 3 of 3" in header
+    assert "<a href=" not in header
+
+
+@pytest.mark.asyncio
 async def test_deck_is_capped_to_top_n():
     """A 20-card deck should only send up to PULSE_TELEGRAM_TOP_N cards."""
     bot = AsyncMock()
@@ -319,7 +381,9 @@ async def test_deck_is_capped_to_top_n():
     http_client.get.return_value = _ok_response(_make_deck(20))
     db_pool = AsyncMock()
 
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+    with patch.object(
+        research_pulse, "list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)
+    ):
         await research_pulse.run_research_pulse(
             http_client,
             db_pool,

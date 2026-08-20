@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-import asyncpg
-from unittest.mock import AsyncMock
+import httpx
+from unittest.mock import AsyncMock, MagicMock
 from jarvis_common.testing import A_PAPER_TITLE, SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 pytestmark = [
     pytest.mark.contract,
@@ -30,53 +31,101 @@ pytestmark = [
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def pi_settings_client(contract_conn, contract_two_users):
-    """ASGI client wired to the real per-test transaction via SharedConnPool.
+    """Serve Platform config through the signed in-process Research command."""
+    from functools import partial
 
-    Sets BOTH overrides so routes that use Depends(get_db_pool) AND any that
-    read request.app.state.db_pool directly (system.py lines 241, 303, 628)
-    both reach the same transactional connection.
-
-    Also patches ``require_admin`` in the settings router namespace because
-    ``set_config`` calls it directly (not via Depends), so dependency_overrides
-    cannot intercept it — same technique as the mock-unit _app fixture.
-    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from fastapi import Depends, FastAPI
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import require_admin
+    from jarvis_common.identity_assertions import (
+        IdentityAssertionSigner,
+        IdentityAssertionVerifier,
+        VerificationKey,
+    )
+    from jarvis_common.identity_capabilities import required_identity_scopes
+    from jarvis_common.identity_middleware import IdentityAssertionMiddleware
     from jarvis_common.testing_contract_apps import (
         make_contract_client,
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-    from paper_ingestion.routers import settings as _settings_mod
+    from paper_ingestion.deps import get_db_pool as get_research_db_pool
+    from paper_ingestion.routers import internal_config
+    from platform_api.deps import get_db_pool as get_platform_db_pool
+    from platform_api.deps import get_identity_signer
+    from platform_api.deps import limiter as platform_limiter
+    from platform_api.main import app as platform_app
 
-    async def _allow_all(request=None) -> None:  # noqa: ARG001
-        return None
-
-    shared = SharedConnPool(contract_conn)
-    # Idiomatic mock carve-out: set_config reads request.app.state.http_client for
-    # the LiteLLM model-validation probe (outbound HTTP — never touches the DB).
-    _orig_require_admin = _settings_mod.require_admin
-    _settings_mod.require_admin = _allow_all
-    app.state.limiter.enabled = False
+    platform_pool = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
+    research_pool = platform_pool.with_session_authorization("jarvis_research_runtime")
+    await contract_conn.execute(
+        "UPDATE users SET role = 'admin' WHERE id = $1",
+        contract_two_users.user_a_id,
+    )
+    private_key = Ed25519PrivateKey.generate()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="contract-current",
+        signing_key=private_key,
+    )
+    verifier = IdentityAssertionVerifier(
+        issuer="jarvis-platform",
+        audience="research",
+        keys={"contract-current": VerificationKey(private_key.public_key())},
+    )
+    research_app = FastAPI(dependencies=[Depends(verify_api_key)])
+    research_app.include_router(internal_config.router)
+    research_app.add_middleware(
+        IdentityAssertionMiddleware,
+        verifier=verifier,
+        scope_resolver=partial(required_identity_scopes, "research"),
+    )
+    platform_limiter.enabled = False
     try:
-        with (
-            patch_app_state(app, {"db_pool": shared, "http_client": AsyncMock()}),
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    get_db_pool: lambda: shared,
-                    verify_api_key: lambda: None,
-                    require_admin: _allow_all,
-                },
-            ),
-        ):
-            async with make_contract_client(app, contract_two_users.cookie_a) as client:
-                yield client
+        research_transport = httpx.ASGITransport(app=research_app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(
+            transport=research_transport,
+            base_url="http://paper_ingestion:8000",
+        ) as research_client:
+            with (
+                patch_app_state(
+                    research_app,
+                    {
+                        "db_pool": research_pool,
+                        "http_client": AsyncMock(spec=httpx.AsyncClient),
+                        "scheduler": MagicMock(),
+                    },
+                ),
+                patch_dependency_overrides(
+                    research_app,
+                    set_overrides={
+                        get_research_db_pool: lambda: research_pool,
+                        verify_api_key: lambda: None,
+                    },
+                ),
+                patch_app_state(
+                    platform_app,
+                    {"db_pool": platform_pool, "http_client": research_client},
+                ),
+                patch_dependency_overrides(
+                    platform_app,
+                    set_overrides={
+                        get_platform_db_pool: lambda: platform_pool,
+                        get_identity_signer: lambda: signer,
+                        verify_api_key: lambda: None,
+                    },
+                ),
+            ):
+                async with make_contract_client(
+                    platform_app,
+                    contract_two_users.cookie_a,
+                ) as client:
+                    yield client
     finally:
-        _settings_mod.require_admin = _orig_require_admin
-        app.state.limiter.enabled = True
+        platform_limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +217,8 @@ async def test_put_encrypted_key_masked_sentinel_does_not_clobber_secret(
 ):
     """Re-submitting the masked display value of an encrypted key must NOT overwrite the stored secret.
 
-    Verified: config_write.py:388 (encrypt_secret(str(value))), config_db.py:122
-    (mask_secret on read), crypto.py:236 ('****'+last4 sentinel).
+    Verified: Research ``config_write`` encrypts new values and shared
+    ``config_store`` masks reads using the ``crypto`` sentinel contract.
     """
     from cryptography.fernet import Fernet
     from jarvis_common.crypto import decrypt_secret, mask_secret, refresh_fernet_cache
@@ -369,10 +418,10 @@ async def test_zotero_cache_survives_identical_scope_and_unrelated_writes(
     )
 
 
-async def test_zotero_library_change_rolls_back_config_and_cache_together(
+async def test_zotero_library_change_stays_pending_when_cache_reset_fails(
     contract_conn, contract_two_users, pi_settings_client
 ):
-    """A cache-reset failure cannot commit a mismatched library identity."""
+    """A cache-reset failure preserves the desired value for durable retry."""
     await _seed_zotero_library_state(contract_conn, contract_two_users)
     user_a = contract_two_users.user_a_id
     await contract_conn.execute(
@@ -390,19 +439,26 @@ async def test_zotero_library_change_rolls_back_config_and_cache_together(
            EXECUTE FUNCTION fail_zotero_collection_reset()"""
     )
 
-    with pytest.raises(asyncpg.RaiseError, match="forced Zotero collection reset failure"):
-        await pi_settings_client.put(
-            "/api/config/zotero.user_id",
-            json={"key": "zotero.user_id", "value": "library-a-new"},
-        )
+    response = await pi_settings_client.put(
+        "/api/config/zotero.user_id",
+        json={"key": "zotero.user_id", "value": "library-a-new"},
+    )
 
+    assert response.status_code == 202
+    assert response.json()["delivery_state"] == "pending"
     assert (
         await contract_conn.fetchval(
             "SELECT value FROM user_config WHERE user_id = $1 AND key = 'zotero.user_id'",
             user_a,
         )
-        == "library-a"
+        == "library-a-new"
     )
+    delivery = await contract_conn.fetchrow(
+        """SELECT state, attempts FROM config_deliveries
+           WHERE scope_user_id = $1 AND key = 'zotero.user_id'""",
+        user_a,
+    )
+    assert tuple(delivery) == ("pending", 1)
     assert (
         await contract_conn.fetchval(
             """SELECT zotero_item_key FROM paper_user_zotero_links
@@ -429,7 +485,7 @@ async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_clien
     record cannot be reassigned through the admin config surface.
     """
     from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
-    from paper_ingestion.services.config_metadata import _ALLOWED_CONFIG_KEYS
+    from jarvis_common.config_metadata import _ALLOWED_CONFIG_KEYS
 
     assert OWNER_USER_ID_CONFIG_KEY not in _ALLOWED_CONFIG_KEYS
 
@@ -452,8 +508,8 @@ async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_clien
 #
 # Verified: config_metadata.py (_ALLOWED_CONFIG_KEYS, PERSONAL_KEYS, SYSTEM_KEYS)
 # Verified: config_validators.py (_CONFIG_VALIDATORS)
-# Verified: config_db.py (_write_config_row — UPSERT)
-# Verified: config_db.py (_fetch_effective_config_row — scoped GET)
+# Verified: jarvis_common.config_store (_write_config_row — UPSERT)
+# Verified: jarvis_common.config_store (_fetch_effective_config_row — scoped GET)
 # ---------------------------------------------------------------------------
 
 
@@ -468,7 +524,7 @@ async def test_put_fsrs_desired_retention_round_trip(
     """PUT /api/config/fsrs.desired_retention persists; GET reads it back.
 
     Verified: config_validators.py (_validate_fsrs_retention),
-              config_db.py (_write_config_row UPSERT path).
+              jarvis_common.config_store (_write_config_row UPSERT path).
     Survivor-of: test_settings.py fsrs key round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -515,7 +571,7 @@ async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client)
     """PUT /api/config/pulse.l2_lambda persists in user_config (user_id IS NULL).
 
     Verified: config_validators.py (_validate_l2_lambda),
-              config_db.py (_write_config_row NULL-scoped UPSERT).
+              jarvis_common.config_store (_write_config_row NULL-scoped UPSERT).
     Survivor-of: test_settings.py l2_lambda round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
@@ -564,7 +620,11 @@ async def test_put_onboarding_dismissed_round_trip_is_personal(
 
     fetched = await pi_settings_client.get("/api/config/onboarding.dismissed")
     assert fetched.status_code == 200
-    assert fetched.json() == {"key": "onboarding.dismissed", "value": True}
+    assert fetched.json() == {
+        "key": "onboarding.dismissed",
+        "value": True,
+        "delivery_state": "applied",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +636,7 @@ async def test_put_setup_completed_persists_true(contract_conn, pi_settings_clie
     """PUT /api/config/setup.completed stores True in user_config.
 
     Verified: config_validators.py (_validate_bool guard),
-              config_db.py (_write_config_row UPSERT).
+              jarvis_common.config_store (_write_config_row UPSERT).
     Survivor-of: test_settings.py setup.completed round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -646,7 +706,7 @@ async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_
     """PUT /api/config/telegram.owner_chat_id stores integer; GET reads it back.
 
     Verified: config_validators.py (telegram.owner_chat_id → _validate_optional_int),
-              config_db.py (_fetch_effective_config_row system path).
+              jarvis_common.config_store (_fetch_effective_config_row system path).
     Survivor-of: test_settings.py telegram.owner_chat_id round-trip tests.
     """
     resp = await pi_settings_client.put(
@@ -678,23 +738,12 @@ async def test_put_telegram_owner_chat_id_null_clears(contract_conn, pi_settings
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_client, monkeypatch):
-    """Fail-closed delivery contract for LiteLLM runtime keys (CRIT-1).
-
-    Part 1: a real (non-"No DB Connected") delivery failure returns 400 and
-    writes NO config row, so the UI snap-back is truthful.
-    Part 1b: the stock-compose "No DB Connected" failure commits the row,
-    returns HTTP 200, and records the role in llm.delivery_pending so
-    GET /api/system/models surfaces delivery="pending_restart" — never a
-    silent phantom "applied".
-    Part 2: delivery fires first; when the subsequent DB write fails the PUT
-    raises (no row committed) and one reconciler pass re-delivers the stored
-    (old) model back to LiteLLM.
-    """
+    """LiteLLM failures retain the desired value with truthful delivery state."""
     from fastapi import HTTPException
 
     import paper_ingestion.services.config_write as _config_write
 
-    # -- Part 1: delivery fails (non-No-DB) → 400 + row NOT written ----------
+    # A normal delivery failure is durable and visibly pending for retry.
     litellm_called: list[str] = []
 
     async def _litellm_fail(**kwargs):  # noqa: ARG001
@@ -707,16 +756,22 @@ async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_c
         "/api/config/llm.contract-host.smart_num_ctx",
         json={"key": "llm.contract-host.smart_num_ctx", "value": 4096},
     )
-    assert resp.status_code == 400
-    assert "litellm-fail" in resp.json()["detail"]
+    assert resp.status_code == 202
+    assert resp.json()["delivery_state"] == "pending"
     row = await contract_conn.fetchrow(
         "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
         "llm.contract-host.smart_num_ctx",
     )
-    assert row is None, "fail-closed: a delivery failure must not commit the row"
+    assert row is not None and row["value"] == 4096
+    delivery = await contract_conn.fetchrow(
+        """SELECT state, attempts FROM config_deliveries
+           WHERE scope_user_id = 0 AND key = 'llm.contract-host.smart_num_ctx'"""
+    )
+    assert tuple(delivery) == ("pending", 1)
     assert litellm_called
 
-    # -- Part 1b: "No DB Connected" → 200 + row committed + role pending -----
+    # The known DB-less LiteLLM mode is applied as an explicit model-level
+    # pending marker rather than an outbox transport failure.
     async def _litellm_no_db(**kwargs):  # noqa: ARG001
         raise HTTPException(
             status_code=400,
@@ -745,99 +800,6 @@ async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_c
     )
     assert pending is not None, "No-DB carve-out must record the pending role"
     assert "smart" in pending["value"]
-
-    # -- Part 2: runtime key — delivery succeeds but _write_config_row fails --
-    # Pins: delivery→commit ordering for LiteLLM runtime keys. When a PUT to
-    # llm.smart_model delivers the new model to LiteLLM successfully but the
-    # subsequent DB write fails, the PUT must raise (no committed row) and one
-    # reconciler pass must re-deliver the STORED (old) model back to LiteLLM.
-    monkeypatch.undo()
-
-    import paper_ingestion.services.config_db as _config_db
-    import paper_ingestion.services.litellm_config as _litellm_cfg
-    from paper_ingestion.litellm_reconciler import _reconcile_litellm_models_once
-
-    # Seed the "old" stored model so the reconciler has something to re-deliver.
-    await contract_conn.execute(
-        """INSERT INTO user_config (user_id, key, value)
-           VALUES (NULL, 'llm.smart_model', $1::jsonb)
-           ON CONFLICT (user_id, key) DO UPDATE SET value = $1::jsonb""",
-        "qwen3:4b",
-    )
-
-    delivered_models: list[str] = []
-
-    async def _capture_delivery(config_key: str, model_name: str, **kwargs: object) -> bool:  # noqa: ARG001
-        delivered_models.append(model_name)
-        return True
-
-    # Stub LiteLLM HTTP calls so reconciler/delivery doesn't need a live proxy.
-    async def _fake_deployments() -> list[dict]:
-        return []
-
-    monkeypatch.setattr(_litellm_cfg, "get_litellm_deployments", _fake_deployments)
-    monkeypatch.setattr(_litellm_cfg, "update_litellm_model", _capture_delivery)
-    # The PUT route binds update_litellm_model early (settings.py passes it as
-    # update_litellm_model_fn) — patch the router namespace too.
-    import paper_ingestion.routers.settings as _settings_router
-
-    monkeypatch.setattr(_settings_router, "update_litellm_model", _capture_delivery)
-
-    # Model-key PUTs verify the model against Ollama tags first; no Ollama here.
-    async def _allow_model(*args: object, **kwargs: object) -> None:
-        return None
-
-    monkeypatch.setattr(_config_write, "validate_model_assignment", _allow_model)
-
-    # Make _write_config_row fail after delivery has fired.
-    _orig_write_config_row = _config_db._write_config_row
-
-    write_call_count = 0
-
-    async def _write_then_fail(conn, **kwargs: object) -> None:
-        nonlocal write_call_count
-        write_call_count += 1
-        raise RuntimeError("db-write-fail")
-
-    monkeypatch.setattr(_config_db, "_write_config_row", _write_then_fail)
-    # config_write imports _write_config_row at its module level; patch there too.
-    monkeypatch.setattr(_config_write, "_write_config_row", _write_then_fail)
-
-    # PUT llm.smart_model = "qwen3:8b" — delivery fires (LiteLLM accepts) then
-    # the row write fails. The ASGI test transport re-raises app exceptions, so
-    # the failed PUT surfaces as the raw RuntimeError (a deployed server would
-    # return 500); either way no row may be committed.
-    with pytest.raises(RuntimeError, match="db-write-fail"):
-        await pi_settings_client.put(
-            "/api/config/llm.smart_model",
-            json={"key": "llm.smart_model", "value": "qwen3:8b"},
-        )
-    # Delivery fired for the new model.
-    assert "qwen3:8b" in delivered_models, (
-        f"Delivery must have fired for 'qwen3:8b' before the write failed; delivered={delivered_models}"
-    )
-    # No row committed for the new value — old "qwen3:4b" row is intact.
-    row = await contract_conn.fetchrow(
-        "SELECT value FROM user_config WHERE key = 'llm.smart_model' AND user_id IS NULL"
-    )
-    assert row is not None, "Old stored model row must survive the failed PUT"
-    assert str(row["value"]) == "qwen3:4b", (
-        f"Old stored model must be 'qwen3:4b', got {row['value']!r}"
-    )
-
-    # Restore _write_config_row so the reconciler can write pending bookkeeping.
-    monkeypatch.setattr(_config_db, "_write_config_row", _orig_write_config_row)
-    monkeypatch.setattr(_config_write, "_write_config_row", _orig_write_config_row)
-
-    # One reconciler pass must re-deliver the STORED (old) model "qwen3:4b".
-    delivered_models.clear()
-    shared = SharedConnPool(contract_conn)
-    await _reconcile_litellm_models_once(shared)
-
-    assert "qwen3:4b" in delivered_models, (
-        f"Reconciler must re-deliver the stored model 'qwen3:4b' within one pass; "
-        f"delivered={delivered_models}"
-    )
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -911,12 +873,12 @@ async def test_put_config_litellm_skipped_pending_semantics(
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _ai_settings_client(contract_conn, tmp_path_factory):
+async def _ai_settings_client(contract_conn, contract_two_users, tmp_path_factory):
     """ASGI client wired for /api/settings/ai endpoints.
 
     - SharedConnPool for dismiss-banner DB writes (within per-test txn).
     - require_admin patched in the settings_ai module namespace (it is a *local*
-      function from paper_ingestion.routers.admin, not jarvis_common.auth, so
+      function from platform_api.routers.admin, not jarvis_common.auth, so
       dependency_overrides cannot intercept it; direct attribute patch required).
     - A minimal llm-tier-candidates.yaml with one valid ge-48 ollama candidate
       (qwen3:14b — tier=2, assignable=True, smart role — present in catalog).
@@ -954,11 +916,23 @@ async def _ai_settings_client(contract_conn, tmp_path_factory):
     async def _allow_admin(request=None) -> None:  # noqa: ARG001
         return None
 
-    # require_admin in settings_ai.py is imported from paper_ingestion.routers.admin
+    # require_admin in settings_ai.py is imported from platform_api.routers.admin
     # (not jarvis_common.auth), so we must override that specific function object.
-    from paper_ingestion.routers.admin import require_admin as _pi_require_admin
+    from platform_api.routers.admin import require_admin as _pi_require_admin
 
-    shared = SharedConnPool(contract_conn)
+    await contract_conn.execute(
+        "UPDATE users SET role = 'admin' WHERE id = $1",
+        contract_two_users.user_a_id,
+    )
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
+    signed_app = SignedIdentityMiddleware(
+        app,
+        audience="research",
+        session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+    )
     _orig_config_path = _sai_mod._CONFIG_PATH
     _orig_observed_share = _sai_mod.observed_share
     _sai_mod._CONFIG_PATH = config_path
@@ -976,7 +950,10 @@ async def _ai_settings_client(contract_conn, tmp_path_factory):
                 },
             ),
         ):
-            async with make_contract_client(app, None) as client:
+            async with make_contract_client(
+                signed_app,
+                contract_two_users.cookie_a,
+            ) as client:
                 yield client
     finally:
         _sai_mod._CONFIG_PATH = _orig_config_path
@@ -1146,7 +1123,12 @@ async def _me_export_client(contract_conn, contract_two_users):
                 },
             ),
         ):
-            async with make_contract_client(app, contract_two_users.cookie_a) as client:
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+            )
+            async with make_contract_client(signed_app, contract_two_users.cookie_a) as client:
                 yield client
     finally:
         app.state.limiter.enabled = True
@@ -1324,7 +1306,10 @@ async def test_get_my_export_requires_auth(contract_conn):
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -1337,8 +1322,13 @@ async def test_get_my_export_requires_auth(contract_conn):
                 },
             ),
         ):
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+            )
             # Pass None for the session cookie → no jarvis_session header sent.
-            async with make_contract_client(app, None) as unauth_client:
+            async with make_contract_client(signed_app, None) as unauth_client:
                 resp = await unauth_client.get("/api/me/export")
     finally:
         app.state.limiter.enabled = True
@@ -1390,3 +1380,39 @@ async def test_get_my_export_excludes_other_users_papers(
     assert len(titles) == 1, (
         f"Expected exactly 1 paper for user A in export; got {len(titles)}: {titles!r}"
     )
+
+
+async def test_non_admin_reads_pulse_flag_while_writes_stay_admin_only(
+    contract_conn, pi_settings_client
+):
+    """A non-admin browser session can SEE that Pulse is off but not switch it.
+
+    The empty-Pulse copy has to name the reason, which means the flag must reach
+    a user who cannot change it. Readability and writability are separate gates:
+    `list_config` consults BROWSER_READABLE_SYSTEM_KEYS while `set_config` still
+    routes every system-scope key through require_admin.
+    Verified: Platform ``configuration.list_config`` and shared
+    ``config_metadata.BROWSER_READABLE_SYSTEM_KEYS``.
+    """
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES (NULL, 'pulse.enabled', 'false'::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value""",
+    )
+
+    resp = await pi_settings_client.get("/api/config")
+    assert resp.status_code == 200
+    entries = {item["key"]: item["value"] for item in resp.json()}
+    assert entries.get("pulse.enabled") is False, (
+        "a non-admin must see the flag, or the empty state cannot explain itself"
+    )
+
+    # The write gate is the key's classification, not this listing: making the
+    # flag readable must not quietly make it personal, which is what would let a
+    # non-admin write it. This fixture patches require_admin out, so asserting on
+    # a rejected PUT here would prove nothing — the classification is the real
+    # invariant, and it is what set_config branches on.
+    from jarvis_common.config_metadata import PERSONAL_KEYS, _classify_config_key
+
+    assert _classify_config_key("pulse.enabled") == "system"
+    assert "pulse.enabled" not in PERSONAL_KEYS

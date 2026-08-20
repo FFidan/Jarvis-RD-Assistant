@@ -1,232 +1,130 @@
-"""Unit tests for BotConfig.from_env."""
+"""Unit contracts for the database-free Telegram configuration boundary."""
 
 from __future__ import annotations
 
+import inspect
 import os
-from unittest.mock import patch
+from collections.abc import Iterator
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 from telegram_bot.config import BotConfig
 
 
 def _minimal_env() -> dict[str, str]:
-    """Return a minimal env dict with required vars set."""
-    env: dict[str, str] = {
+    return {
         "TELEGRAM_BOT_TOKEN": "test-token",
-        "DATABASE_URL": "postgres://localhost/test",
+        "JARVIS_TELEGRAM_SERVICE_TOKEN": "service-token-with-at-least-32-characters",
     }
-    return env
 
 
-def test_config_from_env_happy_path():
-    """All required vars set → config loads with correct values."""
-    env = _minimal_env()
-    with patch.dict(os.environ, env, clear=True):
+@pytest.fixture(autouse=True)
+def _platform_token_unavailable() -> Iterator[AsyncMock]:
+    lookup = AsyncMock(return_value=None)
+    with patch("telegram_bot.config._read_platform_bot_token", lookup):
+        yield lookup
+
+
+def test_config_from_env_requires_no_database_or_config_key() -> None:
+    with patch.dict(os.environ, _minimal_env(), clear=True):
         config = BotConfig.from_env()
 
     assert config.telegram_token.get_secret_value() == "test-token"
-    assert config.database_url == "postgres://localhost/test"
+    assert config.telegram_service_token.get_secret_value().startswith("service-token")
 
 
-def test_config_from_env_missing_token_raises_systemexit():
-    """Missing TELEGRAM_BOT_TOKEN must still raise SystemExit(1)."""
-    env = {"DATABASE_URL": "postgres://localhost/test"}
-    with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(SystemExit):
-            BotConfig.from_env()
-
-
-def test_config_from_env_missing_database_url_raises_systemexit():
-    """Missing DATABASE_URL must still raise SystemExit(1)."""
-    env = {"TELEGRAM_BOT_TOKEN": "tok"}
-    with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(SystemExit):
-            BotConfig.from_env()
-
-
-def test_config_jarvis_base_url_defaults_to_none():
-    """TG-BUG-01: jarvis_base_url defaults to None when JARVIS_BASE_URL is unset."""
+@pytest.mark.parametrize(
+    "missing",
+    ["TELEGRAM_BOT_TOKEN", "JARVIS_TELEGRAM_SERVICE_TOKEN"],
+)
+def test_config_missing_required_credential_exits(missing: str) -> None:
     env = _minimal_env()
-    with patch.dict(os.environ, env, clear=True):
+    env.pop(missing)
+    with patch.dict(os.environ, env, clear=True), pytest.raises(SystemExit):
+        BotConfig.from_env()
+
+
+def test_config_jarvis_base_url_defaults_to_none() -> None:
+    with patch.dict(os.environ, _minimal_env(), clear=True):
         config = BotConfig.from_env()
 
     assert config.jarvis_base_url is None
 
 
-def test_config_reads_jarvis_base_url_from_env():
-    """TG-BUG-01: jarvis_base_url is sourced from JARVIS_BASE_URL."""
-    env = _minimal_env()
-    env["JARVIS_BASE_URL"] = "https://jarvis.example.com"
+def test_config_reads_jarvis_base_url_from_env() -> None:
+    env = {**_minimal_env(), "JARVIS_BASE_URL": "https://jarvis.example.com/"}
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
 
     assert config.jarvis_base_url == "https://jarvis.example.com"
 
 
-def test_config_reads_token_from_secret_file_when_env_unset(tmp_path):
-    """Docker-secret convention: when only TELEGRAM_BOT_TOKEN_FILE is set (the bare
-    TELEGRAM_BOT_TOKEN env is absent), the token is read from that secret file.
-
-    Guards the bug where BotConfig (JarvisCommonSettings) does not apply the
-    ``_FILE`` indirection, so the documented Docker-secret token path silently
-    yielded an empty token and the bot exited.
-    """
-    secret = tmp_path / "telegram_bot_token"
-    secret.write_text("123456:secret-token-from-file\n")
+def test_config_reads_both_credentials_from_secret_files(tmp_path) -> None:
+    bot_secret = tmp_path / "telegram_bot_token"
+    service_secret = tmp_path / "telegram_service_token"
+    bot_secret.write_text("123456:secret-token-from-file\n")
+    service_secret.write_text("dedicated-service-token-with-32-characters\n")
     env = {
-        "TELEGRAM_BOT_TOKEN_FILE": str(secret),
-        "DATABASE_URL": "postgres://localhost/test",
+        "TELEGRAM_BOT_TOKEN_FILE": str(bot_secret),
+        "JARVIS_TELEGRAM_SERVICE_TOKEN_FILE": str(service_secret),
     }
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
 
     assert config.telegram_token.get_secret_value() == "123456:secret-token-from-file"
+    assert config.telegram_service_token.get_secret_value().startswith("dedicated-service")
 
 
-def test_config_token_secret_file_oserror_falls_through_to_systemexit(tmp_path):
-    """A TELEGRAM_BOT_TOKEN_FILE that cannot be read must fail safe, not raise OSError.
-
-    read_text() on a directory raises IsADirectoryError (OSError subclass). The
-    shared secret-file reader swallows it and yields None, so with no bare token
-    and no DB row the token resolves empty and from_env exits cleanly.
-    """
-    env = {
-        "TELEGRAM_BOT_TOKEN_FILE": str(tmp_path),  # a directory → IsADirectoryError
-        "DATABASE_URL": "postgres://localhost/test",
-    }
-    with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(SystemExit):
-            BotConfig.from_env()
-
-
-def test_config_reads_jarvis_api_key_from_secret_file(tmp_path):
-    """Docker-secret convention: when only JARVIS_API_KEY_FILE is set (the bare
-    JARVIS_API_KEY env is absent), the key is read from that secret file.
-
-    Guards the bug where an empty JARVIS_API_KEY caused every backend call to
-    return 403.
-    """
-    secret = tmp_path / "jarvis_api_key"
-    secret.write_text("my-secret-api-key\n")
-    env = {
-        "TELEGRAM_BOT_TOKEN": "test-token",
-        "DATABASE_URL": "postgres://localhost/test",
-        "JARVIS_API_KEY_FILE": str(secret),
-    }
-    with patch.dict(os.environ, env, clear=True):
+def test_platform_bot_token_overrides_bootstrap_secret(
+    _platform_token_unavailable: AsyncMock,
+) -> None:
+    _platform_token_unavailable.return_value = "wizard-saved-token"
+    with patch.dict(os.environ, _minimal_env(), clear=True):
         config = BotConfig.from_env()
 
-    assert config.jarvis_api_key is not None
-    assert config.jarvis_api_key.get_secret_value() == "my-secret-api-key"
+    assert config.telegram_token.get_secret_value() == "wizard-saved-token"
 
 
-def test_config_jarvis_base_url_javascript_scheme_rejected():
-    """TG-03: a javascript: JARVIS_BASE_URL must be rejected at config-parse time.
-
-    Prevents XSS / open-redirect via crafted deep-links in Telegram digests.
-    ValidationError (pydantic) wraps the ValueError raised by _validate_base_url.
-    """
-    from pydantic import ValidationError
-
+@pytest.mark.parametrize(
+    "file_variable",
+    ["TELEGRAM_BOT_TOKEN_FILE", "JARVIS_TELEGRAM_SERVICE_TOKEN_FILE"],
+)
+def test_unreadable_secret_file_fails_safe(tmp_path, file_variable: str) -> None:
     env = _minimal_env()
-    env["JARVIS_BASE_URL"] = "javascript:alert(1)"
-    with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(ValidationError):
-            BotConfig.from_env()
+    direct_variable = (
+        "TELEGRAM_BOT_TOKEN"
+        if file_variable == "TELEGRAM_BOT_TOKEN_FILE"
+        else "JARVIS_TELEGRAM_SERVICE_TOKEN"
+    )
+    env.pop(direct_variable)
+    env[file_variable] = str(tmp_path)
+    with patch.dict(os.environ, env, clear=True), pytest.raises(SystemExit):
+        BotConfig.from_env()
 
 
-def test_config_jarvis_base_url_https_accepted():
-    """TG-03: a well-formed https:// JARVIS_BASE_URL passes validation unchanged."""
-    env = _minimal_env()
-    env["JARVIS_BASE_URL"] = "https://jarvis.example.com"
-    with patch.dict(os.environ, env, clear=True):
-        config = BotConfig.from_env()
-
-    assert config.jarvis_base_url == "https://jarvis.example.com"
+def test_config_rejects_javascript_public_url() -> None:
+    env = {**_minimal_env(), "JARVIS_BASE_URL": "javascript:alert(1)"}
+    with patch.dict(os.environ, env, clear=True), pytest.raises(ValidationError):
+        BotConfig.from_env()
 
 
-# ---------------------------------------------------------------------------
-# M12d — DSN credential redaction in the pool-creation log line
-# ---------------------------------------------------------------------------
+def test_config_rejects_credentials_in_service_url() -> None:
+    env = {**_minimal_env(), "PLATFORM_API_URL": "http://user:password@platform_api:8003"}
+    with patch.dict(os.environ, env, clear=True), pytest.raises(ValidationError):
+        BotConfig.from_env()
 
 
-def test_redact_dsn_strips_userinfo_and_query():
-    """_redact_dsn keeps only hostname:port/path — no userinfo, no query string."""
-    from telegram_bot.config import _redact_dsn
-
-    assert _redact_dsn("postgresql://u:pw@h:5432/db") == "h:5432/db"
-    # Query strings can carry password= — they must be dropped too.
-    assert _redact_dsn("postgresql://h/db?password=qpw") == "h/db"
-
-
-@pytest.mark.asyncio
-async def test_create_db_pool_log_redacts_credentials(caplog):
-    """The 'Database pool created' log line must never leak DSN credentials.
-
-    A DSN of the form user:password@host must surface as host:port/db only —
-    neither the username nor the password substring may appear in the log.
-    """
-    import logging
-    from unittest.mock import AsyncMock
-
-    from telegram_bot.config import create_db_pool
-
-    dsn = "postgresql://dbuser:hunter2@dbhost:5433/jarvis"
-    with patch("telegram_bot.config.asyncpg.create_pool", new=AsyncMock(return_value=object())):
-        with caplog.at_level(logging.INFO, logger="telegram_bot.config"):
-            await create_db_pool(dsn)
-
-    assert "Database pool created" in caplog.text
-    assert "hunter2" not in caplog.text
-    assert "dbuser" not in caplog.text
-    assert "dbhost:5433/jarvis" in caplog.text
-
-
-# ---------------------------------------------------------------------------
-# Self-documentation: the env-var table
-# ---------------------------------------------------------------------------
-
-
-def test_bot_config_env_var_table_is_a_real_docstring():
-    """The env-var table must be BotConfig's docstring, not a stray literal.
-
-    Placed after ``model_config`` the table was an ordinary expression
-    statement, so ``BotConfig.__doc__`` was None and the table was invisible to
-    ``help()`` and every docstring-reading tool. It must also stay complete:
-    JARVIS_BASE_URL was added to the class long after the table was written.
-    """
-    doc = BotConfig.__doc__
-    assert doc is not None, "BotConfig has no docstring — the env-var table is a stray literal"
-    for env_var in (
-        "TELEGRAM_BOT_TOKEN",
-        "JARVIS_BASE_URL",
-        "DATABASE_URL",
-        "PAPER_INGESTION_URL",
-        "LEARNING_ENGINE_URL",
-        "JARVIS_API_KEY",
+def test_bot_config_has_numpy_style_public_docstring() -> None:
+    doc = inspect.getdoc(BotConfig)
+    assert doc is not None
+    assert "Parameters\n----------" in doc
+    for field in (
+        "telegram_token",
+        "telegram_service_token",
+        "platform_api_url",
+        "paper_ingestion_url",
+        "learning_engine_url",
+        "jarvis_base_url",
     ):
-        assert env_var in doc, f"{env_var} is missing from the BotConfig env-var table"
-
-
-def test_config_jarvis_api_key_file_oserror_falls_through_to_none(tmp_path):
-    """JARVIS_API_KEY_FILE pointing to an unreadable path must NOT raise.
-
-    read_text() on a directory raises IsADirectoryError (OSError subclass).
-    The OSError catch in BotConfig.from_env() must swallow it and leave
-    jarvis_api_key as None (unauthenticated warning path).
-
-    Verified: telegram_bot/config.py:183-190 — OSError branch sets api_key=None.
-    """
-    # A directory raises IsADirectoryError (OSError) on read_text().
-    unreadable = tmp_path  # tmp_path itself is a directory
-    env = {
-        "TELEGRAM_BOT_TOKEN": "test-token",
-        "DATABASE_URL": "postgres://localhost/test",
-        "JARVIS_API_KEY_FILE": str(unreadable),
-    }
-    # Bare JARVIS_API_KEY is absent — only the FILE path is set.
-    with patch.dict(os.environ, env, clear=True):
-        config = BotConfig.from_env()
-
-    # Must not raise; key falls through to None.
-    assert config.jarvis_api_key is None
+        assert field in doc

@@ -453,7 +453,6 @@ async def test_http_review_increments_cards_reviewed_total(
         "UPDATE cards SET due_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
         card_id_a,
     )
-
     async with _client(_le_app, contract_two_users.cookie_a) as c:
         review_resp = await c.post(
             f"/api/review/{card_id_a}", json={"rating": 3, "review_duration_ms": 1500}

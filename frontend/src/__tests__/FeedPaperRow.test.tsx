@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
@@ -7,6 +7,16 @@ import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
 import type { FeedPaper } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
+
+// Only the citation client is stubbed; everything else the row touches stays
+// real so the rest of this file keeps testing the row it ships.
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  copyPaperCitation: vi.fn(),
+}));
+
+vi.mock('sonner', async () =>
+  (await import('@/__tests__/fixtures/sonner-mock')).createSonnerMock());
 
 // FeedbackButtons uses useMutation — wrap with QueryClientProvider
 function renderRow(props: Parameters<typeof FeedPaperRow>[0]) {
@@ -73,6 +83,33 @@ const trashPaper: FeedPaper = {
   state: 'trash',
 };
 
+// Radix DropdownMenu (the row's overflow menu) relies on pointer-capture APIs
+// not present in jsdom.
+beforeAll(() => {
+  if (!window.HTMLElement.prototype.hasPointerCapture) {
+    window.HTMLElement.prototype.hasPointerCapture = () => false;
+  }
+  if (!window.HTMLElement.prototype.setPointerCapture) {
+    window.HTMLElement.prototype.setPointerCapture = () => {};
+  }
+  if (!window.HTMLElement.prototype.releasePointerCapture) {
+    window.HTMLElement.prototype.releasePointerCapture = () => {};
+  }
+  if (!window.HTMLElement.prototype.scrollIntoView) {
+    window.HTMLElement.prototype.scrollIntoView = () => {};
+  }
+});
+
+/** Opens the row's overflow menu and clicks the named item. */
+async function selectOverflow(
+  user: ReturnType<typeof userEvent.setup>,
+  title: string,
+  item: RegExp,
+) {
+  await user.click(screen.getByRole('button', { name: `More actions for ${title}` }));
+  await user.click(await screen.findByRole('menuitem', { name: item }));
+}
+
 describe('FeedPaperRow', () => {
   it('renders shared metadata', () => {
     renderRow({ paper });
@@ -89,14 +126,16 @@ describe('FeedPaperRow', () => {
     expect(onSeedChange).toHaveBeenCalledWith(7);
   });
 
-  it('state=inbox: renders Save and Skip buttons', async () => {
-    const user = userEvent.setup();
+  it('state=inbox: Save is the primary action and Skip lives in the overflow', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     const onSave = vi.fn();
     const onSkip = vi.fn();
     renderRow({ paper, onSave, onSkip });
     await user.click(screen.getByRole('button', { name: `Save ${paper.title}` }));
-    await user.click(screen.getByRole('button', { name: `Skip ${paper.title}` }));
     expect(onSave).toHaveBeenCalledWith(paper.id);
+    // Skip is not a top-level button any more.
+    expect(screen.queryByRole('button', { name: `Skip ${paper.title}` })).not.toBeInTheDocument();
+    await selectOverflow(user, paper.title, /^Skip$/);
     expect(onSkip).toHaveBeenCalledWith(paper.id);
   });
 
@@ -105,46 +144,75 @@ describe('FeedPaperRow', () => {
     expect(screen.getAllByText('NEW').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('state=to_read: renders Mark Reading and Mark Done buttons', async () => {
-    const user = userEvent.setup();
+  it('state=to_read: Start reading is primary and Mark Done lives in the overflow', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     const onMarkReading = vi.fn();
     const onMarkDone = vi.fn();
     renderRow({ paper: toReadPaper, onMarkReading, onMarkDone });
-    await user.click(screen.getByRole('button', { name: `Mark ${toReadPaper.title} as reading` }));
-    await user.click(screen.getByRole('button', { name: `Mark ${toReadPaper.title} as done` }));
+    expect(screen.getByText('Reading List')).toBeInTheDocument();
+    expect(screen.queryByText('TO_READ')).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: `Start reading ${toReadPaper.title}` }),
+    );
     expect(onMarkReading).toHaveBeenCalledWith(toReadPaper.id);
+    await selectOverflow(user, toReadPaper.title, /^Mark Done$/);
     expect(onMarkDone).toHaveBeenCalledWith(toReadPaper.id);
   });
 
-  it('state=reading: renders Pause reading and Mark Done buttons; shows ★ when starred=true', async () => {
-    const user = userEvent.setup();
+  it('state=reading: Mark Done is primary, Pause reading is overflow; shows ★ when starred=true', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     const onSetAside = vi.fn();
     const onMarkDone = vi.fn();
     renderRow({ paper: readingPaper, onSetAside, onMarkDone });
     expect(screen.getByTitle('Starred')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: `Pause reading ${readingPaper.title}` }));
-    await user.click(screen.getByRole('button', { name: `Mark ${readingPaper.title} as done` }));
-    expect(onSetAside).toHaveBeenCalledWith(readingPaper.id);
+    await user.click(screen.getByRole('button', { name: `Mark Done ${readingPaper.title}` }));
     expect(onMarkDone).toHaveBeenCalledWith(readingPaper.id);
+    await selectOverflow(user, readingPaper.title, /^Pause reading$/);
+    expect(onSetAside).toHaveBeenCalledWith(readingPaper.id);
   });
 
-  it('state=done: renders Resume reading button', async () => {
-    const user = userEvent.setup();
+  it('state=done: Reopen is the primary action', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     const onReopen = vi.fn();
     renderRow({ paper: donePaper, onReopen });
-    await user.click(screen.getByRole('button', { name: `Resume reading ${donePaper.title}` }));
+    await user.click(screen.getByRole('button', { name: `Reopen ${donePaper.title}` }));
     expect(onReopen).toHaveBeenCalledWith(donePaper.id);
   });
 
-  it('state=trash: renders Restore and Permanently delete buttons', async () => {
-    const user = userEvent.setup();
+  it('state=trash: Restore is primary and Permanently delete lives in the overflow', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     const onRestore = vi.fn();
     const onHardDelete = vi.fn();
     renderRow({ paper: trashPaper, onRestore, onHardDelete });
     await user.click(screen.getByRole('button', { name: `Restore ${trashPaper.title}` }));
-    await user.click(screen.getByRole('button', { name: `Permanently delete ${trashPaper.title}` }));
     expect(onRestore).toHaveBeenCalledWith(trashPaper.id);
+    await selectOverflow(user, trashPaper.title, /^Permanently delete$/);
     expect(onHardDelete).toHaveBeenCalledWith(trashPaper.id);
+  });
+
+  it('citing one paper is reachable from the overflow, without its own row control', async () => {
+    const { copyPaperCitation } = await import('@/lib/api');
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(copyPaperCitation).mockResolvedValue('@article{x}');
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    renderRow({ paper, onSave: vi.fn() });
+
+    // The refined row spends no permanent control on citing.
+    expect(screen.queryByRole('button', { name: /^Cite$/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: `More actions for ${paper.title}` }));
+    await user.click(await screen.findByRole('menuitem', { name: /^Cite$/ }));
+    // A plain click event: userEvent's pointer sequence does not reach an item
+    // inside a Radix submenu portal under jsdom.
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Copy BibTeX/ }));
+
+    await waitFor(() => expect(copyPaperCitation).toHaveBeenCalledWith(paper.id, 'bibtex'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('@article{x}'));
   });
 
   it('state=trash: no FeedbackButtons rendered', () => {
@@ -208,11 +276,18 @@ describe('FeedPaperRow', () => {
     expect(screen.getByText(/★\s*Matches your topic profile/)).toBeInTheDocument();
   });
 
-  it('omits action buttons whose callback is not passed', () => {
+  it('omits action items whose callback is not passed', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderRow({ paper, onView: vi.fn() });
     expect(screen.queryByRole('button', { name: `Save ${paper.title}` })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: `Skip ${paper.title}` })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: `View ${paper.title} details` })).toBeInTheDocument();
+
+    // The overflow still opens for the actions that need no callback, and
+    // offers nothing it cannot carry out.
+    await user.click(screen.getByRole('button', { name: `More actions for ${paper.title}` }));
+    expect((await screen.findAllByRole('menuitem')).map((item) => item.textContent)).toEqual([
+      'Cite',
+    ]);
   });
 
   it('onToggleSelect (new API) works for bulk selection', async () => {

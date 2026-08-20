@@ -103,9 +103,11 @@ describe('ScheduleSelect', () => {
   });
 
   it('gives the weekday select and the time picker an accessible name', () => {
-    render(<ScheduleSelect value="0 9 * * 1" onChange={vi.fn()} />);
+    const { container } = render(<ScheduleSelect value="0 9 * * 1" onChange={vi.fn()} />);
     expect(screen.getByRole('combobox', { name: /day of week/i })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: /run time/i })).toBeInTheDocument();
+    expect(screen.getByText('Run time')).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveClass('items-end');
   });
 
   it('reports an unrecognised schedule as custom and writes nothing', () => {

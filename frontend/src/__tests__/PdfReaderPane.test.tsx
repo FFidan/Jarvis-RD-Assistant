@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
-import { screen, within, waitFor } from '@testing-library/react';
+import { act, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ScaledPosition } from 'react-pdf-highlighter-extended';
 import { PdfReaderPane } from '@/components/paper/PdfReaderPane';
+import { PDF_GOTO_EVENT } from '@/lib/pdf-events';
 import type { Highlight } from '@/types';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
@@ -25,6 +26,9 @@ const mocks = vi.hoisted<{
   trackExternalJob: Mock;
   isRunning: Mock;
   toastError: Mock;
+  // Stand-in for the highlighter's page viewer, handed to the component
+  // through the `utilsRef` callback the library normally supplies.
+  viewer: { scrollPageIntoView: Mock; getPageView: Mock } | null;
 }>(() => ({
   selection: null,
   fetchPdfUrl: vi.fn(),
@@ -37,6 +41,7 @@ const mocks = vi.hoisted<{
   trackExternalJob: vi.fn(),
   isRunning: vi.fn(() => false),
   toastError: vi.fn(),
+  viewer: null,
 }));
 
 // Lightweight stub of the PDF library so tests exercise OUR adapter / CRUD /
@@ -58,13 +63,18 @@ vi.mock('react-pdf-highlighter-extended', async () => {
       children,
       selectionTip,
       style,
+      utilsRef,
     }: {
       highlights: Array<{ id: string }>;
       children: React.ReactNode;
       selectionTip: React.ReactNode;
       style?: React.CSSProperties;
-    }) =>
-      React.createElement(
+      utilsRef?: (utils: unknown) => void;
+    }) => {
+      React.useEffect(() => {
+        utilsRef?.({ getViewer: () => mocks.viewer });
+      }, [utilsRef]);
+      return React.createElement(
         'div',
         { 'data-testid': 'pdf-highlighter', style },
         React.createElement('span', { 'data-testid': 'hl-count' }, String(highlights.length)),
@@ -76,7 +86,8 @@ vi.mock('react-pdf-highlighter-extended', async () => {
           ),
         ),
         selectionTip,
-      ),
+      );
+    },
     TextHighlight: ({
       highlight,
       onClick,
@@ -161,6 +172,7 @@ function renderPane() {
 
 beforeEach(() => {
   mocks.selection = null;
+  mocks.viewer = null;
   mocks.fetchPdfUrl.mockReset();
   mocks.listHighlights.mockReset();
   mocks.createHighlight.mockReset();
@@ -370,5 +382,137 @@ describe('PdfReaderPane — export highlights to Zotero', () => {
 
     const button = await screen.findByRole('button', { name: /exporting/i });
     expect(button).toBeDisabled();
+  });
+});
+
+describe('PdfReaderPane — evidence anchor jump and quote flash', () => {
+  // The text layer is one span per LINE, and extraction hyphenates across
+  // them, so this page is written the way a real one breaks: the quote starts
+  // mid-line, crosses three spans, and is split by a hyphen.
+  const LINES = [
+    'The Transformer achieves 28.4 BLEU on the WMT',
+    '2014 English-to-German translation task, im-',
+    'proving over the best previously reported results.',
+  ];
+  const QUOTE = 'on the WMT 2014 English-to-German translation task, improving over';
+
+  // The event carries a 1-based page number; the viewer indexes its page views
+  // from 0. Only this index holds the page, so an off-by-one returns nothing
+  // and the flash cannot happen — which is what makes the flash assertions
+  // below a real guard on the conversion.
+  const REQUESTED_PAGE = 3;
+  const PAGE_VIEW_INDEX = REQUESTED_PAGE - 1;
+
+  function buildPageView(): { div: HTMLElement; spans: HTMLElement[] } {
+    const div = document.createElement('div');
+    const textLayer = document.createElement('div');
+    textLayer.className = 'textLayer';
+    const spans = LINES.map((line) => {
+      const span = document.createElement('span');
+      span.textContent = line;
+      span.scrollIntoView = vi.fn();
+      textLayer.appendChild(span);
+      return span;
+    });
+    div.appendChild(textLayer);
+    document.body.appendChild(div);
+    return { div, spans };
+  }
+
+  /** A viewer that only knows the page at PAGE_VIEW_INDEX, like a real one. */
+  function mockViewerFor(div: HTMLElement) {
+    return {
+      scrollPageIntoView: vi.fn(),
+      getPageView: vi.fn((index: number) => (index === PAGE_VIEW_INDEX ? { div } : undefined)),
+    };
+  }
+
+  it('opens the requested page and flashes every span the quote overlaps', async () => {
+    const { div, spans } = buildPageView();
+    mocks.viewer = mockViewerFor(div);
+    mocks.fetchPdfUrl.mockResolvedValue('blob:fake');
+    mocks.listHighlights.mockResolvedValue([]);
+
+    renderPane();
+    await screen.findByTestId('pdf-highlighter');
+
+    window.dispatchEvent(
+      new CustomEvent(PDF_GOTO_EVENT, { detail: { page: REQUESTED_PAGE, quote: QUOTE } }),
+    );
+
+    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: REQUESTED_PAGE });
+
+    await waitFor(
+      () => expect(spans[0]!.style.backgroundColor).not.toBe(''),
+      { timeout: 3000 },
+    );
+    // Asserted inside the same settled state as the flash, so the lookup has
+    // provably already happened by the time the index is checked.
+    expect(mocks.viewer.getPageView).toHaveBeenCalledWith(PAGE_VIEW_INDEX);
+    expect(mocks.viewer.getPageView).not.toHaveBeenCalledWith(REQUESTED_PAGE);
+    expect(spans[1]!.style.backgroundColor).not.toBe('');
+    expect(spans[2]!.style.backgroundColor).not.toBe('');
+    expect(spans[0]!.scrollIntoView).toHaveBeenCalled();
+
+    div.remove();
+  });
+
+  it('leaves the page alone when the quote is too short to identify', async () => {
+    const { div, spans } = buildPageView();
+    mocks.viewer = mockViewerFor(div);
+    mocks.fetchPdfUrl.mockResolvedValue('blob:fake');
+    mocks.listHighlights.mockResolvedValue([]);
+
+    renderPane();
+    await screen.findByTestId('pdf-highlighter');
+
+    window.dispatchEvent(
+      new CustomEvent(PDF_GOTO_EVENT, { detail: { page: REQUESTED_PAGE, quote: 'the' } }),
+    );
+
+    expect(mocks.viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: REQUESTED_PAGE });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(spans.every((span) => span.style.backgroundColor === '')).toBe(true);
+
+    div.remove();
+  });
+
+  it('replays a jump that arrived before the PDF had finished loading', async () => {
+    const { div, spans } = buildPageView();
+    const viewer = mockViewerFor(div);
+    mocks.viewer = viewer;
+    // The blob is still downloading, so the reader renders its loading state
+    // and there is no viewer to act on yet.
+    let deliverPdf: (url: string) => void = () => {};
+    mocks.fetchPdfUrl.mockReturnValue(
+      new Promise<string>((resolve) => {
+        deliverPdf = resolve;
+      }),
+    );
+    mocks.listHighlights.mockResolvedValue([]);
+
+    renderPane();
+    await screen.findByTestId('pdf-reader-loading');
+
+    window.dispatchEvent(
+      new CustomEvent(PDF_GOTO_EVENT, { detail: { page: REQUESTED_PAGE, quote: QUOTE } }),
+    );
+    expect(viewer.scrollPageIntoView).not.toHaveBeenCalled();
+
+    await act(async () => {
+      deliverPdf('blob:fake');
+    });
+    await screen.findByTestId('pdf-highlighter');
+
+    // The jump is honoured once the reader can act on it, rather than lost.
+    await waitFor(() =>
+      expect(viewer.scrollPageIntoView).toHaveBeenCalledWith({ pageNumber: REQUESTED_PAGE }),
+    );
+    await waitFor(
+      () => expect(spans[0]!.style.backgroundColor).not.toBe(''),
+      { timeout: 3000 },
+    );
+
+    div.remove();
   });
 });

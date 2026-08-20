@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Directory the postgres_backups volume is mounted at (read-only) in this service.
 _BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/backups"))
-# The backup sidecar writes an inbox inventory containing names and booleans,
+# The one-shot restore job writes an inbox inventory containing names and booleans,
 # without paths or key contents. The application reads it from the existing
 # trigger volume and does not mount the restore inbox.
 _INBOX_MANIFEST = (
@@ -196,7 +196,7 @@ def _read_inbox_manifest() -> list[InboxRestorePoint]:
     Mirrors ``_read_manifest``'s degrade-to-safe contract. Each entry is re-validated
     through ``InboxRestorePoint`` so a corrupt/tampered manifest can never inject
     arbitrary fields — a bad entry is dropped, never surfaced. The manifest is written
-    by ``restore.sh --inbox-manifest`` in the postgres-backup sidecar; the app only
+    by ``restore.sh --inbox-manifest`` in the one-shot restore job; the app only
     reads it (it never mounts /restore-inbox).
     """
     try:

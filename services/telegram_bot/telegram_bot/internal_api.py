@@ -1,20 +1,14 @@
-"""Internal HTTP API for the Telegram bot service.
-
-Exposes a minimal FastAPI application on :8002 that allows other services
-(e.g. paper_ingestion) to trigger scheduler reloads without restarting the bot.
-"""
+"""Private liveness API for the database-free Telegram adapter."""
 
 import asyncio
 import logging
 
-import asyncpg
 import uvicorn
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from jarvis_common import create_limiter
 from jarvis_common.app_factory import configure_middleware_and_errors
-from jarvis_common.auth import verify_api_key
-from jarvis_common.health import make_postgres_probe, register_health_routes
-from jarvis_common.settings import get_core_settings, get_secrets_settings
+from jarvis_common.health import register_health_routes
+from jarvis_common.settings import get_core_settings
 from jarvis_common.version import app_version
 
 limiter = create_limiter(default_limits=["600/minute"], user_aware=False)
@@ -47,7 +41,7 @@ class _ServerState:
     """
 
     server: uvicorn.Server | None = None
-    task: asyncio.Task | None = None  # type: ignore[type-arg]
+    task: asyncio.Task[None] | None = None
 
 
 _server_state = _ServerState()
@@ -56,61 +50,19 @@ _server_state = _ServerState()
 register_health_routes(
     _internal_app,
     service_name="telegram_bot",
-    checks=[("postgres", make_postgres_probe())],
+    checks=[],
     limiter=limiter,
 )
 
 
-@_internal_app.post("/internal/reload-nudges", dependencies=[Depends(verify_api_key)])
-async def reload_nudges() -> dict[str, str]:
-    """Re-register all nudge_* scheduler jobs from the database.
-
-    Reads the current user.timezone and re-schedules every enabled nudge.
-    Called by paper_ingestion whenever a nudge or user.timezone config changes.
-    """
-    scheduler = _internal_app.state.scheduler  # type: ignore[attr-defined]
-    await scheduler.reload_nudges()
-    logger.info("reload-nudges completed via internal API")
-    return {"status": "ok"}
-
-
-async def start_internal_server(scheduler: object, db_pool: asyncpg.Pool, port: int = 8002) -> None:
+async def start_internal_server(port: int = 8002) -> None:
     """Start the internal uvicorn server as an asyncio task.
 
     Parameters
     ----------
-    scheduler:
-        The :class:`~telegram_bot.scheduler.JarvisScheduler` instance to attach.
-    db_pool:
-        The bot's asyncpg connection pool, attached to app state so the
-        ``/health`` postgres probe can reach it.
-    port:
+    port : int
         TCP port to listen on (default 8002).
     """
-    # F-01: Refuse to start unauthenticated internal API in DEV_MODE
-    core = get_core_settings()
-    api_key_secret = get_secrets_settings().jarvis_api_key
-    api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
-    if core.dev_mode and not api_key:
-        logger.warning(
-            "Refusing to start telegram_bot internal API: DEV_MODE=true and "
-            "JARVIS_API_KEY is empty — unauthenticated endpoint would accept any caller."
-        )
-        return
-
-    _internal_app.state.scheduler = scheduler  # type: ignore[attr-defined]
-    _internal_app.state.db_pool = db_pool  # type: ignore[attr-defined]
-    # H.9: bind to 0.0.0.0 inside the container so the paper_ingestion sibling
-    # service can reach this endpoint over the Docker bridge network at
-    # http://telegram_bot:8002. The telegram_bot service does NOT publish
-    # this port to the host (no `ports:` block in docker-compose.yml), so
-    # reachability is limited to the internal Docker network. The endpoint
-    # is additionally protected by ``verify_api_key`` (X-API-Key check) and
-    # the F-01 startup guard above refuses to bind at all when DEV_MODE=true
-    # and JARVIS_API_KEY is empty. If the deployment posture ever changes
-    # to host-network or to a config where host port 8002 is published,
-    # tighten this to 127.0.0.1 and route reload-nudges via a UNIX socket
-    # or an external load balancer instead.
     config = uvicorn.Config(
         _internal_app,
         host="0.0.0.0",  # noqa: S104 — see comment above
@@ -124,7 +76,7 @@ async def start_internal_server(scheduler: object, db_pool: asyncpg.Pool, port: 
     # Capture this task's handle so post_shutdown can cancel/await it
     _server_state.task = asyncio.current_task()
 
-    def _on_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
+    def _on_done(task: asyncio.Task[None]) -> None:
         if not task.cancelled():
             exc = task.exception()
             if exc is not None:

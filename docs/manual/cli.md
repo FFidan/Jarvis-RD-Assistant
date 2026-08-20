@@ -29,7 +29,7 @@ startup file.
 | `repair` | Bounded, non-destructive recovery: recreate stopped containers (no build, no pull) and restart any unhealthy mandatory service. |
 | `owner status` | Show whether instance ownership comes from the host environment or database and whether it resolves to a live administrator. |
 | `owner set <email>` | Repair a missing or invalid database-managed owner. Refuses host-managed ownership and requires the target email to be typed again. |
-| `restore status` | Report what the backup service's last or current restore did: state, current step, error, whether manual follow-up is required, and the safety backup to restore if it is. |
+| `restore status` | Report the queued or most recent transient restore: state, current step, error, whether manual follow-up is required, and its safety backup. |
 | `restore legacy <timestamp> [--allow-unknown-schema]` | Restore a backup taken on this host before manifest signing. The set cannot be checked for tampering, so the acceptance phrase must be typed at the prompt. Add `--allow-unknown-schema` only when the chosen backup recorded no usable database schema version (it was written while the database was unreachable) and the restore refuses it for that reason. Off-site sets are never eligible. See [Backup & Restore](backup-and-restore.md#if-your-only-surviving-backup-is-an-older-unsigned-one). |
 | `restore request <timestamp>` | Print the ordered steps and the ready-made request for recovering this host from another installation's backup set. It submits nothing. |
 | `restore acknowledge <restore-id>` | After an off-host restore, release outbound-integration quarantine for the exact reviewed restore. Requires the restore ID to be typed again. |

@@ -7,7 +7,7 @@ Asserts the canonical 4xx/5xx JSON envelope shape emitted by
 Canonical error envelope (from ``error_handlers.py``, read at HEAD)
 --------------------------------------------------------------------
 All three handlers return:
-  ``{"detail": <str>, "request_id": <str | null>}``
+  ``{"detail": <str>, "request_id": <str | null>, "correlation_id": <str | null>, "trace_id": <str | null>}``
 
 Specifically:
 * ``http_exception_handler`` (StarletteHTTPException): ``{"detail": exc.detail, "request_id": ...}``
@@ -132,6 +132,8 @@ async def test_http_exception_envelope_shape(
     assert "detail" in body, f"Missing 'detail' in {body}"
     assert "request_id" in body, f"Missing 'request_id' in {body}"
     assert isinstance(body["detail"], str) and body["detail"]
+    assert body["correlation_id"] is None or isinstance(body["correlation_id"], str)
+    assert body["trace_id"] is None or isinstance(body["trace_id"], str)
     # request_id is None when RequestIDMiddleware is not in the stack
     assert body["request_id"] is None or isinstance(body["request_id"], str)
 
@@ -157,6 +159,8 @@ async def test_validation_error_envelope_shape() -> None:
     body = resp.json()
     assert "detail" in body, f"Missing 'detail' in {body}"
     assert "request_id" in body, f"Missing 'request_id' in {body}"
+    assert "correlation_id" in body
+    assert "trace_id" in body
     assert body["detail"] == "Validation error"
 
 
@@ -175,6 +179,8 @@ async def test_validation_error_missing_body() -> None:
     body = resp.json()
     assert "detail" in body
     assert "request_id" in body
+    assert "correlation_id" in body
+    assert "trace_id" in body
 
 
 async def test_unhandled_exception_envelope_shape() -> None:
@@ -200,6 +206,8 @@ async def test_unhandled_exception_envelope_shape() -> None:
     body = resp.json()
     assert "detail" in body, f"Missing 'detail' in {body}"
     assert "request_id" in body, f"Missing 'request_id' in {body}"
+    assert "correlation_id" in body
+    assert "trace_id" in body
     assert body["detail"] == "An internal error occurred."
 
 
@@ -219,7 +227,7 @@ async def test_envelope_no_extra_keys_on_http_exception() -> None:
         resp = await client.get("/raise-http/404")
 
     assert resp.status_code == 404
-    assert set(resp.json().keys()) == {"detail", "request_id"}
+    assert set(resp.json().keys()) == {"detail", "request_id", "correlation_id", "trace_id"}
 
 
 async def test_envelope_no_extra_keys_on_unhandled_exception() -> None:
@@ -234,7 +242,7 @@ async def test_envelope_no_extra_keys_on_unhandled_exception() -> None:
         resp = await client.get("/raise-unhandled")
 
     assert resp.status_code == 500
-    assert set(resp.json().keys()) == {"detail", "request_id"}
+    assert set(resp.json().keys()) == {"detail", "request_id", "correlation_id", "trace_id"}
 
 
 async def test_ok_route_not_wrapped_in_envelope() -> None:

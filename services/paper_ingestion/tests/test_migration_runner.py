@@ -5,14 +5,12 @@ resolves to the real db/migrations/ directory in the repo. This avoids
 fragile monkeypatching of Path internals.
 """
 
-from unittest.mock import ANY
-
 import asyncpg
 import pytest
 
 from jarvis_common.migrations import required_code_schema
 from jarvis_common.migrations import _strip_outer_transaction_control
-from tests.conftest import _make_pool_and_conn
+from jarvis_common.testing_db import make_pool_and_conn
 
 
 def _import_run_migrations():
@@ -22,27 +20,24 @@ def _import_run_migrations():
     return run_migrations
 
 
-async def test_creates_schema_migrations_table():
-    """run_migrations should create the schema_migrations table after acquiring the lock."""
+async def test_does_not_create_schema_migrations_table(tmp_path):
+    """Only the SQL bootstrap/migration contract creates migration metadata."""
     run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
-    # Post-squash: no .sql files on disk; mock fetch returns empty (nothing to apply).
+    pool, conn = make_pool_and_conn()
+    # An explicit empty test directory avoids applying packaged migrations.
     conn.fetch.return_value = []
     conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
-    await run_migrations(pool)
+    await run_migrations(pool, migrations_dir=tmp_path)
 
-    # First execute: SET LOCAL lock_timeout
-    # Second execute: SELECT pg_advisory_xact_lock(42)
-    # Third execute: CREATE TABLE IF NOT EXISTS schema_migrations
     all_calls = [str(c) for c in conn.execute.call_args_list]
-    assert any("CREATE TABLE IF NOT EXISTS schema_migrations" in c for c in all_calls)
+    assert not any("CREATE TABLE" in c and "schema_migrations" in c for c in all_calls)
 
 
 async def test_skips_already_applied_migrations(tmp_path):
     """Migrations already in schema_migrations should not be re-executed."""
     run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
+    pool, conn = make_pool_and_conn()
     # Post-squash: the baseline is pre-seeded; no .sql files on disk.
     conn.fetch.return_value = [{"version": v} for v in range(1, 102)]
     conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
@@ -69,7 +64,7 @@ async def test_no_migrations_applied_when_all_fresh(tmp_path):
     files == {} ∩ applied == {}, i.e. no per-migration savepoint.
     """
     run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
+    pool, conn = make_pool_and_conn()
     conn.fetch.return_value = []  # Nothing applied yet
     conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
@@ -79,32 +74,28 @@ async def test_no_migrations_applied_when_all_fresh(tmp_path):
     assert conn.transaction.call_count == 2
 
 
-async def test_schema_migrations_select_called():
+async def test_schema_migrations_select_called(tmp_path):
     """run_migrations should SELECT existing versions from schema_migrations."""
     run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
+    pool, conn = make_pool_and_conn()
     # Post-squash: no .sql files → nothing to probe; mock returns empty applied list.
     conn.fetch.return_value = []
     conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
-    await run_migrations(pool)
+    await run_migrations(pool, migrations_dir=tmp_path)
 
-    conn.fetch.assert_any_await(
-        "SELECT version FROM schema_migrations WHERE version = ANY($1::int[])",
-        ANY,
-    )
     conn.fetch.assert_any_await("SELECT version FROM schema_migrations")
 
 
-async def test_migration_uses_xact_lock():
+async def test_migration_uses_xact_lock(tmp_path):
     """run_migrations must use pg_advisory_xact_lock (not session-level pg_advisory_lock)."""
     run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
+    pool, conn = make_pool_and_conn()
     # Post-squash: no .sql files; mock returns empty applied list.
     conn.fetch.return_value = []
     conn.fetchval.return_value = required_code_schema()  # Simulate a database at the floor.
 
-    await run_migrations(pool)
+    await run_migrations(pool, migrations_dir=tmp_path)
 
     execute_calls = [str(c) for c in conn.execute.call_args_list]
     # xact lock must be present
@@ -117,10 +108,10 @@ async def test_migration_uses_xact_lock():
     )
 
 
-async def test_migration_lock_timeout_fails_closed_by_default():
+async def test_migration_lock_timeout_fails_closed_by_default(tmp_path):
     """Lock contention should fail startup unless compatibility mode is explicit."""
     run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
+    pool, conn = make_pool_and_conn()
 
     # Make execute raise LockNotAvailableError on the advisory lock call
     async def _execute_side_effect(sql, *_):
@@ -130,17 +121,17 @@ async def test_migration_lock_timeout_fails_closed_by_default():
     conn.execute.side_effect = _execute_side_effect
 
     with pytest.raises(RuntimeError, match="migration lock contended"):
-        await run_migrations(pool)
+        await run_migrations(pool, migrations_dir=tmp_path)
 
     # fetch (SELECT version FROM schema_migrations) must NOT have been called —
     # we bailed out before reaching it
     conn.fetch.assert_not_awaited()
 
 
-async def test_migration_lock_timeout_rechecks_floor_with_env_flag(monkeypatch):
+async def test_migration_lock_timeout_rechecks_floor_with_env_flag(tmp_path, monkeypatch):
     """Compatibility mode starts only after the contending migrator reaches the floor."""
     run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
+    pool, conn = make_pool_and_conn()
 
     async def _execute_side_effect(sql, *_):
         if "pg_advisory_xact_lock" in sql:
@@ -150,7 +141,7 @@ async def test_migration_lock_timeout_rechecks_floor_with_env_flag(monkeypatch):
     conn.fetchval.return_value = required_code_schema()
     monkeypatch.setenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "true")
 
-    await run_migrations(pool)
+    await run_migrations(pool, migrations_dir=tmp_path)
 
     conn.fetchval.assert_awaited_once_with(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"

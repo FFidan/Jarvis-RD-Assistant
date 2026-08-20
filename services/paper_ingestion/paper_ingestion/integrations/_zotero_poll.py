@@ -791,11 +791,8 @@ async def _persist_poll_cursor(
     try:
         async with db_pool.acquire() as conn:
             await conn.execute(
-                """
-            INSERT INTO user_config (user_id, key, value)
-            VALUES ($2, 'zotero.last_library_version', $1::jsonb)
-            ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
-            """,
+                "SELECT platform.set_research_config_v1("
+                "$2, 'zotero.last_library_version', $1::jsonb, 'upsert')",
                 new_version,
                 polling_user_id,
             )

@@ -33,6 +33,7 @@ class PTBContextOptions:
     args: list[str] | None = None
     user_data: dict[str, Any] | None = None
     with_bot: bool = False
+    paired_user_id: int | None = 1
 
 
 # ---------------------------------------------------------------------------
@@ -125,29 +126,61 @@ def make_bot_config(bot_config_cls: Any, **overrides: Any) -> Any:
 
     defaults: dict[str, Any] = dict(
         telegram_token="test-token",
-        database_url="postgres://test",
+        telegram_service_token=SecretStr("test-service-token-with-at-least-32-characters"),
+        platform_api_url="http://platform:8003",
         paper_ingestion_url="http://paper:8000",
         learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
     )
     defaults.update(overrides)
     return bot_config_cls(**defaults)
 
 
 def make_ptb_context(
-    pool: Any,
+    platform_client: Any,
     config: Any,
     *,
     options: PTBContextOptions | None = None,
 ) -> MagicMock:
-    """Build a PTB callback context wired to the standard application state."""
+    """Build a PTB callback context wired to the standard application state.
+
+    Parameters
+    ----------
+    platform_client : Any
+        Platform client test double or real HTTPX client. Mock clients receive
+        a default pairing response controlled by ``options.paired_user_id``.
+    config : Any
+        Bot configuration test double.
+    options : PTBContextOptions or None, optional
+        Optional state and pairing behavior.
+
+    Returns
+    -------
+    MagicMock
+        PTB context with Platform and downstream HTTP clients in ``bot_data``.
+    """
     options = options or PTBContextOptions()
+    if isinstance(platform_client, (AsyncMock, MagicMock)):
+        request = httpx.Request("GET", "http://platform/internal/telegram/pairings/1")
+        if options.paired_user_id is None:
+            pairing_response = httpx.Response(404, request=request)
+        else:
+            pairing_response = httpx.Response(
+                200,
+                request=request,
+                json={
+                    "user_id": options.paired_user_id,
+                    "chat_id": 1,
+                    "telegram_username": None,
+                    "paired_at": None,
+                },
+            )
+        platform_client.get = AsyncMock(return_value=pairing_response)
     context = MagicMock()
     context.args = list(options.args or [])
     context.application = MagicMock()
     context.application.bot_data = {
         "config": config,
-        "db_pool": pool,
+        "platform_client": platform_client,
         "http_client": (options.http_client if options.http_client is not None else AsyncMock()),
     }
     context.user_data = options.user_data if options.user_data is not None else {}

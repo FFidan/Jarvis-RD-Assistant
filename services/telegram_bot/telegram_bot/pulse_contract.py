@@ -26,6 +26,11 @@ class PulseCard(BaseModel):
     signals: dict[str, float]
     reasoning_verified: bool | None = None
     reasoning_confidence: Literal["HIGH", "MEDIUM", "LOW", "UNVERIFIED"] | None = None
+    #: Server-owned lifecycle state of the card's paper for the requesting user.
+    #: ``None`` means no state row exists yet, which the backend reads as the
+    #: ``inbox`` default. This is the only record of whether the user has
+    #: already acted on a card; Telegram keeps no memory of its own.
+    user_state: str | None = None
 
 
 class PulseDeck(BaseModel):
@@ -73,3 +78,17 @@ class PulseGenerateJob(BaseModel):
 
     job_id: str = Field(min_length=1, max_length=200)
     status: Literal["queued"]
+
+
+class PulseGenerateStatus(BaseModel):
+    """Progress of a Pulse generation job Telegram is waiting on."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    job_id: str = Field(min_length=1, max_length=200)
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether the job has stopped changing state."""
+        return self.status in {"succeeded", "failed", "cancelled"}

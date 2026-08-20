@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { SearchPreviewResult } from '@/types';
+import type { SearchPreviewResult, SearchPreviewSourceError } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import {
@@ -13,15 +13,25 @@ import {
 import { Save, X, Loader2 } from 'lucide-react';
 import { SearchPreviewDrawer } from '@/components/feed/SearchPreviewDrawer';
 import { SearchPreviewRow } from '@/components/feed/SearchPreviewRow';
+import { SOURCE_LABELS } from '@/components/feed/source-labels';
 
 interface PreviewResultsProps {
   papers: SearchPreviewResult[];
   onSave: (papers: SearchPreviewResult[]) => void;
   onClear: () => void;
   isSaving: boolean;
+  perSourceCounts?: Record<string, number>;
+  sourceErrors?: Record<string, SearchPreviewSourceError>;
 }
 
-export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewResultsProps) {
+export function PreviewResults({
+  papers,
+  onSave,
+  onClear,
+  isSaving,
+  perSourceCounts = {},
+  sourceErrors = {},
+}: PreviewResultsProps) {
   const navigate = useNavigate();
   const saveablePapers = useMemo(
     () => papers.filter((paper) => !paper.library_match?.paper_id),
@@ -31,9 +41,10 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
     () => new Set(saveablePapers.map((paper) => paper.external_id)),
     [saveablePapers],
   );
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(saveablePapers.map((p) => p.external_id)),
-  );
+  // Nothing is pre-selected: search results are candidates the researcher opts
+  // INTO, and pre-selecting everything next to "Save all unsaved" made a stray
+  // click bulk-import an unreviewed set.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [sortField, setSortField] = useState<'relevance' | 'date' | 'title' | 'citations'>('relevance');
   const [previewPaper, setPreviewPaper] = useState<SearchPreviewResult | null>(null);
   const previousPaperIdsRef = useRef<string[] | null>(null);
@@ -53,8 +64,8 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
   }, [papers, sortField]);
 
   // Preserve partial selection across in-place save reconciliation. A fresh
-  // result set initializes all saveable rows, but an update to the same result
-  // set only removes rows that became non-saveable.
+  // result set starts empty, and an update to the same result set only removes
+  // rows that became non-saveable.
   useEffect(() => {
     const nextPaperIds = papers.map((paper) => paper.external_id);
     const previousPaperIds = previousPaperIdsRef.current;
@@ -65,7 +76,7 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
       previousPaperIds.every((id) => nextPaperIds.includes(id));
 
     if (!sameResultSet) {
-      setSelected(new Set(saveablePapers.map((paper) => paper.external_id)));
+      setSelected(new Set());
     } else {
       setSelected((current) => {
         const next = new Set<string>();
@@ -117,6 +128,9 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
   const selectedCount = selectedPapers.length;
   const hasSaveablePapers = saveablePapers.length > 0;
   const hasLibraryMatches = saveablePapers.length !== papers.length;
+  const sourceTypes = Array.from(
+    new Set([...Object.keys(perSourceCounts), ...Object.keys(sourceErrors)]),
+  );
 
   return (
     <div className="space-y-4">
@@ -143,7 +157,50 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
       </div>
 
       <p className="text-sm text-muted-foreground mb-2">{papers.length} results</p>
-      {(!hasSaveablePapers || hasLibraryMatches) && (
+      {sourceTypes.length > 0 && (
+        <ul className="divide-y divide-hair rounded-md border border-hair text-sm">
+          {sourceTypes.map((sourceType) => {
+            const count = perSourceCounts[sourceType] ?? 0;
+            const error = sourceErrors[sourceType];
+            return (
+              <li
+                key={sourceType}
+                data-testid={`source-summary-${sourceType}`}
+                className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2"
+              >
+                <span className="font-medium">
+                  {SOURCE_LABELS[sourceType] ?? sourceType}
+                </span>
+                <span className="text-muted-foreground">
+                  {/* A source that failed returned nothing because it was never
+                      searched — "0 results" would claim it looked and found none. */}
+                  {error && count === 0
+                    ? 'not searched'
+                    : `${count} ${count === 1 ? 'result' : 'results'}`}
+                </span>
+                {error && (
+                  <span className="basis-full text-xs text-muted-foreground">
+                    {error.message}
+                  </span>
+                )}
+                {error && (error.status_code !== null || error.retry_after_s !== null) && (
+                  <span className="basis-full text-xs text-muted-foreground">
+                    {error.status_code !== null && `Status ${error.status_code}`}
+                    {error.status_code !== null && error.retry_after_s !== null ? ', ' : ''}
+                    {error.retry_after_s !== null && `Retry after ${error.retry_after_s}s`}
+                  </span>
+                )}
+                {error?.settings_hint && !error.message.includes(error.settings_hint) && (
+                  <span className="basis-full text-xs text-muted-foreground">
+                    {error.settings_hint}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {papers.length > 0 && (!hasSaveablePapers || hasLibraryMatches) && (
         <p className="text-sm text-muted-foreground">
           {hasLibraryMatches && hasSaveablePapers
             ? 'Library-matched results are already in your library and excluded from save actions.'

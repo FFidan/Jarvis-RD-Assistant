@@ -15,7 +15,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { formatDistanceToNow } from 'date-fns';
+import { formatRelativeTime } from '@/lib/relative-time';
 import { toast } from 'sonner';
 import {
   listUsers,
@@ -71,15 +71,6 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
-
-function formatDate(iso: string | null): string {
-  if (!iso) return '—';
-  try {
-    return formatDistanceToNow(new Date(iso), { addSuffix: true });
-  } catch {
-    return iso;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Invite modal
@@ -589,10 +580,10 @@ export function AdminUsersPage() {
                     </Select>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {formatDate(user.created_at)}
+                    {formatRelativeTime(user.created_at)}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {formatDate(user.last_login_at)}
+                    {formatRelativeTime(user.last_login_at)}
                   </td>
                   <td className="px-4 py-3">
                     <PasskeyCell user={user} />

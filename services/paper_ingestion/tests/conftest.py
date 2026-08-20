@@ -29,6 +29,8 @@ from jarvis_common.testing import (  # noqa: F401
     SharedConnPool,
     _make_pool_and_conn,
     make_pool_and_conn,
+    open_cross_domain_path,
+    reset_product_tables,
 )
 
 # Seed helpers used by the two_users fixture (now canonical in jarvis_common.testing).
@@ -72,6 +74,7 @@ from jarvis_common.testing_contract_apps import (  # noqa: E402
     make_contract_client,
     patch_pi_test_app,
 )
+from jarvis_common.testing_auth import SignedIdentityMiddleware  # noqa: E402
 
 contract_pg_dsn = _make_contract_pg_dsn("jarvis-rd-contract")
 _contract_pool = _make_contract_pool_fixture()
@@ -176,13 +179,34 @@ async def _pi_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app as pi_app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     with patch_pi_test_app(
         shared,
         app=pi_app,
         get_db_pool=get_db_pool,
         limiter=limiter,
-        options=PITestAppOptions(remove_owner_override=True),
+        options=PITestAppOptions(remove_identity_overrides=True),
+    ) as app:
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _platform_app_with_pool(contract_conn: Any) -> AsyncIterator[Any]:
+    """Wire the Platform app to the per-test contract connection."""
+    from platform_api.deps import get_db_pool, limiter
+    from platform_api.main import app as platform_app
+
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_platform_runtime")
+    with patch_pi_test_app(
+        shared,
+        app=platform_app,
+        get_db_pool=get_db_pool,
+        limiter=limiter,
+        options=PITestAppOptions(remove_identity_overrides=True),
     ) as app:
         yield app
 
@@ -193,21 +217,25 @@ async def _pi_app(contract_conn: Any) -> AsyncIterator[Any]:
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app as pi_app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     with patch_pi_test_app(
         shared,
         app=pi_app,
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             mock_http_client=True,
             mock_embedder=True,
         ),
     ) as app:
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 # Composable contract-app fixture wiring the PI app to a FauxLiteLLMServer
@@ -241,12 +269,26 @@ def _clear_settings_caches():
     """Clear all lru_cache'd settings + the module-level API-key cache."""
     from jarvis_common.auth import refresh_api_key_cache
     from jarvis_common.settings import get_secrets_settings
+    from platform_api.config import get_platform_settings
 
     get_secrets_settings.cache_clear()
+    get_platform_settings.cache_clear()
     refresh_api_key_cache()
     yield
     get_secrets_settings.cache_clear()
+    get_platform_settings.cache_clear()
     refresh_api_key_cache()
+
+
+@pytest.fixture(autouse=True)
+def _disable_platform_rate_limiter_for_direct_router_tests():
+    """Disable Platform's limiter when legacy tests call moved handlers directly."""
+    from platform_api.deps import limiter as platform_limiter
+
+    was_enabled = platform_limiter.enabled
+    platform_limiter.enabled = False
+    yield
+    platform_limiter.enabled = was_enabled
 
 
 @pytest.fixture(autouse=True)
@@ -322,7 +364,11 @@ async def test_db_pool(live_pg_dsn):
     for attempt in range(10):
         try:
             pool = await asyncpg.create_pool(
-                live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+                live_pg_dsn,
+                min_size=1,
+                max_size=5,
+                init=init_pg_connection,
+                setup=open_cross_domain_path,
             )
             break
         except (OSError, asyncpg.PostgresError):
@@ -376,7 +422,11 @@ async def _xuser_pool(xuser_pg_dsn):
     for attempt in range(10):
         try:
             pool = await asyncpg.create_pool(
-                xuser_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+                xuser_pg_dsn,
+                min_size=1,
+                max_size=5,
+                init=init_pg_connection,
+                setup=open_cross_domain_path,
             )
             break
         except (OSError, asyncpg.PostgresError):
@@ -397,7 +447,7 @@ async def _xuser_pool(xuser_pg_dsn):
 async def two_users(_xuser_pool):
     """Two real users, each with a valid session cookie and owned rows.
 
-    Resets the shared session DB to a pristine state (TRUNCATE every public
+    Resets the shared session DB to a pristine state (TRUNCATE every product
     table, RESTART IDENTITY CASCADE) then runs the canonical seed — all
     COMMITTED so the real SessionMiddleware can resolve the jarvis_session cookie
     under READ COMMITTED. Truncate-of-all wipes any app writes from the prior
@@ -407,10 +457,7 @@ async def two_users(_xuser_pool):
     and must NOT be closed here.
     """
     async with _xuser_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-        names = ", ".join(f'"{r["tablename"]}"' for r in rows)
-        if names:
-            await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+        await reset_product_tables(conn)
 
         user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.com")
         user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.com")
@@ -444,7 +491,11 @@ async def _baseline_pool(baseline_pg_dsn):
     from tests.migration_helpers import apply_fresh_init
 
     pool = await asyncpg.create_pool(
-        baseline_pg_dsn, min_size=1, max_size=2, init=init_pg_connection
+        baseline_pg_dsn,
+        min_size=1,
+        max_size=2,
+        init=init_pg_connection,
+        setup=open_cross_domain_path,
     )
     try:
         await apply_fresh_init(pool)  # schema once; per-test reset is TRUNCATE
@@ -455,10 +506,7 @@ async def _baseline_pool(baseline_pg_dsn):
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def baseline_conn(_baseline_pool):
-    """Pristine connection per test: TRUNCATE all public tables, then yield."""
+    """Pristine connection per test: empty every product table, then yield."""
     async with _baseline_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-        names = ", ".join(f'"{r["tablename"]}"' for r in rows)
-        if names:
-            await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+        await reset_product_tables(conn)
         yield conn

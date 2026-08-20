@@ -34,6 +34,10 @@ from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
+# RFC 5321 maximum address length, shared by Platform account flows and
+# Research source-configuration validation.
+MAX_EMAIL_LENGTH = 320
+
 # Socket-operation timeout for the live magic-link send. Kept >= the setup
 # wizard's SMTP_TEST_TIMEOUT_SECONDS (10s) so a slow-but-valid relay that
 # passed the test-send is not cut off on the real send, while still bounding
@@ -700,4 +704,9 @@ async def smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
     return await _smtp_configured(pool)
 
 
-__all__ = ["probe_smtp_reachable", "send_magic_link", "smtp_configured"]
+__all__ = [
+    "MAX_EMAIL_LENGTH",
+    "probe_smtp_reachable",
+    "send_magic_link",
+    "smtp_configured",
+]

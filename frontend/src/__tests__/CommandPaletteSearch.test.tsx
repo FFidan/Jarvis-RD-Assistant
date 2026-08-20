@@ -5,9 +5,11 @@
  *  - ⌘K (the global keydown registered by the controller hook) opens the
  *    palette via the store.
  *  - Esc closes it.
- *  - Typing a query runs the debounced searchPreview call and renders
- *    results (title + authors).
+ *  - Typing a query runs the debounced search over the caller's own papers,
+ *    scoped so trashed papers cannot appear, and renders results.
  *  - Selecting a result navigates to /paper/:id and closes the palette.
+ *  - External discovery is a separate, labelled action into Discover — never
+ *    mixed into results from the caller's own papers.
  *  - A failed search shows the friendly error state (no throw).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -16,61 +18,28 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { CommandPaletteSearch } from '@/components/layout/CommandPaletteSearch';
 import { useCommandPalette } from '@/stores/command-palette-store';
-import { searchPreview } from '@/lib/api';
-import type { SearchPreviewResponse } from '@/types';
+import { fetchFeedPapers } from '@/lib/api';
+import type { FeedResponse } from '@/types';
+import { makeFeedPaper } from '@/__tests__/fixtures/feed-paper';
 
 vi.mock('@/lib/api', () => ({
-  searchPreview: vi.fn(),
+  fetchFeedPapers: vi.fn(),
 }));
 
-const mockSearchPreview = vi.mocked(searchPreview);
+const mockFetchFeedPapers = vi.mocked(fetchFeedPapers);
 
-function makeResponse(): SearchPreviewResponse {
+function makeResponse(): FeedResponse {
   return {
-    results: [
-      {
+    papers: [
+      makeFeedPaper({
+        id: 42,
         external_id: 'abc.123',
-        source_type: 'arxiv',
         title: 'Attention Is All You Need',
         authors: ['Ashish Vaswani', 'Noam Shazeer'],
-        abstract: null,
-        published_date: null,
         url: 'https://arxiv.org/abs/abc.123',
-        pdf_url: null,
-        citation_count: 0,
-        metadata: {},
-        library_match: { paper_id: 42, has_project_links: false, zotero_item_key: null },
-      },
+      }),
     ],
     total: 1,
-    per_source_counts: { arxiv: 1 },
-    degraded_sources: [],
-    source_errors: {},
-  };
-}
-
-/** A result with no library_match — "not in your library yet". */
-function makeResponseNotInLibrary(): SearchPreviewResponse {
-  return {
-    results: [
-      {
-        external_id: 'xyz.999',
-        source_type: 'arxiv',
-        title: 'Deep Residual Learning for Image Recognition',
-        authors: ['Kaiming He', 'Xiangyu Zhang'],
-        abstract: null,
-        published_date: null,
-        url: 'https://arxiv.org/abs/xyz.999',
-        pdf_url: null,
-        citation_count: 0,
-        metadata: {},
-        library_match: null,
-      },
-    ],
-    total: 1,
-    per_source_counts: { arxiv: 1 },
-    degraded_sources: [],
-    source_errors: {},
   };
 }
 
@@ -90,7 +59,7 @@ describe('CommandPaletteSearch', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();
     useCommandPalette.getState()._reset();
-    mockSearchPreview.mockResolvedValue(makeResponse());
+    mockFetchFeedPapers.mockResolvedValue(makeResponse());
   });
 
   afterEach(() => {
@@ -134,7 +103,16 @@ describe('CommandPaletteSearch', () => {
       vi.advanceTimersByTime(300);
     });
 
-    await waitFor(() => expect(mockSearchPreview).toHaveBeenCalledWith('attention'));
+    // The box says it searches YOUR papers, so it must hit the paper feed —
+    // not the external-source preview — and it must ask the server for the
+    // scope it advertises, or trashed papers come back as "your papers".
+    await waitFor(() =>
+      expect(mockFetchFeedPapers).toHaveBeenCalledWith({
+        q: 'attention',
+        limit: 8,
+        view: 'all_non_trash',
+      }),
+    );
 
     const result = await screen.findByText('Attention Is All You Need');
     await user.click(result);
@@ -144,7 +122,7 @@ describe('CommandPaletteSearch', () => {
   });
 
   it('shows a friendly error state when the search fails', async () => {
-    mockSearchPreview.mockRejectedValueOnce(new Error('network down'));
+    mockFetchFeedPapers.mockRejectedValueOnce(new Error('network down'));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPalette();
 
@@ -161,8 +139,8 @@ describe('CommandPaletteSearch', () => {
   });
 
   it('fails into the error state after 8 s timeout instead of hanging', async () => {
-    // searchPreview never resolves — simulates a slow embedding/search backend.
-    mockSearchPreview.mockReturnValue(new Promise(() => {}));
+    // The feed request never resolves — simulates a slow backend.
+    mockFetchFeedPapers.mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPalette();
 
@@ -190,8 +168,7 @@ describe('CommandPaletteSearch', () => {
     expect(await screen.findByText(/couldn't search right now/i)).toBeInTheDocument();
   });
 
-  it('navigates to Discover when a not-in-library result is selected', async () => {
-    mockSearchPreview.mockResolvedValue(makeResponseNotInLibrary());
+  it('offers external discovery as a separate labelled action into Discover', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
     const LocationProbe = () => {
@@ -217,49 +194,51 @@ describe('CommandPaletteSearch', () => {
       vi.advanceTimersByTime(300);
     });
 
-    await waitFor(() => expect(mockSearchPreview).toHaveBeenCalledWith('residual'));
+    const discover = await screen.findByText(/Search external sources for/i);
+    expect(discover).toHaveTextContent('residual');
 
-    // The result should be present and clickable (not disabled).
-    const result = await screen.findByText('Deep Residual Learning for Image Recognition');
-    // Verify the item is not aria-disabled.
-    const item = result.closest('[role="option"]') ?? result.closest('[cmdk-item]') ?? result.parentElement;
-    expect(item).not.toBeNull();
+    await user.click(discover);
 
-    await user.click(result);
-
-    // After selecting, the palette closes and we navigate to the Discover/search
-    // surface with the typed query carried as ?q= so SearchBar is prefilled.
     await waitFor(() => expect(useCommandPalette.getState().isOpen).toBe(false));
     await waitFor(() =>
       expect(screen.getByTestId('loc').textContent).toBe('/feed?surface=search&q=residual'),
     );
   });
 
-  it('not-in-library result is not disabled (has no aria-disabled=true attribute)', async () => {
-    mockSearchPreview.mockResolvedValue(makeResponseNotInLibrary());
+  it('never labels one of your own papers as missing from your papers', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPalette();
 
     act(() => useCommandPalette.getState().open());
 
     const input = await screen.findByPlaceholderText(/search your papers/i);
-    await user.type(input, 'residual');
+    await user.type(input, 'attention');
 
     await act(async () => {
       vi.advanceTimersByTime(300);
     });
 
-    await waitFor(() => expect(mockSearchPreview).toHaveBeenCalled());
+    await screen.findByText('Attention Is All You Need');
+    // Every hit comes from the caller's own papers, so the old
+    // "Not in your library yet" caption can never be true here.
+    expect(screen.queryByText(/Not in your library yet/i)).not.toBeInTheDocument();
+  });
 
-    const result = await screen.findByText('Deep Residual Learning for Image Recognition');
-    // cmdk sets data-disabled on the Command.Item element.
-    // Walk up to find the cmdk item wrapper.
-    let el: HTMLElement | null = result;
-    while (el && !el.hasAttribute('data-disabled') && el !== document.body) {
-      el = el.parentElement;
-    }
-    // data-disabled should not be 'true' — item is actionable.
-    expect(el?.getAttribute('data-disabled')).not.toBe('true');
+  it('reports an empty result set as no matches in your papers', async () => {
+    mockFetchFeedPapers.mockResolvedValue({ papers: [], total: 0 });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPalette();
+
+    act(() => useCommandPalette.getState().open());
+
+    const input = await screen.findByPlaceholderText(/search your papers/i);
+    await user.type(input, 'nothing');
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(await screen.findByText(/No matches in your papers/i)).toBeInTheDocument();
   });
 
   it('renders an accessible description for the dialog (a11y)', async () => {

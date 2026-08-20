@@ -2,14 +2,13 @@
 
 import logging
 
-import asyncpg
 import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
+from telegram_bot.platform_client import list_user_pairings
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +33,8 @@ async def _send_reminder_to_chat(
     chat_id : int
         Target Telegram chat ID.
     user_id : int
-        DB user PK. Adds ``X-Owner-User-Id`` + ``X-API-Key`` headers
-        so the backend scopes stats to that user.
+        DB user PK. The client auth flow exchanges its local paired-user
+        marker for an assertion that scopes stats to that user.
     """
     try:
         stats = await services_client.fetch_stats(http_client, config, user_id)
@@ -72,7 +71,7 @@ async def _send_reminder_to_chat(
 
 async def run_review_reminder(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
     *,
@@ -80,22 +79,22 @@ async def run_review_reminder(
 ) -> None:
     """Send a review reminder if cards are due.
 
-    Iterates ``telegram_user_pairings`` and delivers per-user reminders by
-    sending ``X-Owner-User-Id`` + ``X-API-Key`` headers.  Skips with a warning
-    when no pairings exist.
+    Iterates ``telegram_user_pairings`` and delivers per-user reminders
+    through Telegram's route-bound backend assertion flow. Skips with a
+    warning when no pairings exist.
 
     Parameters
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool.
+    platform_client : httpx.AsyncClient
+        Scoped Platform client used to list active pairings.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
         Bot configuration.
     """
-    pairings = await _owner.list_user_pairings(db_pool)
+    pairings = await list_user_pairings(platform_client, config)
     if not pairings:
         logger.warning(
             "review_reminder skipped: no Telegram pairings exist — use /pair in Telegram to set up"

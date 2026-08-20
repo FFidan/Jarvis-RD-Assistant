@@ -95,4 +95,14 @@ describe('LearningFocusSection', () => {
     // The "Review now →" button should NOT appear
     expect(screen.queryByText('Review now →')).not.toBeInTheDocument();
   });
+
+  it('omits zero-day streak labels', async () => {
+    vi.mocked(getStats).mockResolvedValue({ ...makeStats(0), streak_days: 0 });
+    vi.mocked(fetchMyDay).mockResolvedValue({ ...MOCK_MY_DAY, focus_streak_days: 0 });
+
+    renderSubject();
+
+    await screen.findByText(/2 reviewed today/i);
+    expect(screen.queryByText(/0d streak/i)).not.toBeInTheDocument();
+  });
 });

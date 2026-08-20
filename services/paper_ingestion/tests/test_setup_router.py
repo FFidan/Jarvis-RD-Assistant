@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg
-import paper_ingestion.routers.setup as setup_router
+import platform_api.routers.setup as setup_router
 import pytest
 from fastapi import HTTPException
 from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
@@ -302,9 +302,7 @@ async def test_configure_setup_mode_does_not_require_restart(monkeypatch) -> Non
     conn.fetchval = AsyncMock(return_value=0)  # bootstrap: no admin yet
     pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
-    monkeypatch.setattr(
-        "paper_ingestion.routers.setup._persist_config", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", AsyncMock(return_value=None))
 
     body = setup_router.SetupModeBody(mode="multi")
     result = await setup_router.configure_setup_mode(body, request)
@@ -370,7 +368,7 @@ async def test_create_first_admin_logs_hash_not_raw_email(monkeypatch, caplog) -
 
     body = setup_router.AdminBody(email=raw_email)
 
-    with caplog.at_level(logging.INFO, logger="paper_ingestion.routers.setup"):
+    with caplog.at_level(logging.INFO, logger="platform_api.routers.setup"):
         await setup_router.create_first_admin(body, request, response)
 
     assert any(expected_hash in r.message for r in caplog.records), (
@@ -387,49 +385,27 @@ async def test_create_first_admin_logs_hash_not_raw_email(monkeypatch, caplog) -
 
 
 @pytest.mark.asyncio
-async def test_configure_cloud_llm_keys_uses_config_lock_and_machine_id(monkeypatch):
-    """configure_cloud_llm_keys re-push must go through _config_lock and pass machine_id."""
-
+async def test_configure_cloud_llm_keys_leaves_delivery_to_research(monkeypatch):
+    """Platform persists provider keys without invoking Research delivery code."""
     import paper_ingestion.services.litellm_config as litellm_mod
 
-    # Conn returns the active fast model for the ROLE_TO_ALIAS key lookup.
     conn = AsyncMock()
-    conn.fetchrow = AsyncMock(
-        side_effect=lambda q, *a: (
-            {"value": "anthropic/claude-haiku-4-5"} if "llm.fast_model" in a else None
-        )
-    )
+    conn.fetchval = AsyncMock(return_value=0)
     pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
-
-    # Capture the machine_id passed to update_litellm_model and whether the
-    # call happened inside _config_lock.
-    captured: list[dict] = []
-    lock_held_during: list[bool] = []
-
-    async def fake_update(alias_key, model_id, *, db_pool, machine_id):
-        lock_held_during.append(litellm_mod._config_lock.locked())
-        captured.append({"alias_key": alias_key, "machine_id": machine_id})
-        return True
-
-    monkeypatch.setattr(litellm_mod, "update_litellm_model", fake_update)
-    monkeypatch.setattr("paper_ingestion.routers.setup.socket.gethostname", lambda: "test-host")
-
-    # require_unconfigured_or_admin: no admin exists (fetchval = 0)
-    conn.fetchval = AsyncMock(return_value=0)
-    # Bypass _persist_config entirely — this test is about the delivery plane
-    monkeypatch.setattr(
-        "paper_ingestion.routers.setup._persist_config", AsyncMock(return_value=None)
-    )
+    persist = AsyncMock(return_value=None)
+    deliver = AsyncMock(side_effect=AssertionError("Platform must not invoke Research code"))
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", persist)
+    monkeypatch.setattr(litellm_mod, "update_litellm_model", deliver)
 
     body = setup_router.CloudLlmKeysBody(anthropic="sk-ant-test-key-xxxxxxxxxxxx")
     result = await setup_router.configure_cloud_llm_keys(body, request)
 
+    persist.assert_awaited_once_with(pool, "llm.anthropic.api_key", body.anthropic)
+    deliver.assert_not_awaited()
+    assert result.saved_providers == ["anthropic"]
+    assert result.applied_now == []
     assert result.restart_required is False
-    assert any(c["machine_id"] == "test-host" for c in captured), (
-        "machine_id=socket.gethostname() must be passed to update_litellm_model"
-    )
-    assert all(lock_held_during), "_config_lock must be held during update_litellm_model"
 
 
 # ---------------------------------------------------------------------------
@@ -599,7 +575,7 @@ async def test_configure_smtp_persists_reply_to_and_from_name(monkeypatch) -> No
     async def fake_persist(pool, key, value):
         persisted[key] = value
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", fake_persist)
 
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)  # no admin → bootstrap
@@ -631,7 +607,7 @@ async def test_configure_smtp_reply_to_none_not_persisted(monkeypatch) -> None:
     async def fake_persist(pool, key, value):
         persisted[key] = value
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", fake_persist)
 
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
@@ -666,7 +642,7 @@ async def test_configure_smtp_empty_reply_to_persisted_as_clear(monkeypatch) -> 
     async def fake_persist(pool, key, value):
         persisted[key] = value
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", fake_persist)
 
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
@@ -699,7 +675,7 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
     async def fake_persist(pool, key, value):
         pass
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", fake_persist)
 
     captured_recipient: list[str] = []
 
@@ -707,7 +683,7 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
         captured_recipient.append(recipient)
         return None  # success
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._send_test_email", fake_send_test)
+    monkeypatch.setattr("platform_api.routers.setup._send_test_email", fake_send_test)
 
     from jarvis_common.email import _EffectiveSmtp
 
@@ -716,7 +692,7 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
             host="smtp.example.com", port=587, user=None, password=None, sender="bot@example.com"
         )
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._effective_smtp", fake_effective_smtp)
+    monkeypatch.setattr("platform_api.routers.setup._effective_smtp", fake_effective_smtp)
 
     conn = AsyncMock()
     # fetchval is called twice: once in require_unconfigured_or_admin, once in the
@@ -837,7 +813,7 @@ async def test_configure_smtp_test_send_uses_stored_password_when_blank(monkeypa
     async def fake_persist(pool, key, value):
         pass
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", fake_persist)
 
     captured_password: list[str | None] = []
 
@@ -845,7 +821,7 @@ async def test_configure_smtp_test_send_uses_stored_password_when_blank(monkeypa
         captured_password.append(password)
         return None  # success
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._send_test_email", fake_send_test)
+    monkeypatch.setattr("platform_api.routers.setup._send_test_email", fake_send_test)
 
     from jarvis_common.email import _EffectiveSmtp
 
@@ -858,7 +834,7 @@ async def test_configure_smtp_test_send_uses_stored_password_when_blank(monkeypa
             sender="bot@example.com",
         )
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._effective_smtp", fake_effective_smtp)
+    monkeypatch.setattr("platform_api.routers.setup._effective_smtp", fake_effective_smtp)
 
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)  # no admin → bootstrap
@@ -888,7 +864,7 @@ async def test_configure_smtp_test_send_uses_body_password_when_provided(monkeyp
     async def fake_persist(pool, key, value):
         pass
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+    monkeypatch.setattr("platform_api.routers.setup._persist_config", fake_persist)
 
     captured_password: list[str | None] = []
 
@@ -896,13 +872,13 @@ async def test_configure_smtp_test_send_uses_body_password_when_provided(monkeyp
         captured_password.append(password)
         return None
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._send_test_email", fake_send_test)
+    monkeypatch.setattr("platform_api.routers.setup._send_test_email", fake_send_test)
 
     # _effective_smtp must NOT be consulted when body.password is present.
     async def fail_effective_smtp(pool):  # pragma: no cover
         raise AssertionError("_effective_smtp must not be called when body.password is provided")
 
-    monkeypatch.setattr("paper_ingestion.routers.setup._effective_smtp", fail_effective_smtp)
+    monkeypatch.setattr("platform_api.routers.setup._effective_smtp", fail_effective_smtp)
 
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
@@ -923,32 +899,34 @@ async def test_configure_smtp_test_send_uses_body_password_when_provided(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# _classify_config_key and _SECRET_KEYS
+# _classify_config_key and secret masking
 # ---------------------------------------------------------------------------
 
 
 def test_classify_config_key_smtp_reply_to_is_system() -> None:
-    from paper_ingestion.services.config_metadata import _classify_config_key
+    from jarvis_common.config_metadata import _classify_config_key
 
     assert _classify_config_key("smtp.reply_to") == "system"
 
 
 def test_classify_config_key_smtp_from_name_is_system() -> None:
-    from paper_ingestion.services.config_metadata import _classify_config_key
+    from jarvis_common.config_metadata import _classify_config_key
 
     assert _classify_config_key("smtp.from_name") == "system"
 
 
-def test_smtp_reply_to_not_in_secret_keys() -> None:
-    from paper_ingestion.services.config_metadata import _SECRET_KEYS
+def test_smtp_reply_to_is_not_masked() -> None:
+    """It is an address an administrator has to read back, not a credential."""
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS
 
-    assert "smtp.reply_to" not in _SECRET_KEYS
+    assert "smtp.reply_to" not in _ENCRYPTED_KEYS
 
 
-def test_smtp_from_name_not_in_secret_keys() -> None:
-    from paper_ingestion.services.config_metadata import _SECRET_KEYS
+def test_smtp_from_name_is_not_masked() -> None:
+    """It is an address an administrator has to read back, not a credential."""
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS
 
-    assert "smtp.from_name" not in _SECRET_KEYS
+    assert "smtp.from_name" not in _ENCRYPTED_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -958,7 +936,7 @@ def test_smtp_from_name_not_in_secret_keys() -> None:
 
 @pytest.mark.parametrize("value", [None, ""])
 def test_validate_optional_email_allows_none_and_empty(value) -> None:
-    from paper_ingestion.services.config_validators import _validate_optional_email
+    from jarvis_common.config_validators import _validate_optional_email
 
     # Must not raise
     _validate_optional_email(value)
@@ -966,13 +944,13 @@ def test_validate_optional_email_allows_none_and_empty(value) -> None:
 
 @pytest.mark.parametrize("value", ["support@example.com", "a@b.io"])
 def test_validate_optional_email_valid_email(value) -> None:
-    from paper_ingestion.services.config_validators import _validate_optional_email
+    from jarvis_common.config_validators import _validate_optional_email
 
     _validate_optional_email(value)  # must not raise
 
 
 def test_validate_optional_email_rejects_invalid() -> None:
-    from paper_ingestion.services.config_validators import _validate_optional_email
+    from jarvis_common.config_validators import _validate_optional_email
 
     with pytest.raises(ValueError):
         _validate_optional_email("not-an-email")
@@ -980,20 +958,20 @@ def test_validate_optional_email_rejects_invalid() -> None:
 
 @pytest.mark.parametrize("value", [None, ""])
 def test_validate_optional_header_str_allows_none_and_empty(value) -> None:
-    from paper_ingestion.services.config_validators import _validate_optional_header_str
+    from jarvis_common.config_validators import _validate_optional_header_str
 
     _validate_optional_header_str(value)  # must not raise
 
 
 def test_validate_optional_header_str_valid_string() -> None:
-    from paper_ingestion.services.config_validators import _validate_optional_header_str
+    from jarvis_common.config_validators import _validate_optional_header_str
 
     _validate_optional_header_str("JARVIS Bot")  # must not raise
 
 
 @pytest.mark.parametrize("value", ["Evil\r\nBcc: x@y.com", "has\nnewline", "has\x00null"])
 def test_validate_optional_header_str_rejects_control_chars(value) -> None:
-    from paper_ingestion.services.config_validators import _validate_optional_header_str
+    from jarvis_common.config_validators import _validate_optional_header_str
 
     with pytest.raises(ValueError):
         _validate_optional_header_str(value)
@@ -1040,36 +1018,6 @@ async def test_get_smtp_config_returns_reply_to_and_from_name(monkeypatch) -> No
     assert hasattr(result, "issues"), "SmtpConfigResponse must have 'issues' field"
 
 
-@pytest.mark.asyncio
-async def test_configure_cloud_llm_keys_push_failure_no_restart_required(monkeypatch):
-    """A failed live push must NOT set restart_required — reconciler retries in ≤30 s."""
-    import paper_ingestion.services.litellm_config as litellm_mod
-
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(
-        side_effect=lambda q, *a: {"value": "openai/gpt-4o"} if "llm.smart_model" in a else None
-    )
-    conn.fetchval = AsyncMock(return_value=0)
-    conn.execute = AsyncMock(return_value=None)
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _build_request(pool)
-
-    async def failing_update(alias_key, model_id, *, db_pool, machine_id):
-        raise RuntimeError("LiteLLM unreachable")
-
-    monkeypatch.setattr(litellm_mod, "update_litellm_model", failing_update)
-    monkeypatch.setattr("paper_ingestion.routers.setup.socket.gethostname", lambda: "test-host")
-    monkeypatch.setattr(
-        "paper_ingestion.routers.setup._persist_config", AsyncMock(return_value=None)
-    )
-
-    body = setup_router.CloudLlmKeysBody(openai="sk-openai-test-key-xxxxxxxxxxxx")
-    result = await setup_router.configure_cloud_llm_keys(body, request)
-
-    assert result.restart_required is False
-    assert result.applied_now == []
-
-
 # ---------------------------------------------------------------------------
 # _persist_config derives encryption from the canonical secret set
 # ---------------------------------------------------------------------------
@@ -1080,7 +1028,7 @@ def test_persist_config_derives_encryption_from_canonical_set(monkeypatch):
     config_metadata._ENCRYPTED_KEYS — no per-call-site flag."""
     import asyncio
 
-    from paper_ingestion.routers import setup as setup_router
+    from platform_api.routers import setup as setup_router
 
     captured: list[tuple[str, tuple]] = []
 
@@ -1117,8 +1065,8 @@ def test_persist_config_derives_encryption_from_canonical_set(monkeypatch):
 def test_wizard_smtp_keys_stay_bound_to_canonical_config_sets():
     """Drift-guard: the wizard's duplicated SMTP key tuples must agree with the
     canonical allow-list / encryption set in config_metadata."""
-    from paper_ingestion.routers.setup import _SMTP_ENCRYPTED_KEYS, _SMTP_PLAINTEXT_KEYS
-    from paper_ingestion.services.config_metadata import (
+    from platform_api.routers.setup import _SMTP_ENCRYPTED_KEYS, _SMTP_PLAINTEXT_KEYS
+    from jarvis_common.config_metadata import (
         _ALLOWED_CONFIG_KEYS,
         _ENCRYPTED_KEYS,
     )

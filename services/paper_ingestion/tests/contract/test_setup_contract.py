@@ -82,13 +82,16 @@ async def setup_client(contract_conn, monkeypatch):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
     get_secrets_settings.cache_clear()
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -112,12 +115,15 @@ async def setup_app(contract_conn, monkeypatch):
     from jarvis_common import verify_api_key
     from jarvis_common.settings import get_secrets_settings
     from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
     get_secrets_settings.cache_clear()
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
     app.state.limiter.enabled = False
     try:
         with (
@@ -727,12 +733,16 @@ async def test_create_first_admin_writes_owner_config_row(setup_client, contract
         f"owner.user_id row must equal the new admin id {user_id}; got {owner_value!r}"
     )
     audit = await contract_conn.fetchrow(
-        "SELECT user_id, resource, metadata FROM audit_log WHERE action = 'admin.owner.bootstrap'"
+        """SELECT event.user_id, event.resource, event.metadata, subject.user_id AS subject_user_id
+           FROM audit_log AS event
+           LEFT JOIN audit_subjects AS subject ON subject.id = event.subject_id
+           WHERE event.action = 'admin.owner.bootstrap'"""
     )
     assert audit is not None
-    assert audit["user_id"] == str(user_id)
+    assert audit["user_id"] is None
+    assert audit["subject_user_id"] == user_id
     assert audit["resource"] == "owner.user_id"
-    assert audit["metadata"] == {"source": "first_admin"}
+    assert audit["metadata"] == {}
 
 
 async def test_first_admin_owner_row_rolls_back_with_session_failure(
@@ -777,7 +787,7 @@ async def test_first_admin_rolls_back_when_mandatory_owner_audit_fails(
     """Bootstrap ownership and its security audit are one atomic mutation."""
     import contextlib
 
-    from paper_ingestion.routers import setup as setup_router
+    from platform_api.routers import setup as setup_router
 
     async def _fail_audit(*_args, **_kwargs):
         raise RuntimeError("audit unavailable")

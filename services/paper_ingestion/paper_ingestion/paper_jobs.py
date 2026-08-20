@@ -319,6 +319,19 @@ async def _paper_analyze_job(
     except PDFUserFacingError as exc:
         raise JobError(str(exc)) from exc
 
+    if row["source_type"] == "local":
+        from paper_ingestion.services.bibliography import (  # noqa: PLC0415
+            process_uploaded_document_citations,
+        )
+
+        sources = services.sources or {}
+        await process_uploaded_document_citations(
+            pool,
+            paper_id,
+            s2_source=sources.get("semantic_scholar"),
+            openai_client=services.openai_client,
+        )
+
     # ---- Step 3: Summarize ----
     await ctx.update_progress(0.7, "Summarizing")
     await _summarize_single_paper(paper_id, pool, http_client, user_id=user_id, force=force)

@@ -136,8 +136,23 @@ export const QUERY_KEYS = {
 
   // ── Feed ──────────────────────────────────────────────────────────────────
   feed: {
-    counts: (scope?: "library" | "corpus") =>
-      scope ? (["feed-counts", scope] as const) : (["feed-counts"] as const),
+    counts: (
+      scope?: "library" | "corpus",
+      view?: string,
+      source?: string | null,
+      topicId?: number | null,
+      untagged?: boolean,
+    ) =>
+      scope || view || source || topicId != null || untagged
+        ? ([
+            "feed-counts",
+            scope ?? null,
+            view ?? null,
+            source ?? null,
+            topicId ?? null,
+            untagged ?? false,
+          ] as const)
+        : (["feed-counts"] as const),
     onboardingCheck: () => ["papers-feed", "onboarding-check"] as const,
     readingHero: () => ["feed", "reading", "hero"] as const,
   },

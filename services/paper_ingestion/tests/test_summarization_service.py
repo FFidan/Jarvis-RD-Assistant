@@ -10,6 +10,7 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
 from jarvis_common.testing_db import make_multi_acquire_pool
 from jarvis_common.verify import QuoteVerifier
 
@@ -96,8 +97,8 @@ async def test_find_cross_references_prefers_semantic_results():
     # candidates and decides nothing. Scope is covered separately by
     # test_cross_references_background_job_ignores_discovery_attribution.
     conn.fetch.return_value = [
-        {"id": 2, "content_generation": 4},
-        {"id": 3, "content_generation": 7},
+        {"id": 2, "title": "Second Paper", "published_year": 2024, "content_generation": 4},
+        {"id": 3, "title": "Third Paper", "published_year": 2025, "content_generation": 7},
     ]
     embedder = AsyncMock()
     embedder.search_similar.return_value = [
@@ -109,6 +110,8 @@ async def test_find_cross_references_prefers_semantic_results():
     result = await summarization._find_cross_references(conn, 7, "Test Paper", embedder=embedder)
 
     assert [item.related_paper_id for item in result] == [2, 3]
+    assert [item.related_title for item in result] == ["Second Paper", "Third Paper"]
+    assert [item.related_year for item in result] == [2024, 2025]
     assert [item.content_generation for item in result] == [4, 7]
     assert all(item.relationship == "semantic_similarity" for item in result)
 
@@ -162,6 +165,124 @@ async def test_generate_paper_summary_returns_existing_summary():
     assert result.passes == 0
     llm_mock.assert_not_called()
     convert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_successful_summary_synchronizes_citations_without_propagating_failure(monkeypatch):
+    """A completed summary remains successful when citation synchronization fails."""
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), {"id": 1, "cross_references": []}]
+    pool = _make_pool(conn)
+    source = MagicMock()
+    monkeypatch.setattr(summarization.svc, "sources", {"semantic_scholar": source})
+
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "row_to_summary_response", return_value="existing-summary"),
+        patch.object(
+            summarization,
+            "_refresh_stale_citations",
+            AsyncMock(side_effect=RuntimeError("unavailable")),
+        ) as sync,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=MagicMock(),
+            embedder=MagicMock(),
+        )
+
+    assert result.summary == "existing-summary"
+    # Routed through the staleness check, so a re-summarize cannot re-fetch a
+    # paper whose citations are still current.
+    sync.assert_awaited_once_with(pool, source, [7])
+
+
+@pytest.mark.asyncio
+async def test_summary_response_joins_related_title_and_preserves_missing_reference():
+    """The response enriches available targets and retains missing-target context."""
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {
+            "id": 2,
+            "title": "Available Related Paper",
+            "published_year": 2023,
+            "content_generation": 4,
+        }
+    ]
+    stored_references = [
+        {
+            "related_paper_id": 2,
+            "relationship": "semantic_similarity",
+            "explanation": "Related evidence",
+            "content_generation": 4,
+        },
+        {
+            "related_paper_id": 99,
+            "relationship": "semantic_similarity",
+            "explanation": "The target was removed",
+            "content_generation": 1,
+        },
+    ]
+
+    enriched = await summarization.filter_current_cross_references(conn, stored_references, 11)
+    response = summarization.row_to_summary_response(
+        _stored_row(cross_references=stored_references),
+        cross_references=enriched,
+    )
+
+    payload = response.model_dump()
+    assert len(payload["cross_references"]) == 2
+    assert payload["cross_references"][0]["related_title"] == "Available Related Paper"
+    assert payload["cross_references"][0]["related_year"] == 2023
+    assert payload["cross_references"][1]["related_title"] is None
+    assert payload["cross_references"][1]["related_paper_id"] == 99
+
+
+@pytest.mark.asyncio
+async def test_cross_reference_titles_are_scoped_to_the_caller():
+    """A stored reference cannot disclose a title the caller may no longer see."""
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+    stored_references = [
+        {
+            "related_paper_id": 2,
+            "relationship": "semantic_similarity",
+            "explanation": "Visible when stored, private now",
+            "content_generation": 4,
+        }
+    ]
+
+    enriched = await summarization.filter_current_cross_references(conn, stored_references, 11)
+
+    # The behavioural proof that another user's title stays hidden lives in the
+    # database-backed contract suite; here we pin that the caller's identity is
+    # bound into the lookup at all, and that an unreachable target yields no title.
+    assert 11 in conn.fetch.await_args.args, "the caller's identity must reach the lookup"
+    assert enriched[0]["related_title"] is None
+
+
+@pytest.mark.asyncio
+async def test_background_cross_reference_titles_are_limited_to_public_papers():
+    """A caller-less background read sees public papers only, as generation does."""
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+
+    await summarization.filter_current_cross_references(
+        conn,
+        [
+            {
+                "related_paper_id": 2,
+                "relationship": "semantic_similarity",
+                "explanation": "Background read",
+                "content_generation": 4,
+            }
+        ],
+        None,
+    )
+
+    assert PUBLIC_VISIBILITY_SCOPE in conn.fetch.await_args.args
 
 
 @pytest.mark.asyncio
@@ -998,6 +1119,21 @@ def test_system_summarize_contains_rules():
     assert "verbatim quote" in _SYSTEM_SUMMARIZE.lower() or "verbatim" in _SYSTEM_SUMMARIZE
 
 
+def test_body_findings_rule_is_conditional_on_chunks_after_the_abstract() -> None:
+    abstract_only = [SimpleNamespace(chunk_index=0)]
+    with_body = [*abstract_only, SimpleNamespace(chunk_index=1)]
+
+    abstract_system = summarization._findings_system_prompt(
+        summarization._SYSTEM_SUMMARIZE, abstract_only
+    )
+    body_system = summarization._findings_system_prompt(summarization._SYSTEM_SUMMARIZE, with_body)
+
+    assert summarization._BODY_FINDINGS_RULE not in abstract_system
+    assert summarization._BODY_FINDINGS_RULE in body_system
+    assert "Results and Methods" in body_system
+    assert "not the abstract" in body_system
+
+
 def test_summary_prompt_shapes_include_relevance_notes():
     """Prompt JSON examples should match the optional relevance_notes schema field."""
     from paper_ingestion.services.summarization import _SYSTEM_REDUCE, _SYSTEM_SUMMARIZE
@@ -1503,7 +1639,13 @@ async def test_map_reduce_reads_every_window_and_carries_window_verified_quotes(
         for c in llm_mock.call_args_list
         if c.kwargs["response_model"] is WindowDigest
     ]
+    digest_systems = [
+        c.kwargs["options"].system
+        for c in llm_mock.call_args_list
+        if c.kwargs["response_model"] is WindowDigest
+    ]
     assert len(digest_prompts) == 3
+    assert all(summarization._BODY_FINDINGS_RULE in system for system in digest_systems)
     for marker in ("unique alpha result", "distinctive beta outcome", "singular gamma effect"):
         assert sum(marker in p for p in digest_prompts) == 1
 
@@ -1625,9 +1767,101 @@ async def test_single_window_paper_keeps_single_call_and_prompt_shape():
     )
     options = kwargs["options"]
     assert options.system == summarization._SYSTEM_SUMMARIZE
+    assert summarization._BODY_FINDINGS_RULE not in options.system
     assert options.max_tokens == summarization._SUMMARY_OUTPUT_TOKENS
     assert result.passes == 1
     assert result.coverage == 1.0
+
+
+@pytest.mark.asyncio
+async def test_single_window_body_paper_applies_body_findings_rule() -> None:
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = _chunk_rows(
+        ["Abstract summary.", "Methods and results provide body evidence."]
+    )
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = _stored_row()
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=0,
+        verified_count=0,
+        confidence=Confidence.NONE,
+    )
+    output = SummarizationOutput(
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[],
+    )
+    patch_ctx, llm_mock = _patched_call_llm(return_value=output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    options = llm_mock.call_args.kwargs["options"]
+    assert summarization._BODY_FINDINGS_RULE in options.system
+
+
+@pytest.mark.asyncio
+async def test_abstract_only_paper_keeps_verified_findings() -> None:
+    abstract = "The abstract reports a reproducible improvement."
+    chunk = {**_chunk_row(), "content": abstract, "end_char": len(abstract)}
+    stored_finding = {
+        "finding": "The approach improves the reported outcome.",
+        "quote": abstract,
+        "page_number": 1,
+        "chunk_id": chunk["id"],
+        "verified": True,
+        "snapshot_path": None,
+    }
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [{**_paper_row(), "abstract": abstract}, None]
+    conn_phase1.fetch.return_value = [chunk]
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = _stored_row(key_findings=[stored_finding])
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    output = SummarizationOutput(
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[
+            KeyFindingOutput(
+                finding="The approach improves the reported outcome.",
+                quote=abstract,
+                page_number=1,
+            )
+        ],
+    )
+    patch_ctx, llm_mock = _patched_call_llm(return_value=output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=QuoteVerifier(),
+            embedder=MagicMock(),
+        )
+
+    options = llm_mock.call_args.kwargs["options"]
+    assert summarization._BODY_FINDINGS_RULE not in options.system
+    persisted_findings = conn_phase2.fetchrow.call_args.args[5]
+    assert [finding["quote"] for finding in persisted_findings] == [abstract]
+    assert result.summary.key_findings[0].quote == abstract
 
 
 # ---------------------------------------------------------------------------

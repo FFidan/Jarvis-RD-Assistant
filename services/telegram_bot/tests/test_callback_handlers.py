@@ -10,6 +10,8 @@ H1 invariant: every test for the dispatcher callbacks asserts
 
 from __future__ import annotations
 
+import contextlib
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,7 +24,9 @@ from telegram import Message, Update
 from telegram.ext import ContextTypes
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.callback_handler import (
+    FOCUS_RESTART_CALLBACK,
     _callback_auth,
+    focus_restart_callback,
     paper_action_callback,
     paper_detail_callback,
     paper_feedback_callback,
@@ -85,7 +89,7 @@ _TEST_CHAT_ID = 12345
 
 
 def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_CHAT_ID):
-    """Build (Update, Context, mock_db, mock_http) tuple for callback tests."""
+    """Build callback state with paired Platform and downstream HTTP clients."""
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
@@ -103,17 +107,38 @@ def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_C
 
     context = MagicMock()
     config = make_bot_config(BotConfig)
-    mock_db = AsyncMock()
+    mock_platform = AsyncMock()
+    mock_platform.get.return_value = make_http_response(
+        {
+            "user_id": 1,
+            "chat_id": chat_id,
+            "telegram_username": None,
+            "paired_at": None,
+        }
+    )
     mock_http = AsyncMock()
 
     context.application = MagicMock()
     context.application.bot_data = {
         "config": config,
-        "db_pool": mock_db,
+        "platform_client": mock_platform,
         "http_client": mock_http,
     }
 
-    return update, context, mock_db, mock_http
+    return update, context, mock_platform, mock_http
+
+
+def _capture_scheduled(context) -> list:
+    """Collect coroutines a callback schedules instead of awaiting inline.
+
+    A callback must not await minutes of backend work inside the update loop:
+    this application processes updates one at a time, so doing so would stop
+    the bot answering anyone. Capturing the scheduled coroutine lets a test
+    assert both that property and what the detached work eventually does.
+    """
+    scheduled: list = []
+    context.application.create_task = scheduled.append
+    return scheduled
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +186,8 @@ async def test_paper_detail_api_failure():
 
 
 @pytest.mark.asyncio
-async def test_paper_detail_callback_includes_api_key_header():
-    """H7: paper_detail_callback passes X-API-Key header to the GET request."""
+async def test_paper_detail_callback_uses_only_paired_user_marker():
+    """The downstream request carries no general API key."""
     update, context, _, mock_http = _make_callback_update_and_context("paper_detail_99")
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -177,7 +202,8 @@ async def test_paper_detail_callback_includes_api_key_header():
     mock_http.get.assert_awaited_once()
     call_kwargs = mock_http.get.await_args[1]
     headers = call_kwargs["headers"]
-    assert headers.get("X-API-Key") == "test-key"
+    assert headers.get("X-Jarvis-Paired-User-Id") == "1"
+    assert "X-API-Key" not in headers
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +427,28 @@ async def test_paper_action_failure_trash():
     query.message.reply_text.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_paper_action_reply_failure_does_not_report_the_action_as_failed():
+    """A confirmation that cannot be sent must not undo what the user just did.
+
+    The paper has already been saved when the reply is attempted, so a failure
+    there is about the message, not the action: telling the user it failed
+    would be untrue, and the second answer breaks H1.
+    """
+    update, context, _, _ = _make_callback_update_and_context("paper:save:42")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+    query = update.callback_query
+    query.message.reply_text.side_effect = RuntimeError("Flood control exceeded")
+
+    with contextlib.suppress(RuntimeError):
+        await paper_action_callback(update, context)
+
+    mock_http.request.assert_awaited_once()  # the action did happen
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "💾 Saved"
+
+
 # ---------------------------------------------------------------------------
 # Tests: paper_action_callback — bad data path
 # ---------------------------------------------------------------------------
@@ -435,8 +483,7 @@ async def test_paper_action_auth_fail_answers_query():
     # auth_check's DB fallback queries user_config; return None to take the
     # explicit "no owner paired" reject path.  Also return None for the
     # telegram_user_pairings lookup (migration 071) so the denial is complete.
-    mock_db.fetchval.return_value = None
-    mock_db.fetchrow.return_value = None
+    mock_db.get.return_value = make_http_response(None, status=404)
 
     await paper_action_callback(update, context)
 
@@ -451,8 +498,7 @@ async def test_paper_feedback_auth_fail_answers_query():
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         "paper:feedback_pos:42:pulse_thumbs", chat_id=99999
     )
-    mock_db.fetchval.return_value = None
-    mock_db.fetchrow.return_value = None
+    mock_db.get.return_value = make_http_response(None, status=404)
 
     await paper_feedback_callback(update, context)
 
@@ -588,6 +634,23 @@ async def test_paper_feedback_failure():
     assert query.answer.await_args[1].get("text") == "Feedback failed — try again later"
 
 
+@pytest.mark.asyncio
+async def test_paper_feedback_ack_failure_does_not_report_the_signal_as_lost():
+    """A failed acknowledgement must not claim the recorded signal was rejected."""
+    update, context, _, _ = _make_callback_update_and_context("paper:feedback_pos:42:pulse_thumbs")
+    mock_http = AsyncMock()
+    mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
+    context.application.bot_data["http_client"] = mock_http
+    query = update.callback_query
+    query.answer.side_effect = RuntimeError("Query is too old")
+
+    with contextlib.suppress(RuntimeError):
+        await paper_feedback_callback(update, context)
+
+    mock_http.post.assert_awaited_once()  # the signal was recorded
+    assert query.answer.call_count == 1  # H1
+
+
 # ---------------------------------------------------------------------------
 # Tests: paper_feedback_callback — bad data path
 # ---------------------------------------------------------------------------
@@ -633,6 +696,7 @@ async def test_project_detail_success():
             [{"id": 1, "name": "Milestone 1", "deadline": None, "completed": False}]
         ),  # milestones
     ]
+    scheduled = _capture_scheduled(context)
 
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
@@ -641,7 +705,13 @@ async def test_project_detail_success():
     ):
         await project_detail_callback(update, context)
 
+    # The three reads run detached: awaiting them here would stop the bot
+    # answering every other user for as long as the backend takes.
+    assert mock_http.get.await_count == 0, "the callback must not read inside the update loop"
     update.callback_query.answer.assert_awaited_once()
+    assert len(scheduled) == 1
+    await scheduled[0]
+
     update.callback_query.message.reply_text.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "My Project" in text
@@ -653,7 +723,7 @@ async def test_project_detail_success():
     assert urls[1].endswith("/api/projects/3/tasks")
     assert urls[2].endswith("/api/projects/3/milestones")
     for c in mock_http.get.await_args_list:
-        assert c.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+        assert c.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
@@ -661,6 +731,7 @@ async def test_project_detail_not_found():
     """project_detail callback sends 'not found' when project does not exist (404)."""
     update, context, _, mock_http = _make_callback_update_and_context("project_detail_999")
     mock_http.get.return_value = make_http_response(None, status=404)  # fetch_project → None
+    scheduled = _capture_scheduled(context)
 
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
@@ -668,6 +739,7 @@ async def test_project_detail_not_found():
         return_value=(True, _PAIRED_USER_ID),
     ):
         await project_detail_callback(update, context)
+    await scheduled[0]
 
     update.callback_query.answer.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
@@ -680,6 +752,7 @@ async def test_project_detail_service_error_replies_gracefully():
     update, context, _, mock_http = _make_callback_update_and_context("project_detail_3")
     # First call (fetch_project) raises → graceful handling kicks in.
     mock_http.get.side_effect = httpx.ReadTimeout("timed out")
+    scheduled = _capture_scheduled(context)
 
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
@@ -687,6 +760,7 @@ async def test_project_detail_service_error_replies_gracefully():
         return_value=(True, _PAIRED_USER_ID),
     ):
         await project_detail_callback(update, context)
+    await scheduled[0]
 
     update.callback_query.answer.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
@@ -719,7 +793,7 @@ async def test_task_done_success():
     put_call = mock_http.put.await_args
     assert put_call.args[0].endswith("/api/tasks/10")
     assert put_call.kwargs["json"] == {"status": "done"}
-    assert put_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert put_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
@@ -765,18 +839,18 @@ async def test_task_done_service_error_replies_gracefully():
 # Cross-tenant task-done writes are now blocked server-side.
 #
 # Post-REST-migration, task_done_callback no longer runs an ownership pre-check
-# in the bot — it PUTs to the Learning Engine, which scopes by the forwarded
-# X-Owner-User-Id header.  A non-owned task therefore returns 404 (→ "not
+# in the bot — Telegram auth exchanges the local user marker for a signed
+# Learning assertion. A non-owned task therefore returns 404 (→ "not
 # found", no existence leak).  The cross-tenant *denial* guarantee is proven by
 # the LE contract test (T8: test_update_task_cross_tenant_returns_404); the bot
-# tests below assert the two things the bot is responsible for: forwarding the
-# owner identity, and surfacing a 404 as "not found".
+# tests below assert the two things the bot is responsible for: staging paired
+# identity for the exchange, and surfacing a 404 as "not found".
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_task_done_forwards_owner_user_id_for_paired_user():
-    """Bot half: the PUT forwards X-Owner-User-Id so the LE can scope."""
+    """The bot stages paired identity before the PUT assertion exchange."""
     update, context, _, mock_http = _make_paired_callback("task_done_5")
     mock_http.put.return_value = make_http_response({"id": 5, "status": "done"})
 
@@ -786,8 +860,8 @@ async def test_task_done_forwards_owner_user_id_for_paired_user():
     put_call = mock_http.put.await_args
     assert put_call.args[0].endswith("/api/tasks/5")
     assert put_call.kwargs["json"] == {"status": "done"}
-    assert put_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert put_call.kwargs["headers"].get("X-API-Key") == "test-key"
+    assert put_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
+    assert "X-API-Key" not in put_call.kwargs["headers"]
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "done" in text.lower() or "5" in text
 
@@ -796,7 +870,7 @@ async def test_task_done_forwards_owner_user_id_for_paired_user():
 async def test_task_done_non_owned_task_returns_not_found_no_leak():
     """Bot half: a non-owned task → LE 404 → 'not found' (no existence leak)."""
     update, context, _, mock_http = _make_paired_callback("task_done_9")
-    # The LE scopes by X-Owner-User-Id; another user's task is invisible → 404.
+    # The LE scopes by the signed assertion; another user's task is invisible.
     mock_http.put.return_value = make_http_response(None, status=404)
 
     await task_done_callback(update, context)
@@ -892,11 +966,7 @@ def test_start_review_not_registered_in_callback_handler():
 def _make_unauthed_callback(callback_data: str) -> tuple:
     """Build (update, context, mock_db) for an unauthorised caller (chat_id != 12345)."""
     update, context, mock_db, _ = _make_callback_update_and_context(callback_data, chat_id=99999)
-    # auth_check DB path returns None → no paired owner → denied.
-    # Also return None for telegram_user_pairings (migration 071) so denial
-    # propagates through all three lookup stages.
-    mock_db.fetchval.return_value = None
-    mock_db.fetchrow.return_value = None
+    mock_db.get.return_value = make_http_response(None, status=404)
     return update, context, mock_db
 
 
@@ -921,11 +991,14 @@ async def test_paper_detail_unauthed_acks_before_returning():
 async def test_project_detail_unauthed_acks_before_returning():
     """project_detail_callback acks the query even when auth fails."""
     update, context, _ = _make_unauthed_callback("project_detail_3")
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
 
     assert update.callback_query.answer.call_count == 1
     update.callback_query.message.reply_text.assert_not_awaited()
+    # The rejection path must not detach the reads either.
+    assert not scheduled
 
 
 @pytest.mark.asyncio
@@ -951,7 +1024,7 @@ async def test_start_review_unauthed_acks_before_returning():
 
 
 # ---------------------------------------------------------------------------
-# Cross-user: X-Owner-User-Id forwarded from paired callbacks
+# Paired-user context staged by callbacks before assertion exchange
 # ---------------------------------------------------------------------------
 
 _PAIRED_CHAT_ID = 55555
@@ -961,24 +1034,25 @@ _PAIRED_USER_ID = 42
 def _make_paired_callback(callback_data: str) -> tuple:
     """Build (update, context, mock_db, mock_http) for a paired multi-tenant chat.
 
-    The chat_id does not match the env-var config, so auth_check will query
-    telegram_user_pairings.  We set mock_db.fetchrow to return a row with
-    user_id=_PAIRED_USER_ID so auth_check grants access as a paired user.
+    Platform resolves the chat to ``_PAIRED_USER_ID`` for downstream scoping.
     """
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         callback_data, chat_id=_PAIRED_CHAT_ID
     )
-    # auth_check path 1 (env var): no match — chat_id != _TEST_CHAT_ID
-    # auth_check path 2 (user_config owner): fetchval returns None
-    mock_db.fetchval.return_value = None
-    # auth_check path 3 (telegram_user_pairings): return paired row
-    mock_db.fetchrow.return_value = {"user_id": _PAIRED_USER_ID}
+    mock_db.get.return_value = make_http_response(
+        {
+            "user_id": _PAIRED_USER_ID,
+            "chat_id": _PAIRED_CHAT_ID,
+            "telegram_username": None,
+            "paired_at": None,
+        }
+    )
     return update, context, mock_db, mock_http
 
 
 @pytest.mark.asyncio
 async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
-    """paper_detail_callback includes X-Owner-User-Id for a paired user."""
+    """paper_detail_callback includes X-Jarvis-Paired-User-Id for a paired user."""
     update, context, _, mock_http = _make_paired_callback("paper_detail_42")
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -992,13 +1066,13 @@ async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
 
     mock_http.get.assert_awaited_once()
     headers = mock_http.get.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert headers.get("X-API-Key") == "test-key"
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
 async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
-    """paper_action_callback includes X-Owner-User-Id for a paired user."""
+    """paper_action_callback includes X-Jarvis-Paired-User-Id for a paired user."""
     update, context, _, _ = _make_paired_callback("paper:save:7")
     mock_http = _make_action_mock_http()
     context.application.bot_data["http_client"] = mock_http
@@ -1007,13 +1081,13 @@ async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
 
     mock_http.request.assert_awaited_once()
     headers = mock_http.request.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert headers.get("X-API-Key") == "test-key"
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
 async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
-    """paper_feedback_callback includes X-Owner-User-Id for a paired user."""
+    """paper_feedback_callback includes X-Jarvis-Paired-User-Id for a paired user."""
     update, context, _, _ = _make_paired_callback("paper:feedback_pos:7:pulse_thumbs")
     mock_http = AsyncMock()
     mock_resp = MagicMock()
@@ -1025,17 +1099,16 @@ async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
 
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
-    assert headers.get("X-API-Key") == "test-key"
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
+    assert "X-API-Key" not in headers
 
 
 @pytest.mark.asyncio
 async def test_paper_feedback_callback_uses_paired_user_identity_in_request():
     """TG-02: paper_feedback_callback forwards the authenticated user's identity.
 
-    The assert jarvis_user_id is not None guard (post-auth-check) ensures the
-    paired user ID — not None — is threaded into _owner_headers and onward to
-    the backend.  Asserts X-Owner-User-Id equals the paired user's id.
+    The post-auth guard ensures the paired user ID, not ``None``, is threaded
+    into ``_owner_headers`` for the later assertion exchange.
     """
     update, context, _, _ = _make_paired_callback("paper:feedback_neg:55:feed_thumbs")
     mock_http = AsyncMock()
@@ -1049,16 +1122,15 @@ async def test_paper_feedback_callback_uses_paired_user_identity_in_request():
     mock_http.post.assert_awaited_once()
     headers = mock_http.post.await_args[1]["headers"]
     # Must carry the exact paired user ID — not None, not the env chat_id.
-    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 # ---------------------------------------------------------------------------
 # TG-N2: project_detail user-scoping defense-in-depth
 #
-# Post-REST-migration the bot no longer issues SQL; per-user scoping is enforced
-# by forwarding X-Owner-User-Id on every backend GET (the Learning Engine scopes
-# the SQL).  These tests assert the header is forwarded on each of the three
-# project-detail GETs (project, tasks, milestones).
+# The bot no longer issues SQL. It stages paired identity on each request, and
+# Telegram auth exchanges that marker for the signed assertion that Learning
+# uses for SQL scoping. These tests cover all three project-detail requests.
 # ---------------------------------------------------------------------------
 
 
@@ -1081,41 +1153,47 @@ def _project_detail_responses() -> list:
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_project_fetch() -> None:
-    """TG-N2: the project GET forwards X-Owner-User-Id so the LE scopes it."""
+    """TG-N2: the project GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
+    await scheduled[0]
 
     project_call = mock_http.get.await_args_list[0]
     assert project_call.args[0].endswith("/api/projects/3")
-    assert project_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert project_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_task_fetch() -> None:
-    """TG-N2: the tasks GET forwards X-Owner-User-Id so the LE scopes it."""
+    """TG-N2: the tasks GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
+    await scheduled[0]
 
     task_call = mock_http.get.await_args_list[1]
     assert task_call.args[0].endswith("/api/projects/3/tasks")
-    assert task_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert task_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_milestone_fetch() -> None:
-    """TG-N2: the milestones GET forwards X-Owner-User-Id so the LE scopes it."""
+    """TG-N2: the milestones GET stages identity for the Learning assertion."""
     update, context, _, mock_http = _make_paired_callback("project_detail_3")
     mock_http.get.side_effect = _project_detail_responses()
+    scheduled = _capture_scheduled(context)
 
     await project_detail_callback(update, context)
+    await scheduled[0]
 
     milestone_call = mock_http.get.await_args_list[2]
     assert milestone_call.args[0].endswith("/api/projects/3/milestones")
-    assert milestone_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert milestone_call.kwargs["headers"].get("X-Jarvis-Paired-User-Id") == str(_PAIRED_USER_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -1150,9 +1228,18 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
 
     context = MagicMock()
     context.application = MagicMock()
+    platform_client = AsyncMock()
+    platform_client.get.return_value = make_http_response(
+        {
+            "user_id": 1,
+            "chat_id": _TEST_CHAT_ID,
+            "telegram_username": None,
+            "paired_at": None,
+        }
+    )
     context.application.bot_data = {
         "config": make_bot_config(BotConfig),
-        "db_pool": AsyncMock(),
+        "platform_client": platform_client,
         "http_client": AsyncMock(),
     }
 
@@ -1163,3 +1250,79 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
 
     mock_review_start.assert_not_awaited()
     query.answer.assert_awaited_once_with("This message is no longer accessible", show_alert=True)
+
+
+# ---------------------------------------------------------------------------
+# Tests: focus_restart
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_focus_restart_starts_a_session_at_the_saved_duration():
+    """The "Start another" button reuses the /focus start path and its saved length."""
+    from telegram_bot.platform_client import TimerPreferences
+
+    update, context, _, _ = _make_callback_update_and_context(FOCUS_RESTART_CALLBACK)
+
+    with (
+        patch(
+            "telegram_bot.handlers.commands.system_commands.platform_client.get_timer_preferences",
+            new_callable=AsyncMock,
+            return_value=TimerPreferences(45, 4),
+        ),
+        patch(
+            "telegram_bot.handlers.commands.system_commands.services_client.start_focus_session",
+            new_callable=AsyncMock,
+        ) as start_focus,
+    ):
+        await focus_restart_callback(update, context)
+
+    update.callback_query.answer.assert_awaited_once()
+    assert start_focus.await_args.args[2:] == (1, 2700)
+    assert "45" in update.callback_query.message.reply_text.call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# Tests: review conversation re-entry
+# ---------------------------------------------------------------------------
+
+
+def _make_review_command_update() -> Update:
+    """Build a real ``/review`` command update the conversation can route."""
+    chat = telegram.Chat(id=_TEST_CHAT_ID, type=telegram.Chat.PRIVATE)
+    user = telegram.User(id=4242, first_name="Reviewer", is_bot=False)
+    message = Message(
+        message_id=1,
+        date=datetime(2026, 1, 1, tzinfo=UTC),
+        chat=chat,
+        from_user=user,
+        text="/review",
+        entities=(
+            telegram.MessageEntity(
+                type=telegram.MessageEntity.BOT_COMMAND, offset=0, length=len("/review")
+            ),
+        ),
+    )
+    bot = MagicMock()
+    bot.username = "jarvis_test_bot"
+    message.set_bot(bot)
+    return Update(update_id=1, message=message)
+
+
+def test_review_starts_again_after_an_unfinished_session():
+    """A review the user walked away from must not swallow the next /review.
+
+    The abandoned session keeps its state indefinitely and no handler outside
+    the conversation claims a ``/review`` update, so without re-entry the
+    command silently does nothing until the user knows to send /cancel.
+    """
+    conversation = _review_handler_mod.get_review_conversation_handler()
+    update = _make_review_command_update()
+    key = (update.effective_chat.id, update.effective_user.id)
+    conversation._conversations[key] = _review_handler_mod.SHOWING_BACK  # noqa: SLF001
+
+    checked = conversation.check_update(update)
+
+    assert checked is not None, "/review was swallowed by the unfinished session"
+    _state, _key, handler, _payload = checked
+    assert handler in conversation.entry_points

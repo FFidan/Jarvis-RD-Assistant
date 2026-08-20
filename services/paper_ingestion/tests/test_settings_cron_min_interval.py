@@ -10,8 +10,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.services import config_validators
-from paper_ingestion.services.config_validators import _validate_cron, _validate_zotero_cron
+from jarvis_common import config_validators
+from jarvis_common.config_validators import _validate_cron, _validate_zotero_cron
 
 
 @pytest.mark.parametrize(

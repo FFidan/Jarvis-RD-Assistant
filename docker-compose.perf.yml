@@ -17,6 +17,12 @@ services:
 
   paper_ingestion:
     profiles: ["perf"]
+    # The span probe writes into the bind mount below. Running as the account that
+    # started the capture keeps that directory private to it; opening the directory
+    # to everyone instead would expose it to every account on the host. Both the
+    # profile-stack-up target and scripts/profile.sh export this pair; the fallback
+    # is the image's own appuser, which is uid 1000.
+    user: "${JARVIS_PERF_UID:-1000}:${JARVIS_PERF_GID:-1000}"
     cap_add:
       - SYS_PTRACE
     security_opt:

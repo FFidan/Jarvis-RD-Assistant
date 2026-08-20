@@ -7,18 +7,22 @@ and that locally-built images carry explicit pull semantics.
 
 import json
 import os
+import posixpath
 import re
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
+LANGFUSE_DOCKERFILE = REPO_ROOT / "langfuse" / "Dockerfile.langfuse"
 
 # Every service that pairs an `image:` tag with a `build:` context (drift guard).
 BUILT_SERVICES = {
+    "platform_api",
     "paper_ingestion",
     "learning_engine",
     "telegram_bot",
@@ -29,6 +33,7 @@ BUILT_SERVICES = {
 # Published to GHCR and pulled by default; the `build:` block is kept only for the
 # contributor / `--build-local` path.
 PUBLISHED_SERVICES = {
+    "platform_api",
     "paper_ingestion",
     "learning_engine",
     "telegram_bot",
@@ -68,6 +73,11 @@ def _bootstrap_command(compose: dict) -> str:
     command = compose["services"]["ollama-bootstrap"]["command"]
     assert isinstance(command, list) and len(command) == 1
     return command[0].replace("$$", "$")
+
+
+def test_ollama_bootstrap_is_one_shot(compose: dict) -> None:
+    """A successful model pull must not restart and pull the same models forever."""
+    assert compose["services"]["ollama-bootstrap"]["restart"] == "no"
 
 
 def _pull_stub(tmp_path: Path, body: str) -> dict[str, str]:
@@ -125,28 +135,6 @@ def test_ollama_bootstrap_fails_after_bounded_retries(compose, tmp_path: Path) -
     assert (tmp_path / "count").read_text(encoding="utf-8") == "3"
 
 
-def test_telegram_bot_has_langfuse_init_secrets(compose):
-    """
-    Verify that telegram_bot service has langfuse_init_pk and langfuse_init_sk
-    mounted as Docker secrets.
-
-    Without these, the langfuse client silently fails to initialize tracing
-    (LANGFUSE_PUBLIC_KEY_FILE and LANGFUSE_SECRET_KEY_FILE point to missing files).
-    """
-    secrets = compose["services"]["telegram_bot"]["secrets"]
-    # Handle both string entries and dict entries (e.g., {source: ..., target: ...})
-    secret_names = [s if isinstance(s, str) else s.get("source") for s in secrets]
-
-    assert "langfuse_init_pk" in secret_names, (
-        "telegram_bot service missing langfuse_init_pk secret mount; "
-        "langfuse tracing will be silently disabled"
-    )
-    assert "langfuse_init_sk" in secret_names, (
-        "telegram_bot service missing langfuse_init_sk secret mount; "
-        "langfuse tracing will be silently disabled"
-    )
-
-
 def test_setup_mode_reaches_every_application_service(compose):
     """The installer's single/multi choice must reach runtime settings.
 
@@ -170,6 +158,17 @@ def test_owner_override_reaches_only_the_resolver_service(compose):
             assert "OWNER_USER_ID" not in _env_keys(service), (
                 f"{name} receives an owner override it does not consume"
             )
+
+
+def test_ask_rate_limit_reaches_only_research(compose):
+    """The documented benchmark override must retain a production-safe default."""
+    services = compose["services"]
+    assert services["paper_ingestion"]["environment"].get("ASK_RATE_LIMIT") == (
+        "${ASK_RATE_LIMIT:-10/minute}"
+    )
+    for name, service in services.items():
+        if name != "paper_ingestion":
+            assert "ASK_RATE_LIMIT" not in _env_keys(service)
 
 
 def test_dashboard_has_no_tls_material_or_generator(compose):
@@ -204,11 +203,23 @@ def test_dashboard_has_no_tls_material_or_generator(compose):
         for forbidden in ("/host-secrets", "/postgres-data", "/restore-inbox")
     )
 
-    sidecar_mounts = set(services["postgres-backup"]["volumes"])
-    assert "./secrets:/secrets:ro" in sidecar_mounts
-    assert "./secrets:/host-secrets:rw" in sidecar_mounts
-    assert "postgres_data:/postgres-data:ro" in sidecar_mounts
-    assert "restore_inbox:/restore-inbox" in sidecar_mounts
+    backup_mounts = set(services["postgres-backup"]["volumes"])
+    assert {
+        "./secrets/jarvis_config_key.txt:/data-keys/jarvis_config_key.txt:ro",
+        "./secrets/jarvis_model_hmac_key.txt:/data-keys/jarvis_model_hmac_key.txt:ro",
+        "./secrets/litellm_salt_key.txt:/data-keys/litellm_salt_key.txt:ro",
+        "backup_state:/backup-state:rw",
+    }.issubset(backup_mounts)
+    assert all(not mount.startswith("./secrets:") for mount in backup_mounts)
+    assert all("${JARVIS_STATE_DIR:-./secrets}" not in mount for mount in backup_mounts)
+    assert "./secrets:/host-secrets:rw" not in backup_mounts
+    assert "postgres_data:/postgres-data:ro" not in backup_mounts
+    assert "restore_inbox:/restore-inbox" in backup_mounts
+
+    restore_mounts = set(services["postgres-restore"]["volumes"])
+    assert "./secrets:/host-secrets:rw" in restore_mounts
+    assert "postgres_data:/postgres-data:ro" in restore_mounts
+    assert "restore_inbox:/restore-inbox" in restore_mounts
 
     uploader = services["restore-uploader"]
     assert uploader.get("read_only") is True
@@ -252,7 +263,20 @@ def test_service_images_create_the_runtime_user_non_interactively() -> None:
         assert 'adduser --disabled-password --no-create-home --gecos "" appuser' in dockerfile
 
 
-def test_backup_lifecycle_mutex_volume_is_writable_only_by_the_sidecar(compose):
+def test_application_healthchecks_use_unconditional_liveness(compose):
+    """Container restarts must not depend on deep downstream readiness."""
+    expected = {
+        "platform_api": "http://localhost:8003/health/live",
+        "paper_ingestion": "http://localhost:8000/health/live",
+        "learning_engine": "http://localhost:8001/health/live",
+    }
+    for service_name, endpoint in expected.items():
+        probe = " ".join(compose["services"][service_name]["healthcheck"]["test"])
+        assert endpoint in probe
+        assert endpoint.removesuffix("/live") + "'" not in probe
+
+
+def test_backup_lifecycle_mutex_volume_is_writable_only_by_recovery_workers(compose):
     """Applications may request work, but cannot replace lifecycle mutex inodes."""
     backup_mounts: dict[str, str] = {}
     for service_name, service in compose["services"].items():
@@ -263,9 +287,9 @@ def test_backup_lifecycle_mutex_volume_is_writable_only_by_the_sidecar(compose):
     assert backup_mounts.get("postgres-backup") == "postgres_backups:/backups"
     assert backup_mounts.get("paper_ingestion") == "postgres_backups:/backups:ro"
     assert all(
-        service_name == "postgres-backup" or mount.endswith(":ro")
+        service_name in {"postgres-backup", "postgres-restore"} or mount.endswith(":ro")
         for service_name, mount in backup_mounts.items()
-    ), f"only postgres-backup may write lifecycle mutexes under /backups: {backup_mounts}"
+    ), f"only backup or restore workers may write lifecycle mutexes under /backups: {backup_mounts}"
 
 
 def test_backup_sidecar_mounts_the_live_pdf_store_for_backup_and_restore(compose):
@@ -280,6 +304,9 @@ def test_litellm_uses_the_restore_aware_entrypoint(compose):
     )
     assert litellm["entrypoint"] == ["sh", "/usr/local/bin/litellm-entrypoint.sh"]
     assert litellm["command"] == []
+    assert litellm["environment"]["LITELLM_DB_CONNECTION_LIMIT"] == (
+        "${LITELLM_DB_CONNECTION_LIMIT:-5}"
+    )
     assert litellm["healthcheck"]["test"] == [
         "CMD",
         "sh",
@@ -288,13 +315,79 @@ def test_litellm_uses_the_restore_aware_entrypoint(compose):
     ]
 
 
-def test_telegram_can_decrypt_the_token_saved_by_the_setup_ui(compose):
+def test_langfuse_wrapper_preserves_the_pinned_server_command() -> None:
+    """Replacing the upstream entrypoint must retain its default server command."""
+    source = LANGFUSE_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert 'ENTRYPOINT ["/usr/local/bin/langfuse-secrets-entrypoint.sh"]' in source
+    assert 'CMD ["node", "./web/server.js", "--keepAliveTimeout", "110000"]' in source
+
+
+def test_telegram_uses_only_scoped_platform_and_bot_credentials(compose):
     telegram = compose["services"]["telegram_bot"]
-    assert telegram["environment"]["JARVIS_CONFIG_KEY_FILE"] == "/run/secrets/jarvis_config_key"
+    environment = telegram["environment"]
     secret_names = {
         entry if isinstance(entry, str) else entry.get("source") for entry in telegram["secrets"]
     }
-    assert "jarvis_config_key" in secret_names
+    assert environment["JARVIS_TELEGRAM_SERVICE_TOKEN_FILE"] == (
+        "/run/secrets/telegram_service_token"
+    )
+    assert environment["PLATFORM_API_URL"] == "http://platform_api:8003"
+    assert environment["PAPER_INGESTION_URL"] == "http://paper_ingestion:8000"
+    assert environment["LEARNING_ENGINE_URL"] == "http://learning_engine:8001"
+    assert secret_names == {"telegram_bot_token", "telegram_service_token"}
+    assert "postgres" not in telegram["depends_on"]
+    for forbidden in (
+        "JARVIS_API_KEY_FILE",
+        "JARVIS_CONFIG_KEY_FILE",
+        "JARVIS_MODEL_HMAC_KEY_FILE",
+        "LITELLM_MASTER_KEY_FILE",
+    ):
+        assert forbidden not in environment
+
+
+def test_research_does_not_mount_platform_owned_telegram_credentials(
+    compose: dict[str, Any],
+) -> None:
+    """Research must not receive the Platform-owned Telegram bot credential."""
+    research = compose["services"]["paper_ingestion"]
+    environment = research.get("environment", {}) or {}
+    secret_names = {
+        entry if isinstance(entry, str) else entry.get("source")
+        for entry in research.get("secrets", [])
+    }
+
+    assert "TELEGRAM_BOT_TOKEN_FILE" not in environment
+    assert "telegram_bot_token" not in secret_names
+
+
+def test_every_secret_file_environment_path_is_mounted(compose: dict[str, Any]) -> None:
+    """Every ``*_FILE`` path must resolve to a secret mounted by that service.
+
+    Parameters
+    ----------
+    compose : dict[str, Any]
+        Parsed Compose document.
+    """
+    for service_name, service in compose["services"].items():
+        mounted_paths = {
+            f"/run/secrets/{entry}"
+            if isinstance(entry, str)
+            else f"/run/secrets/{entry.get('target') or entry.get('source')}"
+            for entry in service.get("secrets", [])
+        }
+        environment = service.get("environment", {}) or {}
+        environment_items = (
+            ((entry.partition("=")[0], entry.partition("=")[2]) for entry in environment)
+            if isinstance(environment, list)
+            else environment.items()
+        )
+        for variable, path in environment_items:
+            if variable.endswith("_FILE") and isinstance(path, str):
+                assert path in mounted_paths, (
+                    f"{service_name}.{variable} points to {path!r}, but the service "
+                    f"mounts only {sorted(mounted_paths)}"
+                )
 
 
 def test_langfuse_service_secrets_mounted_and_not_in_env(compose):
@@ -431,8 +524,8 @@ def test_app_version_sources_agree():
         (REPO_ROOT / "docker-compose.yml").read_text(),
     )
 
-    assert len(compose_defaults) == 8, (
-        "docker-compose.yml must carry exactly eight application-version defaults; "
+    assert len(compose_defaults) == 12, (
+        "docker-compose.yml must carry exactly twelve application-version defaults; "
         f"found {len(compose_defaults)}"
     )
     root_packages = [
@@ -611,6 +704,84 @@ def _brace_block(text: str, opener: str) -> str:
     return text[match.end() : pos - 1]
 
 
+def test_setup_status_ingress_routes_only_to_platform() -> None:
+    """The public setup-status URL must terminate at the owning Platform API."""
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    block = _brace_block(nginx, r"location = /api/system/setup-status")
+
+    assert "proxy_pass http://platform_api:8003;" in block
+    assert "paper_ingestion" not in block
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in block
+
+
+def test_operator_ingress_routes_only_to_platform() -> None:
+    """Stable configuration and provider URLs terminate at their Platform owner."""
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    opener = re.escape(
+        "location ~ ^/api/(auth|setup|admin|telegram|account|config|logs|providers)(/|$)"
+    )
+    block = _brace_block(nginx, opener)
+
+    assert "proxy_pass http://platform_api:8003;" in block
+    assert "paper_ingestion" not in block
+    assert "nginx-backend-auth.conf" not in block
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in block
+
+
+def test_gateway_strips_forged_identity_and_uses_only_platform_assertion() -> None:
+    """Backend proxying must replace every browser-controlled identity field."""
+    stripped = (REPO_ROOT / "frontend" / "nginx-identity-strip.conf").read_text(encoding="utf-8")
+    expected_headers = {
+        "X-Jarvis-Identity",
+        "X-Jarvis-Principal",
+        "X-Jarvis-Scopes",
+        "X-Jarvis-Session-Id",
+        "X-Jarvis-User-Id",
+        "X-Jarvis-User-Role",
+        "X-Owner-User-Id",
+    }
+    assert {
+        match.group(1) for match in re.finditer(r"proxy_set_header ([A-Za-z0-9-]+) \"\";", stripped)
+    } == expected_headers
+
+    backend_auth = (REPO_ROOT / "frontend" / "nginx-backend-auth.conf").read_text(encoding="utf-8")
+    assert "auth_request /internal/platform-authorize;" in backend_auth
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in backend_auth
+    assert "proxy_set_header X-Jarvis-Identity $jarvis_identity;" in backend_auth
+    assert 'proxy_set_header Connection "";' in backend_auth
+
+    nginx = (REPO_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    upstream = _brace_block(nginx, r"upstream jarvis_platform_authorize")
+    assert "server platform_api:8003;" in upstream
+    assert "keepalive 32;" in upstream
+    research_upstream = _brace_block(nginx, r"upstream jarvis_research")
+    assert "server paper_ingestion:8000;" in research_upstream
+    assert "keepalive 32;" in research_upstream
+    learning_upstream = _brace_block(nginx, r"upstream jarvis_learning")
+    assert "server learning_engine:8001;" in learning_upstream
+    assert "keepalive 32;" in learning_upstream
+    authorize = _brace_block(nginx, r"location = /internal/platform-authorize")
+    assert "internal;" in authorize
+    assert "proxy_pass http://jarvis_platform_authorize/internal/authorize;" in authorize
+    assert "proxy_http_version 1.1;" in authorize
+    assert 'proxy_set_header Connection "";' in authorize
+    assert "include /etc/nginx/nginx-identity-strip.conf;" in authorize
+
+
+def test_gateway_relays_all_bounded_platform_renewal_cookies() -> None:
+    """The auth subrequest's numbered cookies must survive the backend boundary."""
+    backend_auth = (REPO_ROOT / "frontend" / "nginx-backend-auth.conf").read_text(encoding="utf-8")
+
+    for index in range(1, 5):
+        assert (
+            "auth_request_set $jarvis_auth_cookie_"
+            f"{index} $upstream_http_x_jarvis_set_cookie_{index};"
+        ) in backend_auth
+        assert f"add_header Set-Cookie $jarvis_auth_cookie_{index} always;" in backend_auth
+    assert "proxy_hide_header Set-Cookie;" in backend_auth
+    assert 'proxy_set_header Cookie "";' in backend_auth
+
+
 def test_restore_upload_ingress_exists_in_every_same_origin_mode():
     """Invariant: every same-origin ingress routes /restore-upload/ to the uploader.
 
@@ -663,9 +834,24 @@ def test_public_caddy_hsts_is_host_only_and_not_preloaded():
 # the v1.1.3 upgrade failure shipped — declared for every service start,
 # created by nothing on the update path.
 SECRET_PROVISIONING = {
-    "postgres_password": "update",
+    "postgres_platform_runtime_password": "update",
+    "postgres_research_runtime_password": "update",
+    "postgres_learning_runtime_password": "update",
+    "postgres_migrator_password": "update",
+    "postgres_cluster_bootstrap_password": "update",
+    "postgres_backup_reader_password": "update",
+    "postgres_restore_operator_password": "update",
+    "postgres_erasure_executor_password": "update",
+    "litellm_runtime_password": "update",
+    "litellm_migrator_password": "update",
+    "postgres_legacy_source_password": "update",
     "jarvis_api_key": "update",
     "jarvis_setup_token": "update",
+    "platform_identity_private_key": "update",
+    "platform_identity_public_key": "update",
+    "telegram_service_token": "update",
+    "research_service_token": "update",
+    "learning_service_token": "update",
     "jarvis_model_hmac_key": "update",
     "telegram_bot_token": "update",
     "qdrant_api_key": "update",
@@ -678,10 +864,190 @@ SECRET_PROVISIONING = {
     "langfuse_salt": "update",
     "cloudflare_tunnel_token": "update",
     "backup_encrypt_key": "update",
-    "infra_ingest_key": "update",
     "langfuse_init_pk": "setup",
     "langfuse_init_sk": "setup",
 }
+
+
+def _secret_sources(service: dict[str, Any]) -> set[str]:
+    return {
+        entry if isinstance(entry, str) else entry["source"] for entry in service.get("secrets", [])
+    }
+
+
+def test_vector_is_socketless_and_cannot_write_product_logs(compose) -> None:
+    """Optional aggregate logging must not read Docker or call Research."""
+    vector = compose["services"]["vector"]
+    rendered = json.dumps(vector)
+    assert "/var/run/docker.sock" not in rendered
+    assert "infra_ingest_key" not in rendered
+    assert "paper_ingestion" not in vector.get("depends_on", {})
+    assert "vector_data" not in compose.get("volumes", {})
+    vector_config = (REPO_ROOT / "infra/vector.toml").read_text(encoding="utf-8")
+    assert "docker_logs" not in vector_config
+    assert "/infra-events" not in vector_config
+    assert "$1" not in vector_config
+
+
+def test_observability_make_target_does_not_enable_telegram() -> None:
+    """Optional telemetry excludes Telegram and refreshes gateway routing."""
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    target = re.search(r"(?ms)^observability-up:.*?(?=^\S|\Z)", makefile)
+
+    assert target is not None
+    assert "telegram_bot" not in target.group()
+    assert "vector platform_api paper_ingestion learning_engine dashboard" in target.group()
+    assert "restart dashboard" in target.group()
+
+
+def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(compose):
+    """Application services receive one database password after migrations complete."""
+    expected = {
+        "platform_api": "postgres_platform_runtime_password",
+        "paper_ingestion": "postgres_research_runtime_password",
+        "learning_engine": "postgres_learning_runtime_password",
+        "litellm": "litellm_runtime_password",
+    }
+    forbidden = {
+        "postgres_migrator_password",
+        "postgres_cluster_bootstrap_password",
+        "postgres_legacy_rollback_password",
+        "postgres_backup_reader_password",
+        "postgres_restore_operator_password",
+        "postgres_erasure_executor_password",
+        "litellm_migrator_password",
+    }
+    for service_name, password_secret in expected.items():
+        service = compose["services"][service_name]
+        secrets = _secret_sources(service)
+        assert password_secret in secrets
+        assert not secrets & forbidden
+        dependency = (
+            "litellm-migrator" if service_name == "litellm" else "migration-authority-finalize"
+        )
+        assert service["depends_on"][dependency]["condition"] == "service_completed_successfully"
+        if service_name != "litellm":
+            assert "./db:/app/db:ro" in service["volumes"]
+
+    assert _secret_sources(compose["services"]["telegram_bot"]).isdisjoint(set(expected.values()))
+    assert (
+        compose["services"]["litellm"]["environment"]["POSTGRES_USER"] == "jarvis_litellm_runtime"
+    )
+    assert compose["services"]["jarvis-migrator"]["volumes"] == ["./db:/app/db:ro"]
+    assert _secret_sources(compose["services"]["cluster-bootstrap"]) == {
+        "postgres_platform_runtime_password",
+        "postgres_research_runtime_password",
+        "postgres_learning_runtime_password",
+        "postgres_migrator_password",
+        "postgres_cluster_bootstrap_password",
+        "postgres_backup_reader_password",
+        "postgres_restore_operator_password",
+        "postgres_erasure_executor_password",
+        "litellm_runtime_password",
+        "litellm_migrator_password",
+        "postgres_legacy_source_password",
+    }
+    finalizer = compose["services"]["migration-authority-finalize"]
+    assert finalizer["command"] == ["finalize"]
+    assert _secret_sources(finalizer) == {"postgres_cluster_bootstrap_password"}
+    assert finalizer["depends_on"]["jarvis-migrator"]["condition"] == (
+        "service_completed_successfully"
+    )
+    executor = compose["services"]["erasure-executor"]
+    assert executor["restart"] == "unless-stopped"
+    assert executor["command"] == ["python", "-m", "platform_api.erasure_executor"]
+    assert _secret_sources(executor) == {"postgres_erasure_executor_password"}
+    assert executor["environment"] == {
+        "POSTGRES_USER": "jarvis_erasure_executor",
+        "POSTGRES_PASSWORD_FILE": "/run/secrets/postgres_erasure_executor_password",
+    }
+
+
+def test_backup_and_restore_split_credential_lifetimes(compose):
+    """Scheduled backup lacks restore authority; the restore job is one-shot only."""
+    backup = compose["services"]["postgres-backup"]
+    assert _secret_sources(backup) == {
+        "postgres_backup_reader_password",
+        "backup_encrypt_key",
+        "qdrant_api_key",
+    }
+    assert backup["environment"]["PGUSER"] == "jarvis_backup_reader"
+    assert backup["environment"]["POSTGRES_PASSWORD_FILE"].endswith(
+        "postgres_backup_reader_password"
+    )
+    assert "postgres_restore_operator_password" not in str(backup)
+    assert "/usr/local/bin/restore.sh" not in "\n".join(backup["volumes"])
+    assert "/host-secrets" not in "\n".join(backup["volumes"])
+    assert "./secrets:/secrets:ro" not in backup["volumes"]
+    assert "${JARVIS_STATE_DIR:-./secrets}:/backup-state:rw" not in backup["volumes"]
+    assert backup["environment"]["SECRETS_DIR"] == "/data-keys"
+    assert backup["environment"]["HOST_SECRETS_DIR"] == "/backup-state"
+
+    restore = compose["services"]["postgres-restore"]
+    assert restore["profiles"] == ["restore"]
+    assert restore["restart"] == "no"
+    assert _secret_sources(restore) == {
+        "postgres_restore_operator_password",
+        "backup_encrypt_key",
+        "qdrant_api_key",
+    }
+    assert restore["environment"]["PGUSER"] == "jarvis_restore_operator"
+    assert restore["environment"]["POSTGRES_PASSWORD_FILE"].endswith(
+        "postgres_restore_operator_password"
+    )
+    assert "/usr/local/bin/restore.sh" in "\n".join(restore["volumes"])
+    assert "/host-secrets" in "\n".join(restore["volumes"])
+    assert restore["entrypoint"] == ["/usr/local/bin/restore.sh"]
+    assert restore["command"] == ["--run-request"]
+    bootstrap_mounts = set(compose["services"]["cluster-bootstrap"]["volumes"])
+    assert "./db/restore-authority.sql:/app/db/restore-authority.sql:ro" in bootstrap_mounts
+
+
+def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
+    """Floor 113 may bridge owners only until migration 0114 revokes the bridge."""
+    source = (REPO_ROOT / "scripts" / "postgres-role-bootstrap.sh").read_text(encoding="utf-8")
+    owners = "jarvis_platform_owner jarvis_research_owner jarvis_learning_owner jarvis_ops_owner"
+    assert f'owner_roles="{owners}"' in source
+    assert "GRANT ${owner_role} TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE" in source
+    assert "GRANT ${owner_role} TO jarvis_legacy_rollback WITH INHERIT FALSE" in source
+    assert (
+        "GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE" in source
+    )
+    assert "REVOKE ${owner_role} FROM jarvis_legacy_rollback" in source
+    assert "REVOKE ${owner_role} FROM jarvis_migrator" in source
+    assert "CREATE ROLE %s LOGIN SUPERUSER NOINHERIT" in source
+    assert "prepare|finalize|restore-prepare|restore-finalize" in source
+    assert 'if [ "$mode" = "restore-prepare" ]' in source
+    assert 'if [ "$mode" = "restore-finalize" ]' in source
+    assert 'authority_file="/app/db/restore-authority.sql"' in source
+    assert "ALTER ROLE jarvis NOLOGIN" in source
+    assert "public.schema_migrations TO jarvis_migrator" in source
+    assert "GRANT CREATE ON DATABASE ${database} TO ${owner_role}" in source
+    assert "REVOKE CREATE ON DATABASE ${database} FROM ${owner_role}" in source
+    assert "postgres_legacy_source_password" in source
+    assert "transfer_owned_objects litellm jarvis_cluster_bootstrap" in source
+    assert "REASSIGN OWNED BY jarvis_cluster_bootstrap" not in source
+    assert 'if [ "$mode" = "finalize" ]' in source
+    assert "REVOKE CONNECT, TEMPORARY ON DATABASE ${database} FROM PUBLIC" in source
+    assert "ALTER ROLE jarvis_restore_operator WITH CREATEDB INHERIT" in source
+    assert "GRANT pg_signal_backend TO jarvis_restore_operator" in source
+    assert "assert_recovery_roles" in source
+    assert source.count("assert_recovery_roles") == 4
+    assert "backup, restore, or rollback role authority is invalid" in source
+    assert "provision_login jarvis_legacy_rollback" not in source
+    assert "provision_nologin jarvis_legacy_rollback" in source
+    # Scoped to the helper's own body: "NOLOGIN" also appears in ensure_owner_roles,
+    # so a file-wide substring check cannot see this role regaining a login.
+    provisioner = source.split("provision_nologin() {", 1)[1].split("\n}", 1)[0]
+    assert "ALTER ROLE ${nologin_role}" in provisioner
+    assert "NOLOGIN" in provisioner
+    assert "PASSWORD NULL" in provisioner
+    # The start-up guard is the only thing that would notice a rollback authority
+    # that regained a way to connect on an installation the bootstrap did not
+    # provision. Nothing else in the suite reads it, so it is pinned here.
+    assert "FROM pg_authid" in source
+    assert "AND (rolcanlogin OR rolpassword IS NOT NULL)" in source
+
 
 PROVISIONING_SCRIPTS = {
     "update": "scripts/init-secrets.sh",
@@ -702,7 +1068,12 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
     assert not stale, f"SECRET_PROVISIONING lists secrets compose no longer declares: {stale}"
 
     for name, definition in declared.items():
-        assert definition.get("file") == f"./secrets/{name}.txt", (
+        expected_file = (
+            "./secrets/postgres_password.txt"
+            if name == "postgres_legacy_source_password"
+            else f"./secrets/{name}.txt"
+        )
+        assert definition.get("file") == expected_file, (
             f"{name}: compose secret file must be ./secrets/{name}.txt"
         )
 
@@ -711,7 +1082,10 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
         lines = (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()
         scripts[mode] = "\n".join(line for line in lines if not line.lstrip().startswith("#"))
     for name, mode in SECRET_PROVISIONING.items():
-        assert f"{name}.txt" in scripts[mode], (
+        provisioned_filename = (
+            "postgres_password.txt" if name == "postgres_legacy_source_password" else f"{name}.txt"
+        )
+        assert provisioned_filename in scripts[mode], (
             f"{name}: declared '{mode}' but {PROVISIONING_SCRIPTS[mode]} never touches "
             f"{name}.txt outside comments"
         )
@@ -721,3 +1095,86 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
             f"{runner} no longer runs scripts/init-secrets.sh, so 'update' secrets "
             "would not be provisioned before containers are touched"
         )
+
+
+def _workflow(name: str) -> dict[str, Any]:
+    return yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text())
+
+
+def _built_images(job: dict[str, Any]) -> set[tuple[str, str, str]]:
+    """Return the (context, dockerfile, build arguments) a build matrix covers.
+
+    The build arguments are part of the identity: one Dockerfile builds both the
+    default and the CUDA paper-ingestion images, and they are published as
+    separate tags. Keying on the file alone would report the CUDA image as
+    covered by the build of the default one.
+    """
+    return {
+        (
+            posixpath.normpath(entry["context"]),
+            posixpath.normpath(entry["file"]),
+            " ".join(sorted(str(entry.get("build_args", "")).split())),
+        )
+        for entry in job["strategy"]["matrix"]["include"]
+    }
+
+
+def test_build_smoke_gates_every_published_image() -> None:
+    """A published image must be built by the merge gate before it can be pushed.
+
+    ghcr-publish.yml is the only thing that pushes to the registry, so its own
+    matrix is the definition of "published". The build smoke test enumerated its
+    images by hand and drifted, which let platform_api and restore_uploader be
+    published without ever building on a pull request.
+    """
+    published = _built_images(_workflow("ghcr-publish.yml")["jobs"]["build"])
+    gated = _built_images(_workflow("security.yml")["jobs"]["docker-build-smoke"])
+
+    assert published, "ghcr-publish.yml declares no images to publish"
+    ungated = sorted(published - gated)
+    assert not ungated, (
+        f"published but never built by docker-build-smoke: {ungated} — add each "
+        "(context, file) pair to the matrix in .github/workflows/security.yml"
+    )
+
+
+SECRET_INVENTORY_HEADING = "#### Secret inventory"
+SECRET_ROW = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|")
+
+
+def _documented_secrets() -> set[str]:
+    """Return the secret names listed in the deployment guide's inventory table."""
+    lines = (REPO_ROOT / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8").splitlines()
+    start = lines.index(SECRET_INVENTORY_HEADING)
+    documented: set[str] = set()
+    for line in lines[start + 1 :]:
+        if line.startswith("#"):
+            break
+        match = SECRET_ROW.match(line)
+        if match:
+            documented.add(match.group(1))
+    return documented
+
+
+def test_documented_secret_inventory_matches_compose(compose) -> None:
+    """Every credential an operator must hold is documented, and nothing else is.
+
+    The guide described a single database password long after the release split
+    it into eleven per-role logins, so an operator reading it could not tell
+    which files a deployment actually needs.
+    """
+    declared = set(compose.get("secrets") or {})
+    documented = _documented_secrets()
+
+    assert documented, (
+        f"no secret rows found under '{SECRET_INVENTORY_HEADING}' in docs/DEPLOYMENT.md"
+    )
+    undocumented = sorted(declared - documented)
+    assert not undocumented, (
+        f"compose secrets missing from the deployment guide: {undocumented} — add a "
+        f"row for each under '{SECRET_INVENTORY_HEADING}' in docs/DEPLOYMENT.md"
+    )
+    retired = sorted(documented - declared)
+    assert not retired, (
+        f"the deployment guide documents secrets compose no longer declares: {retired}"
+    )

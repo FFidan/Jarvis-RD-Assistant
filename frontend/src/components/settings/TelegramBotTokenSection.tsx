@@ -33,7 +33,7 @@ export function TelegramBotTokenSection() {
   const [token, setToken] = useState('');
   const [formatError, setFormatError] = useState<string | null>(null);
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: QUERY_KEYS.pairing.botTokenStatus(),
     queryFn: getTelegramBotToken,
     staleTime: 60_000,
@@ -65,9 +65,12 @@ export function TelegramBotTokenSection() {
   }
 
   if (isError) {
+    // Surface the server's actual refusal. The old copy blamed "administrator
+    // access required" for EVERY failure, including the origin-trust gate whose
+    // message tells the admin exactly what to do.
     return (
       <p className="text-sm text-destructive">
-        Could not load bot token status (administrator access required).
+        Could not load bot token status: {errorMessage(error)}
       </p>
     );
   }
@@ -109,6 +112,8 @@ export function TelegramBotTokenSection() {
             }}
             placeholder="123456789:ABCdefGHIjkl…"
             autoComplete="off"
+            aria-invalid={formatError ? true : undefined}
+            aria-describedby={formatError ? 'telegram-bot-token-format-error' : undefined}
           />
           <p className="text-xs text-muted-foreground">
             Format: <code className="font-mono">&lt;bot_id&gt;:&lt;token&gt;</code> — obtain from{' '}
@@ -118,7 +123,13 @@ export function TelegramBotTokenSection() {
 
         {/* Format error */}
         {formatError && (
-          <p className="text-sm text-destructive">{formatError}</p>
+          <p
+            id="telegram-bot-token-format-error"
+            role="alert"
+            className="text-sm text-destructive"
+          >
+            {formatError}
+          </p>
         )}
 
         {/* Server-side error */}

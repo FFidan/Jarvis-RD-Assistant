@@ -37,7 +37,7 @@ validation errors.  Keeping annotations evaluated at runtime makes
 introspection work correctly.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated, Any
 
 import asyncpg
@@ -66,6 +66,8 @@ from jarvis_common import jobs as jobs_lib
 from jarvis_common.settings import get_jobs_settings
 
 __all__ = ["build_jobs_router", "collect_handlers", "serialise_row"]
+
+JobDispatcher = Callable[[Request, str, dict[str, Any], int], Awaitable[str]]
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +155,7 @@ def build_jobs_router(
     payload_schemas: dict[str, type[BaseModel]] | None = None,
     paper_ownership_extractor: Callable[[dict[str, Any]], int | list[int] | None] | None = None,
     task_lookup: Callable[[], Mapping[str, Any]] | None = None,
+    dispatch_job: JobDispatcher | None = None,
 ) -> APIRouter:
     """Build a ``/api/jobs`` router wired to the given service's deps.
 
@@ -186,6 +189,10 @@ def build_jobs_router(
     task_lookup:
         Optional callable returning the current kind→task mapping.  Defaults to
         the compatibility ``jarvis_common.task_registry.KIND_TO_TASK`` mapping.
+    dispatch_job:
+        Optional owner-local dispatch boundary. When set, the public facade
+        validates the request here and delegates enqueueing without importing a
+        worker task or holding a database connection across the owner call.
 
     """
     # ``service_name`` is currently informational but kept on the closure so
@@ -230,8 +237,6 @@ def build_jobs_router(
         """Enqueue a new background job and return its ID."""
         import uuid as _uuid
 
-        from jarvis_common.task_registry import KIND_TO_TASK
-
         kinds_now = _public_kinds_now()
         if body.kind not in kinds_now:
             # Discriminated mode already filtered shape errors with 422 at
@@ -259,26 +264,27 @@ def build_jobs_router(
                 async with db_pool.acquire() as conn:
                     await assert_papers_ownership(conn, paper_id_for_check, user_id)  # type: ignore[arg-type]
 
-        # Dispatch via procrastinate task registry.
-        tasks = task_lookup() if task_lookup is not None else KIND_TO_TASK
-        task = tasks.get(body.kind)
-        if task is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown kind {body.kind!r}",
-            )
         payload = dict(body.payload or {})
         if "job_id" in payload or "user_id" in payload:
             raise HTTPException(
                 status_code=400,
                 detail="payload may not contain reserved keys 'job_id' or 'user_id'",
             )
-        jarvis_job_id = str(_uuid.uuid4())
-        await task.defer_async(
-            job_id=jarvis_job_id,
-            user_id=user_id,
-            **payload,
-        )
+        if dispatch_job is not None:
+            jarvis_job_id = await dispatch_job(request, body.kind, payload, user_id)
+        else:
+            # Service-local facades retain their direct task-registry path.
+            if task_lookup is None:
+                from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+                tasks = KIND_TO_TASK
+            else:
+                tasks = task_lookup()
+            task = tasks.get(body.kind)
+            if task is None:
+                raise HTTPException(status_code=400, detail=f"Unknown kind {body.kind!r}")
+            jarvis_job_id = str(_uuid.uuid4())
+            await task.defer_async(job_id=jarvis_job_id, user_id=user_id, **payload)
         return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
     # ------------------------------------------------------------------
@@ -399,14 +405,12 @@ def build_jobs_router(
         if row is None or not _owner_matches(row.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
-        from jarvis_common.task_registry import app as procrastinate_app
-
         try:
-            prow = await jobs_lib.get_procrastinate_job_for_jarvis_id(db_pool, job_id)
+            cancelled = await jobs_lib.cancel_unified(db_pool, job_id, user_id)
         except jobs_lib.JobLookupUnavailable as exc:
             raise _job_lookup_unavailable() from exc
-        if prow:
-            await procrastinate_app.job_manager.cancel_job_by_id_async(prow["id"], abort=True)
+        if not cancelled:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         return {"ok": True}
 
     # Expose the request model on the router so service-level shims (and

@@ -14,7 +14,7 @@
  * Test helpers write sessionStorage before first navigation.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { installMockedApiDefaults } from './helpers/setup';
+import { installMockedApiDefaults, RETURNING_USER_PREFERENCES } from './helpers/setup';
 
 const MOCK_ACCOUNT = {
   id: 1,
@@ -136,7 +136,11 @@ async function setupMocks(page: Page) {
   // Stub config endpoint
   await page.route('**/api/config', async (route) => {
     if (route.request().method() === 'GET') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(RETURNING_USER_PREFERENCES),
+      });
     } else {
       await route.continue();
     }
@@ -167,8 +171,10 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
 
     // h2 detail pane heading should say "Topics"
     await expect(page.getByRole('heading', { name: 'Topics', level: 2 })).toBeVisible({ timeout: 8000 });
-    // Breadcrumb should show Topics
-    await expect(page.getByRole('navigation', { name: 'breadcrumb' })).toContainText('Topics');
+    const breadcrumb = page.getByRole('navigation', { name: 'breadcrumb' });
+    await expect(breadcrumb.getByRole('link', { name: 'Settings' })).toBeVisible();
+    await expect(breadcrumb.getByRole('link', { name: 'Research' })).toBeVisible();
+    await expect(breadcrumb).toContainText('Topics');
   });
 
   test('Account section header appears in rail', async ({ page }) => {
@@ -196,7 +202,7 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
     // Detail pane heading
     await expect(page.getByRole('heading', { name: 'Profile & Email', level: 2 })).toBeVisible({ timeout: 8000 });
     // Breadcrumb updated
-    await expect(page.getByRole('navigation', { name: 'breadcrumb' })).toContainText('Account');
+    await expect(page.getByRole('navigation', { name: 'breadcrumb' }).getByRole('link', { name: 'Account' })).toBeVisible();
     // AccountSection renders profile data
     await expect(page.getByTestId('display-name-value')).toContainText('Ada Test');
     await expect(page.getByTestId('email-value')).toContainText('test@example.com');
@@ -229,7 +235,11 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
     });
     await page.route('**/api/config', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(RETURNING_USER_PREFERENCES),
+      });
     });
     await page.route('**/api/topics', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
@@ -274,7 +284,11 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
     });
     await page.route('**/api/config', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(RETURNING_USER_PREFERENCES),
+      });
     });
     await page.route('**/api/topics', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });

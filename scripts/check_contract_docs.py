@@ -1,7 +1,8 @@
-"""Validate that docs/contracts/ local links are not broken.
+"""Validate that local links in the published docs are not broken.
 
-The check catches broken local links in the public contract docs so that
-cross-references stay in sync as files are moved or renamed.
+The check catches broken local links in the public contract, architecture and
+deployment docs so that cross-references stay in sync as files are moved or
+renamed.
 """
 
 from __future__ import annotations
@@ -15,13 +16,16 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_DOC_PATHS = [
     Path("docs/ENGINEERING_STANDARDS.md"),
     Path("docs/ARCHITECTURE.md"),
+    Path("docs/DEPLOYMENT.md"),
     Path("docs/known-residual-risks.md"),
+    Path("secrets/README.md"),
     Path("docs/contracts/README.md"),
     Path("docs/contracts/01-settings.md"),
     Path("docs/contracts/02-pulse.md"),
     Path("docs/contracts/03-llm.md"),
     Path("docs/contracts/04-observability.md"),
     Path("docs/contracts/05-models-and-hardware.md"),
+    Path("docs/contracts/06-evidence-anchors.md"),
     Path("docs/contracts/07-testing.md"),
 ]
 

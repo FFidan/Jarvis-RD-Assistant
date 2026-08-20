@@ -58,7 +58,9 @@ async def test_scan_links_duplicate_into_scanning_users_library(
     (scan_dir / "dup.pdf").write_bytes(content)
 
     result = await local_pdfs.scan_local_pdf_directory(
-        SharedConnPool(contract_conn), user_id=scanner, scan_dir=str(scan_dir)
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+        user_id=scanner,
+        scan_dir=str(scan_dir),
     )
 
     # The duplicate is recognised (no second corpus row) but the scan still
@@ -116,7 +118,9 @@ async def test_scan_existing_paper_add_to_library_failure_is_logged(
 
     with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.local_pdfs"):
         result = await local_pdfs.scan_local_pdf_directory(
-            SharedConnPool(contract_conn), user_id=scanner, scan_dir=str(scan_dir)
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+            user_id=scanner,
+            scan_dir=str(scan_dir),
         )
 
     # Scan completes without crashing, duplicate counted as skipped.

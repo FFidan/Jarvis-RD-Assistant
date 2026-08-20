@@ -6,18 +6,24 @@ import uuid
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import ErrorResponse
-from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
+from jarvis_common.auth import get_current_user_id
 from jarvis_common.paper_state import assert_paper_in_states as _assert_paper_in_states
 from jarvis_common.paper_state import restore_paper as _restore_paper
 from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 
 from paper_ingestion import papers_service
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
     AnnotationsRequest,
     MarkReadResponse,
     UserStateResponse,
+)
+from paper_ingestion.repos.domain_events import (
+    DomainDeliverySettings,
+    deliver_pending_events,
+    record_event,
 )
 from paper_ingestion.services.paper_state_helpers import _upsert_state_and_starred
 
@@ -51,7 +57,7 @@ async def save_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Save a paper to the Reading List (``state := 'to_read'``)."""
     should_analyze = False
@@ -108,7 +114,7 @@ async def skip_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Skip a paper from the Inbox (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
@@ -129,39 +135,54 @@ async def reading_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Mark a paper as currently being read (``state := 'reading'``)."""
+    event_recorded = False
     async with db_pool.acquire() as conn:
-        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
-        await _assert_paper_in_states(
-            conn, paper_id, user_id, allowed=("to_read", "reading", "done")
-        )
-        state_before = (
-            await conn.fetchval(
-                """SELECT COALESCE(state, 'inbox') FROM paper_user_state
-                   WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
-                paper_id,
-                user_id,
+        async with conn.transaction():
+            await papers_service.assert_paper_ownership(conn, paper_id, user_id)
+            await _assert_paper_in_states(
+                conn, paper_id, user_id, allowed=("to_read", "reading", "done")
             )
-            or "inbox"
-        )
-        await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
-        if state_before != "reading":
-            try:
-                await conn.execute(
-                    """INSERT INTO daily_log (user_id, log_date, papers_read)
-                       VALUES ($1, CURRENT_DATE, 1)
-                       ON CONFLICT (user_id, log_date)
-                       DO UPDATE SET papers_read = COALESCE(daily_log.papers_read, 0) + 1""",
-                    user_id,
-                )
-            except Exception:
-                logger.exception(
-                    "daily_log.papers_read increment failed (user=%s paper=%s); non-blocking",
-                    user_id,
+            state_before = (
+                await conn.fetchval(
+                    """SELECT COALESCE(state, 'inbox') FROM paper_user_state
+                       WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
                     paper_id,
+                    user_id,
                 )
+                or "inbox"
+            )
+            await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
+            if state_before != "reading":
+                await record_event(
+                    conn,
+                    event_type="paper.read",
+                    user_id=user_id,
+                    paper_id=paper_id,
+                )
+                event_recorded = True
+    if event_recorded:
+        settings = get_paper_ingestion_settings()
+        try:
+            token = settings.research_service_token_file.read_text(encoding="utf-8").strip()
+            # Scoped to this reader's own oldest pending event: every delivery
+            # costs an authorization call plus a delivery call, and none of that
+            # belongs in another user's request. The scheduler drains the rest.
+            await deliver_pending_events(
+                db_pool,
+                request.app.state.http_client,
+                settings=DomainDeliverySettings(
+                    platform_url=settings.platform_api_url,
+                    learning_url=settings.learning_engine_url,
+                    service_token=token,
+                ),
+                limit=1,
+                user_id=user_id,
+            )
+        except (OSError, RuntimeError):
+            logger.warning("paper.read projection is pending", exc_info=True)
     return _ok(paper_id)
 
 
@@ -176,7 +197,7 @@ async def done_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Mark a paper as done (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
@@ -196,7 +217,7 @@ async def star_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Set ``starred = TRUE``. Does not change reading state.
 
@@ -267,7 +288,7 @@ async def unstar_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Set ``starred = FALSE``. Does not change reading state."""
     async with db_pool.acquire() as conn:
@@ -287,7 +308,7 @@ async def trash_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Move paper to Trash. Atomic: ``state_before_trash := state; state := 'trash'``."""
     async with db_pool.acquire() as conn:
@@ -307,7 +328,7 @@ async def restore_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Restore a paper from Trash to its prior state."""
     async with db_pool.acquire() as conn:

@@ -28,6 +28,7 @@ groups = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
 ]
 
 outputs = {
+    "platform-api": "services/platform_api/requirements.txt",
     "paper-ingestion": "services/paper_ingestion/requirements.txt",
     "paper-ingestion-optional": "services/paper_ingestion/requirements-optional.txt",
     "learning-engine": "services/learning_engine/requirements.txt",
@@ -169,5 +170,6 @@ export_constraints "paper-ingestion-optional" "services/paper_ingestion/constrai
 # already in the base image instead of the ~3.7 GB nvidia-*/triton set.
 export_constraints "paper-ingestion-optional-cpu" "services/paper_ingestion/constraints-optional-cpu.txt" \
   "--extra-index-url https://download.pytorch.org/whl/cpu"
+export_constraints "platform-api" "services/platform_api/constraints.txt"
 export_constraints "learning-engine" "services/learning_engine/constraints.txt"
 export_constraints "telegram-bot" "services/telegram_bot/constraints.txt"

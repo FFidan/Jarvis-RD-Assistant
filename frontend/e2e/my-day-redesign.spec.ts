@@ -22,7 +22,11 @@
  */
 
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
+import {
+  RETURNING_USER_PREFERENCES,
+  installMockedApiDefaults,
+  seedAuthedSession,
+} from './helpers/setup';
 
 // ---------------------------------------------------------------------------
 // Reachability guard — an unreachable dashboard is a failure, not a skip
@@ -177,9 +181,46 @@ async function installMyDayMocks(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Serve the mocked account with `theme` as its stored appearance preference.
+ *
+ * `usePreferenceSync` reads `/api/config` on mount and pushes
+ * `ui.appearance.theme` into the theme store, so the account decides what
+ * `<html>` ends up wearing. The shared mocked account ships `theme: 'system'`,
+ * which resolves to light under Playwright's default colour scheme; a theme
+ * case that seeds localStorage must state the matching account value too.
+ *
+ * Registered after `installMockedApiDefaults`, so it wins over the shared
+ * `/api/config` route; writes still fall through to it.
+ */
+async function stubAccountTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
+  const preferences = RETURNING_USER_PREFERENCES.map((entry) => (
+    entry.key === 'ui.appearance' ? { key: entry.key, value: { ...entry.value, theme } } : entry
+  ));
+  await page.route('**/api/config', async (route: Route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(preferences),
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
+
+/**
+ * My Day keeps the daily loop above the fold; the rest opens from the "More"
+ * disclosure at the foot of the page.
+ */
+async function openMore(page: Page, label: string) {
+  await page.getByRole('button', { name: new RegExp(`^${label}`) }).click();
+}
 
 test.describe('My Day v5 redesign — smoke', () => {
   test.setTimeout(30_000);
@@ -245,8 +286,10 @@ test.describe('My Day v5 redesign — smoke', () => {
     // Give data time to settle
     await page.waitForTimeout(1_000);
 
-    // TriageSection: returns null when actionItems.length === 0 && foundational.length === 0
-    await expect(page.locator('text="Triage"')).toHaveCount(0);
+    // TriageSection: returns null when actionItems.length === 0 && foundational.length === 0.
+    // Its "More" chip is always offered, so open it and assert nothing appears.
+    await openMore(page, 'Triage');
+    await expect(page.locator('#more-section-triage')).toBeEmpty();
 
     // TodaysPulseSection: returns null on 404 (cards.length <= 1)
     await expect(page.locator('text="Today\'s pulse"')).toHaveCount(0);
@@ -324,6 +367,7 @@ test.describe('My Day v5 redesign — smoke', () => {
     await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
+    await openMore(page, 'End of day');
     await expect(page.getByLabel('One thing that worked')).toBeVisible({ timeout: 5_000 });
     await expect(page.getByLabel("What's still blocking me")).toBeVisible();
     await expect(page.getByLabel('First move tomorrow')).toBeVisible();
@@ -335,8 +379,19 @@ test.describe('My Day v5 redesign — smoke', () => {
     await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
-    await expect(page.locator('text="Open threads"').first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole('button', { name: /\+ new thread/i })).toBeVisible();
+    await openMore(page, 'Open threads');
+    await expect(page.getByRole('button', { name: /\+ new thread/i })).toBeVisible({
+      timeout: 5_000,
+    });
+  });
+
+  test('demoted sections stay closed until their More chip is opened', async ({ page }) => {
+    await page.goto('/my-day');
+    await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
+
+    await expect(page.locator('#more-section-endofday')).toHaveCount(0);
+    await openMore(page, 'End of day');
+    await expect(page.locator('#more-section-endofday')).toBeVisible();
   });
 
   // ── 6. Page wrapper uses .bg-paper class ─────────────────────────────────
@@ -392,7 +447,9 @@ test.describe('dark mode toggle', () => {
   // ── 2. Dark mode persists across page reload ─────────────────────────────
 
   test('dark mode persists after page reload', async ({ page }) => {
-    // Pre-seed localStorage with dark theme so we start in dark directly
+    // The account owns appearance, so both stores must agree on dark or the
+    // account overwrites the seed and the case measures the race, not persistence.
+    await stubAccountTheme(page, 'dark');
     await page.addInitScript(() => {
       localStorage.setItem(
         'jarvis-theme',
@@ -403,7 +460,8 @@ test.describe('dark mode toggle', () => {
     await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
-    // Dark class should be applied by the FOUC script
+    // `useThemeEffect` toggles `dark` on <html> once the shell mounts — index.html
+    // ships no inline script, so the class never appears before React.
     await expect(page.locator('html')).toHaveClass(/dark/);
 
     // Reload and re-install mocks (reload wipes page.route registrations)
@@ -411,7 +469,7 @@ test.describe('dark mode toggle', () => {
     await page.reload();
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
-    // Dark class must survive reload (localStorage-backed)
+    // Dark class must survive reload (localStorage seed plus account preference)
     await expect(page.locator('html')).toHaveClass(/dark/);
   });
 

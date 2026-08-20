@@ -104,26 +104,26 @@ describe('SessionBreadcrumb', () => {
     );
   }
 
-  it('shows Learn and Flashcards nodes', () => {
+  it('shows linked Learn and the Learning Cards control', () => {
     renderCrumb(null);
-    expect(screen.getByText('Learn')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /flashcards/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Learn' })).toHaveAttribute('href', '/cards?mode=library');
+    expect(screen.getByRole('button', { name: 'Learning Cards' })).toBeInTheDocument();
   });
 
-  it('shows deck name with · session suffix', () => {
+  it('shows deck name with Review suffix', () => {
     renderCrumb('RGS Thesis');
-    expect(screen.getByText('RGS Thesis · session')).toBeInTheDocument();
+    expect(screen.getByText('RGS Thesis · Review')).toBeInTheDocument();
   });
 
-  it('shows "All decks · session" when no deck selected', () => {
+  it('shows "All decks · Review" when no deck is selected', () => {
     renderCrumb(null);
-    expect(screen.getByText('All decks · session')).toBeInTheDocument();
+    expect(screen.getByText('All decks · Review')).toBeInTheDocument();
   });
 
-  it('calls onNavigateToLibrary when Flashcards button clicked', async () => {
+  it('calls onNavigateToLibrary when the Learning Cards control is clicked', async () => {
     const spy = vi.fn();
     renderCrumb(null, spy);
-    await userEvent.click(screen.getByRole('button', { name: /flashcards/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Learning Cards' }));
     expect(spy).toHaveBeenCalledTimes(1);
   });
 });

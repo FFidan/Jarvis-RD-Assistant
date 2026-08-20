@@ -1,19 +1,18 @@
 /**
  * Sidebar — grouped roman-numeral navigation per the Shell/Sidebar+Admin IA spec.
  *
- * Density modes (device-scoped, `useNavPrefsStore`):
- *   - simple  — short essentials rail (Home · My Day · Discover · Library · Ask · Cards)
- *               with the rest one click away under a "More" disclosure. The
- *               default for first-time researchers so the app isn't overwhelming.
- *   - full    — the grouped layout below; the default for returning users.
+ * Density modes (saved to the account, `useNavPrefsStore`):
+ *   - simple  — short essentials rail (My Day · Papers · Discover · Projects ·
+ *               Ask · Learning Cards). The default until the researcher asks
+ *               for more.
+ *   - full    — the grouped layout below.
  *
  * Groups (full mode):
- *   Ⅰ Today    — Home · My Day · Pulse Deck · Library (/feed?surface=library) · Discover
- *   Ⅱ Read     — Projects · Knowledge Graph · Citation Graph · Extraction Table
- *   Ⅲ Learn    — Learning Cards · Analytics
- *   Ⅳ Ask      — Ask
- *   Ⅴ Admin    — User Management · System Health · Audit Log · System Logs
- *               (conditionally rendered for role === 'admin')
+ *   Ⅰ Today     — My Day · Home · Pulse Deck · Papers (/feed?surface=library) · Discover
+ *   Ⅱ Workspace — Projects · Ask · Extraction Table · Knowledge Graph · Citation Graph · Consensus
+ *   Ⅲ Learn     — Learning Cards · Analytics
+ *   Ⅳ Admin     — User Management · System Health · Audit Log · Backups · System Logs
+ *                 (conditionally rendered for role === 'admin')
  *
  * Footer: nav-mode toggle · Settings link · HealthDots pill (navigates to
  *         /admin/system-health for admins; expands in-place for non-admins) ·
@@ -85,12 +84,12 @@ const navGroups: NavGroup[] = [
     label: 'Today',
     subLabel: 'What needs your attention right now.',
     items: [
-      { path: '/', label: 'Home', icon: Home },
       { path: '/my-day', label: 'My Day', icon: Sun },
+      { path: '/', label: 'Home', icon: Home },
       { path: '/pulse', label: 'Pulse Deck', icon: Sparkles },
       {
         path: '/feed?surface=library',
-        label: 'Library',
+        label: 'Papers',
         icon: Newspaper,
         tourId: 'sidebar-library sidebar-analyze',
       },
@@ -105,14 +104,15 @@ const navGroups: NavGroup[] = [
   },
   {
     numeral: 'Ⅱ',
-    label: 'Read',
-    subLabel: 'Your library, projects, and the graph that connects them.',
+    label: 'Workspace',
+    subLabel: 'Projects, questions, and the tools that connect your papers.',
     items: [
       { path: '/projects', label: 'Projects', icon: FolderKanban },
+      { path: '/ask', label: 'Ask', icon: MessageCircleQuestion, tourId: 'sidebar-ask' },
+      { path: '/extractions', label: 'Extraction Table', icon: TableProperties },
       { path: '/knowledge', label: 'Knowledge Graph', icon: Network },
       { path: '/citations', label: 'Citation Graph', icon: GitFork },
       { path: '/consensus', label: 'Consensus', icon: Scale },
-      { path: '/extractions', label: 'Extraction Table', icon: TableProperties },
     ],
   },
   {
@@ -126,14 +126,6 @@ const navGroups: NavGroup[] = [
   },
   {
     numeral: 'Ⅳ',
-    label: 'Ask',
-    subLabel: 'Cross-paper reasoning and workspace.',
-    items: [
-      { path: '/ask', label: 'Ask', icon: MessageCircleQuestion, tourId: 'sidebar-ask' },
-    ],
-  },
-  {
-    numeral: 'Ⅴ',
     label: 'Admin',
     subLabel: 'Users, health, and audit trail.',
     adminOnly: true,
@@ -147,17 +139,34 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-// Simple-mode rail: the daily-essential destinations a first-time researcher
-// needs (Pulse lives inside My Day, so the Pulse Deck item drops to "More").
-// Everything else stays one click away under the "More" disclosure.
+// Simple-mode rail: the daily research loop. Pulse lives inside My Day and a
+// landing dashboard is less useful day to day than the researcher's own
+// projects, so Pulse Deck and Home stay in the full grouped view.
 const SIMPLE_NAV_PATHS = new Set([
-  '/',
   '/my-day',
-  '/feed?surface=search',
   '/feed?surface=library',
-  '/ask',
+  '/feed?surface=search',
+  '/projects',
   '/cards',
+  '/ask',
 ]);
+
+// What the "Show all features" toggle actually adds to the rail, read off the
+// same set the rail is built from so the cue cannot drift out of step with it.
+// Admin tools are excluded: they are not research features, and the cue is
+// shown to every user regardless of role.
+const ADVANCED_NAV_LABELS = navGroups
+  .filter((group) => !group.adminOnly)
+  .flatMap((group) => group.items)
+  .filter((item) => !SIMPLE_NAV_PATHS.has(item.path))
+  .map((item) => item.label);
+
+function joinWithAnd(labels: string[]): string {
+  const last = labels[labels.length - 1] ?? '';
+  return labels.length > 1 ? `${labels.slice(0, -1).join(', ')}, and ${last}` : last;
+}
+
+const ADVANCED_NAV_SENTENCE = joinWithAnd(ADVANCED_NAV_LABELS);
 
 // ---------------------------------------------------------------------------
 // NavLink atom
@@ -338,7 +347,12 @@ function SimpleNav({ groups, isAdmin, collapsed, pathname, searchParams }: NavBo
   );
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  drawer?: boolean;
+  onSearch?: () => void;
+}
+
+export function Sidebar({ drawer = false, onSearch }: SidebarProps) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
@@ -355,6 +369,7 @@ export function Sidebar() {
   const isSimple = navMode === 'simple';
   const hasResearchMilestone = completedMilestones.save || completedMilestones.analyze;
   const showAdvancedCue = isSimple && hasResearchMilestone && !advancedCueDismissed;
+  const collapsed = drawer ? false : sidebarCollapsed;
 
   const handleNavModeToggle = () => {
     if (showAdvancedCue) dismissAdvancedCue();
@@ -366,29 +381,45 @@ export function Sidebar() {
       <div
         className={cn(
           'flex h-full flex-col border-r border-hair bg-paper transition-all duration-300',
-          sidebarCollapsed ? 'w-16' : 'w-64',
+          collapsed ? 'w-16' : 'w-64',
         )}
         data-testid="sidebar"
       >
         {/* Header */}
         <div className="flex h-14 items-center justify-between px-4">
-          {!sidebarCollapsed && <BrandMark />}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleSidebar}
-            className="ml-auto"
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? (
-              <ChevronRight className="h-4 w-4" />
-            ) : (
-              <ChevronLeft className="h-4 w-4" />
-            )}
-          </Button>
+          {!collapsed && <BrandMark />}
+          {!drawer && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleSidebar}
+              className="ml-auto"
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {collapsed ? (
+                <ChevronRight className="h-4 w-4" />
+              ) : (
+                <ChevronLeft className="h-4 w-4" />
+              )}
+            </Button>
+          )}
         </div>
 
         <Separator />
+
+        {drawer && onSearch && (
+          <div className="p-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onSearch}
+              className="w-full justify-start"
+            >
+              <Search className="mr-2 h-4 w-4" aria-hidden="true" />
+              Search your papers…
+            </Button>
+          </div>
+        )}
 
         {/* Nav — full grouped layout, or the short simple-mode rail */}
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Main navigation">
@@ -396,7 +427,7 @@ export function Sidebar() {
             <SimpleNav
               groups={navGroups}
               isAdmin={isAdmin}
-              collapsed={sidebarCollapsed}
+              collapsed={collapsed}
               pathname={location.pathname}
               searchParams={searchParams}
             />
@@ -404,7 +435,7 @@ export function Sidebar() {
             <GroupedNav
               groups={navGroups}
               isAdmin={isAdmin}
-              collapsed={sidebarCollapsed}
+              collapsed={collapsed}
               pathname={location.pathname}
               searchParams={searchParams}
             />
@@ -415,7 +446,7 @@ export function Sidebar() {
 
         {/* Footer: Nav-mode toggle · Settings · HealthDots · Sign out */}
         <div className="p-3 space-y-2">
-          {showAdvancedCue && !sidebarCollapsed && (
+          {showAdvancedCue && !collapsed && (
             <div
               className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs text-muted-foreground"
               data-testid="advanced-workspace-cue"
@@ -423,8 +454,8 @@ export function Sidebar() {
             >
               <div className="flex items-start gap-2">
                 <p className="leading-relaxed">
-                  Ready for the next step? Show all features to use Projects, Extraction,
-                  Knowledge Graph, and Citation Graph.
+                  Ready for the next step? Show all features to add {ADVANCED_NAV_SENTENCE} to
+                  the sidebar.
                 </p>
                 <Button
                   variant="ghost"
@@ -439,24 +470,24 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Nav-mode toggle — simple ⇄ full nav density (device-scoped) */}
+          {/* Nav-mode toggle — simple ⇄ full nav density, saved to the account */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size={sidebarCollapsed ? 'icon' : 'sm'}
+                size={collapsed ? 'icon' : 'sm'}
                 onClick={handleNavModeToggle}
                 className="w-full"
                 data-testid="nav-mode-toggle"
                 aria-label={isSimple ? 'Show all features' : 'Simple view'}
               >
                 <Sliders className="h-4 w-4 shrink-0" aria-hidden="true" />
-                {!sidebarCollapsed && (
+                {!collapsed && (
                   <span className="ml-2">{isSimple ? 'Show all features' : 'Simple view'}</span>
                 )}
               </Button>
             </TooltipTrigger>
-            {sidebarCollapsed && (
+            {collapsed && (
               <TooltipContent side="right">
                 {isSimple ? 'Show all features' : 'Simple view'}
               </TooltipContent>
@@ -464,7 +495,7 @@ export function Sidebar() {
           </Tooltip>
 
           {/* Settings — footer utility link (not in any numbered group) */}
-          {sidebarCollapsed ? (
+          {collapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Link
@@ -498,12 +529,12 @@ export function Sidebar() {
 
           {/* HealthDots: admin users navigate to /admin/system-health; others expand in-place */}
           <HealthDots
-            compact={sidebarCollapsed}
-            adminLink={isAdmin && !sidebarCollapsed ? '/admin/system-health' : undefined}
+            compact={collapsed}
+            adminLink={isAdmin && !collapsed ? '/admin/system-health' : undefined}
           />
 
           {/* Build version — muted caption, hidden when collapsed (no room for text) */}
-          {!sidebarCollapsed && (
+          {!collapsed && (
             <p
               className="px-2 text-[10px] text-muted-foreground text-center"
               data-testid="sidebar-app-version"
@@ -517,15 +548,15 @@ export function Sidebar() {
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size={sidebarCollapsed ? 'icon' : 'sm'}
+                size={collapsed ? 'icon' : 'sm'}
                 onClick={logout}
                 className="w-full"
               >
                 <LogOut className="h-4 w-4" />
-                {!sidebarCollapsed && <span className="ml-2">Sign out</span>}
+                {!collapsed && <span className="ml-2">Sign out</span>}
               </Button>
             </TooltipTrigger>
-            {sidebarCollapsed && (
+            {collapsed && (
               <TooltipContent side="right">Sign out</TooltipContent>
             )}
           </Tooltip>

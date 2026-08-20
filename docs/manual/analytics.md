@@ -63,5 +63,5 @@ A chart showing estimated LLM token usage and cost over the selected period, bro
 ## Related pages
 
 - [Learning Cards](learning-cards.md) — the FSRS review system whose ratings feed the RetentionChart and ReviewsByRatingChart.
-- [Research Feed & Library](research-feed.md) — the library whose growth is reflected in the PapersBySourceChart and PapersByStatusChart.
+- [Papers & Discover](research-feed.md) — the library whose growth is reflected in the PapersBySourceChart and PapersByStatusChart.
 - [Settings](settings.md) — configure LLM providers whose cost is tracked in LlmCostChart.

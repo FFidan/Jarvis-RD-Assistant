@@ -1,7 +1,17 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { cleanup, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+
+const { preferenceSyncMounted } = vi.hoisted(() => ({ preferenceSyncMounted: vi.fn() }));
+
+vi.mock('@/hooks/usePreferenceSync', () => ({
+  usePreferenceSync: () => {},
+  PreferenceSync: () => {
+    preferenceSyncMounted();
+    return null;
+  },
+}));
 
 vi.mock('@/lib/api', async () => {
   const { createApiMock } = await import('@/__tests__/fixtures/api-mock');
@@ -66,6 +76,7 @@ describe('App', () => {
       new api.ApiError(401, JSON.stringify({ detail: 'Not authenticated' })),
     );
     resetAuthState();
+    preferenceSyncMounted.mockClear();
   });
 
   it('shows login page when not authenticated', async () => {
@@ -86,6 +97,45 @@ describe('App', () => {
     // renders a loading placeholder until the setup-status query resolves.
     const dashboards = await screen.findAllByText('Dashboard');
     expect(dashboards.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('mounts preference sync only once the user is authenticated', async () => {
+    // Guards the WIRING, not the hook's behaviour: an unmounted hook is dead
+    // code, and asserting on /api/config traffic cannot see the difference
+    // because other authenticated components read config too. The sync needs a
+    // session, so it must not mount on the login page either.
+    useAuthStore.setState({ isAuthenticated: false, authTime: null });
+    renderApp();
+    await screen.findByLabelText('Email');
+    expect(preferenceSyncMounted).not.toHaveBeenCalled();
+
+    cleanup();
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      user: { id: 1, email: 'admin.com', role: 'admin' },
+    });
+    renderApp();
+    await waitFor(() => expect(preferenceSyncMounted).toHaveBeenCalled());
+  });
+
+  it('offers Papers and Discover links on an unknown route', async () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      user: { id: 1, email: 'admin.com', role: 'admin' },
+    });
+    renderApp(['/missing-page']);
+
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Papers' })).toHaveAttribute(
+      'href',
+      '/feed?surface=library',
+    );
+    expect(screen.getByRole('link', { name: 'Open Discover' })).toHaveAttribute(
+      'href',
+      '/feed?surface=search',
+    );
   });
 
 

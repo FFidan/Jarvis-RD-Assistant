@@ -17,18 +17,9 @@ corresponding ``httpx.AsyncClient(transport=ASGITransport(app=…), base_url=
 
 Auth wiring
 -----------
-Both apps require ``X-API-Key: <key>`` (global ``Depends(verify_api_key)``).
-The owner-override path additionally requires:
-  1. ``X-API-Key`` matching the module-level ``_CACHED_API_KEY``
-  2. ``X-Owner-User-Id`` carrying the seeded user's integer id
-  3. The client IP is on the allowlist — patched via
-     ``monkeypatch.setattr("jarvis_common.auth._ip_in_allowlist", lambda _ip: True)``
-     because ``ASGITransport`` presents as ``testclient`` rather than a real
-     routable IP.
-
-``configure_contract_api_key`` sets ``JARVIS_API_KEY`` in the environment and
-refreshes the auth cache so ``verify_api_key`` + ``_CACHED_API_KEY`` both see
-the same key that the client sends.
+Each client uses the production ``TelegramBackendAuth`` flow. A controlled
+Platform exchange issues route-bound assertions, and the real backend identity
+middleware verifies them before strict route dependencies resolve the user.
 
 Endpoints covered
 -----------------
@@ -37,17 +28,14 @@ Endpoints covered
 - ``complete_task``            PUT  /api/tasks/{id}          (LE) — done + daily_log bump
 - ``check_authors``   POST /api/authors/check  (PI) — matches/new_papers/authors_checked
 
-Limitation
-----------
-``check_authors`` calls ``current_user_id_strict_with_owner_override(request)``
-*inline* (not via ``Depends``), so the dependency-override dict is bypassed.
-The IP-allowlist patch + matching API-key in the ``X-API-Key`` header + a real
-DB user row in the pool handle auth end-to-end — no extra override needed.
+No dependency override bypasses backend identity in this suite.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -56,7 +44,15 @@ import asyncpg
 import httpx
 import pytest
 import pytest_asyncio
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jarvis_common.db_helpers import init_pg_connection
+from jarvis_common.identity_assertions import (
+    IdentityAssertionSigner,
+    IdentityAssertionVerifier,
+    VerificationKey,
+)
+from jarvis_common.identity_capabilities import required_identity_scopes, service_principal_scopes
+from jarvis_common.identity_middleware import IdentityAssertionMiddleware
 from jarvis_common.migrations import run_migrations
 from jarvis_common.testing import make_live_pg_dsn as _make_live_pg_dsn
 from jarvis_common.testing_contract_apps import (
@@ -66,6 +62,7 @@ from jarvis_common.testing_contract_apps import (
 )
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
+from telegram_bot.service_auth import TelegramBackendAuth
 from telegram_bot.services_client import (
     check_authors,
     complete_task,
@@ -101,7 +98,11 @@ async def _int_pool(live_pg_dsn: str):
     for attempt in range(10):
         try:
             pool = await asyncpg.create_pool(
-                live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+                live_pg_dsn,
+                min_size=1,
+                max_size=5,
+                init=init_pg_connection,
+                server_settings={"search_path": "platform,research,learning,ops,public"},
             )
             break
         except (OSError, asyncpg.PostgresError):
@@ -250,38 +251,131 @@ def _pi_app_wired(pool: asyncpg.Pool):
 
 
 def _make_config(
-    api_key: str, le_url: str = "http://test", pi_url: str = "http://test"
+    api_key: str,
+    le_url: str = "http://learning.test",
+    pi_url: str = "http://research.test",
 ) -> BotConfig:
     """Build a minimal BotConfig for the integration suite."""
     return BotConfig(
         telegram_token="dummy-token",
         database_url="postgres://unused",
+        platform_api_url="http://platform.test",
         learning_engine_url=le_url,
         paper_ingestion_url=pi_url,
         jarvis_api_key=SecretStr(api_key),
     )
 
 
-def _le_client(pool: asyncpg.Pool, api_key: str) -> httpx.AsyncClient:
-    """Async ASGI client routing to the LE app in-process."""
+class _PlatformAssertionExchange:
+    """Controlled Platform authorization endpoint for real backend middleware."""
+
+    def __init__(self) -> None:
+        private_key = Ed25519PrivateKey.generate()
+        self._signer = IdentityAssertionSigner(
+            issuer="jarvis-platform-integration-test",
+            key_id="integration-test-key",
+            signing_key=private_key,
+        )
+        self._verification_key = VerificationKey(private_key.public_key())
+
+    def verifier(self, audience: str) -> IdentityAssertionVerifier:
+        return IdentityAssertionVerifier(
+            issuer="jarvis-platform-integration-test",
+            audience=audience,
+            keys={"integration-test-key": self._verification_key},
+        )
+
+    def authorize(self, request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        audience = payload["audience"]
+        method = payload["method"]
+        path = payload["path"]
+        user_id = payload["user_id"]
+        scopes = service_principal_scopes("telegram", audience, method, path)
+        if scopes is None:
+            return httpx.Response(403, json={"detail": "capability denied"})
+        assertion = self._signer.issue(
+            audience=audience,
+            subject=f"user:{user_id}",
+            principal="telegram",
+            request_id=payload["request_id"],
+            request_method=method,
+            request_path=path,
+            scopes=scopes,
+            user_id=user_id,
+        )
+        return httpx.Response(200, json={"assertion": assertion})
+
+
+class _RecordingASGITransport(httpx.AsyncBaseTransport):
+    """Record the request that survives TelegramBackendAuth before ASGI dispatch."""
+
+    def __init__(self, app, requests: list[dict[str, str]]) -> None:
+        self._inner = httpx.ASGITransport(app=app)
+        self._requests = requests
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self._requests.append(dict(request.headers))
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+@asynccontextmanager
+async def _le_client(pool: asyncpg.Pool, api_key: str):
+    """Route a production-authenticated Telegram client to Learning ASGI."""
     from learning_engine.main import app as le_app
 
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=le_app),
-        base_url="http://test",
-        headers={"X-API-Key": api_key},
+    del pool
+    config = _make_config(api_key)
+    exchange = _PlatformAssertionExchange()
+    verified_app = IdentityAssertionMiddleware(
+        le_app,
+        verifier=exchange.verifier("learning"),
+        scope_resolver=lambda method, path: required_identity_scopes("learning", method, path),
     )
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(exchange.authorize),
+            base_url=config.platform_api_url,
+        ) as platform_client,
+        httpx.AsyncClient(
+            transport=_RecordingASGITransport(verified_app, requests := []),
+            base_url=config.learning_engine_url,
+            auth=TelegramBackendAuth(config, platform_client),
+        ) as client,
+    ):
+        setattr(client, "_test_backend_requests", requests)
+        yield client
 
 
-def _pi_client(pool: asyncpg.Pool, api_key: str) -> httpx.AsyncClient:
-    """Async ASGI client routing to the PI app in-process."""
+@asynccontextmanager
+async def _pi_client(pool: asyncpg.Pool, api_key: str):
+    """Route a production-authenticated Telegram client to Research ASGI."""
     from paper_ingestion.main import app as pi_app
 
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=pi_app),
-        base_url="http://test",
-        headers={"X-API-Key": api_key},
+    del pool
+    config = _make_config(api_key)
+    exchange = _PlatformAssertionExchange()
+    verified_app = IdentityAssertionMiddleware(
+        pi_app,
+        verifier=exchange.verifier("research"),
+        scope_resolver=lambda method, path: required_identity_scopes("research", method, path),
     )
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(exchange.authorize),
+            base_url=config.platform_api_url,
+        ) as platform_client,
+        httpx.AsyncClient(
+            transport=_RecordingASGITransport(verified_app, requests := []),
+            base_url=config.paper_ingestion_url,
+            auth=TelegramBackendAuth(config, platform_client),
+        ) as client,
+    ):
+        setattr(client, "_test_backend_requests", requests)
+        yield client
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +386,41 @@ pytestmark = [
     pytest.mark.live_pg,
     pytest.mark.asyncio(loop_scope="session"),
 ]
+
+
+async def test_backend_auth_removes_private_marker_before_real_backend_dispatch(
+    _int_pool, _seed, monkeypatch
+):
+    """A paired user reaches Learning only through a signed assertion."""
+    from learning_engine.main import app as le_app
+
+    user_id = _seed["user_id"]
+    with configure_contract_api_key(monkeypatch) as key:
+        config = _make_config(key)
+        untrusted_exchange = _PlatformAssertionExchange()
+        untrusted_app = IdentityAssertionMiddleware(
+            le_app,
+            verifier=untrusted_exchange.verifier("learning"),
+            scope_resolver=lambda method, path: required_identity_scopes("learning", method, path),
+        )
+        with _le_app_wired(_int_pool):
+            async with _le_client(_int_pool, key) as http:
+                await fetch_tasks(http, config, user_id)
+                backend_headers = getattr(http, "_test_backend_requests")
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=untrusted_app),
+                    base_url=config.learning_engine_url,
+                ) as untrusted_client:
+                    rejected = await untrusted_client.get(
+                        "/api/tasks",
+                        headers={"X-Jarvis-Paired-User-Id": str(user_id + 1)},
+                    )
+
+    assert backend_headers
+    assert "x-jarvis-paired-user-id" not in backend_headers[-1]
+    assert "x-api-key" not in backend_headers[-1]
+    assert "x-jarvis-identity" in backend_headers[-1]
+    assert rejected.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +440,7 @@ async def test_fetch_tasks_returns_project_name(_int_pool, _seed, monkeypatch):
 
     with configure_contract_api_key(monkeypatch) as key:
         with monkeypatch.context() as m:
-            m.setattr("jarvis_common.auth._ip_in_allowlist", lambda _ip: True)
+            m.setenv("JARVIS_API_KEY", key)
 
             config = _make_config(key)
             with _le_app_wired(_int_pool):
@@ -350,7 +479,7 @@ async def test_fetch_upcoming_milestones_shape(_int_pool, _seed, monkeypatch):
 
     with configure_contract_api_key(monkeypatch) as key:
         with monkeypatch.context() as m:
-            m.setattr("jarvis_common.auth._ip_in_allowlist", lambda _ip: True)
+            m.setenv("JARVIS_API_KEY", key)
 
             config = _make_config(key)
             with _le_app_wired(_int_pool):
@@ -397,7 +526,7 @@ async def test_complete_task_marks_done_and_bumps_daily_log(_int_pool, _seed, mo
 
     with configure_contract_api_key(monkeypatch) as key:
         with monkeypatch.context() as m:
-            m.setattr("jarvis_common.auth._ip_in_allowlist", lambda _ip: True)
+            m.setenv("JARVIS_API_KEY", key)
 
             config = _make_config(key)
             with _le_app_wired(_int_pool):
@@ -443,18 +572,17 @@ async def test_check_authors_returns_matches_shape(_int_pool, _seed, monkeypatch
     Drift risk: if check_authors renames response keys or the endpoint URL
     changes, the bot silently stops alerting on new author papers.
 
-    Auth: the endpoint resolves identity via
-    Depends(current_user_id_strict_with_owner_override). services_client sends
-    X-Owner-User-Id + X-API-Key; we allowlist the source IP so the real
-    owner-override path runs end-to-end (no resolver patching).
+    Auth: ``TelegramBackendAuth`` consumes the paired-user marker, obtains a
+    route-bound Platform assertion, and the real identity middleware resolves
+    the strict user dependency without a test override.
     """
     user_id = _seed["user_id"]
 
     with configure_contract_api_key(monkeypatch) as key:
         with monkeypatch.context() as m:
-            m.setattr("jarvis_common.auth._ip_in_allowlist", lambda _ip: True)
+            m.setenv("JARVIS_API_KEY", key)
 
-            config = _make_config(key, pi_url="http://test")
+            config = _make_config(key)
             with _pi_app_wired(_int_pool):
                 async with _pi_client(_int_pool, key) as http:
                     result = await check_authors(http, config, user_id)
@@ -495,9 +623,9 @@ async def test_fetch_new_paper_count_no_422(_int_pool, _seed, monkeypatch):
 
     with configure_contract_api_key(monkeypatch) as key:
         with monkeypatch.context() as m:
-            m.setattr("jarvis_common.auth._ip_in_allowlist", lambda _ip: True)
+            m.setenv("JARVIS_API_KEY", key)
 
-            config = _make_config(key, pi_url="http://test")
+            config = _make_config(key)
             with _pi_app_wired(_int_pool):
                 async with _pi_client(_int_pool, key) as http:
                     count = await fetch_new_paper_count(http, config, user_id, hours=24)

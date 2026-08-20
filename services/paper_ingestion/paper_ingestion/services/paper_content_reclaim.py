@@ -1,15 +1,22 @@
-"""Best-effort reclamation of the storage a discarded paper leaves behind.
+"""Reclamation of the storage a discarded or erased paper leaves behind.
 
 Frees a paper's vector points, stored PDF and rendered page images after a
 promotion or a voided run discarded the content they were derived from. Every
 step re-reads its premise and absorbs its own failures.
+
+Account erasure removes storage on the other premise: the paper itself is going,
+because the account being erased was its only holder, so its row and extracted
+text go with its files. Those failures are not absorbed — an erasure that could
+not remove a stored document must not report success.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 import asyncpg
@@ -80,6 +87,23 @@ async def _paper_content_is_still_discarded(conn: ConnLike, paper_id: int) -> bo
     return True
 
 
+async def _delete_stored_pdf(paper_id: int) -> None:
+    """Remove the paper's stored document, tolerating one that is already gone."""
+    pdf_path = secure_path(PDF_STORAGE_PATH, f"{paper_id}.pdf")
+    await asyncio.to_thread(pdf_path.unlink, missing_ok=True)
+
+
+async def _delete_stored_page_images(paper_id: int) -> None:
+    """Remove the paper's rendered page images, tolerating a paper that has none.
+
+    A re-derived document can be shorter than the one it replaces, so the
+    directory goes whole rather than page by page.
+    """
+    snapshot_dir = secure_path(SNAPSHOT_STORAGE_PATH, str(paper_id))
+    with contextlib.suppress(FileNotFoundError):
+        await asyncio.to_thread(shutil.rmtree, snapshot_dir)
+
+
 async def _reclaim_stored_files(conn: ConnLike, paper_id: int) -> None:
     """Free the paper's stored PDF and page images under the publication lock.
 
@@ -106,22 +130,18 @@ async def _reclaim_stored_files(conn: ConnLike, paper_id: int) -> None:
     the other.
 
     The two steps are independent: a failure is logged and the next still runs.
-    A re-derived document can be shorter than the one it replaces, so the image
-    directory goes whole rather than page by page.
+    That is the difference from the erasure path, which shares the deletions
+    below but must not absorb their failures.
     """
     async with pdf_publish_operation(Path(PDF_STORAGE_PATH)):
         if not await _paper_content_is_still_discarded(conn, paper_id):
             return
         try:
-            pdf_path = secure_path(PDF_STORAGE_PATH, f"{paper_id}.pdf")
-            await asyncio.to_thread(pdf_path.unlink, missing_ok=True)
+            await _delete_stored_pdf(paper_id)
         except Exception:  # noqa: BLE001 — best-effort; the file is unreferenced
             logger.warning("Stored PDF reclamation failed for paper %d", paper_id, exc_info=True)
         try:
-            snapshot_dir = secure_path(SNAPSHOT_STORAGE_PATH, str(paper_id))
-            await asyncio.to_thread(shutil.rmtree, snapshot_dir)
-        except FileNotFoundError:
-            pass  # no page images were ever rendered for this paper
+            await _delete_stored_page_images(paper_id)
         except Exception:  # noqa: BLE001 — best-effort; the images are unreferenced
             logger.warning("Page-image reclamation failed for paper %d", paper_id, exc_info=True)
 
@@ -212,3 +232,111 @@ async def reclaim_discarded_paper_content(paper_id: int, db_pool: asyncpg.Pool) 
             await _reclaim_discarded_paper_content_on_connection(conn, paper_id)
     except Exception:  # noqa: BLE001 — best-effort; no failure may reach the caller
         logger.warning("Reclamation failed for paper %d", paper_id, exc_info=True)
+
+
+_LOCK_CANDIDATE_PAPERS_SQL = """
+    SELECT paper.id FROM papers AS paper WHERE paper.id = ANY($1::int[]) FOR UPDATE
+"""
+
+_ORPHANED_PAPER_SQL = """
+    SELECT paper.id
+    FROM papers AS paper
+    JOIN user_library AS held
+      ON held.paper_id = paper.id AND held.user_id = $1
+    WHERE paper.visibility_scope <> 'public'
+      AND NOT EXISTS (
+          SELECT 1 FROM user_library AS other
+          WHERE other.paper_id = paper.id AND other.user_id <> $1
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM pending_paper_deletions AS awaiting
+          WHERE awaiting.paper_id = paper.id AND awaiting.user_id <> $1
+      )
+"""
+
+_DELETE_ORPHANED_PAPERS_SQL = """
+    DELETE FROM papers AS paper
+    WHERE paper.id = ANY($2::int[])
+      AND paper.visibility_scope <> 'public'
+      AND NOT EXISTS (
+          SELECT 1 FROM user_library AS other
+          WHERE other.paper_id = paper.id AND other.user_id <> $1
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM pending_paper_deletions AS awaiting
+          WHERE awaiting.paper_id = paper.id AND awaiting.user_id <> $1
+      )
+    RETURNING paper.id
+"""
+
+
+async def _remove_stored_paper_files(paper_ids: Sequence[int]) -> None:
+    """Delete the stored PDF and page images of each named paper."""
+    for paper_id in paper_ids:
+        await _delete_stored_pdf(paper_id)
+        await _delete_stored_page_images(paper_id)
+
+
+async def erase_orphaned_user_papers(conn: ConnLike, user_id: int) -> list[int]:
+    """Remove the papers an erased account was the only holder of.
+
+    Parameters
+    ----------
+    conn : ConnLike
+        Research runtime connection the caller already holds.
+    user_id : int
+        Account being erased.
+
+    Returns
+    -------
+    list[int]
+        Papers whose row, chunks and stored files were removed.
+
+    Notes
+    -----
+    A paper survives when it is persisted public, when another user still holds
+    it in their library, or when another user's deletion of it is still waiting
+    for Learning to acknowledge. That last case matters because the pending row
+    is the only signal Learning ever gets: nothing in that schema references a
+    paper by foreign key, so cascading the paper away would cut the
+    reconciliation short instead of completing it.
+
+    This rule is narrower than the vector purge's. That phase considers every
+    paper, while this one only ever considers papers this account holds, so a
+    paper nobody holds keeps its row, its text and its stored file after its
+    vectors are gone. Reclaiming those is not this capability's job.
+
+    Call this before ``research.erase_user_data``: the set is derived from this
+    user's ``user_library`` rows, which that capability deletes.
+
+    The delete re-applies the rule rather than trusting the set it selected. A
+    paper another user claims, or the deployment publishes, in between is no
+    longer this account's alone, and it stays.
+
+    Rows go before files, and only the papers the delete actually removed have
+    their files reclaimed. Unlinking first would destroy the stored document of
+    a paper the re-check then keeps. Both happen inside one transaction, so a
+    file that cannot be reclaimed takes the row deletions down with it and the
+    papers become candidates again on the next attempt; without that, the rows
+    would already be gone, the retry would find nothing to do, and the erasure
+    would report itself complete with documents still on disk. The publication
+    lock spans the whole operation so no publisher can write a file in between.
+
+    The candidate rows are locked before the rule is re-applied. A library
+    insert that commits while the delete waits on the row lock is invisible to
+    the delete's own snapshot, so without the lock the paper would be removed
+    and the other account's newly saved row would go with it.
+
+    Reclamation failures are not absorbed. An erasure that cannot remove a
+    stored document must not report success, and here it does not: the
+    transaction unwinds and the work is still outstanding.
+    """
+    candidates = [int(row["id"]) for row in await conn.fetch(_ORPHANED_PAPER_SQL, user_id)]
+    if not candidates:
+        return []
+    async with pdf_publish_operation(Path(PDF_STORAGE_PATH)), conn.transaction():
+        await conn.execute(_LOCK_CANDIDATE_PAPERS_SQL, candidates)
+        rows = await conn.fetch(_DELETE_ORPHANED_PAPERS_SQL, user_id, candidates)
+        removed = [int(row["id"]) for row in rows]
+        await _remove_stored_paper_files(removed)
+    return removed

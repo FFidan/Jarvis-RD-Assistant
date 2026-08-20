@@ -6,7 +6,7 @@ from datetime import date
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, escape_like
-from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
+from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion import papers_service
 from paper_ingestion.converters import row_to_feed_paper, row_to_paper_response
@@ -185,12 +185,24 @@ async def list_papers(
 async def get_feed_counts(
     request: Request,
     scope: str = Query(default="library", max_length=16),
+    view: str | None = Query(default=None, max_length=64),
+    source: SourceType | None = None,
+    topic_id: int | None = None,
+    untagged: bool = False,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
 ) -> FeedCountsResponse:
     """Return per-bucket paper counts (C3: delegates to papers_service)."""
     _ = request  # required by @limiter.limit; not used in body
-    return await papers_service.get_feed_counts(scope, db_pool, user_id)
+    return await papers_service.get_feed_counts(
+        scope,
+        db_pool,
+        user_id,
+        view=view,
+        source=source.value if source is not None else None,
+        topic_id=topic_id,
+        untagged=untagged,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +234,7 @@ async def list_feed_papers(
     view: str | None = Query(default=None, max_length=64),
     scope: str = Query(default="library", max_length=16),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> FeedResponse:
     """Return papers for the What's New feed.
 
@@ -299,7 +311,10 @@ async def list_feed_papers(
 
     async with db_pool.acquire() as conn:
         rows = await fetch_feed_rows(conn, query_parts)
-        count_row = await conn.fetchval(query_parts.count_query, *query_parts.count_params)
+        if offset == 0 and len(rows) < limit:
+            count_row = len(rows)
+        else:
+            count_row = await conn.fetchval(query_parts.count_query, *query_parts.count_params)
 
     papers = [row_to_feed_paper(row) for row in rows]
     for paper in papers:

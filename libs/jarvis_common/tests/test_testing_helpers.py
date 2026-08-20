@@ -9,11 +9,14 @@ by the service's own tests continuing to pass after the conftest re-export.
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 from jarvis_common.testing import (
     FakeAcquireCM,
     FakeRecord,
     FakeTxnCM,
     RoleMiddleware,
+    SignedIdentityMiddleware,
     _make_pool_and_conn,
     make_pool_and_conn,
     make_telegram_update,
@@ -146,7 +149,7 @@ async def test_role_middleware_none_role_does_not_set_attribute():
     wrapped = RoleMiddleware(app, None)
     client = TestClient(wrapped, raise_server_exceptions=True)
     response = client.get("/")
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.asyncio
@@ -168,6 +171,42 @@ async def test_role_middleware_sets_role_when_provided():
     client = TestClient(wrapped, raise_server_exceptions=True)
     client.get("/")
     assert injected == ["admin"]
+
+
+def test_signed_identity_middleware_issues_exact_backend_assertion() -> None:
+    """The explicit wrapper supplies the identity enforced by a backend app."""
+    from jarvis_common.identity_capabilities import required_identity_scopes
+    from jarvis_common.identity_middleware import IdentityAssertionMiddleware
+
+    app = FastAPI()
+
+    @app.get("/api/papers")
+    async def papers(request: Request) -> dict[str, object]:
+        return {
+            "user_id": request.state.user_id,
+            "role": request.state.user_role,
+            "scopes": list(request.state.identity_scopes),
+        }
+
+    app.add_middleware(
+        IdentityAssertionMiddleware,
+        scope_resolver=lambda method, path: required_identity_scopes("research", method, path),
+    )
+    wrapped = SignedIdentityMiddleware(
+        app,
+        audience="research",
+        user_id=7,
+        role="admin",
+    )
+
+    response = TestClient(wrapped).get("/api/papers")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "user_id": 7,
+        "role": "admin",
+        "scopes": ["research:papers:read"],
+    }
 
 
 # ---------------------------------------------------------------------------

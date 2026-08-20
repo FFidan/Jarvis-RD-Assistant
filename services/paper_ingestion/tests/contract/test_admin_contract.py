@@ -28,12 +28,14 @@ Carve-out: send_magic_link (SMTP) is patched out — outbound email boundary exe
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch
 from jarvis_common.testing import SharedConnPool
 
-from paper_ingestion.routers.audit_admin import _build_audit_query
+from platform_api.routers.audit_admin import _build_audit_query
 
 pytestmark = [
     pytest.mark.contract,
@@ -45,6 +47,39 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+async def _seed_soft_deleted(conn, user_id: int, ago: timedelta = timedelta(0)) -> None:
+    """Back-date a soft deletion for setup, outside the runtime's authority.
+
+    The deletion clock is capability-only for ``jarvis_platform_runtime`` so the
+    grace window cannot be shortened at runtime. Fixtures that need an aged
+    deletion therefore set it with the connection's own authority and hand the
+    runtime identity back before the request under test runs.
+    """
+    await conn.execute("RESET SESSION AUTHORIZATION")
+    try:
+        await conn.execute(
+            "UPDATE users SET deleted_at = NOW() - $2::interval WHERE id = $1",
+            user_id,
+            ago,
+        )
+    finally:
+        await conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
+
+
+async def _seed_erasure_request(conn, user_id: int) -> object:
+    """Create a pending erasure row for setup, outside the runtime's authority."""
+    await conn.execute("RESET SESSION AUTHORIZATION")
+    try:
+        return await conn.fetchval(
+            """INSERT INTO erasure_requests (request_id, user_id, state, resume_state)
+               VALUES (gen_random_uuid(), $1, 'requested', 'qdrant_pending')
+               RETURNING request_id""",
+            user_id,
+        )
+    finally:
+        await conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
 
 
 async def _seed_admin_user(conn) -> tuple[int, str]:
@@ -102,10 +137,11 @@ async def admin_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     admin_user_id, admin_cookie = await _seed_admin_user(contract_conn)
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
     shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
     try:
@@ -116,7 +152,7 @@ async def admin_client(contract_conn):
                 set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
             ),
             patch(
-                "paper_ingestion.routers.admin.send_magic_link",
+                "platform_api.routers.admin.send_magic_link",
                 new=AsyncMock(return_value=None),
             ),
         ):
@@ -124,6 +160,7 @@ async def admin_client(contract_conn):
                 client.admin_user_id = admin_user_id  # type: ignore[attr-defined]
                 yield client
     finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
         app.state.limiter.enabled = True
 
 
@@ -142,12 +179,13 @@ async def plain_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool
+    from platform_api.main import app
 
     # Seed admin so the users table is not empty (session middleware needs it).
     await _seed_admin_user(contract_conn)
     _user_id, user_cookie = await _seed_plain_user(contract_conn, "plain-user-contract@example.com")
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
     shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
     try:
@@ -161,6 +199,7 @@ async def plain_client(contract_conn):
             async with make_contract_client(app, user_cookie) as client:
                 yield client
     finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
         app.state.limiter.enabled = True
 
 
@@ -179,12 +218,13 @@ async def audit_admin_client(contract_conn):
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool, verify_platform_request
+    from platform_api.main import app
 
     async def _allow_all() -> None:
         return None
 
+    await contract_conn.execute("SET LOCAL SESSION AUTHORIZATION jarvis_platform_runtime")
     shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
     try:
@@ -195,6 +235,7 @@ async def audit_admin_client(contract_conn):
                 set_overrides={
                     get_db_pool: lambda: shared,
                     verify_api_key: lambda: None,
+                    verify_platform_request: lambda: None,
                     require_admin: _allow_all,
                 },
             ),
@@ -202,6 +243,7 @@ async def audit_admin_client(contract_conn):
             async with make_contract_client(app, None) as client:
                 yield client
     finally:
+        await contract_conn.execute("RESET SESSION AUTHORIZATION")
         app.state.limiter.enabled = True
 
 
@@ -274,10 +316,7 @@ async def test_a4_include_deleted_surfaces_restorable_soft_deleted_users(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         "include-deleted-target@example.com",
     )
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
-        target_id,
-    )
+    await _seed_soft_deleted(contract_conn, target_id, ago=timedelta(hours=1))
 
     # Default list must omit the soft-deleted user.
     default_resp = await admin_client.get("/api/admin/users")
@@ -379,10 +418,7 @@ async def test_a5_invite_soft_deleted_email_returns_409(admin_client, contract_c
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         soft_deleted_email,
     )
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() WHERE id = $1",
-        user_id,
-    )
+    await _seed_soft_deleted(contract_conn, user_id)
 
     resp = await admin_client.post(
         "/api/admin/users",
@@ -404,7 +440,7 @@ async def test_invite_user_token_insert_failure_rolls_back_user(admin_client, co
     must share one transaction so a token failure cannot leave an orphan user.
     """
     from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.main import app
+    from platform_api.main import app
 
     email = "atomicity-invite@example.com"
 
@@ -708,13 +744,12 @@ async def test_a8_restore_user_clears_deleted_at(admin_client, contract_conn):
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
         "restore-target@example.com",
     )
-    # Soft-delete the user in DB (within 30-day window).
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
-        target_id,
-    )
+    await _seed_soft_deleted(contract_conn, target_id, ago=timedelta(hours=1))
+    request_id = await _seed_erasure_request(contract_conn, target_id)
+    assert request_id is not None
 
-    resp = await admin_client.post(f"/api/admin/users/{target_id}/restore")
+    with patch("platform_api.routers.admin.log_audit", new_callable=AsyncMock):
+        resp = await admin_client.post(f"/api/admin/users/{target_id}/restore")
 
     assert resp.status_code == 200, (
         f"Expected 200 from restore; got {resp.status_code}: {resp.text[:300]}"
@@ -728,6 +763,13 @@ async def test_a8_restore_user_clears_deleted_at(admin_client, contract_conn):
         target_id,
     )
     assert deleted_at is None, "restore must clear deleted_at in DB"
+    assert (
+        await contract_conn.fetchval(
+            "SELECT COUNT(*) FROM erasure_requests WHERE user_id = $1",
+            target_id,
+        )
+        == 0
+    ), "restore must cancel the durable erasure request"
 
 
 async def test_a8_restore_outside_grace_returns_404(admin_client, contract_conn):
@@ -740,10 +782,7 @@ async def test_a8_restore_outside_grace_returns_404(admin_client, contract_conn)
         "restore-expired-target@example.com",
     )
     # Soft-delete the user past the 30-day grace window.
-    await contract_conn.execute(
-        "UPDATE users SET deleted_at = NOW() - INTERVAL '31 days' WHERE id = $1",
-        target_id,
-    )
+    await _seed_soft_deleted(contract_conn, target_id, ago=timedelta(days=31))
 
     resp = await admin_client.post(f"/api/admin/users/{target_id}/restore")
 
@@ -760,7 +799,7 @@ async def test_restoring_configured_deleted_admin_owner_requires_explicit_repair
         "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
         "configured-deleted-owner@example.com",
     )
-    await contract_conn.execute("UPDATE users SET deleted_at = NOW() WHERE id = $1", target_id)
+    await _seed_soft_deleted(contract_conn, target_id)
     await _set_database_owner(contract_conn, target_id)
 
     response = await admin_client.post(f"/api/admin/users/{target_id}/restore")
@@ -803,11 +842,17 @@ async def test_owner_transfer_is_atomic_audited_and_not_replayable(admin_client,
     )
     assert stored_owner == str(target_id)
     audit = await contract_conn.fetchrow(
-        "SELECT user_id, action, resource, metadata FROM audit_log "
-        "WHERE action = 'admin.owner.transfer' ORDER BY id DESC LIMIT 1"
+        "SELECT event.user_id, event.subject_id, event.caller_role, event.action, "
+        "event.resource, event.metadata, subject.user_id AS subject_user_id "
+        "FROM audit_log AS event "
+        "LEFT JOIN audit_subjects AS subject ON subject.id = event.subject_id "
+        "WHERE event.action = 'admin.owner.transfer' ORDER BY event.id DESC LIMIT 1"
     )
     assert audit is not None
-    assert audit["user_id"] == str(current_owner_id)
+    assert audit["user_id"] is None
+    assert audit["subject_id"] is not None
+    assert audit["subject_user_id"] == current_owner_id
+    assert audit["caller_role"] == "jarvis_platform_runtime"
     assert audit["resource"] == "owner.user_id"
     assert audit["metadata"]["previous_owner_user_id"] == current_owner_id
     assert audit["metadata"]["new_owner_user_id"] == target_id
@@ -911,7 +956,7 @@ async def test_owner_transfer_rolls_back_when_strict_audit_fails(admin_client, c
 
     with (
         patch(
-            "paper_ingestion.routers.admin.log_audit_strict",
+            "platform_api.routers.admin.log_audit_strict",
             new=AsyncMock(side_effect=RuntimeError("audit unavailable")),
         ),
         pytest.raises(RuntimeError, match="audit unavailable"),
@@ -938,7 +983,7 @@ async def test_owner_sensitive_user_mutation_rolls_back_when_strict_audit_fails(
 
     with (
         patch(
-            "paper_ingestion.routers.admin.log_audit_strict",
+            "platform_api.routers.admin.log_audit_strict",
             new=AsyncMock(side_effect=RuntimeError("audit unavailable")),
         ),
         pytest.raises(RuntimeError, match="audit unavailable"),
@@ -969,9 +1014,9 @@ async def test_a14_audit_log_returns_entries_from_db(audit_admin_client, contrac
     Verified: audit_admin.py:37-84 list_audit_log at HEAD.
     Survivor-of: logs/audit mock-unit assertions.
     """
-    # Insert a known audit_log row in the same transaction.
+    # Append a known fact through the same runtime capability used by Platform.
     await contract_conn.execute(
-        "INSERT INTO audit_log (action, resource) VALUES ($1, $2)",
+        "SELECT platform.append_audit_event(NULL, $1, $2, '{}'::jsonb)",
         "contract.test.action",
         "users/1",
     )

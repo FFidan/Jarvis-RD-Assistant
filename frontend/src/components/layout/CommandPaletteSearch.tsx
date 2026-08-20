@@ -32,18 +32,11 @@ export function CommandPaletteSearch() {
   const setQuery = useCommandPalette((s) => s.setQuery);
 
   function handleSelect(result: SearchPreviewResult) {
+    // Every result comes from the caller's own papers, so it always resolves
+    // to a paper page.
     const paperId = result.library_match?.paper_id;
-    const q = query.trim();
     close();
-    if (paperId != null) {
-      navigate(`/paper/${paperId}`);
-    } else {
-      // Not in the library yet — open the Discover/search surface so the user
-      // can search external sources and add it. Carry the typed query so the
-      // SearchBar is prefilled and the user doesn't have to retype it.
-      const dest = q ? `/feed?surface=search&q=${encodeURIComponent(q)}` : '/feed?surface=search';
-      navigate(dest);
-    }
+    if (paperId != null) navigate(`/paper/${paperId}`);
   }
 
   const trimmedQuery = query.trim();
@@ -74,7 +67,8 @@ export function CommandPaletteSearch() {
         <DialogContent className="max-w-xl p-0 gap-0 overflow-hidden">
           <DialogTitle className="sr-only">Search your papers</DialogTitle>
           <DialogDescription className="sr-only">
-            Search your library and discover new papers. Press Enter to open a paper or navigate to Discover.
+            Search the papers you have saved. Press Enter to open a paper, or jump to Discover
+            to search external sources.
           </DialogDescription>
           <Command
             shouldFilter={false}
@@ -115,34 +109,48 @@ export function CommandPaletteSearch() {
                 </p>
               )}
 
+              {/* Not Command.Empty: the Discover action below always counts as
+                  an item, so cmdk would never consider the list empty. */}
               {hasQuery && !loading && !errored && results.length === 0 && (
-                <Command.Empty className="px-3 py-6 text-center text-[13px] text-faint">
-                  No matches yet — keep typing.
-                </Command.Empty>
+                <p className="px-3 py-6 text-center text-[13px] text-faint">
+                  No matches in your papers.
+                </p>
               )}
 
               {hasQuery &&
                 !loading &&
                 !errored &&
-                results.map((result) => {
-                  const inLibrary = result.library_match?.paper_id != null;
-                  return (
-                    <Command.Item
-                      key={resultKey(result)}
-                      value={resultKey(result)}
-                      onSelect={() => handleSelect(result)}
-                      className="flex flex-col gap-0.5 rounded-md px-3 py-2 cursor-pointer data-[selected=true]:bg-paper"
-                    >
-                      <span className="text-[13px] font-medium text-ink line-clamp-1">
-                        {result.title}
-                      </span>
-                      <span className="text-[11px] text-meta line-clamp-1">
-                        {authorLine(result.authors)}
-                        {!inLibrary && ' · Not in your library yet'}
-                      </span>
-                    </Command.Item>
-                  );
-                })}
+                results.map((result) => (
+                  <Command.Item
+                    key={resultKey(result)}
+                    value={resultKey(result)}
+                    onSelect={() => handleSelect(result)}
+                    className="flex flex-col gap-0.5 rounded-md px-3 py-2 cursor-pointer data-[selected=true]:bg-paper"
+                  >
+                    <span className="text-[13px] font-medium text-ink line-clamp-1">
+                      {result.title}
+                    </span>
+                    <span className="text-[11px] text-meta line-clamp-1">
+                      {authorLine(result.authors)}
+                    </span>
+                  </Command.Item>
+                ))}
+
+              {/* External discovery is one action away, never silently mixed
+                  into results from your own papers. */}
+              {hasQuery && !loading && (
+                <Command.Item
+                  value="__discover__"
+                  onSelect={() => {
+                    close();
+                    navigate(`/feed?surface=search&q=${encodeURIComponent(trimmedQuery)}`);
+                  }}
+                  className="mt-1 flex items-center gap-2 rounded-md border-t border-hair px-3 py-2 cursor-pointer text-[13px] text-meta data-[selected=true]:bg-paper"
+                >
+                  <Search className="h-3.5 w-3.5 shrink-0" />
+                  Search external sources for &ldquo;{trimmedQuery}&rdquo; in Discover →
+                </Command.Item>
+              )}
             </Command.List>
           </Command>
         </DialogContent>

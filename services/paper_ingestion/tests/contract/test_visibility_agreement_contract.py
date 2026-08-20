@@ -590,7 +590,7 @@ async def test_search_persistence_reports_a_middle_failure_and_continues(
     )
 
     saved, failed = await search_router._persist_search_results(
-        SharedConnPool(contract_conn),
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
         [_adapter_paper(external_id, _ADAPTER_PDF_URL) for external_id in external_ids],
         caller,
     )
@@ -639,7 +639,7 @@ async def test_search_promotion_reclaims_the_discarded_files_and_vectors(
     monkeypatch.setattr(paper_content_reclaim, "delete_paper_vectors", _record_vector_delete)
 
     saved, failed = await _persist_search_results(
-        SharedConnPool(contract_conn),
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
         [_adapter_paper("promotion-reclaim-search", _ADAPTER_PDF_URL)],
         caller,
     )
@@ -694,7 +694,7 @@ async def test_promotion_stands_when_reclamation_fails_and_retrieval_stays_close
 
     monkeypatch.setattr(paper_content_reclaim, "delete_paper_vectors", _fail_vector_delete)
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     saved, failed = await _persist_search_results(
         pool,
         [_adapter_paper("promotion-reclaim-fault", _ADAPTER_PDF_URL)],
@@ -760,18 +760,23 @@ async def _promotion_app(contract_conn):
     from unittest.mock import MagicMock
 
     from jarvis_common import (
-        current_user_id_strict_with_owner_override,
+        current_user_id_strict,
         get_current_user_id,
     )
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_auth import SignedIdentityMiddleware
     from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
     from paper_ingestion.main import app
 
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with (
         patch_app_state(
             app,
             {
-                "db_pool": SharedConnPool(contract_conn),
+                "db_pool": shared,
                 "embedder": None,
                 "http_client": MagicMock(),
             },
@@ -779,12 +784,16 @@ async def _promotion_app(contract_conn):
         patch_dependency_overrides(
             app,
             remove_overrides={
-                current_user_id_strict_with_owner_override,
+                current_user_id_strict,
                 get_current_user_id,
             },
         ),
     ):
-        yield app
+        yield SignedIdentityMiddleware(
+            app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 def _serve_storage_roots_to_routes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -924,7 +933,7 @@ async def test_promotion_over_http_closes_every_read_of_the_superseded_content(
     )
     result = await prepare_cross_paper_rag(
         embedder,
-        SharedConnPool(contract_conn),
+        SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
         CrossPaperAskRequest(question="What does the paper say?", decompose=False),
         user_id=contract_two_users.user_b_id,
     )
@@ -1302,7 +1311,7 @@ async def test_live_qdrant_visibility_and_reconciliation_agree(
 
     _bind_live_collection(monkeypatch, collection_name)
     qdrant = AsyncQdrantClient(url=qdrant_url, timeout=15)
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     collection_created = False
     try:
         await qdrant.create_collection(

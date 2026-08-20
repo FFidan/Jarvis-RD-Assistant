@@ -15,11 +15,14 @@ Two failure classes are caught:
    the analytics cross-user leaks (B1/B2) slipped past the old linter, which
    only looked for *uses* of the permissive resolver.
 
-A route is considered guarded when it references any name in
-:data:`SAFE_NAMES` via a ``Depends(...)`` parameter default, a route- or
-router-level ``dependencies=[Depends(...)]`` list, or a direct call in the
-handler body. Genuinely public/ops routes are listed either by file
-(:data:`ALLOWLIST`) or by exact path (:data:`ROUTE_ALLOWLIST`).
+A route is considered guarded when a name in :data:`SAFE_NAMES` is *invoked*:
+as the argument of a ``Depends(...)`` in a parameter default or in a route- or
+router-level ``dependencies=[...]`` list, through a parameter annotated with a
+``type X = Annotated[..., Depends(<safe>)]`` alias, or as a direct call in the
+handler body. A bare mention — a return annotation, a local variable, a string
+— is not proof of authentication and never clears a handler. Genuinely
+public/ops routes are listed either by file (:data:`ALLOWLIST`) or by exact
+path (:data:`ROUTE_ALLOWLIST`).
 
 Pure stdlib (``ast`` + ``pathlib``); exits non-zero on any violation.
 """
@@ -33,17 +36,27 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Forbidden resolver names (the permissive, None-returning ones).
-UNSAFE_NAMES = frozenset({"current_user_id_or_none"})
+UNSAFE_NAMES = frozenset(
+    {
+        "current_user_id_or_none",
+        "current_user_id_with_owner_override",
+        "current_user_id_strict_with_owner_override",
+        "get_current_user_id_or_bot",
+    }
+)
 
 # Resolvers that establish a real, non-None caller identity (or hard 401/403).
+# Callables only: a type alias belongs here only through the callable its
+# ``Depends(...)`` names, which _safe_type_aliases resolves.
 SAFE_NAMES = frozenset(
     {
         "current_user_id_strict",
-        "current_user_id_strict_with_owner_override",
         "get_current_user_id",
-        "get_current_user_id_or_bot",
         "require_admin",
         "require_admin_or_api_key",
+        "require_telegram_principal",
+        "require_unconfigured_or_admin",
+        "authenticate_service_principal",
     }
 )
 
@@ -55,10 +68,6 @@ _ROUTE_DECORATORS = frozenset({"get", "post", "put", "patch", "delete"})
 ALLOWLIST = frozenset(
     {
         "services/paper_ingestion/paper_ingestion/routers/system.py",
-        "services/paper_ingestion/paper_ingestion/routers/logs.py",
-        "services/paper_ingestion/paper_ingestion/routers/telegram.py",
-        "services/paper_ingestion/paper_ingestion/routers/infra_events.py",
-        "services/paper_ingestion/paper_ingestion/routers/setup.py",
     }
 )
 
@@ -68,17 +77,22 @@ ALLOWLIST = frozenset(
 # justification. Per-user endpoints belong in caller-identity checks, not here.
 ROUTE_ALLOWLIST: dict[str, str] = {
     # Public auth flow — establishes identity, cannot require one first.
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /request-link": "public: starts magic-link auth",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /verify": "public: completes magic-link auth",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /logout": "session teardown, no user data read",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /api-key-session": "public: validates an API key and creates a session",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /request-link": "public: starts magic-link auth",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /verify": "public: completes magic-link auth",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /logout": "session teardown, no user data read",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth.py::POST /api-key-session": "public: validates an API key and creates a session",  # noqa: E501
     # Passkey sign-in — the same class as the magic-link flow above: a login
     # ceremony cannot require the session it exists to create. /login/begin is
     # discoverable (username-less), so it takes no identifier and cannot enumerate
     # users; both ceremonies require user verification and are origin-matched.
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/begin": "public: starts passkey auth (username-less, no user enumeration)",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /login/finish": "public: completes passkey auth",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/auth_passkeys.py::POST /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data (POST so the browser attaches Origin on the same-origin probe)",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth_passkeys.py::POST /login/begin": "public: starts passkey auth (username-less, no user enumeration)",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth_passkeys.py::POST /login/finish": "public: completes passkey auth",  # noqa: E501
+    "services/platform_api/platform_api/routers/auth_passkeys.py::POST /capability": "public: reports whether this origin can run passkey ceremonies; no per-user data (POST so the browser attaches Origin on the same-origin probe)",  # noqa: E501
+    # Platform-owned bootstrap and gateway-auth routes use purpose-built guards
+    # rather than caller-ID dependencies.
+    "services/platform_api/platform_api/routers/internal_auth.py::GET /authorize": "internal: trusted gateway peer plus session or operations-key authorization",  # noqa: E501
+    "services/platform_api/platform_api/routers/setup.py::GET /status": "public: fail-closed setup-state probe required before authentication",  # noqa: E501
+    "services/platform_api/platform_api/routers/setup.py::POST /admin": "bootstrap: setup-token-gated first-admin creation under a database lock",  # noqa: E501
     # Restore status requires an admin session, operations key, or restore token.
     # It resolves no user ID, so the caller-identity scan cannot recognize that
     # authentication. The database-independent poll remains available during a
@@ -92,6 +106,19 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::PUT /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::DELETE /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/settings_sources.py::GET /sources": "shared source-plugin registry",  # noqa: E501
+    # Internal domain and job commands are authenticated by the signed-identity
+    # middleware, then bind the verified principal, subject, path and request ID
+    # inside each handler. They deliberately do not resolve browser sessions.
+    "services/learning_engine/learning_engine/routers/internal_domains.py::POST /paper-read": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::POST /paper-deleted": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::PUT /projects/{project_id}/zotero-collection": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::PUT /journal": "internal: exact signed Research command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/internal_domains.py::POST /erasure/{request_id}": "internal: exact signed Platform erasure command with subject and request binding",  # noqa: E501
+    "services/learning_engine/learning_engine/routers/jobs.py::POST /dispatch": "internal: exact signed Platform job dispatch bound to the verified user",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/internal_domains.py::POST /erasure/{request_id}/qdrant": "internal: exact signed Platform erasure command with subject and request binding",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/internal_domains.py::POST /erasure/{request_id}/research": "internal: exact signed Platform erasure command with subject and request binding",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/internal_domains.py::POST /library": "internal: exact signed Learning command with subject and request binding",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/jobs.py::POST /dispatch": "internal: exact signed Platform job dispatch bound to the verified user",  # noqa: E501
     # Shared global topics catalog (`topics` has no user_id column;
     # per-user subscriptions live on the *subscription* routes, which do
     # resolve identity). CRUD here mutates the shared catalog only.
@@ -102,18 +129,21 @@ ROUTE_ALLOWLIST: dict[str, str] = {
 }
 
 
-def _route_meta(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[tuple[str, str]]:
-    """Return ``(METHOD, path)`` for every ``@router.<verb>(...)`` decorator."""
-    out: list[tuple[str, str]] = []
+def _route_meta(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[str, str, str]]:
+    """Return ``(router, METHOD, path)`` for every ``@router.<verb>(...)`` decorator."""
+    out: list[tuple[str, str, str]] = []
     for dec in func.decorator_list:
         if not (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)):
             continue
         if dec.func.attr not in _ROUTE_DECORATORS:
             continue
+        router = dec.func.value.id if isinstance(dec.func.value, ast.Name) else ""
         path = ""
         if dec.args and isinstance(dec.args[0], ast.Constant):
             path = str(dec.args[0].value)
-        out.append((dec.func.attr.upper(), path))
+        out.append((router, dec.func.attr.upper(), path))
     return out
 
 
@@ -128,17 +158,95 @@ def _names_in(node: ast.AST) -> set[str]:
     return found
 
 
-def _router_level_safe(tree: ast.Module) -> bool:
-    """True if ``APIRouter(dependencies=[Depends(<safe>)])`` guards every route."""
+def _depended_names(node: ast.AST) -> set[str]:
+    """Collect the callable each ``Depends(...)`` under *node* actually injects."""
+    found: set[str] = set()
+    for sub in ast.walk(node):
+        if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)):
+            continue
+        if sub.func.id != "Depends" or not sub.args:
+            continue
+        arg = sub.args[0]
+        if isinstance(arg, ast.Name):
+            found.add(arg.id)
+        elif isinstance(arg, ast.Attribute):
+            found.add(arg.attr)
+    return found
+
+
+def _called_names(node: ast.AST) -> set[str]:
+    """Collect every callable invoked directly under *node*.
+
+    This is the ``user_id = await current_user_id_strict(request)`` form, which
+    predates the dependency idiom and is still used outside route handlers.
+    """
+    found: set[str] = set()
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        if isinstance(sub.func, ast.Name):
+            found.add(sub.func.id)
+        elif isinstance(sub.func, ast.Attribute):
+            found.add(sub.func.attr)
+    return found
+
+
+def _safe_type_aliases(tree: ast.Module) -> frozenset[str]:
+    """Return ``type X = Annotated[..., Depends(<safe>)]`` alias names.
+
+    A handler annotated with such an alias is authenticated by the callable the
+    alias injects, so the alias stands in for that callable — and only for as
+    long as it keeps naming one. The alias name itself is never a safe name:
+    mentioning it without using it as a parameter annotation proves nothing.
+    """
+    aliases: set[str] = set()
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+        if isinstance(node, ast.TypeAlias) and isinstance(node.name, ast.Name):
+            if _depended_names(node.value) & SAFE_NAMES:
+                aliases.add(node.name.id)
+    return frozenset(aliases)
+
+
+def _safe_routers(tree: ast.Module) -> frozenset[str]:
+    """Return the names bound to ``APIRouter(dependencies=[Depends(<safe>)])``.
+
+    Binding the guard to the router *name* keeps a second, unguarded router in
+    the same module from inheriting the first one's dependencies.
+    """
+    routers: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
             continue
-        if node.func.id != "APIRouter":
+        call = node.value
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)):
             continue
-        for kw in node.keywords:
-            if kw.arg == "dependencies" and _names_in(kw.value) & SAFE_NAMES:
-                return True
-    return False
+        if call.func.id != "APIRouter":
+            continue
+        if not any(
+            kw.arg == "dependencies" and _depended_names(kw.value) & SAFE_NAMES
+            for kw in call.keywords
+        ):
+            continue
+        routers.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return frozenset(routers)
+
+
+def _handler_is_guarded(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+    safe_aliases: frozenset[str],
+) -> bool:
+    """Whether *func* establishes a caller identity through one of the safe forms."""
+    if _depended_names(func) & SAFE_NAMES:
+        return True
+    if _called_names(func) & SAFE_NAMES:
+        return True
+    args = func.args
+    annotations = (
+        arg.annotation
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)
+        if arg.annotation is not None
+    )
+    return any(_names_in(annotation) & safe_aliases for annotation in annotations)
 
 
 def _imports_unsafe(tree: ast.Module) -> tuple[list[tuple[int, str]], frozenset[str]]:
@@ -181,14 +289,14 @@ def _missing_resolver(
 ) -> list[tuple[int, str]]:
     """Return violations for route handlers that establish no caller identity.
 
-    A handler is guarded when a safe resolver name appears anywhere in the
-    function (parameter ``Depends(...)`` defaults, route-decorator
-    ``dependencies=[...]``, or a direct ``await current_user_id_strict(...)``
-    call in the body), or when the router itself carries a safe dependency,
-    or when the exact route is in :data:`ROUTE_ALLOWLIST`.
+    A handler is guarded when it *invokes* a safe resolver — through a
+    ``Depends(<safe>)`` in its decorators or signature, through a parameter
+    annotated with a safe ``Annotated[..., Depends(<safe>)]`` alias, or through
+    a direct call in its body — when the router it is registered on carries a
+    safe dependency, or when the exact route is in :data:`ROUTE_ALLOWLIST`.
     """
-    if _router_level_safe(tree):
-        return []
+    safe_aliases = _safe_type_aliases(tree)
+    safe_routers = _safe_routers(tree)
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -196,11 +304,11 @@ def _missing_resolver(
         routes = _route_meta(node)
         if not routes:
             continue
-        # `_names_in(node)` walks decorators (incl. dependencies=[...]),
-        # the signature (Depends(...) defaults) and the body (direct calls).
-        if _names_in(node) & SAFE_NAMES:
+        if _handler_is_guarded(node, safe_aliases):
             continue
-        for method, path in routes:
+        for router, method, path in routes:
+            if router in safe_routers:
+                continue
             if f"{rel}::{method} {path}" in ROUTE_ALLOWLIST:
                 continue
             hits.append(

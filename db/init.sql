@@ -673,7 +673,7 @@ CREATE SEQUENCE public.llm_usage_log_id_seq
     CACHE 1;
 CREATE TABLE IF NOT EXISTS public.magic_link_tokens (
     token_hash text NOT NULL,
-    user_id bigint NOT NULL,
+    user_id bigint,
     expires_at timestamp with time zone NOT NULL,
     used_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2060,10 +2060,2074 @@ INSERT INTO schema_migrations (version) VALUES
     (73), (74), (75), (76), (77), (78), (79), (80),
     (81), (82), (83), (84), (85), (86), (87), (88),
     (89), (90), (91), (92), (93), (94), (95), (96),
-    (97), (98), (99), (100), (101)
+    (97), (98), (99), (100), (101), (102), (103), (104), (105), (106),
+    (107), (108), (109), (110), (111), (112), (113), (114), (115), (116), (117), (118),
+    (119), (120)
 ON CONFLICT (version) DO NOTHING;
 
 -- The dedicated ``litellm`` admin database is created by the litellm-db-init
 -- one-shot in docker-compose.yml (fresh AND existing volumes), never here:
 -- CREATE DATABASE cannot run in this file — the test harness applies it via
 -- asyncpg in one implicit transaction, and psql meta-commands don't parse.
+
+-- =============================================================================
+-- FRESH-INSTALL OWNERSHIP BOUNDARY
+-- =============================================================================
+-- 0102: WebAuthn/passkey credential storage.
+--
+-- Stores registered passkeys (webauthn_credentials), short-lived single-use
+-- ceremony nonces (webauthn_challenges), and links a browser session to the
+-- passkey it was minted from (sessions.credential_id). The migration runner
+-- wraps this file in a transaction and strips any outer BEGIN/COMMIT, so none
+-- appear here. All statements are idempotent (IF NOT EXISTS) for safe re-apply.
+--
+-- FK column types match the baseline: users.id and sessions.user_id are bigint;
+-- sessions.id (and thus webauthn_credentials.id) is uuid.
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id bytea UNIQUE NOT NULL,
+    public_key bytea NOT NULL,
+    sign_count bigint NOT NULL DEFAULT 0,
+    transports text[],
+    aaguid uuid,
+    nickname text,
+    created_at timestamptz DEFAULT now(),
+    last_used_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+    challenge bytea PRIMARY KEY,
+    user_id bigint REFERENCES users(id) ON DELETE CASCADE,
+    purpose text NOT NULL,
+    expires_at timestamptz NOT NULL
+);
+
+ALTER TABLE sessions
+    ADD COLUMN IF NOT EXISTS credential_id uuid
+        REFERENCES webauthn_credentials(id) ON DELETE SET NULL;
+-- Purge stale group/supergroup telegram pairings (chat_id < 0) created before the
+-- private-chat-only pairing guard; they still receive outbound scheduled pushes.
+DELETE FROM telegram_user_pairings WHERE chat_id < 0;
+-- 0104: paper_chunks are canonical paper data, not user-owned records.
+-- A user deletion must never cascade into chunks retained by another library.
+ALTER TABLE IF EXISTS paper_chunks
+    DROP CONSTRAINT IF EXISTS paper_chunks_user_id_fkey;
+
+DROP INDEX IF EXISTS idx_paper_chunks_user;
+
+ALTER TABLE IF EXISTS paper_chunks
+    DROP COLUMN IF EXISTS user_id;
+-- 0105: Bridge upgraded deployments to the explicit instance-owner model.
+-- Only one unambiguous live administrator may be selected automatically.
+WITH live_admin AS MATERIALIZED (
+    SELECT id
+    FROM users
+    WHERE role = 'admin' AND deleted_at IS NULL
+), inserted_owner AS (
+    INSERT INTO user_config (user_id, key, value)
+    SELECT NULL, 'owner.user_id', to_jsonb(live_admin.id)
+    FROM live_admin
+    WHERE (SELECT COUNT(*) FROM live_admin) = 1
+      AND NOT EXISTS (
+          SELECT 1
+          FROM user_config
+          WHERE user_id IS NULL AND key = 'owner.user_id'
+      )
+    RETURNING value
+)
+INSERT INTO audit_log (user_id, action, resource, metadata)
+SELECT
+    value #>> '{}',
+    'owner.backfilled',
+    'owner.user_id',
+    jsonb_build_object('source', 'migration_0105', 'owner_user_id', value)
+FROM inserted_owner;
+-- 0106: Persist the source-aware paper visibility boundary.
+--
+-- Provenance labels are descriptive. Public visibility is backfilled only for
+-- known scholarly adapters whose row did not enter through the client-driven
+-- citation-batch path. Every other existing and future row defaults private.
+ALTER TABLE papers
+    ADD COLUMN IF NOT EXISTS visibility_scope text NOT NULL DEFAULT 'private';
+
+DO $$ BEGIN
+    ALTER TABLE papers
+        ADD CONSTRAINT papers_visibility_scope_check
+        CHECK (visibility_scope IN ('public', 'private'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+UPDATE papers
+SET visibility_scope = 'public'
+WHERE source_type IN ('arxiv', 'semantic_scholar', 'openalex', 'pubmed')
+  AND discovery_origin <> 'citation_batch';
+
+COMMENT ON COLUMN papers.visibility_scope IS
+    'Server-controlled authorization scope. Public rows are shared; private rows require user_library membership.';
+-- 0107: Scope the contradiction uniqueness key to the owning user.
+--
+-- The evidence-pair key spanned the whole deployment, so the second user to
+-- scan a shared paper pair collided with the first user's row and recorded none
+-- of their own. Adding the owner widens the key: every existing row keeps its
+-- identity because the key only grows, and each user can now hold their own row
+-- for the same pair of quotes.
+--
+-- COALESCE folds legacy owner-less rows into a single bucket. A bare NULL is
+-- distinct from every other NULL in a unique index, which would let unowned
+-- duplicates accumulate unchecked.
+DROP INDEX IF EXISTS idx_paper_contradictions_unique_quotes;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_contradictions_unique_quotes
+    ON paper_contradictions (
+        LEAST(paper_a_id, paper_b_id),
+        GREATEST(paper_a_id, paper_b_id),
+        md5(quote_a),
+        md5(quote_b),
+        COALESCE(user_id, 0)
+    );
+-- 0108: Record when a Zotero import's analysis scheduling was resolved, and
+-- how many attempts it has spent trying.
+--
+-- The enqueue happens after the ingest transaction commits, so a failure used
+-- to leave a committed paper whose analysis was never scheduled and never
+-- could be: the retry path re-runs the upsert, sees an existing row, and the
+-- brand-new-paper condition never fires again. Recording the successful enqueue
+-- lets a retry tell "already scheduled" from "never scheduled" without
+-- re-scheduling every previously imported item on each re-poll.
+ALTER TABLE paper_user_zotero_links
+    ADD COLUMN IF NOT EXISTS analysis_enqueued_at TIMESTAMPTZ;
+
+-- Treat every link row that predates this column as already resolved. Without
+-- this they all read as "decision outstanding", so the first poll after the
+-- upgrade re-evaluates the whole imported library. Marking them preserves the
+-- behaviour they already had: the previous condition fired only for a brand-new
+-- paper, so an existing link could never be re-scheduled regardless.
+UPDATE paper_user_zotero_links
+   SET analysis_enqueued_at = updated_at
+ WHERE analysis_enqueued_at IS NULL;
+
+COMMENT ON COLUMN paper_user_zotero_links.analysis_enqueued_at IS
+    'When this import''s analysis scheduling was resolved, by any of the three ways it can resolve: the paper.analyze job was deferred, the import carried no PDF to analyse, or the import spent every attempt allowed and was given up on. It records that a decision was reached, not which one; analysis_enqueue_attempts is what distinguishes an import that was given up on. NULL means the decision is still outstanding and the next poll must make it.';
+
+-- Bound that retrying per item. An unresolved decision pins the library
+-- version cursor so the next poll retries it, which is what an enqueue that
+-- failed transiently needs — but an enqueue that can never succeed would
+-- otherwise stop every other item in the library from syncing forever.
+-- Counting attempts on the link row keeps the bound on the item that earned
+-- it, so an item that failed once is never given up on because a different
+-- item is stuck. Zero is correct for every pre-existing row: the backfill
+-- above resolves them all, so they are never scheduled again and can spend
+-- no attempt.
+ALTER TABLE paper_user_zotero_links
+    ADD COLUMN IF NOT EXISTS analysis_enqueue_attempts INTEGER NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_user_zotero_links.analysis_enqueue_attempts IS
+    'How many times this import has tried to schedule its analysis. Incremented inside the ingest transaction, before the paper.analyze deferral runs, so an attempt whose deferral then fails is still counted. Once the limit is reached the poll resolves analysis_enqueued_at and stops retrying that item.';
+-- 0109: Track which version of a paper's PDF each derived artifact belongs to.
+--
+-- Existing papers and artifacts begin together at generation zero. Whenever a
+-- verified source replaces a paper's PDF URL, the application increments the
+-- paper counter in the same transaction that discards the old derived content.
+-- New artifacts copy the paper's current counter so readers can distinguish
+-- current evidence from retained work based on a superseded PDF.
+ALTER TABLE papers
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN papers.content_generation IS
+    'Monotonic version of the PDF-derived content. Incremented atomically when a verified source replacement discards that content.';
+
+ALTER TABLE paper_highlights
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_highlights.content_generation IS
+    'The paper content_generation current when this annotation was created. A mismatch means the annotation belongs to a superseded PDF.';
+
+ALTER TABLE paper_summaries
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_summaries.content_generation IS
+    'The paper content_generation summarized by this generated result.';
+
+ALTER TABLE paper_extractions
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_extractions.content_generation IS
+    'The paper content_generation used for this structured extraction.';
+
+ALTER TABLE paper_entities
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_entities.content_generation IS
+    'The paper content_generation from which this entity link was extracted.';
+
+ALTER TABLE entity_relationships
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN entity_relationships.content_generation IS
+    'The source paper content_generation supporting this relationship.';
+
+ALTER TABLE paper_notes
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_notes.content_generation IS
+    'The paper content_generation displayed when this note was created.';
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN cards.content_generation IS
+    'The source paper content_generation used to create this card.';
+
+ALTER TABLE paper_contradictions
+    ADD COLUMN IF NOT EXISTS paper_a_content_generation BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS paper_b_content_generation BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN paper_contradictions.paper_a_content_generation IS
+    'The paper A content_generation supporting this evidence pair.';
+
+COMMENT ON COLUMN paper_contradictions.paper_b_content_generation IS
+    'The paper B content_generation supporting this evidence pair.';
+-- 0110: Require ownership for new contradiction evidence.
+--
+-- Historical ownerless rows carry no provenance from which an owner could be
+-- inferred. Keep those rows intact while rejecting new or changed ownerless
+-- evidence. NOT VALID deliberately avoids rewriting or rejecting legacy data.
+DO $$
+BEGIN
+    ALTER TABLE paper_contradictions
+        ADD CONSTRAINT chk_paper_contradictions_user_id_present
+        CHECK (user_id IS NOT NULL) NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END
+$$;
+
+DROP INDEX IF EXISTS idx_paper_contradictions_unique_quotes;
+
+-- New application writes normalize whitespace before insertion. Raw hashes
+-- keep historical whitespace variants distinct without mutating or merging
+-- their evidence.
+CREATE UNIQUE INDEX idx_paper_contradictions_unique_quotes
+    ON paper_contradictions (
+        LEAST(paper_a_id, paper_b_id),
+        GREATEST(paper_a_id, paper_b_id),
+        md5(quote_a),
+        md5(quote_b),
+        COALESCE(user_id, 0),
+        paper_a_content_generation,
+        paper_b_content_generation
+    );
+-- Local uploads are identified by the full content digest; the short 16-hex form
+-- predates this and is derivable from the stored source URL (`local://<digest>`).
+--
+-- The NOT EXISTS clause protects the papers_external_id_key unique constraint
+-- against a row that already carries the full-digest id for the same content.
+-- A row it skips keeps its short id and stays reachable; a later re-upload of
+-- those bytes then creates a second, full-id row. That is the accepted residual
+-- for the pathological case where both forms of one digest already coexist.
+UPDATE papers
+SET external_id = 'local:' || substring(url from 9)
+WHERE source_type = 'local'
+  AND external_id LIKE 'local:%'
+  AND length(external_id) = 22
+  AND url LIKE 'local://%'
+  AND length(url) = 72
+  AND NOT EXISTS (
+    SELECT 1 FROM papers p2 WHERE p2.external_id = 'local:' || substring(papers.url from 9)
+  );
+CREATE TABLE focus_sessions (
+    id bigserial PRIMARY KEY,
+    user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    state text NOT NULL CHECK (state IN ('active', 'paused', 'completed')),
+    source text NOT NULL CHECK (source IN ('web', 'telegram')),
+    duration_seconds integer NOT NULL CHECK (duration_seconds BETWEEN 60 AND 28800),
+    started_at timestamp with time zone NOT NULL DEFAULT now(),
+    paused_at timestamp with time zone,
+    paused_seconds double precision NOT NULL DEFAULT 0 CHECK (paused_seconds >= 0),
+    completed_at timestamp with time zone,
+    telegram_notified_at timestamp with time zone,
+    recorded_seconds double precision NOT NULL DEFAULT 0 CHECK (recorded_seconds >= 0),
+    task_id integer REFERENCES tasks(id) ON DELETE SET NULL,
+    paper_id integer REFERENCES papers(id) ON DELETE SET NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    CHECK ((state = 'paused') = (paused_at IS NOT NULL)),
+    CHECK ((state = 'completed') = (completed_at IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX focus_sessions_one_open_per_user
+    ON focus_sessions (user_id)
+    WHERE state IN ('active', 'paused');
+
+CREATE INDEX focus_sessions_user_recent
+    ON focus_sessions (user_id, created_at DESC);
+-- Restore the project-to-Zotero collection cache used by the push workflow.
+-- Older installations that applied migration 031 already have this column;
+-- the IF NOT EXISTS keeps those valid upgrade paths idempotent.
+ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS zotero_collection_key TEXT;
+
+COMMENT ON COLUMN projects.zotero_collection_key IS
+    'Collection key for this project in its owner''s active Zotero library. Cleared when that library identity changes and resolved again on the next project-linked push.';
+
+
+-- Install the v1.2.6 physical ownership boundary.  Existing objects move by
+-- catalog identity, preserving their data, constraints, indexes, triggers, and rules.
+
+DO $$
+DECLARE
+    domain record;
+    object_name text;
+    source_schema text;
+    function_record record;
+BEGIN
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner'),
+                ('research', 'jarvis_research_owner'),
+                ('learning', 'jarvis_learning_owner'),
+                ('ops', 'jarvis_ops_owner')
+        ) AS domains(schema_name, owner_role)
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = domain.owner_role) THEN
+            EXECUTE format(
+                'CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+                domain.owner_role
+            );
+        END IF;
+        EXECUTE format(
+            'ALTER ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+            domain.owner_role
+        );
+        -- Keep each new schema owned by the migration's current role until its
+        -- public objects have moved into it.  The legacy owner needs CREATE for
+        -- ALTER ... SET SCHEMA, but receives no durable schema privilege.
+        IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = domain.schema_name) THEN
+            EXECUTE format('CREATE SCHEMA %I', domain.schema_name);
+        END IF;
+        EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', domain.schema_name);
+    END LOOP;
+
+    -- Runtime shells allow a bootstrap job to assign LOGIN/password separately.
+    FOREACH object_name IN ARRAY ARRAY[
+        'jarvis_platform_runtime', 'jarvis_research_runtime', 'jarvis_learning_runtime',
+        'jarvis_migrator', 'jarvis_legacy_rollback', 'jarvis_backup_reader',
+        'jarvis_restore_operator'
+    ] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = object_name) THEN
+            EXECUTE format(
+                'CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+                object_name
+            );
+        END IF;
+        EXECUTE format(
+            'ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+            object_name
+        );
+    END LOOP;
+    ALTER ROLE jarvis_backup_reader WITH BYPASSRLS;
+    ALTER ROLE jarvis_restore_operator WITH BYPASSRLS;
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner', ARRAY['audit_log','llm_usage_log','magic_link_tokens','sessions','system_events','telegram_pairing','telegram_pairing_tokens','telegram_user_pairings','user_config','users','webauthn_challenges','webauthn_credentials'], ARRAY['audit_log_id_seq','llm_usage_log_id_seq','system_events_id_seq','user_config_id_seq','users_id_seq'], ARRAY['set_updated_at'], ARRAY[]::text[]),
+                ('research', 'jarvis_research_owner', ARRAY['author_alert_log','entities','entity_relationships','extraction_templates','paper_chunks','paper_citations','paper_contradictions','paper_entities','paper_extractions','paper_highlights','paper_notes','paper_recommendations','paper_sources','paper_summaries','paper_topics','paper_user_state','paper_user_zotero_links','papers','pulse_cards','pulse_decks','pulse_models','recommendation_feedback','source_health','source_run_history','thread','topics','tracked_authors','user_library','user_topic_subscriptions'], ARRAY['author_alert_log_id_seq','entities_id_seq','entity_relationships_id_seq','extraction_templates_id_seq','paper_chunks_id_seq','paper_citations_id_seq','paper_contradictions_id_seq','paper_extractions_id_seq','paper_notes_id_seq','paper_recommendations_id_seq','paper_sources_id_seq','paper_summaries_id_seq','paper_user_state_id_seq','papers_id_seq','pulse_cards_id_seq','pulse_decks_id_seq','pulse_models_id_seq','recommendation_feedback_id_seq','source_health_id_seq','source_run_history_id_seq','thread_id_seq','topics_id_seq','tracked_authors_id_seq'], ARRAY['papers_search_vector_update'], ARRAY[]::text[]),
+                ('learning', 'jarvis_learning_owner', ARRAY['cards','daily_intent','daily_log','decks','focus_sessions','journal_entries','milestones','project_papers','project_questions','projects','review_logs','scheduled_nudges','task_paper_links','tasks'], ARRAY['cards_id_seq','daily_log_id_seq','decks_id_seq','journal_entries_id_seq','milestones_id_seq','project_questions_id_seq','projects_id_seq','review_logs_id_seq','scheduled_nudges_id_seq','tasks_id_seq'], ARRAY[]::text[], ARRAY[]::text[]),
+                ('ops', 'jarvis_ops_owner', ARRAY['job_progress','procrastinate_events','procrastinate_jobs','procrastinate_periodic_defers','procrastinate_workers','schema_migrations'], ARRAY['procrastinate_events_id_seq','procrastinate_jobs_id_seq','procrastinate_periodic_defers_id_seq'], ARRAY['procrastinate_cancel_job_v1','procrastinate_defer_jobs_v1','procrastinate_defer_periodic_job_v2','procrastinate_fetch_job_v2','procrastinate_finish_job_v1','procrastinate_notify_queue_abort_job_v1','procrastinate_notify_queue_job_inserted_v1','procrastinate_prune_stalled_workers_v1','procrastinate_register_worker_v1','procrastinate_retry_job_v1','procrastinate_retry_job_v2','procrastinate_trigger_abort_requested_events_procedure_v1','procrastinate_trigger_function_scheduled_events_v1','procrastinate_trigger_function_status_events_insert_v1','procrastinate_trigger_function_status_events_update_v1','procrastinate_unlink_periodic_defers_v1','procrastinate_unregister_worker_v1','procrastinate_update_heartbeat_v1'], ARRAY['procrastinate_job_event_type','procrastinate_job_status','procrastinate_job_to_defer_v1'])
+        ) AS domains(schema_name, owner_role, tables, sequences, functions, types)
+    LOOP
+        FOREACH object_name IN ARRAY domain.tables LOOP
+            SELECT n.nspname INTO source_schema
+            FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace
+            WHERE c.relname = object_name AND c.relkind IN ('r', 'p')
+            ORDER BY CASE n.nspname WHEN domain.schema_name THEN 0 WHEN 'public' THEN 1 ELSE 2 END
+            LIMIT 1;
+            IF source_schema = 'public' THEN
+                EXECUTE format('ALTER TABLE public.%I SET SCHEMA %I', object_name, domain.schema_name);
+            END IF;
+            EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', domain.schema_name, object_name, domain.owner_role);
+        END LOOP;
+
+        FOREACH object_name IN ARRAY domain.types LOOP
+            SELECT n.nspname INTO source_schema
+            FROM pg_type AS t JOIN pg_namespace AS n ON n.oid = t.typnamespace
+            WHERE t.typname = object_name AND t.typtype IN ('c', 'e')
+            LIMIT 1;
+            IF source_schema = 'public' THEN
+                EXECUTE format('ALTER TYPE public.%I SET SCHEMA %I', object_name, domain.schema_name);
+            END IF;
+            EXECUTE format('ALTER TYPE %I.%I OWNER TO %I', domain.schema_name, object_name, domain.owner_role);
+        END LOOP;
+
+        FOR function_record IN
+            SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS arguments
+            FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+            WHERE p.proname = ANY(domain.functions)
+              AND n.nspname IN ('public', domain.schema_name)
+        LOOP
+            IF function_record.nspname = 'public' THEN
+                EXECUTE format('ALTER FUNCTION public.%I(%s) SET SCHEMA %I', function_record.proname, function_record.arguments, domain.schema_name);
+            END IF;
+            EXECUTE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I', domain.schema_name, function_record.proname, function_record.arguments, domain.owner_role);
+        END LOOP;
+    END LOOP;
+
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner'),
+                ('research', 'jarvis_research_owner'),
+                ('learning', 'jarvis_learning_owner'),
+                ('ops', 'jarvis_ops_owner')
+        ) AS domains(schema_name, owner_role)
+    LOOP
+        EXECUTE format('ALTER SCHEMA %I OWNER TO %I', domain.schema_name, domain.owner_role);
+    END LOOP;
+END $$;
+
+ALTER TABLE ops.schema_migrations ADD COLUMN IF NOT EXISTS sha256 text;
+UPDATE ops.schema_migrations
+SET sha256 = CASE version
+    WHEN 102 THEN 'f51c3cc62b967d409df7499ead7a94048c541ac268d8e7cb447d9b03abe7bdfa'
+    WHEN 103 THEN '226474caf5f3a430fc3f4d743d1281e7bc0bad2d8980aa40c1f2924a3774dbc0'
+    WHEN 104 THEN '769d1200264aa4c0beb3b6ad36f962a1a0dc520a86712e82b15f26eaa2c79739'
+    WHEN 105 THEN 'b4efa848f481af8f2fa90d245c6121f1dc90ecc484001882e547aaa1b4073aa3'
+    WHEN 106 THEN 'b57b13bbc0a5ca75d4dabf76f59933600729c5052a0c9588bd47e1c42c25a0c1'
+    WHEN 107 THEN '46172fdc5701b936ad2883a0bf1cff2c88acc3f828ab04502d23bb54a5978283'
+    WHEN 108 THEN '3258edd25894f27cf4ba3c30f743138229219ddd763838200c6e93d41a49f193'
+    WHEN 109 THEN '1c4396cba72df96c0cd86eeff08f073bc6868a7bed8ecc2633e6a722bfdaf53b'
+    WHEN 110 THEN '1b18c151f5d578167a4287fc6186539e91838825982ce5d362d205a7768e538c'
+    WHEN 111 THEN '2948ac6cef69a389a43cc86493b81bfab3ebf35084c5a95a2092d95e3e29db87'
+    WHEN 112 THEN 'f6fe06effb8f3c3df36baa07e0a065a25ff102c5bec192df2c826367d4c1a200'
+    WHEN 113 THEN '46898962d09327d0c7ffd5ac13d272d8e092ea41a9ca1c664436b2f6a35431f6'
+END
+WHERE version BETWEEN 102 AND 113;
+DO $$
+BEGIN
+    ALTER TABLE ops.schema_migrations
+        ADD CONSTRAINT schema_migrations_sha256_format
+        CHECK (sha256 IS NULL OR sha256 ~ '^[0-9a-f]{64}$') NOT VALID;
+EXCEPTION WHEN duplicate_object THEN
+    NULL;
+END $$;
+ALTER TABLE ops.schema_migrations VALIDATE CONSTRAINT schema_migrations_sha256_format;
+
+DO $$
+DECLARE
+    domain record;
+    object_name text;
+BEGIN
+    FOR domain IN
+        SELECT * FROM (
+            VALUES
+                ('platform', 'jarvis_platform_owner', 'jarvis_platform_runtime'),
+                ('research', 'jarvis_research_owner', 'jarvis_research_runtime'),
+                ('learning', 'jarvis_learning_owner', 'jarvis_learning_runtime'),
+                ('ops', 'jarvis_ops_owner', NULL::text)
+        ) AS domains(schema_name, owner_role, runtime_role)
+    LOOP
+        EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM PUBLIC', domain.schema_name);
+        EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC', domain.schema_name);
+        EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC', domain.schema_name);
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO jarvis_legacy_rollback', domain.schema_name);
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO jarvis_backup_reader, jarvis_restore_operator', domain.schema_name);
+        EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO jarvis_backup_reader, jarvis_restore_operator', domain.schema_name);
+        EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO jarvis_backup_reader, jarvis_restore_operator', domain.schema_name);
+        IF domain.runtime_role IS NOT NULL THEN
+            EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+            EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+            EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+            EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', domain.schema_name, domain.runtime_role);
+        END IF;
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON TABLES FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE ALL ON SEQUENCES FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I REVOKE USAGE ON TYPES FROM PUBLIC', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON TABLES TO jarvis_backup_reader, jarvis_restore_operator', domain.owner_role, domain.schema_name);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO jarvis_backup_reader, jarvis_restore_operator', domain.owner_role, domain.schema_name);
+        IF domain.runtime_role IS NOT NULL THEN
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE ON TYPES TO %I', domain.owner_role, domain.schema_name, domain.runtime_role);
+        END IF;
+    END LOOP;
+
+    -- Transitional seams are intentionally relation-specific until their API replacements land.
+    FOREACH object_name IN ARRAY ARRAY['audit_log','magic_link_tokens','sessions','system_events','user_config','users','webauthn_challenges'] LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON platform.%I TO jarvis_research_runtime', object_name);
+    END LOOP;
+    FOREACH object_name IN ARRAY ARRAY['cards','daily_log','decks','journal_entries','milestones','project_papers','projects','review_logs','scheduled_nudges','task_paper_links','tasks'] LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON learning.%I TO jarvis_research_runtime', object_name);
+    END LOOP;
+    FOREACH object_name IN ARRAY ARRAY['job_progress','procrastinate_events','procrastinate_jobs','procrastinate_periodic_defers','procrastinate_workers'] LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ops.%I TO jarvis_research_runtime, jarvis_learning_runtime', object_name);
+    END LOOP;
+    FOREACH object_name IN ARRAY ARRAY['llm_usage_log','user_config','users'] LOOP
+        EXECUTE format('GRANT SELECT ON platform.%I TO jarvis_learning_runtime', object_name);
+    END LOOP;
+    GRANT INSERT, UPDATE ON platform.user_config TO jarvis_learning_runtime;
+    FOREACH object_name IN ARRAY ARRAY['paper_chunks','paper_recommendations','paper_summaries','paper_user_state','paper_user_zotero_links','papers','thread','user_library'] LOOP
+        EXECUTE format('GRANT SELECT ON research.%I TO jarvis_learning_runtime', object_name);
+    END LOOP;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform, learning, ops TO jarvis_research_runtime;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform, research, ops TO jarvis_learning_runtime;
+    GRANT USAGE ON SCHEMA ops TO jarvis_platform_runtime;
+    GRANT USAGE ON SCHEMA platform, learning, ops TO jarvis_research_runtime;
+    GRANT USAGE ON SCHEMA platform, research, ops TO jarvis_learning_runtime;
+    GRANT SELECT ON ops.schema_migrations TO jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ops TO jarvis_research_runtime, jarvis_learning_runtime;
+    GRANT USAGE ON SCHEMA ops TO jarvis_migrator;
+    GRANT SELECT, INSERT ON ops.schema_migrations TO jarvis_migrator;
+
+    GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, jarvis_ops_owner
+        TO jarvis_migrator;
+
+    ALTER ROLE jarvis_platform_owner SET search_path TO platform, pg_catalog;
+    ALTER ROLE jarvis_research_owner SET search_path TO research, pg_catalog;
+    ALTER ROLE jarvis_learning_owner SET search_path TO learning, pg_catalog;
+    ALTER ROLE jarvis_ops_owner SET search_path TO ops, pg_catalog;
+    ALTER ROLE jarvis_platform_runtime SET search_path TO platform, ops, public, pg_catalog;
+    ALTER ROLE jarvis_research_runtime SET search_path TO research, platform, learning, ops, public, pg_catalog;
+    ALTER ROLE jarvis_learning_runtime SET search_path TO learning, research, platform, ops, public, pg_catalog;
+    ALTER ROLE jarvis_migrator SET search_path TO ops, platform, research, learning, public, pg_catalog;
+    ALTER ROLE jarvis_legacy_rollback SET search_path TO platform, research, learning, ops, public, pg_catalog;
+END $$;
+
+-- The migration runner records this migration after this statement.  Keep its
+-- unqualified compatibility insert resolving to the moved metadata relation.
+SET search_path TO ops, public, pg_catalog;
+
+UPDATE ops.schema_migrations
+SET sha256 = 'd05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374'
+WHERE version = 114;
+
+-- 0115: owner-local cross-domain commands and Platform erasure coordination.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jarvis_erasure_executor') THEN
+        CREATE ROLE jarvis_erasure_executor NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+            NOINHERIT NOREPLICATION NOBYPASSRLS;
+    END IF;
+END $$;
+SET ROLE jarvis_research_owner;
+CREATE TABLE IF NOT EXISTS research.domain_events (
+    id uuid PRIMARY KEY,
+    event_type text NOT NULL CHECK (event_type IN ('paper.read', 'paper.deleted')),
+    user_id bigint NOT NULL,
+    paper_id bigint NOT NULL,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at timestamptz NOT NULL DEFAULT NOW(),
+    last_error text,
+    delivered_at timestamptz,
+    dead_lettered_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS research_domain_events_pending_idx
+    ON research.domain_events (next_attempt_at, created_at)
+    WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS research_domain_events_active_deletion_idx
+    ON research.domain_events (event_type, user_id, paper_id)
+    WHERE event_type = 'paper.deleted'
+      AND delivered_at IS NULL AND dead_lettered_at IS NULL;
+CREATE TABLE IF NOT EXISTS research.pending_paper_deletions (
+    event_id uuid PRIMARY KEY REFERENCES research.domain_events (id) ON DELETE CASCADE,
+    user_id bigint NOT NULL, paper_id bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS research.zotero_push_claims (
+    paper_id bigint NOT NULL, user_id bigint NOT NULL, lease_id uuid NOT NULL,
+    lease_expires_at timestamptz NOT NULL, PRIMARY KEY (paper_id, user_id)
+);
+CREATE OR REPLACE FUNCTION research.erase_user_data(p_user_id bigint)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = research, pg_catalog
+AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_user_id <= 0 THEN
+        RAISE EXCEPTION 'research erasure caller is not allowed';
+    END IF;
+    DELETE FROM research.pending_paper_deletions WHERE user_id = p_user_id;
+    DELETE FROM research.domain_events WHERE user_id = p_user_id;
+    DELETE FROM research.zotero_push_claims WHERE user_id = p_user_id;
+    DELETE FROM research.author_alert_log WHERE user_id = p_user_id;
+    DELETE FROM research.paper_contradictions WHERE user_id = p_user_id;
+    DELETE FROM research.paper_entities WHERE user_id = p_user_id;
+    DELETE FROM research.paper_extractions WHERE user_id = p_user_id;
+    DELETE FROM research.paper_highlights WHERE user_id = p_user_id;
+    DELETE FROM research.paper_notes WHERE user_id = p_user_id;
+    DELETE FROM research.paper_recommendations WHERE user_id = p_user_id;
+    DELETE FROM research.paper_summaries WHERE user_id = p_user_id;
+    DELETE FROM research.paper_user_state WHERE user_id = p_user_id;
+    DELETE FROM research.paper_user_zotero_links WHERE user_id = p_user_id;
+    DELETE FROM research.pulse_cards WHERE user_id = p_user_id;
+    DELETE FROM research.pulse_decks WHERE user_id = p_user_id;
+    DELETE FROM research.pulse_models WHERE user_id = p_user_id;
+    DELETE FROM research.recommendation_feedback WHERE user_id = p_user_id;
+    DELETE FROM research.source_health WHERE user_id = p_user_id;
+    DELETE FROM research.source_run_history WHERE user_id = p_user_id;
+    DELETE FROM research.thread WHERE user_id = p_user_id;
+    DELETE FROM research.tracked_authors WHERE user_id = p_user_id;
+    DELETE FROM research.user_library WHERE user_id = p_user_id;
+    DELETE FROM research.user_topic_subscriptions WHERE user_id = p_user_id;
+END;
+$$;
+REVOKE ALL ON FUNCTION research.erase_user_data(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION research.erase_user_data(bigint) TO jarvis_research_runtime;
+
+SET ROLE jarvis_learning_owner;
+CREATE TABLE IF NOT EXISTS learning.domain_commands (
+    id uuid PRIMARY KEY,
+    command_type text NOT NULL CHECK (command_type IN (
+        'paper.read', 'paper.deleted', 'project.zotero_collection', 'journal.upsert', 'user.erase'
+    )),
+    request_id text NOT NULL,
+    user_id bigint,
+    paper_id bigint,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    received_at timestamptz NOT NULL DEFAULT NOW(),
+    processed_at timestamptz,
+    acknowledgement_at timestamptz,
+    last_error text,
+    UNIQUE (command_type, request_id)
+);
+CREATE INDEX IF NOT EXISTS learning_domain_commands_pending_idx
+    ON learning.domain_commands (received_at) WHERE processed_at IS NULL;
+CREATE OR REPLACE FUNCTION learning.erase_user_data(p_user_id bigint, p_request_id text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = learning, pg_catalog
+AS $$
+BEGIN
+    IF session_user <> 'jarvis_learning_runtime' OR p_user_id <= 0 OR p_request_id = '' THEN
+        RAISE EXCEPTION 'learning erasure caller is not allowed';
+    END IF;
+    DELETE FROM learning.review_logs WHERE user_id = p_user_id;
+    DELETE FROM learning.cards WHERE user_id = p_user_id;
+    DELETE FROM learning.task_paper_links AS link USING learning.tasks AS task
+    WHERE link.task_id = task.id AND task.user_id = p_user_id;
+    DELETE FROM learning.tasks WHERE user_id = p_user_id;
+    DELETE FROM learning.project_papers AS link USING learning.projects AS project
+    WHERE link.project_id = project.id AND project.user_id = p_user_id;
+    DELETE FROM learning.project_questions WHERE user_id = p_user_id;
+    DELETE FROM learning.milestones WHERE user_id = p_user_id;
+    DELETE FROM learning.projects WHERE user_id = p_user_id;
+    DELETE FROM learning.decks WHERE user_id = p_user_id;
+    DELETE FROM learning.daily_intent WHERE user_id = p_user_id;
+    DELETE FROM learning.daily_log WHERE user_id = p_user_id;
+    DELETE FROM learning.focus_sessions WHERE user_id = p_user_id;
+    DELETE FROM learning.journal_entries WHERE user_id = p_user_id;
+    DELETE FROM learning.domain_commands
+    WHERE user_id = p_user_id AND request_id <> p_request_id;
+    UPDATE learning.domain_commands SET user_id = NULL, paper_id = NULL, payload = '{}'::jsonb
+    WHERE command_type = 'user.erase' AND request_id = p_request_id AND user_id = p_user_id;
+END;
+$$;
+REVOKE ALL ON FUNCTION learning.erase_user_data(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION learning.erase_user_data(bigint, text) TO jarvis_learning_runtime;
+
+SET ROLE jarvis_platform_owner;
+CREATE TABLE IF NOT EXISTS platform.erasure_requests (
+    request_id uuid PRIMARY KEY,
+    user_id bigint NOT NULL,
+    state text NOT NULL CHECK (state IN (
+        'requested', 'qdrant_pending', 'research_pending', 'learning_pending', 'ready',
+        'executing', 'complete', 'retry_wait', 'attention_required'
+    )),
+    resume_state text NOT NULL CHECK (resume_state IN (
+        'qdrant_pending', 'research_pending', 'learning_pending', 'executing'
+    )),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 8),
+    next_attempt_at timestamptz NOT NULL DEFAULT NOW(),
+    last_error text,
+    requested_at timestamptz NOT NULL DEFAULT NOW(),
+    eligible_at timestamptz NOT NULL DEFAULT NOW() + INTERVAL '30 days',
+    completed_at timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS platform_erasure_requests_one_active_user_idx
+    ON platform.erasure_requests (user_id)
+    WHERE state NOT IN ('complete', 'attention_required');
+CREATE TABLE IF NOT EXISTS platform.erasure_acknowledgements (
+    request_id uuid NOT NULL REFERENCES platform.erasure_requests (request_id) ON DELETE CASCADE,
+    domain text NOT NULL CHECK (domain IN ('qdrant', 'research', 'learning')),
+    receipt jsonb NOT NULL DEFAULT '{}'::jsonb,
+    acknowledged_at timestamptz NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (request_id, domain)
+);
+CREATE TABLE IF NOT EXISTS platform.audit_subjects (
+    id uuid PRIMARY KEY,
+    user_id bigint UNIQUE,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    updated_at timestamptz NOT NULL DEFAULT NOW()
+);
+ALTER TABLE platform.audit_log ADD COLUMN IF NOT EXISTS subject_id uuid;
+ALTER TABLE platform.audit_log ADD COLUMN IF NOT EXISTS caller_role text;
+CREATE INDEX IF NOT EXISTS audit_log_subject_id_idx
+    ON platform.audit_log (subject_id) WHERE subject_id IS NOT NULL;
+ALTER TABLE platform.audit_log DISABLE RULE no_update_audit_log;
+UPDATE platform.audit_log SET caller_role = 'jarvis_migrator' WHERE caller_role IS NULL;
+INSERT INTO platform.audit_subjects (id, user_id)
+SELECT md5('audit-subject:' || user_id)::uuid, user_id::bigint
+FROM platform.audit_log
+WHERE user_id ~ '^[0-9]+$'
+ON CONFLICT (user_id) DO NOTHING;
+UPDATE platform.audit_log AS event
+SET subject_id = subject.id,
+    user_id = NULL,
+    metadata = event.metadata - ARRAY[
+        'ip', 'client_ip', 'raw_client_ip', 'email', 'name', 'username',
+        'telegram_username', 'user_agent', 'user_id'
+    ]::text[]
+FROM platform.audit_subjects AS subject
+WHERE event.subject_id IS NULL AND event.user_id = subject.user_id::text;
+UPDATE platform.audit_log SET user_id = NULL,
+    metadata = metadata - ARRAY['ip', 'client_ip', 'raw_client_ip', 'email', 'name', 'username',
+        'telegram_username', 'user_agent', 'user_id']::text[]
+WHERE user_id IS NOT NULL;
+ALTER TABLE platform.audit_log ENABLE RULE no_update_audit_log;
+ALTER TABLE platform.audit_log ALTER COLUMN caller_role SET NOT NULL;
+ALTER TABLE platform.audit_log ADD CONSTRAINT audit_log_caller_role_check CHECK (
+    caller_role IN (
+        'jarvis_migrator', 'jarvis_platform_runtime',
+        'jarvis_research_runtime', 'jarvis_learning_runtime'
+    )
+);
+CREATE OR REPLACE FUNCTION platform.append_audit_event(
+    p_user_id text, p_action text, p_resource text, p_metadata jsonb
+) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog
+AS $$
+DECLARE
+    v_subject_id uuid;
+BEGIN
+    IF session_user NOT IN ('jarvis_platform_runtime', 'jarvis_research_runtime', 'jarvis_learning_runtime') THEN
+        RAISE EXCEPTION 'audit caller is not allowed';
+    END IF;
+    IF p_action !~ '^[a-z][a-z0-9_.:-]{0,127}$'
+       OR p_resource !~ '^/?[a-z][a-z0-9_./:-]{0,255}$'
+       OR jsonb_typeof(COALESCE(p_metadata, '{}'::jsonb)) <> 'object'
+       OR EXISTS (SELECT 1 FROM jsonb_each(COALESCE(p_metadata, '{}'::jsonb)) AS item(key, value)
+                  WHERE item.key !~ '^[a-z_][a-z0-9_]{0,63}$'
+                     OR jsonb_typeof(item.value) NOT IN ('boolean', 'number', 'null')) THEN
+        RAISE EXCEPTION 'audit event has unsafe shape';
+    END IF;
+    IF p_user_id ~ '^[0-9]+$' THEN
+        SELECT id INTO v_subject_id FROM platform.audit_subjects WHERE user_id = p_user_id::bigint;
+        IF v_subject_id IS NULL THEN
+            v_subject_id := gen_random_uuid();
+            INSERT INTO platform.audit_subjects (id, user_id)
+            VALUES (v_subject_id, p_user_id::bigint)
+            ON CONFLICT (user_id) DO UPDATE SET updated_at = NOW()
+            RETURNING id INTO v_subject_id;
+        END IF;
+    END IF;
+    INSERT INTO platform.audit_log (
+        subject_id, user_id, caller_role, action, resource, metadata
+    ) VALUES (
+        v_subject_id, NULL, session_user, p_action, p_resource,
+        COALESCE(p_metadata, '{}'::jsonb)
+    );
+END;
+$$;
+REVOKE ALL ON FUNCTION platform.append_audit_event(text, text, text, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION platform.append_audit_event(text, text, text, jsonb)
+    TO jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
+REVOKE INSERT, UPDATE, DELETE ON platform.audit_log, platform.audit_subjects
+    FROM jarvis_platform_runtime;
+CREATE OR REPLACE FUNCTION platform.finalize_erasure(p_request_id uuid)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog
+AS $$
+DECLARE v_user_id bigint;
+BEGIN
+    IF session_user <> 'jarvis_erasure_executor' THEN RAISE EXCEPTION 'erasure finalizer is executor-only'; END IF;
+    SELECT er.user_id INTO v_user_id
+    FROM platform.erasure_requests AS er
+    JOIN platform.users AS users ON users.id = er.user_id
+    WHERE er.request_id = p_request_id AND er.state = 'ready'
+      AND er.eligible_at <= NOW() AND users.deleted_at IS NOT NULL
+      AND users.deleted_at + INTERVAL '30 days' <= NOW()
+    FOR UPDATE OF er, users;
+    IF v_user_id IS NULL THEN RETURN FALSE; END IF;
+    UPDATE platform.erasure_requests SET state = 'executing'
+    WHERE request_id = p_request_id AND state = 'ready';
+    IF (SELECT count(*) FROM platform.erasure_acknowledgements WHERE request_id = p_request_id AND domain IN ('qdrant', 'research', 'learning')) <> 3
+       OR COALESCE((SELECT (receipt->>'residual_points')::int FROM platform.erasure_acknowledgements WHERE request_id = p_request_id AND domain = 'qdrant'), -1) <> 0 THEN
+        RAISE EXCEPTION 'erasure acknowledgements are incomplete';
+    END IF;
+    DELETE FROM platform.audit_subjects WHERE user_id = v_user_id;
+    DELETE FROM platform.users WHERE id = v_user_id AND deleted_at IS NOT NULL;
+    IF NOT FOUND THEN RAISE EXCEPTION 'erasure account is no longer disabled'; END IF;
+    UPDATE platform.erasure_requests SET state = 'complete', completed_at = NOW()
+    WHERE request_id = p_request_id AND state = 'executing';
+    RETURN TRUE;
+END;
+$$;
+REVOKE ALL ON FUNCTION platform.finalize_erasure(uuid) FROM PUBLIC;
+GRANT USAGE ON SCHEMA platform TO jarvis_erasure_executor;
+GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_executor;
+RESET ROLE;
+SET search_path TO ops, public, pg_catalog;
+
+UPDATE ops.schema_migrations
+SET sha256 = 'f0bffa08d071b9bcd576f981d3e9db7074f63c1a2e538a5bd8acf4c181c41d46'
+WHERE version = 115;
+
+-- 0116: Platform-owned unified jobs facade and durable queue ownership.
+SET ROLE jarvis_ops_owner;
+CREATE TABLE ops.job_owner_registry (
+    task_name text PRIMARY KEY,
+    queue_name text NOT NULL,
+    service_name text NOT NULL CHECK (service_name IN ('research', 'learning')),
+    CHECK ((service_name = 'research' AND queue_name = 'paper_ingestion')
+        OR (service_name = 'learning' AND queue_name = 'learning_engine'))
+);
+INSERT INTO ops.job_owner_registry (task_name, queue_name, service_name) VALUES
+    ('paper.process','paper_ingestion','research'), ('paper.analyze','paper_ingestion','research'),
+    ('papers.batch_process','paper_ingestion','research'), ('papers.batch_summarize','paper_ingestion','research'),
+    ('papers.process_library','paper_ingestion','research'), ('papers.scan_local','paper_ingestion','research'),
+    ('paper.summarize','paper_ingestion','research'), ('citations.batch_fetch','paper_ingestion','research'),
+    ('digest.weekly','paper_ingestion','research'), ('extraction.single','paper_ingestion','research'),
+    ('extraction.batch','paper_ingestion','research'), ('contradictions.scan','paper_ingestion','research'),
+    ('pulse.generate','paper_ingestion','research'), ('pulse.train_classifier','paper_ingestion','research'),
+    ('model.pull','paper_ingestion','research'), ('zotero.push','paper_ingestion','research'),
+    ('zotero.resync','paper_ingestion','research'), ('zotero.sync_from_zotero','paper_ingestion','research'),
+    ('zotero.sync_annotations','paper_ingestion','research'), ('zotero.push_highlights','paper_ingestion','research'),
+    -- Registered so the test-only kind the public jobs API exposes under
+    -- JARVIS_ENABLE_TEST_JOBS=1 can be deferred like any other job.
+    ('noop.test','paper_ingestion','research'),
+    ('card.generate','learning_engine','learning'), ('card.generate_batch','learning_engine','learning');
+ALTER TABLE ops.procrastinate_jobs ADD COLUMN owner_queue text, ADD COLUMN owner_service text;
+CREATE OR REPLACE FUNCTION ops.enforce_job_owner_metadata_v1() RETURNS trigger
+LANGUAGE plpgsql SET search_path = ops, pg_catalog AS $$
+DECLARE owner_record ops.job_owner_registry%ROWTYPE;
+BEGIN
+    IF NOT (NEW.args ? 'job_id') THEN RETURN NEW; END IF;
+    SELECT * INTO owner_record FROM ops.job_owner_registry WHERE task_name = NEW.task_name;
+    IF NOT FOUND OR NEW.queue_name <> owner_record.queue_name THEN
+        RAISE EXCEPTION 'job queue does not match task owner';
+    END IF;
+    IF (NEW.owner_queue IS NOT NULL AND NEW.owner_queue <> owner_record.queue_name)
+       OR (NEW.owner_service IS NOT NULL AND NEW.owner_service <> owner_record.service_name) THEN
+        RAISE EXCEPTION 'job owner metadata does not match task owner';
+    END IF;
+    NEW.owner_queue := owner_record.queue_name; NEW.owner_service := owner_record.service_name;
+    RETURN NEW;
+END; $$;
+CREATE TRIGGER procrastinate_jobs_owner_guard_v1 BEFORE INSERT OR UPDATE OF queue_name, task_name, owner_queue, owner_service
+ON ops.procrastinate_jobs FOR EACH ROW EXECUTE FUNCTION ops.enforce_job_owner_metadata_v1();
+CREATE OR REPLACE VIEW ops.jarvis_jobs_rollback_v1 AS
+SELECT args->>'job_id' AS id, task_name AS kind, args->>'user_id' AS user_id,
+       args - 'job_id' - 'user_id' AS payload, status::text AS raw_status
+FROM ops.procrastinate_jobs WHERE args ? 'job_id';
+CREATE OR REPLACE FUNCTION ops.jarvis_job_read_v1(p_job_id text)
+RETURNS TABLE (id bigint, queue_name varchar, task_name varchar, status ops.procrastinate_job_status, args jsonb, attempts integer, progress real, progress_message text, result jsonb, error jsonb, created_at timestamptz, started_at timestamptz, finished_at timestamptz)
+LANGUAGE sql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+    SELECT job.id, job.queue_name, job.task_name, job.status, job.args, job.attempts, progress.progress, progress.message, progress.result, progress.error,
+      (SELECT min(event.at) FROM ops.procrastinate_events event WHERE event.job_id = job.id),
+      (SELECT min(event.at) FROM ops.procrastinate_events event WHERE event.job_id = job.id AND event.type = 'started'),
+      (SELECT max(event.at) FROM ops.procrastinate_events event WHERE event.job_id = job.id AND event.type IN ('succeeded','failed','cancelled','aborted'))
+    FROM ops.procrastinate_jobs job LEFT JOIN ops.job_progress progress ON progress.jarvis_job_id = job.args->>'job_id'
+    WHERE job.args->>'job_id' = p_job_id ORDER BY job.id DESC LIMIT 1 $$;
+CREATE OR REPLACE FUNCTION ops.jarvis_job_list_v1(p_status text, p_kind text, p_user_id text, p_limit integer)
+RETURNS TABLE (id text, kind varchar, user_id text, status text, payload jsonb, result jsonb, error jsonb, progress double precision, progress_message text, created_at timestamptz, started_at timestamptz, finished_at timestamptz, source text)
+LANGUAGE sql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+    SELECT job.args->>'job_id', job.task_name, job.args->>'user_id', CASE job.status WHEN 'todo' THEN 'queued' WHEN 'doing' THEN 'running' WHEN 'aborting' THEN 'running' WHEN 'aborted' THEN 'cancelled' ELSE job.status::text END, job.args - 'job_id' - 'user_id', progress.result, progress.error, COALESCE(progress.progress,0)::double precision, progress.message,
+      (SELECT min(event.at) FROM ops.procrastinate_events event WHERE event.job_id = job.id),
+      (SELECT min(event.at) FROM ops.procrastinate_events event WHERE event.job_id = job.id AND event.type = 'started'),
+      (SELECT max(event.at) FROM ops.procrastinate_events event WHERE event.job_id = job.id AND event.type IN ('succeeded','failed','cancelled','aborted')), 'procrastinate'
+    FROM ops.procrastinate_jobs job LEFT JOIN ops.job_progress progress ON progress.jarvis_job_id = job.args->>'job_id'
+    WHERE job.args ? 'job_id' AND (p_kind IS NULL OR job.task_name = p_kind) AND ((p_user_id IS NULL AND job.args->>'user_id' IS NULL) OR job.args->>'user_id' = p_user_id)
+      AND (p_status IS NULL OR (p_status = 'active' AND job.status IN ('todo','doing','aborting'))
+        OR (p_status = 'queued' AND job.status = 'todo') OR (p_status = 'running' AND job.status IN ('doing','aborting'))
+        OR (p_status = 'cancelled' AND job.status IN ('cancelled','aborted')) OR p_status = job.status::text)
+    ORDER BY job.id DESC LIMIT LEAST(GREATEST(p_limit,1),500) $$;
+CREATE OR REPLACE FUNCTION ops.jarvis_job_cancel_v1(p_job_id text, p_user_id text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+BEGIN
+    UPDATE ops.procrastinate_jobs SET abort_requested = true, status = CASE status WHEN 'todo' THEN 'cancelled'::ops.procrastinate_job_status ELSE status END
+    WHERE args->>'job_id' = p_job_id AND args->>'user_id' = p_user_id AND status IN ('todo','doing');
+    RETURN FOUND;
+END; $$;
+REVOKE ALL ON ALL TABLES IN SCHEMA ops FROM jarvis_platform_runtime;
+REVOKE ALL ON FUNCTION ops.jarvis_job_read_v1(text), ops.jarvis_job_list_v1(text,text,text,integer), ops.jarvis_job_cancel_v1(text,text) FROM PUBLIC;
+GRANT USAGE ON SCHEMA ops TO jarvis_platform_runtime;
+GRANT EXECUTE ON FUNCTION ops.jarvis_job_read_v1(text), ops.jarvis_job_list_v1(text,text,text,integer), ops.jarvis_job_cancel_v1(text,text) TO jarvis_platform_runtime;
+GRANT SELECT ON ops.jarvis_jobs_rollback_v1 TO jarvis_legacy_rollback;
+RESET ROLE;
+SET search_path TO ops, public, pg_catalog;
+UPDATE ops.schema_migrations SET sha256 = '30852fdba224eca98935cf2011dc112532c40e7c61159c5f43cdc8c565b486e3' WHERE version = 116;
+
+BEGIN;
+-- Owner-local configuration delivery and exact cross-domain capabilities.
+
+SET LOCAL ROLE jarvis_platform_owner;
+
+CREATE TABLE platform.config_deliveries (
+    scope_user_id bigint NOT NULL CHECK (scope_user_id >= 0),
+    actor_user_id bigint CHECK (actor_user_id IS NULL OR actor_user_id > 0),
+    key text NOT NULL CHECK (key ~ '^[a-z][a-z0-9_.-]{0,127}$'),
+    delivery_id uuid NOT NULL UNIQUE,
+    user_role text CHECK (user_role IS NULL OR user_role IN ('member', 'admin')),
+    session_id text,
+    zotero_scope_changed boolean NOT NULL DEFAULT FALSE,
+    state text NOT NULL CHECK (state IN ('pending', 'applied', 'failed')),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 8),
+    next_attempt_at timestamptz NOT NULL DEFAULT NOW(),
+    last_error text,
+    updated_at timestamptz NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (scope_user_id, key),
+    CHECK (state <> 'pending' OR actor_user_id IS NOT NULL)
+);
+CREATE INDEX config_deliveries_due_idx
+    ON platform.config_deliveries (next_attempt_at, updated_at)
+    WHERE state = 'pending';
+REVOKE ALL ON platform.config_deliveries FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE, DELETE ON platform.config_deliveries
+    TO jarvis_platform_runtime;
+
+CREATE OR REPLACE FUNCTION platform.upsert_config_v1(
+    p_user_id bigint, p_key text, p_value jsonb, p_encrypted_value bytea
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' OR p_key !~ '^[a-z][a-z0-9_.-]{0,127}$'
+       OR (p_value IS NOT NULL AND p_encrypted_value IS NOT NULL) THEN
+        RAISE EXCEPTION 'configuration write is not allowed';
+    END IF;
+    INSERT INTO platform.user_config (user_id, key, value, encrypted_value)
+    VALUES (p_user_id, p_key, p_value, p_encrypted_value)
+    ON CONFLICT (user_id, key) DO UPDATE
+    SET value = EXCLUDED.value, encrypted_value = EXCLUDED.encrypted_value, updated_at = NOW();
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.reencrypt_config_v1(p_id integer, p_ciphertext bytea)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' OR p_ciphertext IS NULL THEN
+        RAISE EXCEPTION 'configuration re-encryption is not allowed';
+    END IF;
+    UPDATE platform.user_config SET value = NULL, encrypted_value = p_ciphertext,
+        updated_at = NOW() WHERE id = p_id AND value IS NOT NULL AND encrypted_value IS NULL;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.set_research_config_v1(
+    p_user_id bigint, p_key text, p_value jsonb, p_mode text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime'
+       OR p_mode NOT IN ('insert', 'upsert', 'delete')
+       OR NOT (
+           p_key IN ('zotero.last_library_version', 'scheduler.auto_pipeline.last_run',
+                     'pulse.classifier_opt_in', 'pulse.cron',
+                     'system.models_autoconfigured', 'llm.smart_model', 'llm.fast_model')
+           OR p_key ~ '^llm\.[a-zA-Z0-9_.-]{1,128}\.(smart|fast)_num_ctx$'
+       ) THEN
+        RAISE EXCEPTION 'research configuration capability is not allowed';
+    END IF;
+    IF p_mode = 'delete' THEN
+        DELETE FROM platform.user_config
+        WHERE user_id IS NOT DISTINCT FROM p_user_id AND key = p_key;
+    ELSIF p_mode = 'insert' THEN
+        INSERT INTO platform.user_config (user_id, key, value)
+        VALUES (p_user_id, p_key, p_value)
+        ON CONFLICT (user_id, key) DO NOTHING;
+    ELSE
+        INSERT INTO platform.user_config (user_id, key, value)
+        VALUES (p_user_id, p_key, p_value)
+        ON CONFLICT (user_id, key) DO UPDATE
+        SET value = EXCLUDED.value, encrypted_value = NULL, updated_at = NOW();
+    END IF;
+    RETURN FOUND;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.append_system_event_v1(
+    p_level text, p_category text, p_source text, p_message text,
+    p_context jsonb, p_correlation_id uuid
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user NOT IN ('jarvis_platform_runtime', 'jarvis_research_runtime',
+                            'jarvis_learning_runtime')
+       OR p_level NOT IN ('debug', 'info', 'warning', 'error', 'critical')
+       OR p_category NOT IN ('error', 'job', 'source', 'auth', 'config', 'infra')
+       OR length(p_source) NOT BETWEEN 1 AND 200
+       OR length(p_message) NOT BETWEEN 1 AND 65535
+       OR jsonb_typeof(COALESCE(p_context, '{}'::jsonb)) <> 'object'
+       OR pg_column_size(COALESCE(p_context, '{}'::jsonb)) > 65536 THEN
+        RAISE EXCEPTION 'system event has unsafe shape';
+    END IF;
+    INSERT INTO platform.system_events
+        (level, category, source, message, context, correlation_id)
+    VALUES (p_level, p_category, p_source, p_message,
+            COALESCE(p_context, '{}'::jsonb), p_correlation_id);
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.mint_session_v1(
+    p_user_id bigint, p_expires_at timestamptz, p_credential_id uuid
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE v_id uuid;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' OR p_expires_at <= NOW()
+       OR NOT EXISTS (SELECT 1 FROM platform.users WHERE id = p_user_id AND deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'session mint is not allowed';
+    END IF;
+    INSERT INTO platform.sessions (user_id, expires_at, credential_id)
+    VALUES (p_user_id, p_expires_at, p_credential_id) RETURNING id INTO v_id;
+    RETURN v_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.renew_session_v1(
+    p_session_id text, p_ttl interval, p_renew_after interval
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE v_id uuid;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' OR p_ttl <= interval '0'
+       OR p_renew_after <= interval '0' OR p_renew_after >= p_ttl THEN
+        RAISE EXCEPTION 'session renewal is not allowed';
+    END IF;
+    UPDATE platform.sessions SET expires_at = NOW() + p_ttl
+    WHERE id = p_session_id::uuid AND revoked_at IS NULL AND expires_at > NOW()
+      AND expires_at < NOW() + p_ttl - p_renew_after RETURNING id INTO v_id;
+    RETURN v_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.purge_identity_retention_v1(p_operation text)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE v_count integer;
+BEGIN
+    IF session_user <> 'jarvis_research_runtime'
+       OR p_operation NOT IN ('sessions', 'webauthn_challenges', 'magic_link_tokens') THEN
+        RAISE EXCEPTION 'identity retention capability is not allowed';
+    END IF;
+    IF p_operation = 'sessions' THEN
+        DELETE FROM platform.sessions
+        WHERE expires_at < NOW() - interval '30 days'
+           OR (revoked_at IS NOT NULL AND revoked_at < NOW() - interval '7 days');
+    ELSIF p_operation = 'webauthn_challenges' THEN
+        DELETE FROM platform.webauthn_challenges WHERE expires_at < NOW();
+    ELSE
+        DELETE FROM platform.magic_link_tokens WHERE expires_at < NOW() - interval '1 day';
+    END IF;
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.purge_system_events_v1(p_class text)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE v_count integer;
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_class NOT IN ('app', 'infra') THEN
+        RAISE EXCEPTION 'event retention capability is not allowed';
+    END IF;
+    IF p_class = 'infra' THEN
+        DELETE FROM platform.system_events
+        WHERE category = 'infra' AND created_at < NOW() - interval '7 days';
+    ELSE
+        DELETE FROM platform.system_events
+        WHERE category <> 'infra' AND created_at < NOW() - interval '30 days';
+    END IF;
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.rotate_visibility_checkpoint_v1(
+    p_key text, p_generation text, p_recovery text, p_rotated_at text
+) RETURNS TABLE(value jsonb) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime'
+       OR p_key <> 'vector_visibility.checkpoint'
+       OR p_generation !~ '^[a-f0-9]{32}$' OR length(p_recovery) NOT BETWEEN 1 AND 128 THEN
+        RAISE EXCEPTION 'visibility checkpoint rotation is not allowed';
+    END IF;
+    RETURN QUERY INSERT INTO platform.user_config(user_id, key, value)
+    VALUES (NULL, p_key, jsonb_build_object(
+        'version', 1, 'visibility_generation', p_generation, 'status', 'pending',
+        'last_chunk_id', 0, 'qdrant_recovery', p_recovery, 'rotated_at', p_rotated_at))
+    ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    RETURNING user_config.value;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.claim_visibility_lease_v1(
+    p_key text, p_generation text, p_worker text, p_seconds integer
+) RETURNS TABLE(value jsonb) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'vector_visibility.checkpoint'
+       OR p_worker = '' OR p_seconds NOT BETWEEN 1 AND 3600 THEN
+        RAISE EXCEPTION 'visibility lease is not allowed';
+    END IF;
+    RETURN QUERY UPDATE platform.user_config
+    SET value = jsonb_set(jsonb_set(user_config.value, '{worker_lease_token}',
+            to_jsonb(p_worker), true), '{lease_expires_at}',
+            to_jsonb((NOW() + make_interval(secs => p_seconds))::text), true),
+        updated_at = NOW()
+    WHERE user_id IS NULL AND key = p_key
+      AND user_config.value->>'visibility_generation' = p_generation
+      AND user_config.value->>'status' = 'pending'
+      AND (user_config.value->>'worker_lease_token' IS NULL
+           OR user_config.value->>'worker_lease_token' = p_worker
+           OR NULLIF(user_config.value->>'lease_expires_at', '')::timestamptz <= NOW())
+    RETURNING user_config.value;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.advance_visibility_checkpoint_v1(
+    p_key text, p_generation text, p_worker text, p_chunk bigint, p_seconds integer
+) RETURNS TABLE(value jsonb) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'vector_visibility.checkpoint'
+       OR p_chunk < 0 OR p_seconds NOT BETWEEN 1 AND 3600 THEN
+        RAISE EXCEPTION 'visibility progress is not allowed';
+    END IF;
+    RETURN QUERY UPDATE platform.user_config
+    SET value = jsonb_set(jsonb_set(user_config.value, '{last_chunk_id}',
+            to_jsonb(GREATEST((user_config.value->>'last_chunk_id')::bigint, p_chunk)), true),
+            '{lease_expires_at}',
+            to_jsonb((NOW() + make_interval(secs => p_seconds))::text), true),
+        updated_at = NOW()
+    WHERE user_id IS NULL AND key = p_key
+      AND user_config.value->>'visibility_generation' = p_generation
+      AND user_config.value->>'status' = 'pending'
+      AND user_config.value->>'worker_lease_token' = p_worker
+      AND NULLIF(user_config.value->>'lease_expires_at', '')::timestamptz > NOW()
+    RETURNING user_config.value;
+END; $$;
+
+CREATE OR REPLACE FUNCTION platform.complete_visibility_checkpoint_v1(
+    p_key text, p_generation text, p_worker text
+) RETURNS TABLE(value jsonb) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_key <> 'vector_visibility.checkpoint' THEN
+        RAISE EXCEPTION 'visibility completion is not allowed';
+    END IF;
+    RETURN QUERY UPDATE platform.user_config
+    SET value = jsonb_set(user_config.value - 'worker_lease_token' - 'lease_expires_at',
+            '{status}', to_jsonb('complete'::text), true), updated_at = NOW()
+    WHERE user_id IS NULL AND key = p_key
+      AND user_config.value->>'visibility_generation' = p_generation
+      AND user_config.value->>'status' = 'pending'
+      AND user_config.value->>'worker_lease_token' = p_worker
+      AND NULLIF(user_config.value->>'lease_expires_at', '')::timestamptz > NOW()
+    RETURNING user_config.value;
+END; $$;
+
+REVOKE ALL ON FUNCTION platform.upsert_config_v1(bigint,text,jsonb,bytea),
+    platform.reencrypt_config_v1(integer,bytea),
+    platform.set_research_config_v1(bigint,text,jsonb,text),
+    platform.append_system_event_v1(text,text,text,text,jsonb,uuid),
+    platform.mint_session_v1(bigint,timestamptz,uuid),
+    platform.renew_session_v1(text,interval,interval),
+    platform.purge_identity_retention_v1(text), platform.purge_system_events_v1(text),
+    platform.rotate_visibility_checkpoint_v1(text,text,text,text),
+    platform.claim_visibility_lease_v1(text,text,text,integer),
+    platform.advance_visibility_checkpoint_v1(text,text,text,bigint,integer),
+    platform.complete_visibility_checkpoint_v1(text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION platform.upsert_config_v1(bigint,text,jsonb,bytea),
+    platform.reencrypt_config_v1(integer,bytea), platform.mint_session_v1(bigint,timestamptz,uuid),
+    platform.renew_session_v1(text,interval,interval) TO jarvis_platform_runtime;
+GRANT EXECUTE ON FUNCTION platform.set_research_config_v1(bigint,text,jsonb,text),
+    platform.purge_identity_retention_v1(text), platform.purge_system_events_v1(text),
+    platform.rotate_visibility_checkpoint_v1(text,text,text,text),
+    platform.claim_visibility_lease_v1(text,text,text,integer),
+    platform.advance_visibility_checkpoint_v1(text,text,text,bigint,integer),
+    platform.complete_visibility_checkpoint_v1(text,text,text) TO jarvis_research_runtime;
+GRANT EXECUTE ON FUNCTION platform.append_system_event_v1(text,text,text,text,jsonb,uuid)
+    TO jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
+GRANT USAGE ON SCHEMA platform TO jarvis_research_runtime, jarvis_learning_runtime;
+
+RESET ROLE;
+
+SET LOCAL ROLE jarvis_research_owner;
+
+CREATE OR REPLACE FUNCTION research.record_author_alert_v1(
+    p_author_id integer, p_paper_id integer, p_user_id integer
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN RAISE EXCEPTION 'author alert caller is not allowed'; END IF;
+    INSERT INTO research.author_alert_log (tracked_author_id, paper_id, user_id)
+    VALUES (p_author_id, p_paper_id, p_user_id)
+    ON CONFLICT (tracked_author_id, paper_id, user_id) DO NOTHING;
+    RETURN FOUND;
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.add_to_library_v1(
+    p_user_id integer, p_paper_id integer, p_added_via text
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN RAISE EXCEPTION 'library caller is not allowed'; END IF;
+    INSERT INTO research.user_library (user_id, paper_id, added_via)
+    VALUES (p_user_id, p_paper_id, p_added_via) ON CONFLICT (user_id, paper_id) DO NOTHING;
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.fan_out_library_v1(
+    p_user_ids integer[], p_paper_id integer
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+DECLARE v_count integer;
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR cardinality(p_user_ids) > 10000 THEN
+        RAISE EXCEPTION 'library fan-out caller is not allowed';
+    END IF;
+    INSERT INTO research.user_library (user_id, paper_id, added_via)
+    SELECT DISTINCT user_id, p_paper_id, 'auto_fetch_topic_match'
+    FROM unnest(p_user_ids) AS user_id
+    ON CONFLICT (user_id, paper_id) DO NOTHING;
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.upsert_paper_state_v1(
+    p_paper_id integer, p_user_id integer, p_state text, p_starred boolean, p_mode text
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user NOT IN ('jarvis_research_runtime', 'jarvis_learning_runtime')
+       OR p_mode NOT IN ('dynamic', 'first_sync', 'advance') THEN
+        RAISE EXCEPTION 'paper state caller is not allowed';
+    END IF;
+    IF session_user = 'jarvis_learning_runtime' THEN
+        IF p_user_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM research.papers p WHERE p.id = p_paper_id
+              AND (p.visibility_scope = 'public' OR EXISTS (
+                  SELECT 1 FROM research.user_library ul
+                  WHERE ul.paper_id = p.id AND ul.user_id = p_user_id))
+        ) THEN
+            RAISE EXCEPTION 'paper state owner mismatch';
+        END IF;
+    END IF;
+    IF p_mode = 'first_sync' THEN
+        INSERT INTO research.paper_user_state (paper_id, user_id, state, starred)
+        VALUES (p_paper_id, p_user_id, COALESCE(p_state, 'inbox'), COALESCE(p_starred, FALSE))
+        ON CONFLICT (paper_id, user_id) DO NOTHING;
+    ELSIF p_mode = 'advance' THEN
+        INSERT INTO research.paper_user_state (paper_id, user_id, state)
+        VALUES (p_paper_id, p_user_id, p_state)
+        ON CONFLICT (paper_id, user_id) DO UPDATE SET state = EXCLUDED.state
+        WHERE paper_user_state.state IN ('inbox', 'to_read');
+    ELSE
+        INSERT INTO research.paper_user_state (paper_id, user_id, state, starred)
+        VALUES (p_paper_id, p_user_id, COALESCE(p_state, 'inbox'), COALESCE(p_starred, FALSE))
+        ON CONFLICT (paper_id, user_id) DO UPDATE SET
+            state = COALESCE(p_state, paper_user_state.state),
+            starred = COALESCE(p_starred, paper_user_state.starred);
+    END IF;
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.star_paper_v1(p_paper_id integer, p_user_id integer)
+RETURNS TABLE(is_new_row boolean, prev_starred boolean) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN RAISE EXCEPTION 'paper star caller is not allowed'; END IF;
+    RETURN QUERY WITH before AS (
+        SELECT starred FROM research.paper_user_state
+        WHERE paper_id = p_paper_id AND user_id IS NOT DISTINCT FROM p_user_id)
+    INSERT INTO research.paper_user_state (paper_id, user_id, starred)
+    VALUES (p_paper_id, p_user_id, TRUE)
+    ON CONFLICT (paper_id, user_id) DO UPDATE SET starred = TRUE
+    RETURNING (xmax = 0), (SELECT COALESCE(starred, FALSE) FROM before);
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.update_paper_feedback_v1(
+    p_paper_id integer, p_user_id integer, p_rating integer, p_notes text, p_flagged boolean
+) RETURNS TABLE(state text, state_before_trash text, starred boolean, rating smallint,
+                user_notes text, flagged boolean, updated_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN RAISE EXCEPTION 'paper feedback caller is not allowed'; END IF;
+    RETURN QUERY INSERT INTO research.paper_user_state
+        (paper_id, user_id, rating, user_notes, flagged)
+    VALUES (p_paper_id, p_user_id, p_rating, p_notes, COALESCE(p_flagged, FALSE))
+    ON CONFLICT (paper_id, user_id) DO UPDATE SET
+        rating = COALESCE(EXCLUDED.rating, paper_user_state.rating),
+        user_notes = COALESCE(EXCLUDED.user_notes, paper_user_state.user_notes),
+        flagged = COALESCE(p_flagged, paper_user_state.flagged)
+    RETURNING COALESCE(paper_user_state.state, 'inbox'), paper_user_state.state_before_trash,
+        COALESCE(paper_user_state.starred, FALSE), paper_user_state.rating,
+        paper_user_state.user_notes, COALESCE(paper_user_state.flagged, FALSE),
+        paper_user_state.updated_at;
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.trash_paper_v1(p_paper_id integer, p_user_id integer)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN RAISE EXCEPTION 'paper trash caller is not allowed'; END IF;
+    INSERT INTO research.paper_user_state (paper_id, user_id, state, state_before_trash)
+    VALUES (p_paper_id, p_user_id, 'trash', 'inbox')
+    ON CONFLICT (paper_id, user_id) DO UPDATE SET state_before_trash = CASE
+        WHEN paper_user_state.state = 'trash' THEN paper_user_state.state_before_trash
+        ELSE paper_user_state.state END, state = 'trash';
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.restore_paper_v1(p_paper_id integer, p_user_id integer)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN RAISE EXCEPTION 'paper restore caller is not allowed'; END IF;
+    UPDATE research.paper_user_state SET state = COALESCE(state_before_trash, 'inbox'),
+        state_before_trash = NULL
+    WHERE paper_id = p_paper_id AND user_id IS NOT DISTINCT FROM p_user_id;
+    RETURN FOUND;
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.claim_source_slot_v1(
+    p_user_id integer, p_source text, p_min_seconds text
+) RETURNS TABLE(last_request_at timestamptz) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_source = ''
+       OR p_min_seconds::numeric < 0 OR p_min_seconds::numeric > 86400 THEN
+        RAISE EXCEPTION 'source slot caller is not allowed';
+    END IF;
+    RETURN QUERY INSERT INTO research.source_health
+        (user_id, source_type, last_request_at, updated_at)
+    VALUES (p_user_id, p_source, NOW(), NOW())
+    ON CONFLICT (user_id, source_type) DO UPDATE
+    SET last_request_at = NOW(), updated_at = NOW()
+    WHERE source_health.last_request_at IS NULL
+       OR source_health.last_request_at < NOW() - (p_min_seconds || ' seconds')::interval
+    RETURNING source_health.last_request_at;
+END; $$;
+
+CREATE OR REPLACE FUNCTION research.update_source_health_v1(
+    p_user_id integer, p_source text, p_at timestamptz, p_status text, p_cooldown timestamptz
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = research, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime'
+       OR p_status NOT IN ('ok', 'rate_limit', 'error', 'reset') THEN
+        RAISE EXCEPTION 'source health caller is not allowed';
+    END IF;
+    INSERT INTO research.source_health
+        (user_id, source_type, last_request_at, last_status, cooldown_until,
+         consecutive_failures, updated_at)
+    VALUES (p_user_id, p_source, p_at, CASE WHEN p_status = 'reset' THEN 'ok' ELSE p_status END,
+            p_cooldown, CASE WHEN p_status = 'error' THEN 1 ELSE 0 END, p_at)
+    ON CONFLICT (user_id, source_type) DO UPDATE SET
+        last_request_at = CASE WHEN p_status = 'reset' THEN source_health.last_request_at ELSE p_at END,
+        last_status = CASE WHEN p_status = 'reset' THEN 'ok' ELSE p_status END,
+        cooldown_until = CASE WHEN p_status IN ('ok', 'reset') THEN NULL
+                              WHEN p_status = 'rate_limit' THEN p_cooldown
+                              ELSE source_health.cooldown_until END,
+        consecutive_failures = CASE WHEN p_status = 'error'
+            THEN COALESCE(source_health.consecutive_failures, 0) + 1
+            WHEN p_status IN ('ok', 'reset') THEN 0 ELSE source_health.consecutive_failures END,
+        updated_at = p_at;
+END; $$;
+
+REVOKE ALL ON FUNCTION research.record_author_alert_v1(integer,integer,integer),
+    research.add_to_library_v1(integer,integer,text),
+    research.fan_out_library_v1(integer[],integer),
+    research.upsert_paper_state_v1(integer,integer,text,boolean,text),
+    research.star_paper_v1(integer,integer),
+    research.update_paper_feedback_v1(integer,integer,integer,text,boolean),
+    research.trash_paper_v1(integer,integer), research.restore_paper_v1(integer,integer),
+    research.claim_source_slot_v1(integer,text,text),
+    research.update_source_health_v1(integer,text,timestamptz,text,timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION research.record_author_alert_v1(integer,integer,integer),
+    research.add_to_library_v1(integer,integer,text),
+    research.fan_out_library_v1(integer[],integer),
+    research.upsert_paper_state_v1(integer,integer,text,boolean,text),
+    research.star_paper_v1(integer,integer),
+    research.update_paper_feedback_v1(integer,integer,integer,text,boolean),
+    research.trash_paper_v1(integer,integer), research.restore_paper_v1(integer,integer),
+    research.claim_source_slot_v1(integer,text,text),
+    research.update_source_health_v1(integer,text,timestamptz,text,timestamptz)
+    TO jarvis_research_runtime;
+GRANT EXECUTE ON FUNCTION research.upsert_paper_state_v1(integer,integer,text,boolean,text)
+    TO jarvis_learning_runtime;
+GRANT USAGE ON SCHEMA research TO jarvis_learning_runtime;
+
+RESET ROLE;
+
+SET LOCAL ROLE jarvis_learning_owner;
+CREATE OR REPLACE FUNCTION learning.clear_zotero_collection_keys_v1(p_user_id integer)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = learning, pg_catalog AS $$
+DECLARE v_count integer;
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_user_id IS NULL THEN
+        RAISE EXCEPTION 'project Zotero cleanup caller is not allowed';
+    END IF;
+    UPDATE learning.projects SET zotero_collection_key = NULL
+    WHERE user_id = p_user_id AND zotero_collection_key IS NOT NULL;
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END; $$;
+REVOKE ALL ON FUNCTION learning.clear_zotero_collection_keys_v1(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION learning.clear_zotero_collection_keys_v1(integer)
+    TO jarvis_research_runtime;
+GRANT USAGE ON SCHEMA learning TO jarvis_research_runtime;
+
+RESET ROLE;
+
+SET LOCAL ROLE jarvis_ops_owner;
+CREATE OR REPLACE FUNCTION ops.record_job_progress_v1(
+    p_job_id text, p_progress real, p_message text
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+DECLARE v_owner text;
+BEGIN
+    v_owner := CASE session_user WHEN 'jarvis_research_runtime' THEN 'research'
+        WHEN 'jarvis_learning_runtime' THEN 'learning' ELSE NULL END;
+    IF v_owner IS NULL OR NOT EXISTS (SELECT 1 FROM ops.procrastinate_jobs
+        WHERE args->>'job_id' = p_job_id AND owner_service = v_owner) THEN
+        RAISE EXCEPTION 'job progress owner mismatch';
+    END IF;
+    INSERT INTO ops.job_progress (jarvis_job_id, progress, message, updated_at)
+    VALUES (p_job_id, p_progress, p_message, NOW())
+    ON CONFLICT (jarvis_job_id) DO UPDATE SET progress = EXCLUDED.progress,
+        message = EXCLUDED.message, updated_at = EXCLUDED.updated_at;
+END; $$;
+
+CREATE OR REPLACE FUNCTION ops.record_job_outcome_v1(
+    p_job_id text, p_result jsonb, p_error jsonb, p_is_error boolean
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+DECLARE v_owner text;
+BEGIN
+    v_owner := CASE session_user WHEN 'jarvis_research_runtime' THEN 'research'
+        WHEN 'jarvis_learning_runtime' THEN 'learning' ELSE NULL END;
+    IF v_owner IS NULL OR NOT EXISTS (SELECT 1 FROM ops.procrastinate_jobs
+        WHERE args->>'job_id' = p_job_id AND owner_service = v_owner) THEN
+        RAISE EXCEPTION 'job outcome owner mismatch';
+    END IF;
+    INSERT INTO ops.job_progress (jarvis_job_id, progress, result, error, updated_at)
+    VALUES (p_job_id, CASE WHEN p_is_error THEN 0.0 ELSE 1.0 END, p_result, p_error, NOW())
+    ON CONFLICT (jarvis_job_id) DO UPDATE SET
+        progress = COALESCE(job_progress.progress, EXCLUDED.progress),
+        result = EXCLUDED.result, error = EXCLUDED.error, updated_at = EXCLUDED.updated_at;
+END; $$;
+
+CREATE OR REPLACE FUNCTION ops.purge_orphaned_job_progress_v1()
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+DECLARE v_count integer;
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN RAISE EXCEPTION 'job retention caller is not allowed'; END IF;
+    DELETE FROM ops.job_progress WHERE NOT EXISTS (
+        SELECT 1 FROM ops.procrastinate_jobs job
+        WHERE job.args->>'job_id' = job_progress.jarvis_job_id);
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END; $$;
+REVOKE ALL ON FUNCTION ops.record_job_progress_v1(text,real,text),
+    ops.record_job_outcome_v1(text,jsonb,jsonb,boolean),
+    ops.purge_orphaned_job_progress_v1() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION ops.record_job_progress_v1(text,real,text),
+    ops.record_job_outcome_v1(text,jsonb,jsonb,boolean)
+    TO jarvis_research_runtime, jarvis_learning_runtime;
+GRANT EXECUTE ON FUNCTION ops.purge_orphaned_job_progress_v1()
+    TO jarvis_research_runtime;
+GRANT USAGE ON SCHEMA ops TO jarvis_research_runtime, jarvis_learning_runtime;
+
+CREATE OR REPLACE FUNCTION ops.enforce_job_owner_metadata_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+DECLARE owner_record ops.job_owner_registry%ROWTYPE; runtime_owner text;
+BEGIN
+    IF NOT (NEW.args ? 'job_id') THEN RETURN NEW; END IF;
+    SELECT * INTO owner_record FROM ops.job_owner_registry WHERE task_name = NEW.task_name;
+    IF NOT FOUND OR NEW.queue_name <> owner_record.queue_name THEN
+        RAISE EXCEPTION 'job queue does not match task owner';
+    END IF;
+    runtime_owner := CASE session_user WHEN 'jarvis_research_runtime' THEN 'research'
+        WHEN 'jarvis_learning_runtime' THEN 'learning' ELSE NULL END;
+    IF runtime_owner IS NOT NULL AND owner_record.service_name <> runtime_owner THEN
+        RAISE EXCEPTION 'job task is owned by another runtime';
+    END IF;
+    IF (NEW.owner_queue IS NOT NULL AND NEW.owner_queue <> owner_record.queue_name)
+       OR (NEW.owner_service IS NOT NULL AND NEW.owner_service <> owner_record.service_name) THEN
+        RAISE EXCEPTION 'job owner metadata does not match task owner';
+    END IF;
+    NEW.owner_queue := owner_record.queue_name; NEW.owner_service := owner_record.service_name;
+    RETURN NEW;
+END; $$;
+REVOKE ALL ON FUNCTION ops.enforce_job_owner_metadata_v1() FROM PUBLIC;
+ALTER TABLE ops.procrastinate_jobs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY research_job_rows_v1 ON ops.procrastinate_jobs
+    FOR ALL TO jarvis_research_runtime
+    USING (owner_service = 'research' OR (owner_service IS NULL AND queue_name = 'paper_ingestion'))
+    WITH CHECK (owner_service = 'research' OR (owner_service IS NULL AND queue_name = 'paper_ingestion'));
+CREATE POLICY learning_job_rows_v1 ON ops.procrastinate_jobs
+    FOR ALL TO jarvis_learning_runtime
+    USING (owner_service = 'learning' OR (owner_service IS NULL AND queue_name = 'learning_engine'))
+    WITH CHECK (owner_service = 'learning' OR (owner_service IS NULL AND queue_name = 'learning_engine'));
+CREATE OR REPLACE FUNCTION ops.redact_erased_user_jobs_v1(p_user_id bigint)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = ops, pg_catalog AS $$
+DECLARE v_count integer;
+BEGIN
+    IF session_user <> 'jarvis_erasure_executor' OR p_user_id <= 0 THEN
+        RAISE EXCEPTION 'job erasure caller is not allowed';
+    END IF;
+    IF EXISTS (SELECT 1 FROM ops.procrastinate_jobs
+               WHERE args->>'user_id' = p_user_id::text
+                 AND status IN ('todo', 'doing', 'aborting')) THEN
+        RAISE EXCEPTION 'active jobs still retain the erasure subject';
+    END IF;
+    UPDATE ops.procrastinate_jobs SET args = args - 'user_id'
+    WHERE args->>'user_id' = p_user_id::text;
+    GET DIAGNOSTICS v_count = ROW_COUNT; RETURN v_count;
+END; $$;
+REVOKE ALL ON FUNCTION ops.redact_erased_user_jobs_v1(bigint) FROM PUBLIC;
+GRANT USAGE ON SCHEMA ops TO jarvis_platform_owner;
+GRANT EXECUTE ON FUNCTION ops.redact_erased_user_jobs_v1(bigint) TO jarvis_platform_owner;
+
+RESET ROLE;
+SET LOCAL ROLE jarvis_platform_owner;
+CREATE OR REPLACE FUNCTION platform.finalize_erasure(p_request_id uuid)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = platform, pg_catalog AS $$
+DECLARE v_user_id bigint;
+BEGIN
+    IF session_user <> 'jarvis_erasure_executor' THEN RAISE EXCEPTION 'erasure finalizer is executor-only'; END IF;
+    SELECT er.user_id INTO v_user_id FROM platform.erasure_requests er
+    JOIN platform.users users ON users.id = er.user_id
+    WHERE er.request_id = p_request_id AND er.state = 'ready' AND er.eligible_at <= NOW()
+      AND users.deleted_at IS NOT NULL AND users.deleted_at + INTERVAL '30 days' <= NOW()
+    FOR UPDATE OF er, users;
+    IF v_user_id IS NULL THEN RETURN FALSE; END IF;
+    UPDATE platform.erasure_requests SET state = 'executing'
+    WHERE request_id = p_request_id AND state = 'ready';
+    IF (SELECT count(*) FROM platform.erasure_acknowledgements
+        WHERE request_id = p_request_id AND domain IN ('qdrant', 'research', 'learning')) <> 3
+       OR COALESCE((SELECT (receipt->>'residual_points')::int
+                    FROM platform.erasure_acknowledgements
+                    WHERE request_id = p_request_id AND domain = 'qdrant'), -1) <> 0 THEN
+        RAISE EXCEPTION 'erasure acknowledgements are incomplete';
+    END IF;
+    PERFORM ops.redact_erased_user_jobs_v1(v_user_id);
+    DELETE FROM platform.config_deliveries WHERE scope_user_id = v_user_id;
+    UPDATE platform.config_deliveries SET actor_user_id = NULL, state = 'failed', attempts = 8,
+        last_error = 'authorizing account erased', updated_at = NOW() WHERE actor_user_id = v_user_id;
+    DELETE FROM platform.audit_subjects WHERE user_id = v_user_id;
+    DELETE FROM platform.users WHERE id = v_user_id AND deleted_at IS NOT NULL;
+    IF NOT FOUND THEN RAISE EXCEPTION 'erasure account is no longer disabled'; END IF;
+    UPDATE platform.erasure_requests SET state = 'complete', completed_at = NOW()
+    WHERE request_id = p_request_id AND state = 'executing'; RETURN TRUE;
+END; $$;
+REVOKE ALL ON FUNCTION platform.finalize_erasure(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_executor;
+RESET ROLE;
+SET LOCAL search_path TO ops, public, pg_catalog;
+UPDATE ops.schema_migrations SET sha256 = '73ef094e42223b7c0c75067d2eb3c382fc0e3e6464b8054792539bf743cd7a98' WHERE version = 117;
+
+-- 0118: enforce final cross-domain runtime privileges.
+SET LOCAL ROLE jarvis_platform_owner;
+CREATE OR REPLACE FUNCTION platform.audit_readiness_v1()
+RETURNS TABLE(latest_event_at timestamptz, event_count bigint)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' THEN
+        RAISE EXCEPTION 'audit readiness caller is not allowed';
+    END IF;
+    RETURN QUERY SELECT MAX(audit_log."timestamp"), COUNT(*) FROM platform.audit_log;
+END;
+$$;
+REVOKE ALL ON FUNCTION platform.audit_readiness_v1()
+    FROM PUBLIC, jarvis_platform_runtime, jarvis_learning_runtime;
+GRANT EXECUTE ON FUNCTION platform.audit_readiness_v1() TO jarvis_research_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE jarvis_platform_owner IN SCHEMA platform
+    REVOKE EXECUTE ON FUNCTIONS FROM jarvis_platform_runtime;
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
+SET LOCAL ROLE jarvis_research_owner;
+ALTER DEFAULT PRIVILEGES FOR ROLE jarvis_research_owner IN SCHEMA research
+    REVOKE EXECUTE ON FUNCTIONS FROM jarvis_research_runtime;
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
+SET LOCAL ROLE jarvis_learning_owner;
+CREATE OR REPLACE FUNCTION learning.update_scheduled_nudge_v1(
+    p_nudge_id integer, p_set_cron boolean, p_cron_expression text,
+    p_set_enabled boolean, p_enabled boolean, p_set_config boolean, p_config jsonb
+)
+RETURNS SETOF learning.scheduled_nudges
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = learning, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_research_runtime' OR p_nudge_id <= 0 THEN
+        RAISE EXCEPTION 'scheduled nudge caller is not allowed';
+    END IF;
+    RETURN QUERY
+    UPDATE learning.scheduled_nudges AS nudge
+    SET cron_expression = CASE WHEN p_set_cron THEN p_cron_expression
+                               ELSE nudge.cron_expression END,
+        enabled = CASE WHEN p_set_enabled THEN p_enabled ELSE nudge.enabled END,
+        config = CASE WHEN p_set_config THEN p_config ELSE nudge.config END
+    WHERE nudge.id = p_nudge_id
+    RETURNING nudge.*;
+END;
+$$;
+REVOKE ALL ON FUNCTION learning.update_scheduled_nudge_v1(
+    integer,boolean,text,boolean,boolean,boolean,jsonb
+) FROM PUBLIC, jarvis_platform_runtime, jarvis_learning_runtime;
+GRANT EXECUTE ON FUNCTION learning.update_scheduled_nudge_v1(
+    integer,boolean,text,boolean,boolean,boolean,jsonb
+) TO jarvis_research_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE jarvis_learning_owner IN SCHEMA learning
+    REVOKE EXECUTE ON FUNCTIONS FROM jarvis_learning_runtime;
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
+SET LOCAL ROLE jarvis_platform_owner;
+REVOKE EXECUTE ON FUNCTION
+    platform.set_research_config_v1(bigint,text,jsonb,text),
+    platform.purge_identity_retention_v1(text), platform.purge_system_events_v1(text),
+    platform.rotate_visibility_checkpoint_v1(text,text,text,text),
+    platform.claim_visibility_lease_v1(text,text,text,integer),
+    platform.advance_visibility_checkpoint_v1(text,text,text,bigint,integer),
+    platform.complete_visibility_checkpoint_v1(text,text,text)
+    FROM jarvis_platform_runtime, jarvis_learning_runtime;
+REVOKE EXECUTE ON FUNCTION platform.finalize_erasure(uuid)
+    FROM jarvis_platform_runtime, jarvis_research_runtime, jarvis_learning_runtime;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON
+    platform.audit_log, platform.magic_link_tokens, platform.sessions,
+    platform.system_events, platform.user_config, platform.users,
+    platform.webauthn_challenges FROM jarvis_research_runtime;
+GRANT SELECT ON platform.user_config, platform.users TO jarvis_research_runtime;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON
+    platform.llm_usage_log, platform.user_config, platform.users
+    FROM jarvis_learning_runtime;
+GRANT SELECT ON platform.llm_usage_log, platform.user_config TO jarvis_learning_runtime;
+REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform
+    FROM jarvis_research_runtime, jarvis_learning_runtime;
+
+RESET ROLE;
+SET LOCAL ROLE jarvis_learning_owner;
+REVOKE EXECUTE ON FUNCTION learning.clear_zotero_collection_keys_v1(integer)
+    FROM jarvis_learning_runtime;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON
+    learning.cards, learning.daily_log, learning.decks, learning.journal_entries,
+    learning.milestones, learning.project_papers, learning.projects,
+    learning.review_logs, learning.scheduled_nudges, learning.task_paper_links,
+    learning.tasks FROM jarvis_research_runtime;
+GRANT SELECT ON
+    learning.cards, learning.daily_log, learning.decks, learning.journal_entries,
+    learning.milestones, learning.project_papers, learning.projects,
+    learning.review_logs, learning.scheduled_nudges, learning.task_paper_links,
+    learning.tasks TO jarvis_research_runtime;
+REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA learning FROM jarvis_research_runtime;
+
+RESET ROLE;
+SET LOCAL ROLE jarvis_research_owner;
+REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA research FROM jarvis_learning_runtime;
+
+RESET ROLE;
+SET LOCAL ROLE jarvis_ops_owner;
+REVOKE SELECT, INSERT, UPDATE, DELETE ON ops.job_progress
+    FROM jarvis_research_runtime, jarvis_learning_runtime;
+GRANT SELECT ON ops.schema_migrations TO jarvis_platform_runtime;
+
+RESET ROLE;
+SET LOCAL search_path TO ops, public, pg_catalog;
+UPDATE ops.schema_migrations SET sha256 = '7f635041cdbc5f267a8d7816d3bdeb9475b5d1a34bc21e0b367d8f51e823ddcf' WHERE version = 118;
+
+-- 0119: executor-only due-erasure selection and checkpoint-key correction.
+SET LOCAL ROLE jarvis_platform_owner;
+CREATE OR REPLACE FUNCTION platform.due_erasure_request_ids(p_limit integer)
+RETURNS TABLE(request_id uuid)
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+BEGIN
+    IF session_user <> 'jarvis_erasure_executor'
+       OR p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
+        RAISE EXCEPTION 'erasure due-request listing is not allowed';
+    END IF;
+    RETURN QUERY
+    SELECT request.request_id
+    FROM platform.erasure_requests AS request
+    JOIN platform.users AS account ON account.id = request.user_id
+    WHERE request.state = 'ready'
+      AND request.eligible_at <= NOW()
+      AND account.deleted_at IS NOT NULL
+      AND account.deleted_at + INTERVAL '30 days' <= NOW()
+    ORDER BY request.eligible_at, request.request_id
+    LIMIT p_limit;
+END;
+$$;
+REVOKE ALL ON FUNCTION platform.due_erasure_request_ids(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION platform.due_erasure_request_ids(integer)
+    TO jarvis_erasure_executor;
+
+RESET ROLE;
+SET LOCAL search_path TO ops, public, pg_catalog;
+UPDATE ops.schema_migrations
+SET sha256 = '9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296'
+WHERE version = 119;
+
+-- 0120: erasure state changes move behind owner-defined capabilities.
+SET LOCAL ROLE jarvis_platform_owner;
+
+CREATE OR REPLACE FUNCTION platform.request_erasure_v1(p_user_id bigint)
+RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    existing uuid;
+    created uuid;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' OR p_user_id IS NULL THEN
+        RAISE EXCEPTION 'erasure request is not allowed';
+    END IF;
+    SELECT request_id INTO existing
+    FROM platform.erasure_requests
+    WHERE user_id = p_user_id AND state NOT IN ('complete', 'attention_required')
+    ORDER BY requested_at DESC
+    LIMIT 1;
+    IF existing IS NOT NULL THEN
+        RETURN existing;
+    END IF;
+    -- eligible_at is derived here, never supplied by the caller, so the
+    -- restore grace cannot be shortened by the service that requests erasure.
+    INSERT INTO platform.erasure_requests
+        (request_id, user_id, state, resume_state, eligible_at)
+    SELECT gen_random_uuid(), account.id, 'requested', 'qdrant_pending',
+           account.deleted_at + INTERVAL '30 days'
+    FROM platform.users AS account
+    WHERE account.id = p_user_id AND account.deleted_at IS NOT NULL
+    RETURNING request_id INTO created;
+    RETURN created;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION platform.begin_erasure_destructive_v1(p_request_id uuid)
+RETURNS TABLE(state text, attempts integer, resume_state text,
+              eligible_at timestamptz, deleted_at timestamptz, user_id bigint)
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    request record;
+    account record;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' THEN
+        RAISE EXCEPTION 'erasure phase change is not allowed';
+    END IF;
+    SELECT * INTO request FROM platform.erasure_requests
+    WHERE request_id = p_request_id FOR UPDATE;
+    IF request IS NULL THEN
+        RAISE EXCEPTION 'erasure request does not exist';
+    END IF;
+    SELECT * INTO account FROM platform.users
+    WHERE id = request.user_id FOR UPDATE;
+    IF account IS NULL OR account.deleted_at IS NULL THEN
+        RAISE EXCEPTION 'erasure account is no longer disabled';
+    END IF;
+    IF request.state = 'requested' THEN
+        -- Both clocks must have elapsed. Checking them inside the capability
+        -- is what makes the grace boundary independent of the caller.
+        IF NOT (request.eligible_at <= NOW()
+                AND account.deleted_at + INTERVAL '30 days' <= NOW()) THEN
+            RAISE EXCEPTION 'account erasure is still inside the restore grace';
+        END IF;
+        UPDATE platform.erasure_requests AS pending
+        SET state = 'qdrant_pending'
+        WHERE pending.request_id = p_request_id AND pending.state = 'requested';
+        request.state := 'qdrant_pending';
+    END IF;
+    RETURN QUERY SELECT request.state, request.attempts, request.resume_state,
+                        request.eligible_at, account.deleted_at, request.user_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION platform.record_erasure_ack_v1(
+    p_request_id uuid, p_domain text, p_receipt jsonb
+)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    phase_order constant text[] := ARRAY['qdrant_pending', 'research_pending',
+                                         'learning_pending', 'ready', 'executing'];
+    reached text;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime'
+       OR p_domain NOT IN ('qdrant', 'research', 'learning') THEN
+        RAISE EXCEPTION 'erasure acknowledgement is not allowed';
+    END IF;
+    -- A receipt binds to the phase that produced it. One for a phase this
+    -- request has not reached would let the caller assemble finalization's
+    -- preconditions before the owning service ran, while one for a phase
+    -- already passed is the legitimate replay of durable work. A waiting
+    -- request is judged by the phase it will resume, and a finalized request is
+    -- history no acknowledgement may amend.
+    SELECT CASE WHEN request.state IN ('retry_wait', 'attention_required')
+                THEN request.resume_state ELSE request.state END
+      INTO reached
+    FROM platform.erasure_requests AS request
+    WHERE request.request_id = p_request_id AND request.state <> 'complete';
+    IF COALESCE(array_position(phase_order, reached), 0)
+       < array_position(phase_order, p_domain || '_pending') THEN
+        RAISE EXCEPTION 'erasure acknowledgement is not allowed for this request';
+    END IF;
+    INSERT INTO platform.erasure_acknowledgements (request_id, domain, receipt)
+    VALUES (p_request_id, p_domain, p_receipt)
+    ON CONFLICT (request_id, domain)
+    DO UPDATE SET receipt = EXCLUDED.receipt, acknowledged_at = NOW();
+END;
+$$;
+
+-- The account-erasure state graph exactly as db/ownership-manifest.json
+-- declares it, minus every edge into 'complete': that step belongs to the
+-- executor's finalization capability and no runtime capability may reach it.
+-- Declaring the graph here is what makes it a boundary rather than advice --
+-- the platform runtime is untrusted for erasure state.
+CREATE OR REPLACE FUNCTION platform.erasure_transition_allowed_v1(
+    p_source text, p_target text
+)
+RETURNS boolean
+LANGUAGE sql IMMUTABLE
+SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM (VALUES
+            ('requested', 'qdrant_pending'),
+            ('qdrant_pending', 'research_pending'),
+            ('qdrant_pending', 'retry_wait'),
+            ('qdrant_pending', 'attention_required'),
+            ('research_pending', 'learning_pending'),
+            ('research_pending', 'retry_wait'),
+            ('research_pending', 'attention_required'),
+            ('learning_pending', 'ready'),
+            ('learning_pending', 'retry_wait'),
+            ('learning_pending', 'attention_required'),
+            ('ready', 'executing'),
+            ('executing', 'retry_wait'),
+            ('executing', 'attention_required'),
+            ('retry_wait', 'qdrant_pending'),
+            ('retry_wait', 'research_pending'),
+            ('retry_wait', 'learning_pending'),
+            ('retry_wait', 'attention_required'),
+            ('attention_required', 'qdrant_pending'),
+            ('attention_required', 'research_pending'),
+            ('attention_required', 'learning_pending')
+        ) AS edge(source, target)
+        WHERE edge.source = p_source AND edge.target = p_target
+    );
+$$;
+REVOKE ALL ON FUNCTION platform.erasure_transition_allowed_v1(text,text) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION platform.transition_erasure_v1(
+    p_request_id uuid, p_target text, p_expected text
+)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    persisted text;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' THEN
+        RAISE EXCEPTION 'erasure transition is not allowed';
+    END IF;
+    -- 'complete' is reached only by the executor's finalization capability.
+    IF p_target = 'complete' THEN
+        RAISE EXCEPTION 'erasure completion is reserved for finalization';
+    END IF;
+    IF NOT platform.erasure_transition_allowed_v1(p_expected, p_target) THEN
+        RAISE EXCEPTION 'erasure transition % -> % is refused by the state graph',
+                        p_expected, p_target;
+    END IF;
+    -- last_error is the only durable record of why a request stranded, so the
+    -- state it strands in keeps it. Every other target has recovered from
+    -- whatever that error described.
+    UPDATE platform.erasure_requests AS request
+    SET state = p_target,
+        last_error = CASE WHEN p_target = 'attention_required'
+                          THEN request.last_error ELSE NULL END,
+        next_attempt_at = CASE WHEN p_target = 'retry_wait'
+                               THEN request.next_attempt_at ELSE NOW() END
+    WHERE request.request_id = p_request_id AND request.state = p_expected
+    RETURNING request.state INTO persisted;
+    RETURN persisted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION platform.record_erasure_retry_v1(
+    p_request_id uuid, p_resume_state text
+)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    persisted text;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime'
+       OR p_resume_state NOT IN ('qdrant_pending', 'research_pending',
+                                 'learning_pending') THEN
+        RAISE EXCEPTION 'erasure retry is not allowed';
+    END IF;
+    UPDATE platform.erasure_requests AS request
+    SET attempts = request.attempts + 1,
+        state = CASE WHEN request.attempts + 1 >= 8
+                     THEN 'attention_required' ELSE 'retry_wait' END,
+        resume_state = p_resume_state,
+        last_error = 'owner command unavailable',
+        next_attempt_at = NOW() + LEAST(
+            INTERVAL '1 hour', POWER(2, request.attempts) * INTERVAL '30 seconds'
+        )
+    WHERE request.request_id = p_request_id
+      AND request.state = p_resume_state
+      AND request.attempts < 8
+    RETURNING request.state INTO persisted;
+    RETURN persisted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION platform.resume_erasure_v1(p_request_id uuid)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    request record;
+    account record;
+    resumed text;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' THEN
+        RAISE EXCEPTION 'erasure resume is not allowed';
+    END IF;
+    SELECT * INTO request FROM platform.erasure_requests
+    WHERE request_id = p_request_id FOR UPDATE;
+    IF request IS NULL THEN
+        RAISE EXCEPTION 'erasure request does not exist';
+    END IF;
+    IF request.state <> 'attention_required' THEN
+        RAISE EXCEPTION 'erasure resume needs a stranded request';
+    END IF;
+    IF NOT platform.erasure_transition_allowed_v1(request.state, request.resume_state) THEN
+        RAISE EXCEPTION 'erasure resume % -> % is refused by the state graph',
+                        request.state, request.resume_state;
+    END IF;
+    -- platform_erasure_requests_one_active_user_idx excludes stranded requests
+    -- on purpose, so a new erasure can be requested past one. Resuming into
+    -- that window would violate the index, so the stranded request waits.
+    IF EXISTS (
+        SELECT 1 FROM platform.erasure_requests AS newer
+        WHERE newer.user_id = request.user_id
+          AND newer.request_id <> p_request_id
+          AND newer.state NOT IN ('complete', 'attention_required')
+    ) THEN
+        RAISE EXCEPTION 'erasure resume is superseded by a newer request';
+    END IF;
+    SELECT * INTO account FROM platform.users
+    WHERE id = request.user_id FOR UPDATE;
+    IF account IS NULL OR account.deleted_at IS NULL THEN
+        RAISE EXCEPTION 'erasure account is no longer disabled';
+    END IF;
+    -- The attempt counter resets with the state. record_erasure_retry_v1 only
+    -- matches below its ceiling, so a resume that left the counter exhausted
+    -- would strand the request again on its first failure, with no retry and
+    -- no recorded reason.
+    UPDATE platform.erasure_requests AS stranded
+    SET state = stranded.resume_state, attempts = 0, last_error = NULL,
+        next_attempt_at = NOW()
+    WHERE stranded.request_id = p_request_id
+      AND stranded.state = 'attention_required'
+    RETURNING stranded.state INTO resumed;
+    RETURN resumed;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION platform.set_account_deleted_v1(p_user_id bigint)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    changed boolean;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' OR p_user_id IS NULL THEN
+        RAISE EXCEPTION 'account deletion is not allowed';
+    END IF;
+    -- NOW() is fixed here, so the grace window cannot start in the past.
+    UPDATE platform.users SET deleted_at = NOW()
+    WHERE id = p_user_id AND deleted_at IS NULL
+    RETURNING true INTO changed;
+    RETURN COALESCE(changed, false);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION platform.restore_account_v1(p_user_id bigint)
+RETURNS TABLE(id bigint, email text, role text,
+              created_at timestamptz, last_login_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = platform, pg_catalog AS $$
+DECLARE
+    started text;
+BEGIN
+    IF session_user <> 'jarvis_platform_runtime' OR p_user_id IS NULL THEN
+        RAISE EXCEPTION 'account restore is not allowed';
+    END IF;
+    -- Every erasure capability locks platform.erasure_requests before
+    -- platform.users: this restore races the destructive start by design, and
+    -- opposite orders deadlock. Locking all of this account's unfinished
+    -- requests covers exactly the rows the DELETE below removes.
+    PERFORM 1 FROM platform.erasure_requests AS request
+    WHERE request.user_id = p_user_id AND request.state <> 'complete'
+    ORDER BY request.request_id
+    FOR UPDATE;
+    PERFORM 1 FROM platform.users AS account
+    WHERE account.id = p_user_id AND account.deleted_at IS NOT NULL
+    FOR UPDATE;
+    -- Restoring an account whose erasure has passed the request phase would
+    -- resurrect a user whose domain data is already being removed, so the
+    -- refusal is decided here under the same lock that performs the restore.
+    -- 'attention_required' refuses too: it is reached only after every
+    -- destructive attempt failed, with domain data already gone.
+    SELECT request.state INTO started
+    FROM platform.erasure_requests AS request
+    WHERE request.user_id = p_user_id
+      AND request.state NOT IN ('complete', 'requested')
+    LIMIT 1;
+    IF started IS NOT NULL THEN
+        RAISE EXCEPTION 'account erasure has already started';
+    END IF;
+    DELETE FROM platform.erasure_requests AS request
+    WHERE request.user_id = p_user_id AND request.state <> 'complete';
+    RETURN QUERY
+    UPDATE platform.users AS account SET deleted_at = NULL
+    WHERE account.id = p_user_id
+      AND account.deleted_at IS NOT NULL
+      AND account.deleted_at >= NOW() - INTERVAL '30 days'
+    RETURNING account.id, account.email, account.role,
+              account.created_at, account.last_login_at;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION
+    platform.request_erasure_v1(bigint),
+    platform.begin_erasure_destructive_v1(uuid),
+    platform.record_erasure_ack_v1(uuid,text,jsonb),
+    platform.transition_erasure_v1(uuid,text,text),
+    platform.record_erasure_retry_v1(uuid,text),
+    platform.resume_erasure_v1(uuid),
+    platform.set_account_deleted_v1(bigint),
+    platform.restore_account_v1(bigint)
+FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION
+    platform.request_erasure_v1(bigint),
+    platform.begin_erasure_destructive_v1(uuid),
+    platform.record_erasure_ack_v1(uuid,text,jsonb),
+    platform.transition_erasure_v1(uuid,text,text),
+    platform.record_erasure_retry_v1(uuid,text),
+    platform.resume_erasure_v1(uuid),
+    platform.set_account_deleted_v1(bigint),
+    platform.restore_account_v1(bigint)
+TO jarvis_platform_runtime;
+
+-- With every legitimate write available as a capability, direct writes to the
+-- erasure tables are withdrawn. The runtime keeps column-scoped UPDATE on
+-- accounts for profile and role administration, but no longer controls the
+-- deletion clock the grace window is measured from, and can no longer remove
+-- an account outside finalization.
+REVOKE INSERT, UPDATE, DELETE ON platform.erasure_requests FROM jarvis_platform_runtime;
+REVOKE INSERT, UPDATE, DELETE ON platform.erasure_acknowledgements FROM jarvis_platform_runtime;
+REVOKE UPDATE, DELETE ON platform.users FROM jarvis_platform_runtime;
+GRANT UPDATE (email, role, display_name, last_login_at)
+    ON platform.users TO jarvis_platform_runtime;
+
+RESET ROLE;
+SET LOCAL search_path TO ops, public, pg_catalog;
+UPDATE ops.schema_migrations
+SET sha256 = 'bbb454245c41be266b9f5b56d041edecd1a71b448fe9a38f7ab3f52f11216cbf'
+WHERE version = 120;
+COMMIT;

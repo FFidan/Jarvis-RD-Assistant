@@ -3,6 +3,7 @@
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -105,6 +106,9 @@ def _make_app_state(
 
     conn = AsyncMock()
     conn.fetch = AsyncMock(side_effect=lambda *_a, **_kw: next(fetch_results))
+    # No saved automation.fetch_interval_hours row, so these tests reach the
+    # pipeline guard through the environment default they each set.
+    conn.fetchrow = AsyncMock(return_value=None)
 
     pool = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -297,31 +301,68 @@ async def test_scheduler_honors_fractional_auto_fetch_interval() -> None:
         scheduler.shutdown(wait=False)
 
 
+def _make_interval_pool(saved_interval: object | None) -> tuple[MagicMock, AsyncMock]:
+    """Pool whose stubbed read answers the saved ``automation.fetch_interval_hours`` row.
+
+    ``saved_interval`` of None means no row is saved. Each caller stubs
+    ``conn.fetch`` itself to say what the discovery queries should do.
+    """
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        return_value=None if saved_interval is None else {"value": saved_interval}
+    )
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    return pool, conn
+
+
 async def test_auto_pipeline_self_gates_on_zero_interval(monkeypatch: pytest.MonkeyPatch) -> None:
-    """run_auto_pipeline must return early without touching the DB when interval=0."""
+    """With no saved interval and the environment default at 0, no discovery runs.
+
+    The guard now reads the saved interval, so it does acquire a connection.
+    What it must not do is any of the pipeline's own work.
+    """
     from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
 
     monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "0")
 
-    # Track whether the DB pool was accessed
-    pool_acquire_called = False
+    pool, conn = _make_interval_pool(None)
+    conn.fetch = AsyncMock(side_effect=AssertionError("discovery must not query the DB"))
+    fake_app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    class _TrackingPool:
-        def acquire(self):
-            nonlocal pool_acquire_called
-            pool_acquire_called = True
-            raise AssertionError("DB pool must not be acquired when interval=0")
+    await run_auto_pipeline(fake_app)
 
+    # run_auto_pipeline swallows exceptions from its own body, so the await
+    # count -- not the raising side effect -- is what proves the guard held.
+    conn.fetch.assert_not_awaited()
+
+
+async def test_auto_pipeline_runs_on_saved_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A saved interval starts the run even though the environment default is 0.
+
+    This is the path a user takes: Settings writes
+    ``automation.fetch_interval_hours``, and nothing else configures the job.
+    """
+    from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
+
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "0")
+
+    pool, conn = _make_interval_pool(6)
+    conn.fetch = AsyncMock(return_value=[])
     fake_app = SimpleNamespace(
         state=SimpleNamespace(
-            db_pool=_TrackingPool(),
+            db_pool=pool,
+            http_client=MagicMock(),
+            pdf_processor=MagicMock(),
+            embedder=MagicMock(),
         )
     )
 
-    # Should return immediately without any DB calls
     await run_auto_pipeline(fake_app)
 
-    assert not pool_acquire_called, "DB pool must not be acquired when interval_hours=0"
+    assert conn.fetch.await_count >= 1, "the saved interval must let the run proceed"
+    assert "paper_sources" in conn.fetch.await_args_list[0].args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +397,17 @@ async def _start(app: SimpleNamespace, interval_hours: float):
 
     with patch("paper_ingestion.scheduler.refresh_recommendations", new=AsyncMock(return_value=0)):
         return await start_scheduler(app, interval_hours=interval_hours)
+
+
+def _next_grid_point(epoch: datetime, interval_hours: float, now: datetime) -> datetime:
+    """First epoch-anchored interval fire at or after ``now``.
+
+    Mirrors the arithmetic an interval trigger applies to a start date already in
+    the past, so an untouched job's next fire is predictable at any wall-clock
+    time instead of only outside a few minutes around a grid point.
+    """
+    interval = timedelta(hours=interval_hours)
+    return epoch + interval * ceil((now - epoch) / interval)
 
 
 async def test_auto_pipeline_interval_is_anchored_to_a_fixed_epoch() -> None:
@@ -395,7 +447,7 @@ async def test_every_registered_job_carries_a_misfire_grace() -> None:
     scheduler = await _start(_make_scheduler_app(), 5)
     try:
         jobs = scheduler.get_jobs()
-        assert {"data_purge", "purge_magic_link_tokens", "purge_sessions"} <= {
+        assert {"domain_outbox", "purge_magic_link_tokens", "purge_sessions"} <= {
             j.id for j in jobs
         }, "the jobs/ helper modules must have registered, or this check is vacuous"
         offenders = [(j.id, j.misfire_grace_time) for j in jobs if j.misfire_grace_time != 3600]
@@ -440,12 +492,17 @@ async def test_stale_last_run_schedules_a_catch_up() -> None:
 
 async def test_fresh_last_run_schedules_no_catch_up() -> None:
     """A recent successful run means nothing was missed — no extra run at boot."""
+    from paper_ingestion.scheduler import _INTERVAL_EPOCH  # noqa: PLC0415
+
+    interval_hours = 5
     fresh = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-    scheduler = await _start(_make_scheduler_app(last_run=fresh), 5)
+    booted_at = datetime.now(UTC)
+    scheduler = await _start(_make_scheduler_app(last_run=fresh), interval_hours)
     try:
         next_run = scheduler.get_job("auto_pipeline").next_run_time
-        assert next_run is not None
-        assert next_run - datetime.now(UTC) > timedelta(minutes=5)
+        assert next_run == _next_grid_point(_INTERVAL_EPOCH, interval_hours, booted_at), (
+            "a fresh last-run stamp must leave the job on its anchored grid slot"
+        )
     finally:
         scheduler.shutdown(wait=False)
 
@@ -460,6 +517,7 @@ def _app_with_procrastinate() -> tuple[SimpleNamespace, MagicMock, AsyncMock]:
     from paper_ingestion.scheduler import _REMOVE_OLD_JOBS_TASK  # noqa: PLC0415
 
     prune_task = MagicMock(defer_async=AsyncMock())
+    prune_task.configure.return_value = prune_task
     procrastinate_app = MagicMock(tasks={_REMOVE_OLD_JOBS_TASK: prune_task})
     db_pool = MagicMock(execute=AsyncMock(return_value="DELETE 4"))
     app = SimpleNamespace(
@@ -493,6 +551,18 @@ async def test_a_periodic_job_history_prune_is_registered() -> None:
         scheduler.shutdown(wait=False)
 
 
+async def test_domain_outbox_dispatcher_is_registered_with_bounded_overlap() -> None:
+    """Outbox retries are scheduled independently of a user request path."""
+    scheduler = await _start(_make_scheduler_app(), 5)
+    try:
+        job = scheduler.get_job("domain_outbox")
+        assert job is not None
+        assert job.max_instances == 1
+        assert job.misfire_grace_time == 3600
+    finally:
+        scheduler.shutdown(wait=False)
+
+
 async def test_prune_defers_the_builtin_task_once_and_purges_orphan_progress() -> None:
     """One deferral per run, with the orphaned progress rows swept beside it."""
     from paper_ingestion.scheduler import purge_job_history_task  # noqa: PLC0415
@@ -502,8 +572,10 @@ async def test_prune_defers_the_builtin_task_once_and_purges_orphan_progress() -
     await purge_job_history_task(app)
 
     prune_task.defer_async.assert_awaited_once()
+    prune_task.configure.assert_called_once_with(queue="paper_ingestion")
     kwargs = prune_task.defer_async.await_args.kwargs
     assert kwargs["max_hours"] == 24 * 30
+    assert kwargs["queue"] == "paper_ingestion"
     assert kwargs["remove_failed"] and kwargs["remove_cancelled"] and kwargs["remove_aborted"]
     # Which rows the sweep spares is proven against a real schema in
     # tests/contract/test_job_history_purge_contract.py. Here it is enough that

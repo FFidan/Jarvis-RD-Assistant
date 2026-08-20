@@ -19,24 +19,22 @@ import {
 } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 
-interface CitationMenuProps {
+/** How long the trigger reads "Copied" after a successful copy. */
+const COPIED_LABEL_MS = 2000;
+
+interface CitationMenuItemsProps {
   paperIds: number[];
-  size?: ButtonProps['size'];
-  disabled?: boolean;
+  /** Called after a copy succeeds, so a trigger can acknowledge it. */
+  onCopied?: () => void;
 }
 
-export function CitationMenu({ paperIds, size = 'sm', disabled }: CitationMenuProps) {
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-    },
-    [],
-  );
-
-  const isEmpty = paperIds.length === 0;
+/**
+ * The citation export actions themselves, without a trigger.
+ *
+ * Split out so the feed row can offer the same exports from a submenu inside
+ * its overflow menu rather than spending a control on them.
+ */
+export function CitationMenuItems({ paperIds, onCopied }: CitationMenuItemsProps) {
   const isBulk = paperIds.length > 1;
 
   async function handleCopy(format: CitationFormat) {
@@ -47,10 +45,8 @@ export function CitationMenu({ paperIds, size = 'sm', disabled }: CitationMenuPr
         ? await copyBulkCitations(paperIds, format)
         : await copyPaperCitation(first, format);
       await navigator.clipboard.writeText(text);
-      setCopied(true);
       toast.success('Citation copied');
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+      onCopied?.();
     } catch (err) {
       toast.error('Could not copy citation', { description: errorMessage(err) });
     }
@@ -81,27 +77,62 @@ export function CitationMenu({ paperIds, size = 'sm', disabled }: CitationMenuPr
   }
 
   return (
+    <>
+      <DropdownMenuItem onSelect={() => void handleCopy('bibtex')}>Copy BibTeX</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => void handleCopy('ris')}>Copy RIS</DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onSelect={() => void handleDownload('bibtex')}>Download .bib</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => void handleDownload('ris')}>Download .ris</DropdownMenuItem>
+      {!isBulk && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => void handleExportMarkdown()}>
+            Export Markdown
+          </DropdownMenuItem>
+        </>
+      )}
+    </>
+  );
+}
+
+interface CitationMenuProps {
+  paperIds: number[];
+  size?: ButtonProps['size'];
+  disabled?: boolean;
+}
+
+export function CitationMenu({ paperIds, size = 'sm', disabled }: CitationMenuProps) {
+  const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    },
+    [],
+  );
+
+  const acknowledgeCopy = () => {
+    setCopied(true);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(false), COPIED_LABEL_MS);
+  };
+
+  return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size={size} disabled={disabled || isEmpty} className="gap-1.5">
+        <Button
+          variant="outline"
+          size={size}
+          disabled={disabled || paperIds.length === 0}
+          className="gap-1.5"
+        >
           <Quote className="h-3.5 w-3.5" />
           {copied ? 'Copied' : 'Cite'}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => void handleCopy('bibtex')}>Copy BibTeX</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void handleCopy('ris')}>Copy RIS</DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => void handleDownload('bibtex')}>Download .bib</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void handleDownload('ris')}>Download .ris</DropdownMenuItem>
-        {!isBulk && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => void handleExportMarkdown()}>
-              Export Markdown
-            </DropdownMenuItem>
-          </>
-        )}
+        <CitationMenuItems paperIds={paperIds} onCopied={acknowledgeCopy} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

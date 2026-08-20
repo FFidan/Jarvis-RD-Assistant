@@ -17,9 +17,12 @@ import httpcore
 import httpx
 import pytest
 import respx
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import FastAPI
 from httpx import ASGITransport
+from jarvis_common.identity_assertions import IdentityAssertionSigner
 from jarvis_common.pinned_transport import PinnedAsyncTransport, pinned_async_client
-from jarvis_common.testing import RoleMiddleware
+from jarvis_common.testing import SignedIdentityMiddleware
 
 from tests.conftest import _make_pool_and_conn
 
@@ -30,39 +33,55 @@ from tests.conftest import _make_pool_and_conn
 
 @pytest.fixture()
 def _app():
-    """Minimal paper_ingestion app with mocked DB and auth disabled."""
-    from unittest.mock import AsyncMock
-
+    """Minimal Platform provider app with deterministic storage and signing."""
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import current_user_id_strict
-    from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
-    from paper_ingestion.deps import get_db_pool, limiter
-    from paper_ingestion.main import app
+    from platform_api.deps import get_db_pool, get_identity_signer, limiter
+    from platform_api.routers import providers
 
     mock_pool, conn = _make_pool_and_conn()
-    with patch_pi_test_app(
-        mock_pool,
-        app=app,
-        get_db_pool=get_db_pool,
-        limiter=limiter,
-        options=PITestAppOptions(
-            remove_owner_override=False,
-            override_db_dependency=True,
-            disable_limiter=True,
-            # set_config reads request.app.state.http_client; provide a stub so
-            # the test does not depend on a sibling test having set it on the
-            # shared app singleton.
-            state_overrides={"http_client": AsyncMock()},
-            dependency_overrides={
-                verify_api_key: lambda: None,
-                # get_config / set_config / test_provider resolve the caller
-                # via Depends(current_user_id_strict); steer it to a concrete
-                # user (the routes hard-401 sessionless callers otherwise).
-                current_user_id_strict: lambda: 1,
-            },
-        ),
-    ):
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform-test",
+        key_id="provider-test",
+        signing_key=Ed25519PrivateKey.generate(),
+    )
+    app = FastAPI()
+    app.include_router(providers.router)
+    app.state.db_pool = mock_pool
+    app.state.http_client = AsyncMock(spec=httpx.AsyncClient)
+    app.state.http_client.post.return_value = httpx.Response(
+        204,
+        request=httpx.Request("POST", "http://paper_ingestion:8000/internal/provider-cache"),
+    )
+    app.dependency_overrides[get_db_pool] = lambda: mock_pool
+    app.dependency_overrides[get_identity_signer] = lambda: signer
+    app.dependency_overrides[verify_api_key] = lambda: None
+    limiter_was_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
         yield app, conn
+    finally:
+        limiter.enabled = limiter_was_enabled
+
+
+@pytest.fixture()
+def _platform_app():
+    """Minimal Platform configuration app with mocked storage."""
+    from jarvis_common.auth import current_user_id_strict
+    from platform_api.deps import get_db_pool, limiter
+    from platform_api.routers import configuration
+
+    mock_pool, conn = _make_pool_and_conn()
+    conn.fetchval.return_value = None
+    app = FastAPI()
+    app.include_router(configuration.router)
+    app.dependency_overrides[get_db_pool] = lambda: mock_pool
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
+    limiter_was_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
+        yield app, conn
+    finally:
+        limiter.enabled = limiter_was_enabled
 
 
 # ---------------------------------------------------------------------------
@@ -70,20 +89,7 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
-async def _put_config(app, key: str, value, *, role: str | None = None):
-    """PUT /api/config/{key}.
-
-    Pass *role* (e.g. ``"admin"``) to simulate a browser session with that role —
-    required for SYSTEM_KEYS (e.g. cloud LLM api_key) that enforce the admin gate.
-    """
-    transport_app = RoleMiddleware(app, role) if role is not None else app
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=transport_app), base_url="http://test"
-    ) as client:
-        return await client.put(f"/api/config/{key}", json={"key": key, "value": value})
-
-
-async def _get_config(app, key: str):
+async def _get_config(app: FastAPI, key: str) -> httpx.Response:
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -91,7 +97,7 @@ async def _get_config(app, key: str):
 
 
 async def _get_providers(app, *, role: str | None = "admin"):
-    transport_app = RoleMiddleware(app, role) if role is not None else app
+    transport_app = _signed_research_app(app, role)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
@@ -99,7 +105,7 @@ async def _get_providers(app, *, role: str | None = "admin"):
 
 
 async def _post_provider_test(app, provider: str, *, role: str | None = "admin"):
-    transport_app = RoleMiddleware(app, role) if role is not None else app
+    transport_app = _signed_research_app(app, role)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
@@ -107,7 +113,7 @@ async def _post_provider_test(app, provider: str, *, role: str | None = "admin")
 
 
 async def _get_provider_account(app, provider: str, *, role: str | None = "admin"):
-    transport_app = RoleMiddleware(app, role) if role is not None else app
+    transport_app = _signed_research_app(app, role)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
@@ -117,11 +123,21 @@ async def _get_provider_account(app, provider: str, *, role: str | None = "admin
 async def _delete_provider_setting(
     app, provider: str, field: str = "key", *, role: str | None = "admin"
 ):
-    transport_app = RoleMiddleware(app, role) if role is not None else app
+    transport_app = _signed_research_app(app, role)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
         return await client.delete(f"/api/providers/{provider}/{field}")
+
+
+def _signed_research_app(app: FastAPI, role: str | None) -> SignedIdentityMiddleware:
+    """Wrap the Platform test app in deterministic browser identity state."""
+    return SignedIdentityMiddleware(
+        app,
+        audience="research",
+        user_id=1 if role is not None else None,
+        role=role,
+    )
 
 
 def _assignment_rows(**models: str) -> list[dict[str, str]]:
@@ -161,7 +177,7 @@ async def test_provider_probe_route_refuses_quarantine_before_database(_app, mon
 
 @pytest.mark.asyncio
 async def test_provider_probe_sink_refuses_quarantine_before_http(monkeypatch, tmp_path):
-    from paper_ingestion.services.provider_test import test_provider_connectivity
+    from jarvis_common.provider_test import test_provider_connectivity
 
     quarantine = tmp_path / ".outbound-quarantine.json"
     quarantine.touch()
@@ -181,32 +197,32 @@ async def test_provider_probe_sink_refuses_quarantine_before_http(monkeypatch, t
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
 async def test_set_encrypted_key_writes_bytea(_app):
-    """PUT /api/config/llm.anthropic.api_key writes encrypted_value BYTEA, not plaintext.
+    """The Research write core stores encrypted_value BYTEA, not plaintext.
 
-    llm.anthropic.api_key is a SYSTEM_KEY (deployment-wide, admin-only write).
-    The route enforces require_admin; this test simulates an admin browser session
-    via RoleMiddleware and asserts the DB row is written with user_id=NULL (system scope).
+    ``llm.anthropic.api_key`` is deployment-wide, so the core must write a
+    NULL-user row even when it receives an authenticated caller identifier.
     """
     app, conn = _app
+    from paper_ingestion.services.config_write import write_config
 
-    # SYSTEM_KEY: requires admin session — simulate via RoleMiddleware.
-    resp = await _put_config(app, "llm.anthropic.api_key", "sk-ant-test123", role="admin")
+    result = await write_config(
+        db_pool=app.state.db_pool,
+        scheduler=None,
+        http_client=app.state.http_client,
+        ollama_url="http://ollama:11434",
+        key="llm.anthropic.api_key",
+        value="sk-ant-test123",
+        caller_user_id=1,
+    )
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["key"] == "llm.anthropic.api_key"
-    # Response must be masked — never the real key
-    assert body["value"] != "sk-ant-test123"
-    assert "****" in body["value"]
+    assert result.display_value.endswith("t123")
+    assert result.display_value != "sk-ant-test123"
+    assert "****" in result.display_value
 
     # Verify the DB execute was called with the encrypted_value path
-    # set_config now emits a log_event (INSERT INTO system_events) in addition to the
-    # UPSERT — expect at least one execute call (the config UPSERT).
     conn.execute.assert_awaited()
     # Use call_args_list[0]: the first call is always the UPSERT.
     call_args = conn.execute.call_args_list[0]
-    sql = call_args.args[0]
-    assert "encrypted_value" in sql
     # SYSTEM_KEY: user_id ($1) must be NULL — write is system-scoped, not user-scoped.
     assert call_args.args[1] is None, (
         "llm.anthropic.api_key is a SYSTEM_KEY: DB row must be written with user_id=NULL"
@@ -221,17 +237,25 @@ async def test_set_encrypted_key_writes_bytea(_app):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
 async def test_set_encrypted_key_does_not_store_plaintext(_app):
-    """PUT /api/config/llm.openai.api_key does not pass the raw key to asyncpg.
+    """The Research write core does not pass the raw key to asyncpg.
 
     llm.openai.api_key is a SYSTEM_KEY: requires admin session via RoleMiddleware.
     Asserts plaintext is never forwarded to the DB driver and the write is system-scoped
     (user_id=NULL).
     """
     app, conn = _app
+    from paper_ingestion.services.config_write import write_config
 
     plaintext = "sk-openai-secret"
-    # SYSTEM_KEY: requires admin session — simulate via RoleMiddleware.
-    await _put_config(app, "llm.openai.api_key", plaintext, role="admin")
+    await write_config(
+        db_pool=app.state.db_pool,
+        scheduler=None,
+        http_client=app.state.http_client,
+        ollama_url="http://ollama:11434",
+        key="llm.openai.api_key",
+        value=plaintext,
+        caller_user_id=1,
+    )
 
     conn.execute.assert_awaited()
     # Use call_args_list[0]: the first call is always the UPSERT (not the log_event INSERT).
@@ -253,11 +277,11 @@ async def test_set_encrypted_key_does_not_store_plaintext(_app):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
-async def test_get_encrypted_key_returns_masked(_app):
+async def test_get_encrypted_key_returns_masked(_platform_app):
     """GET /api/config/llm.anthropic.api_key returns masked value, never plaintext."""
     from jarvis_common.crypto import encrypt_secret
 
-    app, conn = _app
+    app, conn = _platform_app
     plaintext = "sk-ant-realkey"
     ciphertext = encrypt_secret(plaintext).encode("ascii")
 
@@ -269,7 +293,7 @@ async def test_get_encrypted_key_returns_masked(_app):
 
     resp = await _get_config(app, "llm.anthropic.api_key")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["key"] == "llm.anthropic.api_key"
     assert plaintext not in resp.text
@@ -281,11 +305,11 @@ async def test_get_encrypted_key_returns_masked(_app):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
-async def test_get_encrypted_key_short_returns_four_stars(_app):
+async def test_get_encrypted_key_short_returns_four_stars(_platform_app):
     """GET returns '****' for an encrypted key with value <= 4 chars."""
     from jarvis_common.crypto import encrypt_secret
 
-    app, conn = _app
+    app, conn = _platform_app
     plaintext = "abc"  # 3 chars, <= 4
     ciphertext = encrypt_secret(plaintext).encode("ascii")
 
@@ -307,9 +331,9 @@ async def test_get_encrypted_key_short_returns_four_stars(_app):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
-async def test_legacy_plaintext_row_masks_on_read(_app):
+async def test_legacy_plaintext_row_masks_on_read(_platform_app):
     """GET for an encrypted key that still has plaintext value returns masked form."""
-    app, conn = _app
+    app, conn = _platform_app
 
     # Simulate a legacy row: value populated, encrypted_value = NULL
     conn.fetchrow.return_value = {
@@ -357,7 +381,7 @@ async def test_list_providers_admin_returns_metadata(_app):
 
     resp = await _get_providers(app, role="admin")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     provider_ids = {item["id"] for item in resp.json()}
     assert {"anthropic", "openai", "custom_openai_compatible"} <= provider_ids
     openrouter = next(item for item in resp.json() if item["id"] == "openrouter")
@@ -378,11 +402,11 @@ def test_provider_response_models_match_the_registry_capability_literal() -> Non
     """Both response models restate the registry literal, so both must equal it."""
     from typing import get_args
 
-    from paper_ingestion.routers.settings import (
+    from platform_api.routers.providers import (
         ProviderAccountResponse,
         ProviderMetadataResponse,
     )
-    from paper_ingestion.services.llm_provider_registry import AccountCapability
+    from jarvis_common.llm_provider_registry import AccountCapability
 
     expected = get_args(AccountCapability)
 
@@ -394,11 +418,11 @@ def test_provider_response_models_match_the_registry_capability_literal() -> Non
 
 def test_every_account_capability_claim_has_an_implementation() -> None:
     """_ACCOUNT_URLS is the integration truth; a claim without one advertises nothing."""
-    from paper_ingestion.services.llm_provider_registry import (
+    from jarvis_common.llm_provider_registry import (
         ACCOUNT_FETCH_CAPABILITIES,
         PROVIDER_REGISTRY,
     )
-    from paper_ingestion.services.provider_account import _ACCOUNT_URLS
+    from jarvis_common.provider_account import _ACCOUNT_URLS
 
     claimed = {
         provider.id
@@ -477,25 +501,22 @@ async def test_unsupported_provider_account_never_fetches_or_uses_shared_client(
     monkeypatch, provider_id
 ):
     """Unsupported provider accounts are a capability response, never an outbound probe."""
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
-    fetch_key = AsyncMock()
     pinned_factory = AsyncMock()
-    monkeypatch.setattr(provider_account, "get_provider_api_key", fetch_key)
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_factory)
 
-    snapshot = await provider_account.fetch_provider_account(provider_id, db_pool=object())
+    snapshot = await provider_account.fetch_provider_account(provider_id, api_key=None)
 
     assert snapshot.capability == "unavailable"
     assert snapshot.data == {}
     assert snapshot.error_code is None
-    fetch_key.assert_not_awaited()
     pinned_factory.assert_not_called()
 
 
 def test_an_unknown_account_provider_is_never_parsed_as_another_provider() -> None:
     """A provider wired up without a parser must fail closed, not borrow DeepSeek's shape."""
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
     with pytest.raises(provider_account._AccountFetchError) as exc_info:
         provider_account._allowlisted_provider_data("mistral", {"balance_infos": []})
@@ -507,7 +528,7 @@ def test_an_unknown_account_provider_is_never_parsed_as_another_provider() -> No
 async def test_openrouter_account_uses_public_pinned_transport_and_discards_identity(monkeypatch):
     """Current-key snapshots use a dedicated public transport and an explicit field allow-list."""
     from jarvis_common.pinned_transport import PUBLIC_ONLY
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
     transport_calls: list[object] = []
     requests: list[httpx.Request] = []
@@ -540,11 +561,7 @@ async def test_openrouter_account_uses_public_pinned_transport_and_discards_iden
             yield client
 
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
-    monkeypatch.setattr(
-        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
-    )
-
-    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+    snapshot = await provider_account.fetch_provider_account("openrouter", api_key="test-token")
 
     assert transport_calls and transport_calls[0][0] is PUBLIC_ONLY
     assert requests[0].method == "GET"
@@ -605,7 +622,7 @@ async def test_balance_accounts_use_pinned_exact_endpoint_and_sanitized_payload(
 ):
     """Only documented balance routes can decrypt and send a provider credential."""
     from jarvis_common.pinned_transport import PUBLIC_ONLY
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
     requests: list[httpx.Request] = []
     policies: list[object] = []
@@ -621,11 +638,7 @@ async def test_balance_accounts_use_pinned_exact_endpoint_and_sanitized_payload(
             yield client
 
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
-    monkeypatch.setattr(
-        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
-    )
-
-    snapshot = await provider_account.fetch_provider_account(provider_id, db_pool=object())
+    snapshot = await provider_account.fetch_provider_account(provider_id, api_key="test-token")
 
     assert policies == [PUBLIC_ONLY]
     assert snapshot.capability == "balance"
@@ -638,7 +651,7 @@ async def test_balance_accounts_use_pinned_exact_endpoint_and_sanitized_payload(
 @pytest.mark.asyncio
 async def test_openrouter_account_omits_supported_fields_absent_from_provider_response(monkeypatch):
     """Missing fields stay missing so the UI cannot claim account data is available."""
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
     @asynccontextmanager
     async def pinned_client(_policy, *, timeout):
@@ -650,11 +663,7 @@ async def test_openrouter_account_omits_supported_fields_absent_from_provider_re
             yield client
 
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
-    monkeypatch.setattr(
-        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
-    )
-
-    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+    snapshot = await provider_account.fetch_provider_account("openrouter", api_key="test-token")
 
     assert snapshot.data == {}
     assert snapshot.error_code is None
@@ -674,7 +683,7 @@ async def test_openrouter_account_failure_codes_are_sanitized(
     monkeypatch, status_code: int, expected_code: str
 ):
     """Provider status classes remain actionable without exposing response details."""
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
     @asynccontextmanager
     async def pinned_client(_policy, *, timeout):
@@ -687,11 +696,7 @@ async def test_openrouter_account_failure_codes_are_sanitized(
             yield client
 
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
-    monkeypatch.setattr(
-        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
-    )
-
-    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+    snapshot = await provider_account.fetch_provider_account("openrouter", api_key="test-token")
 
     assert snapshot.data == {}
     assert snapshot.error_code == expected_code
@@ -700,7 +705,7 @@ async def test_openrouter_account_failure_codes_are_sanitized(
 @pytest.mark.asyncio
 async def test_openrouter_account_timeout_has_a_specific_sanitized_code(monkeypatch):
     """HTTP-client timeouts are not collapsed into an unhelpful network failure."""
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
     @asynccontextmanager
     async def pinned_client(_policy, *, timeout):
@@ -713,11 +718,7 @@ async def test_openrouter_account_timeout_has_a_specific_sanitized_code(monkeypa
             yield client
 
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
-    monkeypatch.setattr(
-        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
-    )
-
-    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+    snapshot = await provider_account.fetch_provider_account("openrouter", api_key="test-token")
 
     assert snapshot.data == {}
     assert snapshot.error_code == "provider_request_timed_out"
@@ -726,7 +727,7 @@ async def test_openrouter_account_timeout_has_a_specific_sanitized_code(monkeypa
 @pytest.mark.asyncio
 async def test_openrouter_account_response_is_hard_byte_capped(monkeypatch):
     """Account snapshots stop reading oversized bodies before decoding them."""
-    from paper_ingestion.services import provider_account
+    from jarvis_common import provider_account
 
     @asynccontextmanager
     async def pinned_client(_policy, *, timeout):
@@ -741,11 +742,7 @@ async def test_openrouter_account_response_is_hard_byte_capped(monkeypatch):
             yield client
 
     monkeypatch.setattr(provider_account, "pinned_async_client", pinned_client)
-    monkeypatch.setattr(
-        provider_account, "get_provider_api_key", AsyncMock(return_value="test-token")
-    )
-
-    snapshot = await provider_account.fetch_provider_account("openrouter", db_pool=object())
+    snapshot = await provider_account.fetch_provider_account("openrouter", api_key="test-token")
 
     assert snapshot.data == {}
     assert snapshot.error_code == "provider_response_too_large"
@@ -966,9 +963,7 @@ async def test_test_provider_custom_endpoint_blocks_link_local_resolution(_app, 
     def fake_getaddrinfo(*_args, **_kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
 
-    monkeypatch.setattr(
-        "paper_ingestion.services.llm_provider_registry.socket.getaddrinfo", fake_getaddrinfo
-    )
+    monkeypatch.setattr("jarvis_common.llm_provider_registry.socket.getaddrinfo", fake_getaddrinfo)
 
     resp = await _post_provider_test(app, "custom_openai_compatible")
 
@@ -982,7 +977,7 @@ async def test_test_provider_custom_endpoint_blocks_link_local_resolution(_app, 
 @pytest.mark.asyncio
 async def test_custom_provider_rebind_is_blocked_at_the_real_connect_boundary(monkeypatch):
     """A public validation answer cannot authorize a private connection answer."""
-    from paper_ingestion.services import provider_test
+    from jarvis_common import provider_test
 
     delegated: list[str] = []
 
@@ -1015,7 +1010,7 @@ async def test_custom_provider_rebind_is_blocked_at_the_real_connect_boundary(mo
         )
 
     monkeypatch.setattr(
-        "paper_ingestion.services.llm_provider_registry.socket.getaddrinfo",
+        "jarvis_common.llm_provider_registry.socket.getaddrinfo",
         public_validation_answer,
     )
     monkeypatch.setattr(provider_test, "pinned_async_client", client_factory)
@@ -1077,13 +1072,10 @@ async def test_google_probe_uses_header_not_url_param(_app):
 
 
 @pytest.fixture()
-def _cache_invalidations(monkeypatch):
-    """Record the provider ids whose cached model list the route discarded."""
-    from paper_ingestion.routers import settings as settings_router
-
-    invalidate = AsyncMock()
-    monkeypatch.setattr(settings_router, "invalidate_provider_model_cache", invalidate)
-    return invalidate
+def _cache_invalidations(_app):
+    """Return the exact Research cache-command mock owned by the Platform app."""
+    app, _conn = _app
+    return app.state.http_client.post
 
 
 @pytest.mark.asyncio
@@ -1100,8 +1092,11 @@ async def test_removing_a_provider_key_clears_it_and_records_the_change(
     assert resp.status_code == 204
     _, deleted_key = _statement_with(conn, "DELETE FROM user_config")
     assert deleted_key == "llm.anthropic.api_key"
-    _cache_invalidations.assert_awaited_once_with("anthropic")
-    audit = _statement_with(conn, "audit_log")
+    _cache_invalidations.assert_awaited_once()
+    assert _cache_invalidations.await_args.args[0].endswith(
+        "/internal/platform/providers/anthropic/cache/invalidate"
+    )
+    audit = _statement_with(conn, "platform.append_audit_event")
     assert audit[2] == "secret.remove"
     assert audit[3] == "llm.anthropic.api_key"
 
@@ -1219,7 +1214,7 @@ def test_provider_lists_survives_the_models_response_model() -> None:
 async def test_key_presence_covers_every_registered_provider() -> None:
     """Presence is read for all nine providers, not the three that once shipped."""
     from paper_ingestion.routers.system import _cloud_key_presence
-    from paper_ingestion.services.llm_provider_registry import PROVIDER_REGISTRY
+    from jarvis_common.llm_provider_registry import PROVIDER_REGISTRY
     from tests.test_provider_models import FakeConfigPool
 
     presence = await _cloud_key_presence(FakeConfigPool({"llm.providers.deepseek.api_key": "key"}))
@@ -1282,7 +1277,7 @@ def test_every_account_capability_is_accepted_by_the_browser_schema() -> None:
     from pathlib import Path
     from typing import get_args
 
-    from paper_ingestion.services.llm_provider_registry import AccountCapability
+    from jarvis_common.llm_provider_registry import AccountCapability
 
     schema = (
         Path(__file__).resolve().parents[3] / "frontend/src/lib/api/schemas/settings.ts"

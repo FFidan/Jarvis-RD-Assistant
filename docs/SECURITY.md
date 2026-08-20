@@ -133,7 +133,6 @@ explicitly set in the environment. An explicit env var always wins.
 | `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for automatic magic-link delivery. Without them, an administrator can still create a 24-hour invitation or 15-minute recovery link and share it privately. Explicit empty-string secret values are rejected; leave the fields unset when email is intentionally disabled. | Optional; recommended when users need self-service recovery |
 | `SMTP_REPLY_TO` | Optional Reply-To address for sign-in emails. When set, email clients route replies here instead of the From address. Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
 | `SMTP_FROM_NAME` | Optional sender display name shown in the From header (e.g. `JARVIS RD`). Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP. | No |
-| `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the Telegram bot's own pinned address as a `/32` (tracks `JARVIS_TELEGRAM_BOT_IP`, which setup derives from `JARVIS_NET_SUBNET`; default `10.137.241.250`), so no other container on the bridge can send the header. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
 | `ALLOW_PRIVATE_SMTP_HOST` | Default `false`. When `false`, the SMTP host is validated at config-save AND at magic-link send time and rejected if it resolves to a private/loopback/link-local/reserved address (SSRF guard). Set `true` ONLY if you run a legitimate **internal SMTP relay** on a private address/hostname — otherwise magic-link delivery to that relay is refused. | No (set only for an internal relay) |
 
 ### Outbound Connection Pinning
@@ -181,30 +180,14 @@ self-hosted gateway use. Administrators should only configure endpoints they
 trust, because prompts and relevant source excerpts are sent there when a custom
 model is assigned.
 
-### X-Owner-User-Id Mechanism
+### Platform assertions and Telegram
 
-The Telegram bot sends `X-Owner-User-Id: <user_id>` to route per-user API
-calls. This header is only honored when all three guards pass:
-
-1. A valid `JARVIS_API_KEY` is present on the request.
-2. The source IP falls within `OWNER_OVERRIDE_ALLOWED_CIDRS`.
-3. The supplied `user_id` exists in the `users` table and is not deleted.
-
-Any guard failure returns 403. The mechanism is implemented in
-`current_user_id_strict_with_owner_override` in `libs/jarvis_common/jarvis_common/auth.py`.
-
-The bot resolves the `user_id` it injects from `telegram_user_pairings` — the
-durable record written when a user runs `/pair <token>` in the bot. This is
-the bot's sole identity mechanism; it does not rely on a fixed chat-id
-environment variable. The `telegram.owner_chat_id` config key is active: the scheduler reads it to
-resolve the deployment owner's Telegram chat ID for timezone-based nudge
-scheduling and job failure-alert delivery (see
-`services/telegram_bot/telegram_bot/scheduler.py`).
-
-The bot's product-data tenant isolation (projects, tasks, milestones, papers,
-author alerts) is enforced entirely server-side by the service endpoints it
-calls — the same routes the web app uses. The bot is a REST caller, not a
-second writer implementing its own scoping.
+Platform is the sole signer of short-lived, request-bound assertions. nginx
+obtains one for browser API traffic, and service principals receive only their
+declared capabilities. Telegram is a database-free REST client: it has no
+PostgreSQL or configuration-encryption credential and sends no generic
+impersonation header. Pairing and per-user authorization are resolved by the
+owning Platform or product API boundary.
 
 ### Config Key Rotation
 
@@ -220,32 +203,33 @@ of those two files by hand.
 
 ---
 
+## Database privilege boundary
+
+The v1.2.6 database contract is tracked in
+`db/ownership-manifest.json`. Platform,
+Research, and Learning each have a NOLOGIN owner role and a distinct runtime
+role. Operations has a NOLOGIN owner role; product runtimes reach only approved
+job capabilities rather than receiving a general Operations writer role.
+Runtime roles receive DML only in their own domain, selected cross-domain reads
+or capabilities, and no DDL authority. `PUBLIC` does not receive application
+schema creation or function execution by default.
+
+The ownership contract is validated independently of production grants. A
+real-PostgreSQL test projects its table privileges inside a rollback
+transaction, grants owner and same-domain runtime access, and confirms that
+foreign-domain roles have no table privileges. The source inventory separately
+fails unclassified cross-domain writes and unreviewed computed SQL.
+
+The physical `platform`, `research`, `learning`, and `ops` schemas are owned by
+NOLOGIN roles. Platform, Research, Learning, and LiteLLM use distinct runtime
+or migration identities. A one-shot migrator is the only normal migration
+authority; runtime startup checks the schema floor and integrity read-only.
+
+---
+
 ## Proxy-Trust and Source-IP Allowlisting
 
-Two auth surfaces use `request.client.host` to determine source IP for
-allowlist checks. The reported IP is rewritten by `ProxyHeadersMiddleware`
-when the request originates from a host in `trusted_proxy_hosts` (see
-`configure_middleware_and_errors` in
-`libs/jarvis_common/jarvis_common/app_factory.py`). If `trusted_proxy_hosts`
-is broader than the actual reverse-proxy fleet, an attacker behind any
-included host could spoof `X-Forwarded-For` to forge the source IP.
-
-The IP-allowlist call sites are:
-
-- `_ip_in_allowlist` (`libs/jarvis_common/jarvis_common/auth.py`) — backs
-  `OWNER_OVERRIDE_ALLOWED_CIDRS` for the `X-Owner-User-Id` header bypass;
-  mis-trusted XFF forges the operator's IP guard.
-- `_infra_ip_in_allowlist`
-  (`services/paper_ingestion/paper_ingestion/routers/infra_events.py`) —
-  backs `INFRA_INGEST_ALLOWED_CIDRS` for the Vector sidecar ingest
-  endpoint; mis-trusted XFF forges the sidecar's IP and reduces the
-  defense-in-depth to the static shared key (`INFRA_INGEST_KEY`) alone.
-  Note: `/infra-events` authenticates with a static shared key (constant-time
-  `hmac.compare_digest`) plus the CIDR allowlist — it is NOT a challenge-response
-  scheme and has no replay/nonce protection; the internal-network + default-deny
-  CIDR posture is the boundary.
-
-**Deployment requirement:** keep `trusted_proxy_hosts` scoped to the actual
+Keep `trusted_proxy_hosts` scoped to the actual
 reverse-proxy hop. Do not set `trusted_proxy_hosts="*"` in production. In the
 standard stack, the application trusts only loopback and the dashboard
 container's derived `/32` address. Nginx, in turn, accepts forwarded HTTPS
@@ -267,9 +251,10 @@ These values are numeric because uvicorn matches the immediate socket peer
 before applying `X-Forwarded-For`. Setup and update accept an IPv4 `/27` or
 larger network and derive the gateway and highest five usable addresses from
 `JARVIS_NET_SUBNET`; a custom subnet does not require Compose or nginx edits.
-Nginx also strips any browser-supplied `X-Owner-User-Id` header before proxying;
-only the container-internal caller that does not traverse nginx can set it.
-Override the defaults only for a proxy topology whose exact peers you control.
+Nginx defensively strips browser-supplied identity headers before proxying.
+Identity is established by the Platform assertion boundary, not a client-set
+header bypass. Override proxy defaults only for a topology whose exact peers
+you control.
 
 ### Transport header scope
 
@@ -311,6 +296,36 @@ resource, timestamp). This is the one sanctioned mutation: it brackets the
 transaction (RULEs are query-rewrite and role-independent, so `SECURITY DEFINER`
 cannot bypass them); the rule is re-enabled before commit, so ordinary writes
 remain no-ops.
+
+The v1.2.6 erasure contract removes that runtime DDL exception. Platform first
+disables the account and records an idempotent erasure request. Research must
+durably acknowledge Qdrant deletion or redaction and a residual scan showing
+zero attributable points; Research and Learning must also acknowledge their
+owner-local cleanup. Only then may an isolated execute-only principal invoke
+audited, DML-only finalization procedures. Qdrant unavailability, residual
+points, or a domain cleanup failure leaves the account disabled in a visible,
+retryable state; retry exhaustion requires operator attention rather than
+silently deleting relational data first.
+
+A completed erasure also removes the papers the account was the only holder of,
+together with the text extracted from them and the documents stored on disk, so
+that nothing an erased account contributed alone survives as retrievable
+content. Three kinds of paper are deliberately kept: one another researcher still
+holds in their library, which is that researcher's data and not the departing
+account's; one the deployment publishes to everybody; and one another account
+has already asked to discard, whose own cleanup has to finish before the paper
+can go. The rule is re-checked at the moment of deletion rather than taken from
+the earlier read, and a paper's stored document is reclaimed only once its
+record is actually gone, so a paper that turns out to be spoken for keeps the
+document it still needs. Removal runs before the relational cleanup, because
+library membership is what identifies those papers.
+
+Immutable audit events must not retain directly erasable identity or free-form
+personal data. The schema cutover moves that link and erasable metadata into a
+mutable Platform-owned subject mapping, sanitizes historical rows once through
+the migrator, and limits runtime erasure to deleting or anonymizing the mapping.
+The compatibility implementation above remains in effect until that migration
+and DML-only path are installed.
 
 ---
 
@@ -391,31 +406,38 @@ topology changes.
 
 The application does not perform database restores. An active administrator
 must type **RESTORE**; the app then writes a request to the `backup_trigger`
-volume. The `postgres-backup` sidecar takes the safety backup, verifies the
-selected restore point, loads staging databases, and performs the swap. The app
-mounts backup archives read-only, and the operations API key cannot start a
-restore.
+volume. That request remains inert until an operator runs
+`jarvis-research restore run` on the host. The command starts a profile-gated,
+transient restore job that takes the safety backup, verifies the selected
+restore point, loads staging databases, and performs the swap. Dedicated
+bootstrap and migration jobs then reconstruct database authority and advance
+the restored schema before maintenance can end. The continuously running
+`postgres-backup` service has read-only database authority, cannot resolve the
+restore credential, and cannot execute a restore. The app mounts backup
+archives read-only, and the operations API key cannot start a restore.
 
 A failure before the swap leaves the live databases in place. Once the swap
 begins, a failure keeps the service in maintenance until the operator recovers
 from the safety restore point. Restoring a point from a newer application
 version is refused.
 
-A compromised admin session can still request a destructive rollback. Typed
-confirmation and the safety point reduce accidents, not a deliberate admin
-action. See the [risk register](known-residual-risks.md).
+A compromised admin session can queue a destructive rollback but cannot execute
+it without host access. Typed confirmation, host execution, and the safety point
+reduce accidents; host compromise remains outside that protection. See the
+[risk register](known-residual-risks.md).
 
 ### Fresh-host uploads
 
 Browser uploads go to the dedicated `restore-uploader` container, not the
 application. It can write only to `restore_inbox` and can read only the hashed,
 expiring upload grant from `backup_trigger`. It has no database credentials,
-Docker socket, or host-secret mount. A restore still requires the separate
-admin confirmation.
+Docker socket, or host-secret mount. A restore still requires both the separate
+admin confirmation and the host command.
 
-The backup sidecar checks the signed archive set and proves that the supplied
+The scheduled backup service publishes only a bounded inbox inventory. The
+transient restore job checks the signed archive set and proves that the supplied
 key can decrypt it before the swap. It removes the one-time key and plaintext
 staging on normal and recorded-failure exits; a forced `SIGKILL` can delay that
-cleanup until the next run. Same-host restores do not use the inbox key. The
+cleanup until the next recovery run. Same-host restores do not use the inbox key. The
 [backup and restore guide](manual/backup-and-restore.md) contains both browser
 and headless recovery procedures.

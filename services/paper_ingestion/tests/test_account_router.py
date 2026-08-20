@@ -1,4 +1,4 @@
-"""Unit tests for paper_ingestion.routers.account."""
+"""Unit tests for platform_api.routers.account."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def test_email_confirmation_link_targets_the_account_settings_route_without_quer
     monkeypatch,
 ) -> None:
     """New confirmation links land on the working UI and keep the token off the wire."""
-    from paper_ingestion.routers.account import _build_email_confirm_link
+    from platform_api.routers.account import _build_email_confirm_link
 
     monkeypatch.setenv("APP_BASE_URL", "https://jarvis.example")
     request = SimpleNamespace(url=_FakeURL())
@@ -61,8 +61,8 @@ def test_email_confirmation_link_targets_the_account_settings_route_without_quer
 @pytest.mark.asyncio
 async def test_email_verification_sent_false_when_smtp_raises() -> None:
     """email_verification_sent must be False when send_magic_link raises."""
-    from paper_ingestion.routers.account import update_account
-    from paper_ingestion.models.account import AccountUpdate
+    from platform_api.routers.account import update_account
+    from platform_api.models.account import AccountUpdate
 
     user_row = _make_user_row()
     # fetchrow calls: (1) current user, (2) clash check → None, (3) refreshed user
@@ -76,7 +76,7 @@ async def test_email_verification_sent_false_when_smtp_raises() -> None:
     body = AccountUpdate(email="new@example.com")
 
     with patch(
-        "paper_ingestion.routers.account.send_magic_link",
+        "platform_api.routers.account.send_magic_link",
         AsyncMock(side_effect=RuntimeError("SMTP failure")),
     ):
         response = await update_account(body=body, request=request, user_id=1)
@@ -96,8 +96,8 @@ async def test_email_verification_sent_false_when_smtp_raises() -> None:
 )
 async def test_email_verification_sent_false_on_non_delivered(outcome) -> None:
     """A non-delivered enum return must NOT read as sent (no raise to catch)."""
-    from paper_ingestion.models.account import AccountUpdate
-    from paper_ingestion.routers.account import update_account
+    from platform_api.models.account import AccountUpdate
+    from platform_api.routers.account import update_account
 
     user_row = _make_user_row()
     pool, conn = make_pool_and_conn(fetchrow_side_effects=[user_row, None, user_row])
@@ -107,7 +107,7 @@ async def test_email_verification_sent_false_on_non_delivered(outcome) -> None:
     body = AccountUpdate(email="new@example.com")
 
     with patch(
-        "paper_ingestion.routers.account.send_magic_link",
+        "platform_api.routers.account.send_magic_link",
         AsyncMock(return_value=outcome),
     ):
         response = await update_account(body=body, request=request, user_id=1)
@@ -118,8 +118,8 @@ async def test_email_verification_sent_false_on_non_delivered(outcome) -> None:
 @pytest.mark.asyncio
 async def test_email_verification_sent_true_on_delivered() -> None:
     """A DELIVERED return sets email_verification_sent True."""
-    from paper_ingestion.models.account import AccountUpdate
-    from paper_ingestion.routers.account import update_account
+    from platform_api.models.account import AccountUpdate
+    from platform_api.routers.account import update_account
 
     user_row = _make_user_row()
     pool, conn = make_pool_and_conn(fetchrow_side_effects=[user_row, None, user_row])
@@ -129,7 +129,7 @@ async def test_email_verification_sent_true_on_delivered() -> None:
     body = AccountUpdate(email="new@example.com")
 
     with patch(
-        "paper_ingestion.routers.account.send_magic_link",
+        "platform_api.routers.account.send_magic_link",
         AsyncMock(return_value=MagicLinkDelivery.DELIVERED),
     ):
         response = await update_account(body=body, request=request, user_id=1)

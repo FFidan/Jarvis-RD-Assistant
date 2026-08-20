@@ -9,10 +9,11 @@
  * - Breadcrumb reflects lifecycle state.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { getCitationGraph } from '@/lib/api';
 import { PaperResearchLog } from '@/components/paper/PaperResearchLog';
 import type { Paper, Summary, Chunk, UserState } from '@/types';
 import { createTestQueryClient } from '@/__tests__/test-utils';
@@ -38,6 +39,8 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     fetchNotes: vi.fn().mockResolvedValue([]),
     fetchDecks: vi.fn().mockResolvedValue([]),
+    fetchPaperDetail: vi.fn().mockRejectedValue(new Error('not stubbed')),
+    getCitationGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
     zoteroGetLinkage: vi.fn().mockResolvedValue({
       zotero_item_key: null,
       zotero_citation_key: null,
@@ -167,6 +170,17 @@ function renderLog(
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('PaperResearchLog — section anchors', () => {
+  it('gives the evidence chip the passages it needs to number one', () => {
+    // Guards the wiring: EvidenceTab numbers a passage only when its parent
+    // hands down the chunk list. Without that prop the chip still renders, but
+    // unnumbered — a silent downgrade no EvidenceTab test can see.
+    renderLog({
+      chunks: [{ ...CHUNKS[0]!, id: 5, chunk_index: 12 }, CHUNKS[1]!],
+    });
+
+    expect(screen.getByText(/Passage 13 of 2/)).toBeInTheDocument();
+  });
+
   it('renders all required section ids', () => {
     renderLog();
     const requiredIds = [
@@ -189,12 +203,23 @@ describe('PaperResearchLog — section anchors', () => {
 });
 
 describe('PaperResearchLog — breadcrumb', () => {
-  it('shows Library / state / title in breadcrumb', () => {
+  it('shows Papers / state / title in breadcrumb', () => {
     renderLog();
-    expect(screen.getByText('Library')).toBeInTheDocument();
-    expect(screen.getByText('reading')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Papers' })).toHaveAttribute('href', '/feed?surface=library');
+    expect(screen.getByRole('link', { name: 'Reading' })).toHaveAttribute(
+      'href',
+      '/feed?surface=library&filter=reading',
+    );
     // Title is in the breadcrumb + also in h1; at least one instance
     expect(screen.getAllByText('Attention Is All You Need').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('uses the shared Reading List label for the to_read state', () => {
+    renderLog({ userState: { ...USER_STATE, state: 'to_read' } });
+    expect(screen.getByRole('link', { name: 'Reading List' })).toHaveAttribute(
+      'href',
+      '/feed?surface=library&filter=to_read',
+    );
   });
 
   it('does NOT render recommendation_score when null', () => {
@@ -283,10 +308,58 @@ describe('PaperResearchLog — coverage transparency', () => {
   });
 });
 
-describe('PaperResearchLog — cross-references', () => {
-  it('renders cross-reference data', () => {
+describe('PaperResearchLog — related work', () => {
+  it('renders semantic cross-reference data under its own heading', () => {
     renderLog();
+    expect(screen.getByText('Similar in your library')).toBeInTheDocument();
     expect(screen.getByText('Builds on seq2seq.')).toBeInTheDocument();
+  });
+
+  it('renders References and Cited by from the citation graph', async () => {
+    vi.mocked(getCitationGraph).mockResolvedValue({
+      nodes: [
+        { id: 1, title: 'Attention Is All You Need', citation_count: 95000, published_date: '2017-06-12', is_stub: false },
+        { id: 2, title: 'Sequence to Sequence Learning', citation_count: 20000, published_date: '2014-09-10', is_stub: false },
+        { id: 3, title: 'BERT', citation_count: 80000, published_date: '2018-10-11', is_stub: true },
+      ],
+      // 1 cites 2; 3 cites 1.
+      edges: [
+        { source: 1, target: 2, is_influential: true, context: null },
+        { source: 3, target: 1, is_influential: false, context: null },
+      ],
+    });
+
+    renderLog();
+
+    // Each row is asserted inside the list it belongs to: this paper cites
+    // "Sequence to Sequence Learning" (a reference) and BERT cites this paper
+    // (a citing paper), so swapping the two lists must fail here.
+    const references = await screen.findByTestId('citation-references');
+    const citedBy = screen.getByTestId('citation-cited-by');
+    expect(within(references).getByRole('heading', { name: /References/ })).toBeInTheDocument();
+    expect(within(citedBy).getByRole('heading', { name: /Cited by/ })).toBeInTheDocument();
+    expect(
+      within(references).getByRole('link', { name: 'Sequence to Sequence Learning' }),
+    ).toHaveAttribute('href', '/paper/2');
+    expect(within(references).queryByRole('link', { name: 'BERT' })).not.toBeInTheDocument();
+    expect(within(citedBy).getByRole('link', { name: 'BERT' })).toHaveAttribute(
+      'href',
+      '/paper/3',
+    );
+    expect(
+      within(citedBy).queryByRole('link', { name: 'Sequence to Sequence Learning' }),
+    ).not.toBeInTheDocument();
+    // Papers known only from a bibliography are labelled as such.
+    expect(within(citedBy).getByText('not in your library')).toBeInTheDocument();
+  });
+
+  it('offers a citation lookup when the paper has no citation data yet', async () => {
+    renderLog();
+
+    await waitFor(() => {
+      expect(screen.getByText('No citation data yet for this paper.')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Fetch citations/ })).toBeInTheDocument();
   });
 });
 
@@ -312,8 +385,8 @@ describe('PaperResearchLog — chunks (lazy)', () => {
       expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
     // Individual chunk header buttons visible
-    expect(screen.getByText(/Passage 0/)).toBeInTheDocument();
-    expect(screen.getByText(/Passage 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 1 of/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 2 of/)).toBeInTheDocument();
   });
 
   it('collapses chunks when toggle is clicked a second time', async () => {

@@ -18,14 +18,30 @@ wrapped in a per-test rollback transaction).
 
 from __future__ import annotations
 
+from typing import Any
+
+import httpx
 import pytest
 import pytest_asyncio
+from jarvis_common.testing_auth import SignedIdentityMiddleware
+from jarvis_common.testing_contract_apps import make_contract_client
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
+
+
+def _make_signed_client(app: Any, user_id: int) -> httpx.AsyncClient:
+    """Return a gateway-faithful Research client for one authenticated user."""
+    signed_app = SignedIdentityMiddleware(
+        app,
+        audience="research",
+        user_id=user_id,
+        role="user",
+    )
+    return make_contract_client(signed_app)
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -137,7 +153,6 @@ async def test_get_zotero_state_404_for_nonexistent_paper(_zotero_app):
     """
     from jarvis_common.auth import current_user_id_strict
     from jarvis_common.testing_contract_apps import (
-        make_contract_client,
         patch_dependency_overrides,
     )
 
@@ -145,7 +160,7 @@ async def test_get_zotero_state_404_for_nonexistent_paper(_zotero_app):
     nonexistent_paper_id = 999_999_999
 
     with patch_dependency_overrides(_zotero_app, set_overrides={current_user_id_strict: lambda: 1}):
-        async with make_contract_client(_zotero_app, None) as client:
+        async with _make_signed_client(_zotero_app, 1) as client:
             resp = await client.get(f"/api/papers/{nonexistent_paper_id}/zotero")
 
     # 403 (ownership guard fires before the SELECT) or 404 (paper not found) are
@@ -169,7 +184,6 @@ async def test_get_zotero_state_403_for_non_owner(contract_conn, _zotero_app):
     """
     from jarvis_common.auth import current_user_id_strict
     from jarvis_common.testing_contract_apps import (
-        make_contract_client,
         patch_dependency_overrides,
     )
 
@@ -189,7 +203,7 @@ async def test_get_zotero_state_403_for_non_owner(contract_conn, _zotero_app):
     with patch_dependency_overrides(
         _zotero_app, set_overrides={current_user_id_strict: lambda: intruder_id}
     ):
-        async with make_contract_client(_zotero_app, None) as client:
+        async with _make_signed_client(_zotero_app, int(intruder_id)) as client:
             resp = await client.get(f"/api/papers/{paper_id}/zotero")
 
     assert resp.status_code == 403, (
@@ -216,7 +230,6 @@ async def test_a170_push_to_zotero_owner_gets_202(contract_conn, _zotero_app):
     import jarvis_common.task_registry as task_registry
     from jarvis_common.auth import current_user_id_strict
     from jarvis_common.testing_contract_apps import (
-        make_contract_client,
         patch_dependency_overrides,
     )
 
@@ -235,7 +248,7 @@ async def test_a170_push_to_zotero_owner_gets_202(contract_conn, _zotero_app):
         ),
         patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
     ):
-        async with make_contract_client(_zotero_app, None) as client:
+        async with _make_signed_client(_zotero_app, int(owner_id)) as client:
             resp = await client.post(f"/api/papers/{paper_id}/zotero")
 
     assert resp.status_code == 202, (
@@ -257,7 +270,6 @@ async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn, _zotero_app
     """
     from jarvis_common.auth import current_user_id_strict
     from jarvis_common.testing_contract_apps import (
-        make_contract_client,
         patch_dependency_overrides,
     )
 
@@ -274,7 +286,7 @@ async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn, _zotero_app
     with patch_dependency_overrides(
         _zotero_app, set_overrides={current_user_id_strict: lambda: intruder_id}
     ):
-        async with make_contract_client(_zotero_app, None) as client:
+        async with _make_signed_client(_zotero_app, int(intruder_id)) as client:
             resp = await client.post(f"/api/papers/{paper_id}/zotero")
 
     assert resp.status_code == 403, (
@@ -300,7 +312,6 @@ async def test_a172_resync_owner_gets_202(contract_conn, _zotero_app):
     import jarvis_common.task_registry as task_registry
     from jarvis_common.auth import current_user_id_strict
     from jarvis_common.testing_contract_apps import (
-        make_contract_client,
         patch_dependency_overrides,
     )
 
@@ -319,7 +330,7 @@ async def test_a172_resync_owner_gets_202(contract_conn, _zotero_app):
         ),
         patch.dict(task_registry._TASK_MAP, {"zotero.resync": mock_task}),
     ):
-        async with make_contract_client(_zotero_app, None) as client:
+        async with _make_signed_client(_zotero_app, int(owner_id)) as client:
             resp = await client.post(f"/api/zotero/resync/{paper_id}")
 
     assert resp.status_code == 202, (
@@ -491,7 +502,6 @@ async def test_a172_resync_non_owner_gets_403(contract_conn, _zotero_app):
     """
     from jarvis_common.auth import current_user_id_strict
     from jarvis_common.testing_contract_apps import (
-        make_contract_client,
         patch_dependency_overrides,
     )
 
@@ -508,7 +518,7 @@ async def test_a172_resync_non_owner_gets_403(contract_conn, _zotero_app):
     with patch_dependency_overrides(
         _zotero_app, set_overrides={current_user_id_strict: lambda: intruder_id}
     ):
-        async with make_contract_client(_zotero_app, None) as client:
+        async with _make_signed_client(_zotero_app, int(intruder_id)) as client:
             resp = await client.post(f"/api/zotero/resync/{paper_id}")
 
     assert resp.status_code == 403, (

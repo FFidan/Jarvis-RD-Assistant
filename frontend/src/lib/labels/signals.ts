@@ -8,7 +8,7 @@ export const SIGNAL_LABELS: Record<string, string> = {
   recency: 'Recency',
   citation_pagerank: 'Citation PageRank',
   citation_count: 'Citation count',
-  citation_adamic_adar: 'Shared citation neighbourhood',
+  citation_adamic_adar: 'Shared citation neighborhood',
   classifier: 'Personal classifier',
   // Short aliases used in why-chip / score breakdown contexts
   emb: 'Semantic similarity',

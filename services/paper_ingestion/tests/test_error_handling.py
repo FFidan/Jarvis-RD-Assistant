@@ -204,7 +204,7 @@ def _stub_rag_deps():
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             dependency_overrides={
                 get_embedder: lambda: fake_embedder,
                 get_http_client: lambda: fake_http,

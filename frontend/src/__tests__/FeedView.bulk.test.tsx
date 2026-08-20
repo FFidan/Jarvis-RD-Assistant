@@ -58,10 +58,10 @@ function makeQueryClient() {
   return createTestQueryClient();
 }
 
-function renderFeedView() {
+function renderFeedView(scope: 'library' | 'corpus' = 'library') {
   return renderWithProviders(
     <MemoryRouter>
-      <FeedView surface="library" />
+      <FeedView surface="library" scope={scope} />
     </MemoryRouter>,
     { queryClient: makeQueryClient() },
   );
@@ -97,5 +97,19 @@ describe('FeedView — bulk selection wiring', () => {
     });
     // Library surface offers Mark Reading + Mark Done + Trash + Star/Unstar
     expect(screen.getByRole('button', { name: 'Mark Reading' })).toBeInTheDocument();
+  });
+
+  it('keeps lifecycle actions out of the corpus while preserving its save action', async () => {
+    const user = userEvent.setup();
+    renderFeedView('corpus');
+
+    await user.click(
+      await screen.findByLabelText(/select bulk selection test paper for bulk action/i),
+    );
+
+    expect(screen.getByRole('button', { name: 'Save to Reading List' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark Reading' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark Done' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Move to Trash' })).not.toBeInTheDocument();
   });
 });

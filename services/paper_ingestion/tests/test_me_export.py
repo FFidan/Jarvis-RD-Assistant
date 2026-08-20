@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing import SignedIdentityMiddleware
 from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
 
@@ -69,7 +70,7 @@ def _export_app(pool: MagicMock):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             disable_limiter=True,
             dependency_overrides={
                 verify_api_key: lambda: None,
@@ -81,8 +82,14 @@ def _export_app(pool: MagicMock):
 
 
 async def _get_export(app) -> httpx.Response:
+    signed_app = SignedIdentityMiddleware(
+        app,
+        audience="research",
+        user_id=1,
+        role="member",
+    )
     async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=signed_app), base_url="http://test"
     ) as client:
         return await client.get("/api/me/export", headers={"X-API-Key": "test"})
 

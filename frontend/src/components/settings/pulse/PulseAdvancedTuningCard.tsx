@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/tooltip';
 import { ChevronDown, ChevronRight, Link as LinkIcon } from 'lucide-react';
 import {
+  CLASSIFIER_OPT_IN_CONFIG_KEY,
   DEFAULT_PULSE_WEIGHTS,
   CORE_SIGNAL_KEYS,
   OPTIONAL_SIGNAL_KEYS,
@@ -181,6 +182,13 @@ export function PulseAdvancedTuningCard({
     enabled: advancedOpen,
     staleTime: 30_000,
   });
+  // Read from the settings the page already loads, not from the debug query:
+  // that query only runs once this card is expanded, and someone whose ranking
+  // changed has to be told without going looking for it.
+  const classifierOptIn = getConfigValue<boolean>(configs, CLASSIFIER_OPT_IN_CONFIG_KEY, false);
+  // The setting exists only once the threshold has been crossed, so its absence
+  // means there is nothing to say yet — which is not the same as declining it.
+  const classifierDecided = configs.some((c) => c.key === CLASSIFIER_OPT_IN_CONFIG_KEY);
 
   const recommendationEnabled = getConfigValue<boolean>(configs, 'recommendation.enabled', true);
   const likedWeightConfig = getConfigValue<number>(configs, 'recommendation.liked_weight', 0.6);
@@ -211,6 +219,14 @@ export function PulseAdvancedTuningCard({
     useSyncedState<Record<PulseWeightKey, number>>(pulseWeightsServer);
 
   const onWeightsSaveError = onSaveError('Could not update the signal weights');
+
+  const setClassifierOptIn = (value: boolean) => {
+    if (settingsControlsDisabled) return;
+    setMut.mutate(
+      { key: CLASSIFIER_OPT_IN_CONFIG_KEY, value },
+      { onError: onSaveError('Could not change the personal classifier setting') },
+    );
+  };
 
   const updatePulseWeight = (key: PulseWeightKey, value: number) => {
     if (settingsControlsDisabled) return;
@@ -280,6 +296,31 @@ export function PulseAdvancedTuningCard({
         </button>
       </CardHeader>
 
+      {/* Outside the collapse: a change to how papers are ranked has to be
+          readable without opening a panel named "Advanced tuning". */}
+      {classifierDecided && (
+        <div
+          className="mx-6 mb-3 space-y-2 rounded-md border p-3 text-xs"
+          data-testid="classifier-opt-in-notice"
+        >
+          <p>
+            {classifierOptIn
+              ? 'You have rated enough papers for a personal classifier, so Pulse now lets what you rated influence how papers are ranked. Turning it off ranks papers the way it did before.'
+              : 'Your personal classifier is trained but is not influencing how papers are ranked.'}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            disabled={settingsControlsDisabled}
+            onClick={() => setClassifierOptIn(!classifierOptIn)}
+          >
+            {classifierOptIn ? 'Stop using my ratings' : 'Use my ratings'}
+          </Button>
+        </div>
+      )}
+
       {advancedOpen && (
         <CardContent id="pulse-advanced-tuning" className="space-y-5 border-t pt-4">
           <div className="space-y-4">
@@ -338,22 +379,21 @@ export function PulseAdvancedTuningCard({
             <div className="space-y-3 rounded-md border border-dashed p-3">
               <div>
                 <h5 className="text-xs font-semibold">
-                  Optional signals — need extra data or dependencies
+                  Optional signals
                 </h5>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  These signals are inactive by default. Enable them once the prerequisites are in
-                  place.
+                  These signals start inactive. Standard installations include their
+                  required packages; some signals also need enough research data.
                 </p>
                 <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
                   <li>
                     <span className="font-medium">Citation signals</span> (Citation PageRank,
-                    Citation count, Shared citation neighbourhood) — need the{' '}
-                    <code className="rounded bg-muted px-0.5">networkx</code> package on the server.
+                    Citation count, Shared citation neighborhood) — need citation data for the
+                    papers being ranked.
                   </li>
                   <li>
-                    <span className="font-medium">Personal classifier</span> — needs the{' '}
-                    <code className="rounded bg-muted px-0.5">scikit-learn</code> package on the
-                    server, plus ~30 Pulse ratings.
+                    <span className="font-medium">Personal classifier</span> — becomes useful after
+                    about 30 Pulse ratings.
                   </li>
                 </ul>
                 <p className="mt-1.5 text-[11px] text-muted-foreground">

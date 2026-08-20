@@ -44,8 +44,8 @@ vi.mock('@/lib/api', async () => {
       { source_type: 'local', count: 5 },
     ]),
     fetchPapersByStatus: async () => ([
-      { status: 'new', count: 8 },
-      { status: 'read', count: 7 },
+      { status: 'to_read', count: 8 },
+      { status: 'done', count: 7 },
     ]),
   });
 });
@@ -78,8 +78,7 @@ describe('AnalyticsPage — Analytics IA', () => {
     // breadcrumb "Analytics" is an anchor link
     expect(screen.getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
     // breadcrumb group "Learn" (the real sidebar group for Analytics) appears in the nav
-    const nav = screen.getByRole('navigation');
-    expect(nav).toHaveTextContent('Learn');
+    expect(screen.getByRole('link', { name: 'Learn' })).toHaveAttribute('href', '/cards?mode=library');
   });
 
   it('renders REVIEW · 30 DAYS marker with default days', () => {

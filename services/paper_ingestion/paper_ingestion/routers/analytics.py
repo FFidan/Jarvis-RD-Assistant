@@ -171,8 +171,9 @@ async def feedback_summary(
             FROM recommendation_feedback rf
             JOIN papers p ON p.id = rf.paper_id
             WHERE rf.user_id = $1
+              AND rf.created_at > NOW() - INTERVAL '90 days'
             GROUP BY p.id, p.title
-            ORDER BY positive_count DESC
+            ORDER BY MAX(rf.created_at) DESC
             LIMIT 30
             """,
             user_id,

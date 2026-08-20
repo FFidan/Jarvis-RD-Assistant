@@ -13,6 +13,8 @@ SNAPSHOT_STORAGE_PATH     snapshot_storage_path     card_generator.py
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from jarvis_common.config import JarvisCommonSettings
 from pydantic import Field
 
@@ -37,6 +39,18 @@ class LearningEngineSettings(JarvisCommonSettings):
             "Learning Engine reads snapshots written by Paper Ingestion's "
             "summarization pipeline when generating cards."
         ),
+    )
+    platform_api_url: str = Field(
+        default="http://platform_api:8003",
+        description="Platform signer origin for owner-command authorization (PLATFORM_API_URL).",
+    )
+    paper_ingestion_url: str = Field(
+        default="http://paper_ingestion:8000",
+        description="Research owner API origin for domain commands (PAPER_INGESTION_URL).",
+    )
+    learning_service_token_file: Path = Field(
+        default=Path("/run/secrets/learning_service_token"),
+        description="Learning-only service credential used for owner commands.",
     )
 
 

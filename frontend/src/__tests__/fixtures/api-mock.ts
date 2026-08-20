@@ -37,7 +37,12 @@ export type ApiOverrides = Partial<Record<keyof ApiSurface, (...args: never[]) =
 // Pure synchronous helpers on the api surface. They stay real: replacing a
 // sync formatter/comparator with an async rejecting stub would hand a Promise
 // to JSX/sort call sites, which React rejects as an "async Client Component".
-const PURE_SYNC_EXPORTS = new Set(['ApiError', 'cloudProviderLabel', 'compareCloudProviders']);
+const PURE_SYNC_EXPORTS = new Set([
+  'ApiError',
+  'cloudProviderLabel',
+  'compareCloudProviders',
+  'resolveFeedView',
+]);
 
 export async function createApiMock(overrides: ApiOverrides = {}): Promise<ApiSurface> {
   const actual = await vi.importActual<ApiSurface>('@/lib/api');

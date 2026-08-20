@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: app-wide -->
+<!-- verified-against-UI: 2026-08-19 | routes: app-wide -->
 
 # User guide
 
@@ -38,10 +38,10 @@ These documents are part of the repository and are available in the **Get Starte
 | [First sign-in and setup](getting-started.md) | Create the first administrator, invite family, and add the first paper |
 | [Access from other devices](access-modes.md) | Choose localhost, private HTTPS, LAN diagnostics, Cloudflare, or your own domain |
 | [Passkeys](passkeys.md) | Add, remove, use, and recover from passkeys with or without email |
-| [Navigation](navigation.md) | Sidebar, search, jobs, Pomodoro timer, and appearance controls |
-| [Home & My Day](home-my-day.md) | Home dashboard, My Day page |
-| [Research Feed & Library](research-feed.md) | Inbox, Library, Discover (search), and Trash views of the feed |
-| [Paper Detail](paper-detail.md) | Three-pane paper view: metadata, full text, RAG chat |
+| [Navigation](navigation.md) | The simple and full sidebars, the three search inputs, jobs, and the focus timer |
+| [Home & My Day](home-my-day.md) | The focused daily page, and the Home dashboard |
+| [Papers & Discover](research-feed.md) | Inbox, saved papers, Discover, and Trash |
+| [Paper Detail](paper-detail.md) | The reading view: summaries, evidence anchors, related work, notes, and per-paper chat |
 | [Ask (Cross-paper RAG)](ask.md) | Ask questions that span your entire library |
 | [Pulse Deck](pulse.md) | Daily recommendation deck, card rating, and schedule configuration |
 | [Projects](projects.md) | Organising papers into named projects |
@@ -50,9 +50,9 @@ These documents are part of the repository and are available in the **Get Starte
 | [Extraction Table](extraction-table.md) | Structured data extracted from papers |
 | [Learning Cards](learning-cards.md) | FSRS spaced-repetition review and card library |
 | [Analytics](analytics.md) | Reading activity charts and corpus statistics |
-| [Settings](settings.md) | Sources, topics, automation, integrations, and account |
+| [Settings](settings.md) | Account and appearance, sources, topics, automation, and integrations |
 | [What your hardware gets you](hardware-and-models.md) | How detected hardware maps to model recommendations |
 | [Hardware support matrix](hardware-support-matrix.md) | Supported GPU vendors and acceleration status |
-| [Telegram](telegram.md) | Pairing your Telegram account and (admin) bot-token configuration |
+| [Telegram](telegram.md) | Pairing your Telegram account, the commands, and the admin bot token |
 | [Backup and restore](backup-and-restore.md) | Keep off-site restore points and recover the instance (admin) |
 | [Admin and multi-user operation](admin.md) | Invite users, manage access, health, backups, and logs (admin only) |

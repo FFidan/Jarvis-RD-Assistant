@@ -8,17 +8,19 @@ Each test exercises the real code path with a mocked DB so the relevant
 fetchrow returns None and verifies that RuntimeError (not
 AssertionError/AttributeError) is raised.
 
-Also covers F10 best-effort behaviour: a daily_log write failure must not fail
-the PUT /reading response.
+Also covers the durable projection boundary: a Learning delivery failure must
+not fail the PUT /reading response after its outbox transaction commits.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.testing import make_pool_and_conn
 
 
@@ -49,6 +51,139 @@ async def test_get_feed_counts_raises_runtime_error_when_fetchrow_returns_none()
             await get_feed_counts(scope="library", db_pool=pool, user_id=1)
 
 
+async def test_get_feed_counts_threads_active_filters_to_each_count_query():
+    """Active source and topic-group filters reach every applicable count query."""
+    from paper_ingestion.queries.predicates import paper_untagged_sql
+
+    aggregate_row = {
+        "inbox": 1,
+        "library": 0,
+        "reading_list": 0,
+        "reading": 0,
+        "done": 0,
+        "starred": 0,
+        "trash": 0,
+        "active": 1,
+        "kept": 0,
+        "all_non_trash": 1,
+    }
+    pool, conn = make_pool_and_conn(fetchrow_return=aggregate_row)
+    facet_counts = AsyncMock(return_value=({"arxiv": 0}, [], 0))
+
+    with (
+        patch(
+            "paper_ingestion.papers_service.fetch_feed_facet_counts",
+            facet_counts,
+        ),
+        patch(
+            "paper_ingestion.papers_service.paper_untagged_sql",
+            wraps=paper_untagged_sql,
+        ) as status_untagged_predicate,
+    ):
+        from paper_ingestion.papers_service import get_feed_counts
+
+        result = await get_feed_counts(
+            scope="library",
+            db_pool=pool,
+            user_id=7,
+            view="library",
+            source="pubmed",
+            topic_id=19,
+            untagged=True,
+        )
+
+    assert result.library == 0
+    assert conn.fetchrow.await_args.args[1:] == (7, "pubmed", 19)
+    facet_counts.assert_awaited_once_with(
+        conn,
+        7,
+        scope="library",
+        view="library",
+        source="pubmed",
+        topic_id=19,
+        untagged=True,
+    )
+    status_untagged_predicate.assert_called_once_with()
+
+
+async def test_untagged_conditions_source_counts_but_not_its_own_group():
+    """The active no-topic selection applies once beyond its own bucket query."""
+    from paper_ingestion.queries.predicates import paper_untagged_sql
+    from paper_ingestion.services.feed_query import fetch_feed_facet_counts
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[[], []])
+    conn.fetchrow = AsyncMock(return_value={"cnt": 0})
+
+    with patch(
+        "paper_ingestion.services.feed_query.paper_untagged_sql",
+        wraps=paper_untagged_sql,
+    ) as untagged_predicate:
+        result = await fetch_feed_facet_counts(
+            conn,
+            7,
+            scope="library",
+            view="library",
+            untagged=True,
+        )
+
+    assert result == ({}, [], 0)
+    assert untagged_predicate.call_count == 2
+
+
+async def test_feed_counts_route_threads_untagged_selection():
+    """The HTTP boundary preserves the active no-topic selection."""
+    from jarvis_common.auth import get_current_user_id
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.routers.papers_feed import router as feed_router
+
+    app = FastAPI()
+    app.include_router(feed_router)
+    pool, _conn = make_pool_and_conn()
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_current_user_id] = lambda: 7
+    service_counts = AsyncMock(
+        return_value={
+            "inbox": 0,
+            "library": 0,
+            "reading_list": 0,
+            "reading": 0,
+            "done": 0,
+            "starred": 0,
+            "trash": 0,
+            "active": 0,
+            "kept": 0,
+            "all_non_trash": 0,
+            "by_source": {},
+            "by_topic": [],
+            "untagged": 0,
+        }
+    )
+
+    with patch(
+        "paper_ingestion.routers.papers_feed.papers_service.get_feed_counts",
+        service_counts,
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/papers/feed/counts",
+                params={"scope": "library", "untagged": "true"},
+            )
+
+    assert response.status_code == 200
+    service_counts.assert_awaited_once_with(
+        "library",
+        pool,
+        7,
+        view=None,
+        source=None,
+        topic_id=None,
+        untagged=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 2. routers.papers_lifecycle.annotate_paper — RETURNING row is None
 #
@@ -76,7 +211,6 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
     """
     from jarvis_common.auth import (
         get_current_user_id,
-        get_current_user_id_or_bot,
         verify_api_key,
     )
     from paper_ingestion.deps import get_db_pool
@@ -91,7 +225,7 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_current_user_id] = lambda: 7
-    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 7
+    app.dependency_overrides[get_current_user_id] = lambda: 7
 
     with (
         patch(
@@ -114,25 +248,16 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# F10: best-effort — daily_log write failure must not fail PUT /reading
+# F10: best-effort — Learning delivery failure must not fail PUT /reading
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_f10_daily_log_failure_does_not_fail_reading_mark():
-    """PUT /reading returns 200 even when the daily_log upsert raises.
-
-    Patches: ownership check → granted; assert_paper_in_states → allowed;
-    conn.fetchval → 'to_read' (state_before); _upsert_state_and_starred → no-op;
-    conn.execute → raises asyncpg.PostgresError (simulates daily_log failure).
-
-    Verified: papers_lifecycle.py — the daily_log execute is wrapped in try/except.
-    """
-    import asyncpg
+async def test_f10_projection_failure_does_not_fail_reading_mark():
+    """PUT /reading succeeds when delivery is pending after durable outbox insertion."""
 
     from jarvis_common.auth import (
         get_current_user_id,
-        get_current_user_id_or_bot,
         verify_api_key,
     )
     from paper_ingestion.deps import get_db_pool
@@ -140,14 +265,14 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
 
     app = FastAPI()
     app.include_router(lifecycle_router)
+    app.state.http_client = object()
 
     pool, conn = make_pool_and_conn(fetchval_return="to_read")
-    conn.execute = AsyncMock(side_effect=asyncpg.PostgresError("simulated daily_log failure"))
 
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_current_user_id] = lambda: 7
-    app.dependency_overrides[get_current_user_id_or_bot] = lambda: 7
+    app.dependency_overrides[get_current_user_id] = lambda: 7
 
     with (
         patch(
@@ -162,6 +287,14 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
             "paper_ingestion.routers.papers_lifecycle._upsert_state_and_starred",
             AsyncMock(return_value=None),
         ),
+        patch(
+            "paper_ingestion.routers.papers_lifecycle.record_event",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "paper_ingestion.routers.papers_lifecycle.deliver_pending_events",
+            AsyncMock(side_effect=RuntimeError("Learning unavailable")),
+        ),
     ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -169,5 +302,145 @@ async def test_f10_daily_log_failure_does_not_fail_reading_mark():
             resp = await client.put("/api/papers/42/reading")
 
     assert resp.status_code == 200, (
-        f"PUT /reading must succeed even when daily_log write fails; got {resp.status_code}: {resp.text[:200]}"
+        "PUT /reading must succeed when the durable projection is pending; "
+        f"got {resp.status_code}: {resp.text[:200]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_projection_retries_a_non_mapping_acknowledgement() -> None:
+    """A malformed Learning response remains pending for bounded retry."""
+    from paper_ingestion.repos import domain_events
+
+    event_id = uuid.uuid4()
+    pool, conn = make_pool_and_conn()
+    conn.fetch.return_value = [
+        {
+            "id": event_id,
+            "event_type": "paper.read",
+            "user_id": 7,
+            "paper_id": 42,
+        }
+    ]
+    response = MagicMock()
+    response.json.return_value = []
+    client = AsyncMock()
+    client.post.return_value = response
+
+    with patch(
+        "paper_ingestion.repos.domain_events.authorize_service_command",
+        AsyncMock(return_value={"X-Request-Id": str(event_id)}),
+    ):
+        delivered = await domain_events.deliver_pending_events(
+            pool,
+            client,
+            settings=domain_events.DomainDeliverySettings(
+                platform_url="http://platform",
+                learning_url="http://learning",
+                service_token="test-token",
+            ),
+        )
+
+    assert delivered == 0
+    assert conn.execute.await_args is not None
+    assert conn.execute.await_args.args[1] == event_id
+
+
+@pytest.mark.asyncio
+async def test_outbox_event_persists_only_trace_and_correlation_context() -> None:
+    """Outbox metadata excludes user-content while retaining delivery ancestry."""
+    from paper_ingestion.repos.domain_events import record_event
+
+    event_id = uuid.uuid4()
+    _pool, conn = make_pool_and_conn(fetchval_return=event_id)
+    corr = uuid.uuid4()
+    token = correlation_id_var.set(corr)
+    try:
+        await record_event(conn, event_type="paper.read", user_id=7, paper_id=42)
+    finally:
+        correlation_id_var.reset(token)
+
+    payload = conn.execute.await_args.args[5]
+    assert payload == {"correlation_id": str(corr)}
+
+
+@pytest.mark.asyncio
+async def test_outbox_delivery_restores_persisted_correlation_for_signed_command() -> None:
+    """Delivery uses the original correlation context when authorizing the owner command."""
+    from jarvis_common.telemetry import correlation_id
+    from paper_ingestion.repos import domain_events
+
+    event_id = uuid.uuid4()
+    corr = uuid.uuid4()
+    pool, conn = make_pool_and_conn()
+    conn.fetch.return_value = [
+        {
+            "id": event_id,
+            "event_type": "paper.read",
+            "user_id": 7,
+            "paper_id": 42,
+            "payload": {"correlation_id": str(corr)},
+        }
+    ]
+    client = AsyncMock()
+    response = MagicMock()
+    response.json.return_value = {"acknowledged": True}
+    client.post.return_value = response
+    seen: list[tuple[str | None, str | None]] = []
+
+    async def authorize(*_args, **_kwargs):
+        command = _kwargs["command"]
+        seen.append((correlation_id(), command.request_id))
+        return {
+            "X-Jarvis-Identity": "signed",
+            "X-Request-Id": command.request_id,
+            "X-Correlation-Id": correlation_id(),
+        }
+
+    with patch("paper_ingestion.repos.domain_events.authorize_service_command", authorize):
+        await domain_events.deliver_pending_events(
+            pool,
+            client,
+            settings=domain_events.DomainDeliverySettings(
+                platform_url="http://platform",
+                learning_url="http://learning",
+                service_token="test-token",
+            ),
+        )
+
+    assert seen == [(str(corr), str(event_id))]
+    assert client.post.await_args_list[0].kwargs["headers"]["X-Request-Id"] == str(event_id)
+    assert client.post.await_args_list[0].kwargs["headers"]["X-Correlation-Id"] == str(corr)
+
+
+@pytest.mark.asyncio
+async def test_service_command_keeps_request_id_distinct_from_active_correlation() -> None:
+    """The signed idempotency identifier never replaces the active correlation header."""
+    from jarvis_common.service_auth import ServiceCommand, authorize_service_command
+
+    corr = uuid.uuid4()
+    token = correlation_id_var.set(corr)
+    client = AsyncMock()
+    response = MagicMock()
+    response.json.return_value = {"assertion": "signed"}
+    client.post.return_value = response
+    try:
+        headers = await authorize_service_command(
+            client,
+            platform_url="http://platform",
+            principal="research",
+            token="token",
+            command=ServiceCommand(
+                audience="learning",
+                method="POST",
+                path="/internal/domains/paper-read",
+                user_id=7,
+                request_id="event-id",
+            ),
+        )
+    finally:
+        correlation_id_var.reset(token)
+
+    assert client.post.await_args.kwargs["json"]["request_id"] == "event-id"
+    assert headers["X-Request-Id"] == "event-id"
+    assert headers["X-Correlation-Id"] == str(corr)

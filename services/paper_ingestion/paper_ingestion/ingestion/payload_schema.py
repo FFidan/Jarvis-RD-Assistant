@@ -201,23 +201,7 @@ async def rotate_visibility_checkpoint(
     generation = _validate_generation(generation or secrets.token_hex(16))
     rotated_at = datetime.now(UTC).isoformat()
     row = await conn.fetchrow(
-        """INSERT INTO user_config(user_id, key, value)
-           VALUES (
-               NULL,
-               $1,
-               jsonb_build_object(
-                   'version', 1,
-                   'visibility_generation', $2::text,
-                   'status', 'pending',
-                   'last_chunk_id', 0,
-                   'qdrant_recovery', $3::text,
-                   'rotated_at', $4::text
-               )
-           )
-           ON CONFLICT (user_id, key) DO UPDATE
-           SET value = EXCLUDED.value,
-               updated_at = now()
-           RETURNING value""",
+        "SELECT * FROM platform.rotate_visibility_checkpoint_v1($1, $2, $3, $4)",
         CHECKPOINT_KEY,
         generation,
         qdrant_recovery,
@@ -264,24 +248,7 @@ async def claim_visibility_lease(
     if not worker_token or lease_seconds <= 0:
         raise ValueError("A worker token and positive lease duration are required")
     row = await conn.fetchrow(
-        """UPDATE user_config
-           SET value = jsonb_set(
-                   jsonb_set(value, '{worker_lease_token}', to_jsonb($3::text), true),
-                   '{lease_expires_at}',
-                   to_jsonb((now() + make_interval(secs => $4))::text),
-                   true
-               ),
-               updated_at = now()
-           WHERE user_id IS NULL
-             AND key = $1
-             AND value->>'visibility_generation' = $2
-             AND value->>'status' = 'pending'
-             AND (
-                 value->>'worker_lease_token' IS NULL
-                 OR value->>'worker_lease_token' = $3
-                 OR NULLIF(value->>'lease_expires_at', '')::timestamptz <= now()
-             )
-           RETURNING value""",
+        "SELECT * FROM platform.claim_visibility_lease_v1($1, $2, $3, $4)",
         CHECKPOINT_KEY,
         generation,
         worker_token,
@@ -329,26 +296,7 @@ async def advance_visibility_checkpoint(
     if last_chunk_id < 0 or lease_seconds <= 0:
         raise ValueError("Checkpoint progress and lease duration must be non-negative")
     row = await conn.fetchrow(
-        """UPDATE user_config
-           SET value = jsonb_set(
-                   jsonb_set(
-                       value,
-                       '{last_chunk_id}',
-                       to_jsonb(GREATEST((value->>'last_chunk_id')::bigint, $4::bigint)),
-                       true
-                   ),
-                   '{lease_expires_at}',
-                   to_jsonb((now() + make_interval(secs => $5))::text),
-                   true
-               ),
-               updated_at = now()
-           WHERE user_id IS NULL
-             AND key = $1
-             AND value->>'visibility_generation' = $2
-             AND value->>'status' = 'pending'
-             AND value->>'worker_lease_token' = $3
-             AND NULLIF(value->>'lease_expires_at', '')::timestamptz > now()
-           RETURNING value""",
+        "SELECT * FROM platform.advance_visibility_checkpoint_v1($1, $2, $3, $4, $5)",
         CHECKPOINT_KEY,
         generation,
         worker_token,
@@ -367,21 +315,7 @@ async def complete_visibility_checkpoint(
     """Mark only the exact current generation/lease pair complete."""
     _validate_generation(generation)
     row = await conn.fetchrow(
-        """UPDATE user_config
-           SET value = jsonb_set(
-                   value - 'worker_lease_token' - 'lease_expires_at',
-                   '{status}',
-                   to_jsonb('complete'::text),
-                   true
-               ),
-               updated_at = now()
-           WHERE user_id IS NULL
-             AND key = $1
-             AND value->>'visibility_generation' = $2
-             AND value->>'status' = 'pending'
-             AND value->>'worker_lease_token' = $3
-             AND NULLIF(value->>'lease_expires_at', '')::timestamptz > now()
-           RETURNING value""",
+        "SELECT * FROM platform.complete_visibility_checkpoint_v1($1, $2, $3)",
         CHECKPOINT_KEY,
         generation,
         worker_token,

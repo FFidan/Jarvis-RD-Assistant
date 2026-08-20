@@ -79,6 +79,18 @@ class TestImportsUnsafe:
         hits, aliases = _imports_unsafe(_parse(src))
         assert len(hits) == 2
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "current_user_id_with_owner_override",
+            "current_user_id_strict_with_owner_override",
+            "get_current_user_id_or_bot",
+        ],
+    )
+    def test_retired_owner_override_import_flagged(self, name: str) -> None:
+        hits, _ = _imports_unsafe(_parse(f"from jarvis_common.auth import {name}"))
+        assert hits == [(1, f"import {name}")]
+
 
 # ---------------------------------------------------------------------------
 # _depends_on_unsafe
@@ -226,7 +238,7 @@ class TestMissingResolver:
                 _REL,
                 "@router.put('/{paper_id}/save')\n"
                 "async def save(request: Request, "
-                "user_id: int = Depends(get_current_user_id_or_bot)):\n"
+                "user_id: int = Depends(get_current_user_id)):\n"
                 "    return {}\n",
             ),
             (_REL, "async def helper(conn):\n    return 1\n"),
@@ -261,3 +273,56 @@ class TestMissingResolver:
         hits = _missing_resolver(_parse(src), _REL)
         assert len(hits) == 1
         assert "PUT /{paper_id}/save" in hits[0][1]
+
+    def test_alias_mentioned_but_not_used_is_flagged(self) -> None:
+        """Naming an authentication alias is not the same as depending on it.
+
+        The alias resolves to a real resolver, but this handler never takes it
+        as a parameter, so nothing authenticates the request.
+        """
+        src = (
+            "type Principal = Annotated[str, Depends(authenticate_service_principal)]\n"
+            "\n"
+            "@router.post('/authorize')\n"
+            "async def authorize(body: Request) -> Principal:\n"
+            "    return {}\n"
+        )
+        hits = _missing_resolver(_parse(src), _REL)
+        assert len(hits) == 1
+        assert "POST /authorize" in hits[0][1]
+
+    def test_alias_parameter_annotation_accepted(self) -> None:
+        """A parameter annotated with the alias does inject the resolver."""
+        src = (
+            "type Principal = Annotated[str, Depends(authenticate_service_principal)]\n"
+            "\n"
+            "@router.post('/authorize')\n"
+            "async def authorize(body: Request, principal: Principal):\n"
+            "    return {}\n"
+        )
+        assert _missing_resolver(_parse(src), _REL) == []
+
+    def test_alias_to_an_unsafe_resolver_is_not_accepted(self) -> None:
+        """The alias stands in for its callable, so an unguarded one stays unguarded."""
+        src = (
+            "type Pool = Annotated[str, Depends(get_db_pool)]\n"
+            "\n"
+            "@router.post('/authorize')\n"
+            "async def authorize(body: Request, db: Pool):\n"
+            "    return {}\n"
+        )
+        assert len(_missing_resolver(_parse(src), _REL)) == 1
+
+    def test_unguarded_sibling_router_is_flagged(self) -> None:
+        """One guarded router must not clear the routes of a second, bare one."""
+        src = (
+            "router = APIRouter(dependencies=[Depends(current_user_id_strict)])\n"
+            "public = APIRouter()\n"
+            "\n"
+            "@public.get('/summary')\n"
+            "async def summary(request: Request):\n"
+            "    return {}\n"
+        )
+        hits = _missing_resolver(_parse(src), _REL)
+        assert len(hits) == 1
+        assert "GET /summary" in hits[0][1]

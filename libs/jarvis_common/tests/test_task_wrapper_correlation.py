@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from jarvis_common.logging_config import correlation_id_var
+from jarvis_common.telemetry import capture_task_context, configure_telemetry
+from opentelemetry import trace
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -201,3 +203,40 @@ async def test_task_wrapper_resets_correlation_id_var_after_handler(monkeypatch)
         assert correlation_id_var.get() is None
     finally:
         correlation_id_var.reset(prior_token)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_proxy_preserves_raw_task_registration_and_adds_context() -> None:
+    """The enqueue facade carries context while the underlying task stays the registered task."""
+    import jarvis_common.task_registry as task_registry
+
+    configure_telemetry(service="test", enabled=False, otlp_endpoint=None, timeout_ms=1)
+    raw_task = SimpleNamespace(defer_async=AsyncMock(return_value="queued"))
+    proxy = task_registry._TaskEnqueueProxy(raw_task)
+
+    with trace.get_tracer("test").start_as_current_span("request"):
+        result = await proxy.defer_async(job_id="job", user_id=7)
+
+    assert result == "queued"
+    payload = raw_task.defer_async.await_args.kwargs
+    assert payload["job_id"] == "job"
+    assert payload["_jarvis_telemetry"]["traceparent"].startswith("00-")
+
+
+def test_only_registry_wrapped_tasks_can_carry_the_reserved_telemetry_entry() -> None:
+    """A task with a fixed signature cannot absorb the reserved payload entry.
+
+    The registry's generated wrapper accepts ``**payload`` and strips the entry
+    before the handler runs, which is why deferrals aimed at a registered kind
+    may carry it. Procrastinate's own maintenance task declares keyword-only
+    parameters and no catch-all, so attaching the entry to that deferral would
+    fail the job at execution rather than trace it.
+    """
+    import inspect
+
+    from procrastinate.builtin_tasks import remove_old_jobs
+
+    payload = capture_task_context({"max_hours": 1})
+
+    with pytest.raises(TypeError, match="_jarvis_telemetry"):
+        inspect.signature(remove_old_jobs.func).bind(None, **payload)

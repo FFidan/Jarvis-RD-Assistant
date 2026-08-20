@@ -246,3 +246,18 @@ def test_resolve_env_file_indirection_empty_file_resolves_to_none(tmp_path, monk
     get_secrets_settings.cache_clear()
     settings = SecretsSettings()
     assert settings.jarvis_api_key is None
+
+
+def test_core_settings_documents_no_removed_infra_ingest_allowlist():
+    """A comment left behind by a removed field documents the next one instead.
+
+    The orphaned block sat directly above ``owner_user_id`` and described a CIDR
+    allowlist for an endpoint this deployment no longer exposes, so the file read
+    as though the owner override were that allowlist.
+    """
+    from pathlib import Path
+
+    from jarvis_common import settings as settings_module
+
+    source = Path(settings_module.__file__).read_text(encoding="utf-8")
+    assert "infra-ingest" not in source

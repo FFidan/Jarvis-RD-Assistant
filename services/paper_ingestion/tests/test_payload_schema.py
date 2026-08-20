@@ -63,7 +63,10 @@ def test_fail_closed_visibility_never_matches_a_runtime_generation() -> None:
 @pytest.mark.asyncio
 async def test_checkpoint_rotation_replaces_generation_and_revokes_worker_lease() -> None:
     """Collection replacement publishes a fresh pending checkpoint atomically."""
-    from paper_ingestion.ingestion.payload_schema import rotate_visibility_checkpoint
+    from paper_ingestion.ingestion.payload_schema import (
+        CHECKPOINT_KEY,
+        rotate_visibility_checkpoint,
+    )
 
     value = {
         "version": 1,
@@ -86,19 +89,27 @@ async def test_checkpoint_rotation_replaces_generation_and_revokes_worker_lease(
     assert checkpoint.status == "pending"
     assert checkpoint.last_chunk_id == 0
     assert "worker_lease_token" not in value
+    assert conn.fetchrow.await_args.args[1] == CHECKPOINT_KEY
 
 
 @pytest.mark.asyncio
 async def test_stale_worker_cannot_advance_or_complete_a_checkpoint() -> None:
     """A failed compare-and-swap returns False and performs no fallback write."""
     from paper_ingestion.ingestion.payload_schema import (
+        CHECKPOINT_KEY,
         advance_visibility_checkpoint,
+        claim_visibility_lease,
         complete_visibility_checkpoint,
     )
 
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=None)
 
+    claimed = await claim_visibility_lease(
+        conn,
+        generation="a" * 32,
+        worker_token="worker-a",
+    )
     advanced = await advance_visibility_checkpoint(
         conn,
         generation="a" * 32,
@@ -111,9 +122,11 @@ async def test_stale_worker_cannot_advance_or_complete_a_checkpoint() -> None:
         worker_token="worker-a",
     )
 
+    assert claimed is False
     assert advanced is False
     assert completed is False
-    assert conn.fetchrow.await_count == 2
+    assert conn.fetchrow.await_count == 3
+    assert all(call.args[1] == CHECKPOINT_KEY for call in conn.fetchrow.await_args_list)
 
 
 @pytest.mark.asyncio

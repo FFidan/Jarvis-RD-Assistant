@@ -545,7 +545,7 @@ async def test_my_day_returns_caller_data_via_session_cookie(
 ):
     """GET /api/executive/my-day returns 200 with correct shape for session-authenticated caller.
 
-    Exercises current_user_id_strict_with_owner_override: session path resolves
+    Exercises current_user_id_strict: session path resolves
     user_id from the jarvis_session cookie. Tests scoping at the positive control
     level — the fixture already has test_get_my_day_response_shape, this test
     documents the contract for the *session-cookie* auth path explicitly.
@@ -565,7 +565,7 @@ async def test_my_day_returns_caller_data_via_session_cookie(
 async def test_my_day_no_session_returns_401(_le_app, _configure_api_key):
     """GET /api/executive/my-day without any session returns 401 (or 403 for no identity).
 
-    When neither session nor X-Owner-User-Id resolves, current_user_id_strict_with_owner_override
+    When neither session nor X-Jarvis-Paired-User-Id resolves, current_user_id_strict
     raises 401. Documents the behavior: API-key-only (no session, no override header) → 401.
     # Verified: libs/jarvis_common/jarvis_common/auth.py:452-465
     """

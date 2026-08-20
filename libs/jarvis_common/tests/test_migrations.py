@@ -8,13 +8,18 @@ Covers the two paths in the try/except block around pg_advisory_xact_lock:
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import asyncpg
 import pytest
 from jarvis_common.migrations import (
     _REQUIRED_CODE_SCHEMA_FALLBACK,
+    check_migrations,
     required_code_schema,
     run_migrations,
 )
@@ -63,6 +68,7 @@ async def test_lock_not_available_raises_runtime_error_without_compat_flag(
 
     pool, _conn = _pool_with_execute_effects(
         [
+            None,  # SET LOCAL search_path = ops, public
             None,  # SET LOCAL lock_timeout = '60s'
             _make_lock_not_available(),  # SELECT pg_advisory_xact_lock(42)
         ]
@@ -82,6 +88,7 @@ async def test_lock_contention_waits_until_the_schema_reaches_the_floor(
 
     pool, conn = _pool_with_execute_effects(
         [
+            None,  # SET LOCAL search_path = ops, public
             None,  # SET LOCAL lock_timeout = '60s'
             _make_lock_not_available(),  # SELECT pg_advisory_xact_lock(42)
         ]
@@ -109,7 +116,8 @@ async def test_lock_contention_refuses_a_schema_still_below_the_floor(
     floor = required_code_schema()
     pool, conn = _pool_with_execute_effects(
         [
-            None,
+            None,  # SET LOCAL search_path = ops, public
+            None,  # SET LOCAL lock_timeout = '60s'
             _make_lock_not_available(),
         ]
     )
@@ -129,6 +137,7 @@ async def test_generic_postgres_error_is_reraised(tmp_path, monkeypatch) -> None
     connection_error = _make_generic_postgres_error("08006")
     pool, _conn = _pool_with_execute_effects(
         [
+            None,  # SET LOCAL search_path = ops, public
             None,  # SET LOCAL lock_timeout = '60s'
             connection_error,  # SELECT pg_advisory_xact_lock(42)
         ]
@@ -181,12 +190,7 @@ async def test_baseline_schema_passes_the_floor(tmp_path, monkeypatch) -> None:
 async def test_absent_migrations_dir_still_refuses_under_baseline_schema(
     tmp_path, monkeypatch
 ) -> None:
-    """An absent migrations directory must not bypass the floor.
-
-    A packaging or mount glitch is exactly the case the floor exists for: with
-    no directory to apply from, an under-baseline database can only stay under
-    baseline, so startup must refuse rather than serve.
-    """
+    """A dedicated migrator refuses an unavailable migration package."""
     monkeypatch.delenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", raising=False)
     floor = required_code_schema()
     absent_dir = tmp_path / "no-such-migrations"
@@ -194,17 +198,13 @@ async def test_absent_migrations_dir_still_refuses_under_baseline_schema(
 
     pool = _pool_at_schema(floor - 1)
 
-    with pytest.raises(RuntimeError, match="refusing to start"):
+    with pytest.raises(RuntimeError, match="migrations directory not found"):
         await run_migrations(pool, migrations_dir=absent_dir)
 
 
 @pytest.mark.asyncio
 async def test_absent_migrations_dir_starts_when_floor_is_satisfied(tmp_path, monkeypatch) -> None:
-    """An absent migrations directory over an at-baseline database must still start.
-
-    Deployments that mount migrations elsewhere legitimately point the runner at
-    a path that is not there; they must keep booting.
-    """
+    """An at-floor database cannot hide an unavailable migration package."""
     monkeypatch.delenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", raising=False)
     floor = required_code_schema()
     absent_dir = tmp_path / "no-such-migrations"
@@ -212,7 +212,56 @@ async def test_absent_migrations_dir_starts_when_floor_is_satisfied(tmp_path, mo
 
     pool = _pool_at_schema(floor)
 
-    await run_migrations(pool, migrations_dir=absent_dir)  # must not raise
+    with pytest.raises(RuntimeError, match="migrations directory not found"):
+        await run_migrations(pool, migrations_dir=absent_dir)
+
+
+@pytest.mark.asyncio
+async def test_runtime_check_is_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The runtime schema check neither applies DDL nor repairs metadata."""
+    expected_hash = "a" * 64
+    monkeypatch.setattr(
+        "jarvis_common.migrations._verified_migration_hashes", lambda: {102: expected_hash}
+    )
+    monkeypatch.setattr("jarvis_common.migrations.required_code_schema", lambda: 102)
+    rows = [{"version": version, "sha256": None} for version in range(1, 102)]
+    rows.append({"version": 102, "sha256": expected_hash})
+    pool, conn = make_pool_and_conn(fetch_return=rows, fetchval_return="jarvis_research_runtime")
+
+    result = await check_migrations(pool)
+
+    assert result.current_user == "jarvis_research_runtime"
+    assert result.integrity == "ok"
+    conn.execute.assert_not_awaited()
+
+
+def test_changed_packaged_migration_fails_before_database_access(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A changed applied file is rejected before a new migration can execute."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    migration = migrations_dir / "0102_example.sql"
+    migration.write_text("SELECT 1;\n", encoding="utf-8")
+    manifest = {
+        "compatibility_baseline": {
+            "unhashed_revisions": {
+                "first": 1,
+                "last": 101,
+                "marker": "squashed_baseline_source_unavailable",
+            },
+            "retained_migrations": [{"path": "0102_example.sql", "sha256": "0" * 64}],
+        }
+    }
+    manifest_path = tmp_path / "ownership-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr("jarvis_common.migrations._migrations_dir", lambda: migrations_dir)
+    monkeypatch.setattr("jarvis_common.migrations._migration_manifest_path", lambda: manifest_path)
+
+    with pytest.raises(RuntimeError, match="migration integrity mismatch"):
+        from jarvis_common.migrations import _verified_migration_hashes
+
+        _verified_migration_hashes()
 
 
 def test_code_max_migration_returns_floor_on_empty_dir(tmp_path, monkeypatch) -> None:
@@ -236,6 +285,15 @@ def test_required_code_schema_reads_schema_version_file() -> None:
     repo_root = Path(_m.__file__).resolve().parents[3]
     expected = int((repo_root / "db" / "SCHEMA_VERSION").read_text().strip())
     assert required_code_schema() == expected
+
+
+def test_packaged_migration_hashes_match_the_tracked_files() -> None:
+    """Every retained migration must still match its recorded immutable hash."""
+    from jarvis_common.migrations import _verified_migration_hashes
+
+    hashes = _verified_migration_hashes()
+
+    assert hashes[114] == "d05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374"
 
 
 def test_required_code_schema_absent_file_is_silent(tmp_path, monkeypatch, caplog) -> None:
@@ -276,3 +334,310 @@ def test_schema_version_file_matches_fallback_constant() -> None:
     repo_root = Path(_m.__file__).resolve().parents[3]
     file_value = int((repo_root / "db" / "SCHEMA_VERSION").read_text().strip())
     assert file_value == _m._REQUIRED_CODE_SCHEMA_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# Migration file hygiene and replay safety
+# ---------------------------------------------------------------------------
+
+# A complete ``SET search_path ...;`` statement.  The ``SET search_path`` that
+# follows a ``CREATE FUNCTION`` header is an attribute clause, not a statement:
+# it is never terminated on its own line and it rejects ``LOCAL``.
+_STATEMENT_SEARCH_PATH_RE = re.compile(
+    r"^SET\s+(?P<local>LOCAL\s+)?search_path\b[^;]*;\s*$", re.IGNORECASE
+)
+
+_REPLAYED_MIGRATIONS = (
+    "0115_cross_domain_boundaries.sql",
+    "0116_unified_job_facade.sql",
+    "0117_owner_capabilities.sql",
+)
+
+_REPLAYED_INDEXES = frozenset(
+    {
+        "research_domain_events_pending_idx",
+        "research_domain_events_active_deletion_idx",
+        "learning_domain_commands_pending_idx",
+        "platform_erasure_requests_one_active_user_idx",
+        "audit_log_subject_id_idx",
+        "config_deliveries_due_idx",
+    }
+)
+
+# ``CREATE TABLE IF NOT EXISTS`` accepts a table whose columns differ, so a
+# half-applied revision would replay cleanly and only fail later, in the grants
+# that assume these columns.  Replay must leave the declared shape intact.
+_DECLARED_COLUMNS: dict[tuple[str, str], frozenset[str]] = {
+    ("research", "domain_events"): frozenset(
+        {
+            "id",
+            "event_type",
+            "user_id",
+            "paper_id",
+            "payload",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "delivered_at",
+            "dead_lettered_at",
+            "created_at",
+        }
+    ),
+    ("research", "pending_paper_deletions"): frozenset(
+        {"event_id", "user_id", "paper_id", "created_at"}
+    ),
+    ("research", "zotero_push_claims"): frozenset(
+        {"paper_id", "user_id", "lease_id", "lease_expires_at"}
+    ),
+    ("learning", "domain_commands"): frozenset(
+        {
+            "id",
+            "command_type",
+            "request_id",
+            "user_id",
+            "paper_id",
+            "payload",
+            "received_at",
+            "processed_at",
+            "acknowledgement_at",
+            "last_error",
+        }
+    ),
+    ("platform", "erasure_requests"): frozenset(
+        {
+            "request_id",
+            "user_id",
+            "state",
+            "resume_state",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "requested_at",
+            "eligible_at",
+            "completed_at",
+        }
+    ),
+    ("platform", "erasure_acknowledgements"): frozenset(
+        {"request_id", "domain", "receipt", "acknowledged_at"}
+    ),
+    ("platform", "audit_subjects"): frozenset(
+        {"id", "user_id", "metadata", "created_at", "updated_at"}
+    ),
+    ("platform", "config_deliveries"): frozenset(
+        {
+            "scope_user_id",
+            "actor_user_id",
+            "key",
+            "delivery_id",
+            "user_role",
+            "session_id",
+            "zotero_scope_changed",
+            "state",
+            "attempts",
+            "next_attempt_at",
+            "last_error",
+            "updated_at",
+        }
+    ),
+    ("ops", "job_owner_registry"): frozenset({"task_name", "queue_name", "service_name"}),
+}
+
+_OWNED_SCHEMAS = ("research", "learning", "platform", "ops")
+
+
+def _db_dir() -> Path:
+    """Resolve the tracked db/ directory from this test file."""
+    return Path(__file__).resolve().parents[3] / "db"
+
+
+def test_no_migration_sets_a_session_scoped_search_path() -> None:
+    """A statement-position ``SET search_path`` must be written ``SET LOCAL``.
+
+    ``run_migrations`` applies every file inside one transaction, so a
+    session-scoped statement outlives the migration that ran it and leaves the
+    connection on a search path nothing else chose.
+    """
+    migration_files = sorted((_db_dir() / "migrations").glob("*.sql"))
+    assert migration_files, "no migration files were scanned"
+
+    session_scoped = [
+        f"{path.name}:{number}"
+        for path in migration_files
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if (match := _STATEMENT_SEARCH_PATH_RE.match(line)) and not match.group("local")
+    ]
+    assert session_scoped == []
+
+
+async def _owned_schema_columns(
+    conn: asyncpg.Connection,
+) -> dict[tuple[str, str], frozenset[str]]:
+    """Return the column names of every table in the owned schemas."""
+    shape: dict[tuple[str, str], set[str]] = {}
+    for row in await conn.fetch(
+        """
+        SELECT table_schema, table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema = ANY($1::text[])
+        """,
+        list(_OWNED_SCHEMAS),
+    ):
+        shape.setdefault((row["table_schema"], row["table_name"]), set()).add(row["column_name"])
+    return {table: frozenset(columns) for table, columns in shape.items()}
+
+
+def _assert_declared_columns(shape: dict[tuple[str, str], frozenset[str]]) -> None:
+    """Fail when a replayed migration's table lost a column it declares."""
+    for table, declared in _DECLARED_COLUMNS.items():
+        qualified = ".".join(table)
+        assert table in shape, f"{qualified} does not exist"
+        assert declared <= shape[table], (
+            f"{qualified} is missing declared columns: {sorted(declared - shape[table])}"
+        )
+
+
+async def _insert_job(conn: asyncpg.Connection, task_name: str, status: str, job_id: str) -> None:
+    """Insert one research-owned job carrying a public job id.
+
+    The replay fixture connects with a bare ``asyncpg.connect``, which registers
+    no JSONB codec, so this argument really does have to arrive already encoded.
+    """
+    await conn.execute(  # nolint:jsonb-double-encode
+        """
+        INSERT INTO ops.procrastinate_jobs (queue_name, task_name, args, status)
+        VALUES ('paper_ingestion', $1, $2::jsonb, $3::ops.procrastinate_job_status)
+        """,
+        task_name,
+        json.dumps({"job_id": job_id, "user_id": 71}),
+        status,
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio
+async def test_replayed_migrations_converge_on_the_installed_baseline(live_pg_dsn: str) -> None:
+    """Re-running 0115-0117 over an installed schema succeeds and changes nothing.
+
+    Exercises the migration files themselves rather than ``db/init.sql``: the
+    disposable database is built from ``db/init.sql`` and each file is then
+    executed again, which is what a replay after a lost ``schema_migrations``
+    marker does.  The contract suite cannot cover this — ``db/init.sql`` records
+    every revision as applied, so the runner skips all of them there.
+    """
+    db_dir = _db_dir()
+    conn = await asyncpg.connect(live_pg_dsn)
+    try:
+        await conn.execute((db_dir / "init.sql").read_text(encoding="utf-8"))
+        installed_shape = await _owned_schema_columns(conn)
+
+        for name in _REPLAYED_MIGRATIONS:
+            async with conn.transaction():
+                await conn.execute((db_dir / "migrations" / name).read_text(encoding="utf-8"))
+
+        replayed_shape = await _owned_schema_columns(conn)
+        assert replayed_shape == installed_shape
+        _assert_declared_columns(replayed_shape)
+
+        indexes = {
+            row["indexname"]
+            for row in await conn.fetch(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = ANY($1::text[])",
+                list(_OWNED_SCHEMAS),
+            )
+        }
+        assert _REPLAYED_INDEXES <= indexes
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM pg_constraint WHERE conname = 'audit_log_caller_role_check'"
+            )
+            == 1
+        )
+
+        # The replay installed 0116's job facade over db/init.sql's, so what
+        # follows reads the migration route's registry seed and cancel function.
+        test_job_id = str(uuid.uuid4())
+        await _insert_job(conn, "noop.test", "todo", test_job_id)
+        assert await conn.fetchrow(
+            "SELECT owner_queue, owner_service FROM ops.procrastinate_jobs "
+            "WHERE args->>'job_id' = $1",
+            test_job_id,
+        ) == ("paper_ingestion", "research")
+
+        for status, cancelled in (("succeeded", False), ("aborting", False), ("doing", True)):
+            job_id = str(uuid.uuid4())
+            await _insert_job(conn, "paper.process", status, job_id)
+            assert (
+                await conn.fetchval("SELECT ops.jarvis_job_cancel_v1($1, '71')", job_id)
+                is cancelled
+            ), f"cancelling a {status} job reported the wrong result"
+    finally:
+        await conn.close()
+
+
+_FUNCTION_DEFINITION_RE = re.compile(
+    r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\((.*?)\)\s*(.*?)\$\$;",
+    re.S | re.I,
+)
+_SQL_COMMENT_RE = re.compile(r"--[^\n]*")
+_SQL_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+_SQL_PUNCTUATION_RE = re.compile(r"\s*([(),;])\s*")
+_SQL_OPTIONAL_ALIAS_RE = re.compile(r"\bas\s+(?=[a-z_][a-z0-9_]*\b)(?!select)")
+
+
+def _canonical_sql(definition: str) -> str:
+    """Reduce one definition to what PostgreSQL would actually execute.
+
+    Formatting is not drift. A raw comparison reports five divergent functions
+    here, four of which differ only by an optional ``AS`` alias or a space after
+    a comma; a gate that reports those as drift is a gate people learn to skip.
+    """
+    without_comments = _SQL_BLOCK_COMMENT_RE.sub(" ", _SQL_COMMENT_RE.sub(" ", definition))
+    collapsed = " ".join(without_comments.lower().split())
+    return _SQL_OPTIONAL_ALIAS_RE.sub("", _SQL_PUNCTUATION_RE.sub(r"\1", collapsed))
+
+
+def _function_definitions(sql: str) -> dict[str, str]:
+    """Canonical body per function name; a later definition supersedes an earlier one."""
+    return {
+        match.group(1).lower(): _canonical_sql(match.group(0))
+        for match in _FUNCTION_DEFINITION_RE.finditer(sql)
+    }
+
+
+def test_both_schema_routes_define_every_function_identically() -> None:
+    """A fresh install and an upgraded one must run the same function bodies.
+
+    ``db/init.sql`` is a hand-maintained mirror of the migration ledger, and the
+    recorded hashes bind each file to itself and never to the other, so the two
+    can drift silently. They already did: ``ops.jarvis_job_cancel_v1`` reported
+    success for a job it had not cancelled on upgraded installs while fresh ones
+    were correct, and no gate could see it. Contract tests build from
+    ``db/init.sql`` and never execute a migration file, so this comparison is
+    the only thing standing between the two representations.
+    """
+    db_dir = _db_dir()
+    fresh_install = _function_definitions((db_dir / "init.sql").read_text(encoding="utf-8"))
+
+    upgraded: dict[str, tuple[str, str]] = {}
+    for migration in sorted((db_dir / "migrations").glob("*.sql")):
+        for name, body in _function_definitions(migration.read_text(encoding="utf-8")).items():
+            upgraded[name] = (body, migration.name)
+
+    shared = sorted(set(fresh_install) & set(upgraded))
+    assert len(shared) > 40, f"the comparison read almost nothing: {len(shared)} shared functions"
+
+    diverged = {
+        name: upgraded[name][1] for name in shared if fresh_install[name] != upgraded[name][0]
+    }
+    assert not diverged, (
+        f"these functions behave differently on a fresh install than on an upgraded one: {diverged}"
+    )
+
+    # The more dangerous direction: an object an upgrade creates that a fresh
+    # install never gets, so the defect appears only on new deployments.
+    missing_from_fresh_install = {
+        name: upgraded[name][1] for name in sorted(set(upgraded) - set(fresh_install))
+    }
+    assert not missing_from_fresh_install, (
+        f"migrations define functions db/init.sql never creates: {missing_from_fresh_install}"
+    )

@@ -22,7 +22,20 @@ class CommandSpec:
 
 
 COMMAND_CATALOG: tuple[CommandSpec, ...] = (
-    CommandSpec("papers", "papers [query]", "List recent papers or search", "Papers", "standard"),
+    CommandSpec(
+        "papers",
+        "papers [query]",
+        "List recent library papers or search your library",
+        "Papers",
+        "standard",
+    ),
+    CommandSpec(
+        "discover",
+        "discover <query>",
+        "Search external sources and save results to your library",
+        "Papers",
+        "standard",
+    ),
     CommandSpec("briefing", "briefing", "Show the current briefing", "Papers", "standard"),
     CommandSpec("next", "next", "Show the next Pulse recommendation", "Papers", "standard"),
     CommandSpec("inbox", "inbox", "Show unread saved papers", "Papers", "standard"),
@@ -37,7 +50,7 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
         "review",
         include_in_menu=False,
     ),
-    CommandSpec("projects", "projects", "List active projects", "Projects and tasks", "standard"),
+    CommandSpec("projects", "projects", "List your projects", "Projects and tasks", "standard"),
     CommandSpec(
         "newproject",
         "newproject <name>",
@@ -49,8 +62,8 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("done", "done <id>", "Mark a task complete", "Projects and tasks", "standard"),
     CommandSpec(
         "focus",
-        "focus [minutes]",
-        "Start a focus session",
+        "focus [start [minutes] / pause / resume / stop]",
+        "Show the focus timer, or start, pause, resume, or stop it",
         "Projects and tasks",
         "standard",
     ),

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -57,6 +58,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SMTP_PASS",
         "LITELLM_MASTER_KEY",
         "POSTGRES_PASSWORD",
+        "POSTGRES_PASSWORD_FILE",
         "APP_BASE_URL",
     ):
         monkeypatch.delenv(var, raising=False)
@@ -411,6 +413,18 @@ class TestValidateProductionConfigPostgresPassword:
 
         with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
             validate_production_config()
+
+    def test_role_scoped_postgres_password_file_passes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Production accepts the same role-scoped secret file used by Compose."""
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+        password_file = tmp_path / "postgres_research_runtime_password"
+        password_file.write_text("a-strong-role-specific-password")
+        monkeypatch.setenv("POSTGRES_PASSWORD_FILE", str(password_file))
+
+        validate_production_config()
 
     def test_placeholder_postgres_password_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A long-enough but placeholder-derived password is still rejected.

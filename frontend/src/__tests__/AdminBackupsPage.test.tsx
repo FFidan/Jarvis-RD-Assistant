@@ -213,7 +213,7 @@ describe('AdminBackupsPage', () => {
         'Last backup attempt failed — check the backup service.',
       ),
     );
-    expect(screen.getByTestId('backup-status')).toHaveTextContent(/\(\d+m ago\)/);
+    expect(screen.getByTestId('backup-status')).toHaveTextContent(/\(.+ ago\)/);
   });
 
   it('warns that a succeeded run captured no vectors', async () => {
@@ -305,7 +305,7 @@ describe('AdminBackupsPage', () => {
   it('enables Restore for a complete same/older restore point', async () => {
     renderPage();
     await screen.findByTestId('restore-point-card');
-    const restoreBtn = screen.getByRole('button', { name: /restore to this point/i });
+    const restoreBtn = screen.getByRole('button', { name: /request host restore/i });
     expect(restoreBtn).toBeEnabled();
   });
 
@@ -313,7 +313,7 @@ describe('AdminBackupsPage', () => {
     getRestorePointsMock.mockResolvedValue(_newerPoints);
     renderPage();
     await screen.findByTestId('restore-point-card');
-    expect(screen.getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /request host restore/i })).toBeDisabled();
     expect(
       screen.getByText(/newer than the current app version — update first/i),
     ).toBeInTheDocument();
@@ -323,13 +323,13 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
 
     const input = await screen.findByLabelText(/type RESTORE to confirm/i);
     // Confirm stays disabled until the exact word is typed.
-    expect(screen.getByRole('button', { name: /^restore$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^request host restore$/i })).toBeDisabled();
     await user.type(input, 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     await waitFor(() =>
       expect(requestRestoreMock).toHaveBeenCalledWith(
@@ -358,7 +358,7 @@ describe('AdminBackupsPage', () => {
 
     renderPage();
     const card = await screen.findByTestId('restore-point-card');
-    expect(within(card).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(within(card).getByRole('button', { name: /request host restore/i })).toBeDisabled();
     expect(within(card).getByText(/missing its PDF archive/i)).toBeInTheDocument();
     expect(requestRestoreMock).not.toHaveBeenCalled();
   });
@@ -381,7 +381,7 @@ describe('AdminBackupsPage', () => {
     renderPage();
     await user.click(
       within(await screen.findByTestId('restore-point-card')).getByRole('button', {
-        name: /restore to this point/i,
+        name: /request host restore/i,
       }),
     );
 
@@ -389,7 +389,7 @@ describe('AdminBackupsPage', () => {
     expect(within(dialog).getByText(/does not include PDF files/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/remove the PDF files currently stored/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/papers may still appear in JARVIS/i)).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: /^restore$/i })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: /^request host restore$/i })).toBeDisabled();
     expect(requestRestoreMock).not.toHaveBeenCalled();
   });
 
@@ -411,11 +411,11 @@ describe('AdminBackupsPage', () => {
     renderPage();
     await user.click(
       within(await screen.findByTestId('restore-point-card')).getByRole('button', {
-        name: /restore to this point/i,
+        name: /request host restore/i,
       }),
     );
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     await waitFor(() =>
       expect(requestRestoreMock).toHaveBeenCalledWith(
@@ -442,13 +442,13 @@ describe('AdminBackupsPage', () => {
     renderPage();
     const card = await screen.findByTestId('restore-point-card');
     expect(within(card).getByText(/predates schema recording/i)).toBeInTheDocument();
-    await user.click(within(card).getByRole('button', { name: /restore to this point/i }));
+    await user.click(within(card).getByRole('button', { name: /request host restore/i }));
 
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByTestId('restore-unknown-schema-warning')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('checkbox', { name: /without a version check/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^request host restore$/i }));
 
     await waitFor(() =>
       expect(requestRestoreMock).toHaveBeenCalledWith(
@@ -467,13 +467,13 @@ describe('AdminBackupsPage', () => {
 
     renderPage();
     const card = await screen.findByTestId('restore-point-card');
-    await user.click(within(card).getByRole('button', { name: /restore to this point/i }));
+    await user.click(within(card).getByRole('button', { name: /request host restore/i }));
 
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByRole('checkbox', { name: /without a version check/i })).not
       .toBeChecked();
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^request host restore$/i }));
 
     expect(requestRestoreMock).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/without a version check/i));
@@ -483,9 +483,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     expect(await screen.findByTestId('restore-progress')).toBeInTheDocument();
     expect(await screen.findByText('Safety backup')).toBeInTheDocument();
@@ -535,12 +535,12 @@ describe('AdminBackupsPage', () => {
     // The incomplete/keyless point cannot be triggered; its hint explains why.
     const incomplete = items[1]!;
     expect(within(incomplete).getByText('Incomplete')).toBeInTheDocument();
-    expect(within(incomplete).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(within(incomplete).getByRole('button', { name: /request host restore/i })).toBeDisabled();
     expect(within(incomplete).getByText(/missing a required database archive/i)).toBeInTheDocument();
 
     // The complete + keyed point restores through the shared typed-RESTORE confirm.
     const ready = items[0]!;
-    await user.click(within(ready).getByRole('button', { name: /restore to this point/i }));
+    await user.click(within(ready).getByRole('button', { name: /request host restore/i }));
     // An off-host set carries no readable database version, so the acknowledgement
     // is reachable here — without it disaster recovery could not be completed.
     const dialog = await screen.findByRole('alertdialog');
@@ -549,7 +549,7 @@ describe('AdminBackupsPage', () => {
     );
     await user.click(within(dialog).getByRole('checkbox', { name: /without a version check/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     await waitFor(() =>
       expect(requestRestoreMock).toHaveBeenCalledWith(
@@ -597,12 +597,12 @@ describe('AdminBackupsPage', () => {
 
     renderPage();
     const section = await screen.findByTestId('inbox-restore-section');
-    await user.click(within(section).getByRole('button', { name: /restore to this point/i }));
+    await user.click(within(section).getByRole('button', { name: /request host restore/i }));
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText(/remove the PDF files currently stored/i)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('checkbox', { name: /without a version check/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(within(dialog).getByRole('button', { name: /^restore$/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^request host restore$/i }));
 
     await waitFor(() =>
       expect(requestRestoreMock).toHaveBeenCalledWith(
@@ -631,7 +631,7 @@ describe('AdminBackupsPage', () => {
     const section = await screen.findByTestId('inbox-restore-section');
     const point = within(section).getByTestId('inbox-restore-point');
     expect(within(point).getByText('No data keys')).toBeInTheDocument();
-    expect(within(point).getByRole('button', { name: /restore to this point/i })).toBeDisabled();
+    expect(within(point).getByRole('button', { name: /request host restore/i })).toBeDisabled();
     expect(within(point).getByText(/no data-key archive/i)).toBeInTheDocument();
     expect(requestRestoreMock).not.toHaveBeenCalled();
   });
@@ -647,9 +647,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     // The poll must present the bearer token so it survives the DB swap.
     await waitFor(() => expect(getRestoreStatusMock).toHaveBeenCalledWith('poll-bearer-42'));
@@ -659,9 +659,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     await waitFor(() => expect(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY)).not.toBeNull());
     const stored = JSON.parse(sessionStorage.getItem(RESTORE_RECOVERY_STORAGE_KEY) ?? '{}');
@@ -822,9 +822,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     // The mid-restore 503 interceptor flips the app into maintenance.
     act(() => useMaintenanceStore.getState().setMaintenance(true, 30));
@@ -841,9 +841,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     expect(await screen.findByTestId('restore-degraded')).toHaveTextContent(
       /briefly unavailable while the database is restored/i,
@@ -868,9 +868,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     expect(await screen.findByTestId('restore-progress')).toBeInTheDocument();
     await waitFor(() => expect(getRestoreStatusMock).toHaveBeenCalled());
@@ -902,16 +902,16 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId('restore-point-card')).toHaveLength(2));
-    const [firstRestoreBtn] = screen.getAllByRole('button', { name: /restore to this point/i });
+    const [firstRestoreBtn] = screen.getAllByRole('button', { name: /request host restore/i });
     if (!firstRestoreBtn) throw new Error('expected at least one restore button');
     await user.click(firstRestoreBtn);
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     // No concurrent destructive restore: every remaining "Restore to this point"
     // CTA is disabled while one restore is in flight.
     await waitFor(() => {
-      const others = screen.queryAllByRole('button', { name: /^restore to this point$/i });
+      const others = screen.queryAllByRole('button', { name: /^request host restore$/i });
       expect(others.length).toBeGreaterThan(0);
       for (const b of others) expect(b).toBeDisabled();
     });
@@ -933,9 +933,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     const notice = await screen.findByTestId('restore-manual-steps');
     expect(notice).toHaveTextContent(/one more step/i);
@@ -959,9 +959,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Restore complete. Your data has been restored.'),
@@ -999,11 +999,11 @@ describe('AdminBackupsPage', () => {
     await waitFor(() => expect(screen.getAllByTestId('restore-point-card')).toHaveLength(2));
 
     // --- Restore #1 ---
-    const [firstBtn] = screen.getAllByRole('button', { name: /restore to this point/i });
+    const [firstBtn] = screen.getAllByRole('button', { name: /request host restore/i });
     if (!firstBtn) throw new Error('expected at least one restore button');
     await user.click(firstBtn);
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     // Wait for the legitimate success toast from restore #1.
     await waitFor(() =>
@@ -1029,18 +1029,18 @@ describe('AdminBackupsPage', () => {
     // After restore #1 completes, restoringTimestamp resets to null and the
     // restore buttons become re-enabled. Wait for that transition.
     await waitFor(() => {
-      const btns = screen.getAllByRole('button', { name: /restore to this point/i });
+      const btns = screen.getAllByRole('button', { name: /request host restore/i });
       expect(btns.some((b) => !b.hasAttribute('disabled'))).toBe(true);
     });
 
     // --- Restore #2 ---
     const enabledBtn = screen
-      .getAllByRole('button', { name: /restore to this point/i })
+      .getAllByRole('button', { name: /request host restore/i })
       .find((b) => !b.hasAttribute('disabled'));
     if (!enabledBtn) throw new Error('expected an enabled restore button for restore #2');
     await user.click(enabledBtn);
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     // After the mutation fires, onSuccess runs synchronously in the mock (resolved
     // value). Without the fix, the stale 'done' cache causes an extra success toast
@@ -1105,9 +1105,9 @@ describe('AdminBackupsPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTestId('restore-point-card');
-    await user.click(screen.getByRole('button', { name: /restore to this point/i }));
+    await user.click(screen.getByRole('button', { name: /request host restore/i }));
     await user.type(await screen.findByLabelText(/type RESTORE to confirm/i), 'RESTORE');
-    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+    await user.click(screen.getByRole('button', { name: /^request host restore$/i }));
 
     // Can't delete the point a restore is using.
     await waitFor(() => expect(screen.getByRole('button', { name: /^delete$/i })).toBeDisabled());

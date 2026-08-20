@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from jarvis_common.session_middleware import (
     SESSION_COOKIE_NAME,
     SESSION_TTL,
@@ -56,6 +59,13 @@ def mock_pool(mock_request):
     return pool, mock_request
 
 
+def _enable_transactions(conn: AsyncMock) -> None:
+    """Configure an async context manager for a mocked connection savepoint."""
+    conn.transaction = MagicMock()
+    conn.transaction.return_value.__aenter__ = AsyncMock(return_value=None)
+    conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
+
+
 # ---------------------------------------------------------------------------
 # expires_at IS NOT NULL defense-in-depth
 # ---------------------------------------------------------------------------
@@ -84,6 +94,7 @@ async def test_populate_state_rejects_null_expires_at(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -116,6 +127,7 @@ async def test_populate_state_accepts_valid_session(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -127,6 +139,7 @@ async def test_populate_state_accepts_valid_session(mock_pool):
     assert request.state.user_id == 42
     assert request.state.user_email == "test@example.com"
     assert request.state.user_role == "user"
+    assert request.state.session_id == "session-id"
 
 
 @pytest.mark.asyncio
@@ -149,6 +162,7 @@ async def test_populate_state_accepts_expired_within_grace(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -180,6 +194,7 @@ async def test_populate_state_rejects_expired_outside_grace(mock_pool):
     }
 
     conn = AsyncMock()
+    _enable_transactions(conn)
     conn.fetchrow = AsyncMock(return_value=row)
     pool.acquire = MagicMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -215,9 +230,7 @@ def _wire_conn(pool, *, row, renewed=None):
     the atomic renewal UPDATE ``fetchval`` returns (None ⇒ the predicate — grace /
     revoked / throttle — matched no row). Both acquires yield this same conn.
     """
-    wired, conn = make_pool_and_conn(
-        fetchrow_return=row, fetchval_return=renewed, with_transaction=False
-    )
+    wired, conn = make_pool_and_conn(fetchrow_return=row, fetchval_return=renewed)
     # The pool under test comes from the fixture; graft the wired acquire onto it.
     pool.acquire = wired.acquire
     return conn
@@ -225,7 +238,7 @@ def _wire_conn(pool, *, row, renewed=None):
 
 @pytest.mark.asyncio
 async def test_active_session_renews_and_marks_state(mock_pool):
-    """An active, renewable session runs the UPDATE and flags session_renewed."""
+    """An active session resolves and renews through one acquired connection."""
     pool, request = mock_pool
     future = datetime.now(UTC) + timedelta(days=20)
     conn = _wire_conn(pool, row=_row(future), renewed="session-id")
@@ -233,34 +246,64 @@ async def test_active_session_renews_and_marks_state(mock_pool):
     await _populate_state_from_cookie(request, "session-id")
 
     assert request.state.user_id == 42
+    assert pool.acquire.call_count == 1
     conn.fetchval.assert_awaited_once()
     assert request.state.session_renewed == "session-id"
 
 
 @pytest.mark.asyncio
+async def test_concurrent_requests_share_only_the_overlapping_session_lookup(mock_pool):
+    """Concurrent requests share one lookup without retaining a completed result."""
+    pool, request = mock_pool
+    near_full = datetime.now(UTC) + timedelta(days=30) - timedelta(hours=1)
+    conn = _wire_conn(pool, row=_row(near_full), renewed=None)
+    requests = [request]
+    for _ in range(9):
+        peer = MagicMock()
+        peer.state = MockState()
+        peer.cookies = {}
+        peer.app.state.db_pool = pool
+        requests.append(peer)
+
+    await asyncio.gather(*(_populate_state_from_cookie(peer, "session-id") for peer in requests))
+
+    assert pool.acquire.call_count == 1
+    conn.fetchrow.assert_awaited_once()
+    assert all(peer.state.user_id == 42 for peer in requests)
+
+    later = MagicMock()
+    later.state = MockState()
+    later.cookies = {}
+    later.app.state.db_pool = pool
+    await _populate_state_from_cookie(later, "session-id")
+    assert pool.acquire.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_grace_expired_resolves_but_does_not_renew(mock_pool):
-    """A grace-expired session resolves identity but the predicate blocks renewal."""
+    """A grace-expired session resolves identity without a renewal query."""
     pool, request = mock_pool
     expired = datetime.now(UTC) - timedelta(hours=12)  # within SESSION_GRACE
-    _wire_conn(pool, row=_row(expired), renewed=None)  # predicate matches no row
+    conn = _wire_conn(pool, row=_row(expired), renewed=None)
 
     await _populate_state_from_cookie(request, "session-id")
 
     assert request.state.user_id == 42
+    conn.fetchval.assert_not_awaited()
     assert not hasattr(request.state, "session_renewed")
 
 
 @pytest.mark.asyncio
 async def test_recently_renewed_session_is_throttled(mock_pool):
-    """A session already close to full TTL (renewed today) is not written again."""
+    """A recently renewed session skips the database renewal query."""
     pool, request = mock_pool
     near_full = datetime.now(UTC) + timedelta(days=30) - timedelta(hours=1)
-    conn = _wire_conn(pool, row=_row(near_full), renewed=None)  # throttle → no row
+    conn = _wire_conn(pool, row=_row(near_full), renewed=None)
 
     await _populate_state_from_cookie(request, "session-id")
 
     assert request.state.user_id == 42
-    conn.fetchval.assert_awaited_once()
+    conn.fetchval.assert_not_awaited()
     assert not hasattr(request.state, "session_renewed")
 
 
@@ -278,19 +321,28 @@ async def test_revoked_session_never_resolves_or_renews(mock_pool):
     assert not hasattr(request.state, "session_renewed")
 
 
-@pytest.mark.asyncio
-async def test_dispatch_refreshes_cookie_when_session_renewed(mock_pool):
-    """dispatch re-issues the session cookie (same id, 30-day Max-Age) after renewal."""
-    pool, request = mock_pool
-    request.cookies = {SESSION_COOKIE_NAME: "session-id"}
+def _session_test_client(pool: AsyncMock) -> TestClient:
+    """Return a real ASGI client backed by the supplied session pool."""
+    app = FastAPI()
+    app.state.db_pool = pool
+    app.add_middleware(SessionMiddleware)
+
+    @app.get("/ping")
+    async def ping() -> Response:
+        return Response(status_code=204)
+
+    return TestClient(app)
+
+
+def test_middleware_refreshes_cookie_when_session_renewed(mock_pool):
+    """The ASGI middleware reissues a renewed session cookie."""
+    pool, _ = mock_pool
     future = datetime.now(UTC) + timedelta(days=20)
     _wire_conn(pool, row=_row(future), renewed="session-id")
 
-    response = Response()
-    call_next = AsyncMock(return_value=response)
-    middleware = SessionMiddleware(MagicMock())
-
-    result = await middleware.dispatch(request, call_next)
+    client = _session_test_client(pool)
+    client.cookies.set(SESSION_COOKIE_NAME, "session-id")
+    result = client.get("/ping")
 
     set_cookie = result.headers.get("set-cookie")
     assert set_cookie is not None
@@ -313,19 +365,15 @@ async def test_dispatch_refreshes_cookie_when_session_renewed(mock_pool):
     )
 
 
-@pytest.mark.asyncio
-async def test_dispatch_leaves_cookie_untouched_when_not_renewed(mock_pool):
-    """dispatch sets no cookie when the session was resolved but not renewed."""
-    pool, request = mock_pool
-    request.cookies = {SESSION_COOKIE_NAME: "session-id"}
+def test_middleware_leaves_cookie_untouched_when_not_renewed(mock_pool):
+    """The ASGI middleware sets no cookie for a recently renewed session."""
+    pool, _ = mock_pool
     near_full = datetime.now(UTC) + timedelta(days=30) - timedelta(hours=1)
     _wire_conn(pool, row=_row(near_full), renewed=None)
 
-    response = Response()
-    call_next = AsyncMock(return_value=response)
-    middleware = SessionMiddleware(MagicMock())
-
-    result = await middleware.dispatch(request, call_next)
+    client = _session_test_client(pool)
+    client.cookies.set(SESSION_COOKIE_NAME, "session-id")
+    result = client.get("/ping")
 
     assert result.headers.get("set-cookie") is None
 
@@ -370,3 +418,45 @@ def test_session_cookie_kwargs_expires_matches_max_age():
 
 
 __all__ = []
+
+
+def _signing_out_test_client(pool: AsyncMock) -> TestClient:
+    """Return a client whose route clears the session cookie, as sign-out does."""
+    app = FastAPI()
+    app.state.db_pool = pool
+    app.add_middleware(SessionMiddleware)
+
+    @app.post("/sign-out")
+    async def sign_out() -> Response:
+        response = Response(status_code=204)
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return response
+
+    return TestClient(app)
+
+
+def test_middleware_does_not_renew_a_session_the_handler_cleared(mock_pool):
+    """Signing out ends the session even when the request was renewal-eligible.
+
+    The rolling refresh is attached to responses that arrived with a live
+    session, which is exactly the state a sign-out request is in. If it were
+    appended here it would be the last Set-Cookie the browser saw, and the
+    session would survive the sign-out.
+    """
+    pool, _ = mock_pool
+    future = datetime.now(UTC) + timedelta(days=20)
+    _wire_conn(pool, row=_row(future), renewed="session-id")
+
+    client = _signing_out_test_client(pool)
+    client.cookies.set(SESSION_COOKIE_NAME, "session-id")
+    result = client.post("/sign-out")
+
+    session_cookies = [
+        value
+        for key, value in result.headers.items()
+        if key.lower() == "set-cookie" and value.startswith(f"{SESSION_COOKIE_NAME}=")
+    ]
+    assert session_cookies, "sign-out must emit a session cookie header"
+    assert not any("Max-Age=2592000" in cookie for cookie in session_cookies), (
+        f"sign-out must not be handed a renewed session cookie; got {session_cookies}"
+    )

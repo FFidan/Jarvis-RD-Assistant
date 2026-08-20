@@ -89,11 +89,13 @@ sync_secret() {
     case "$key" in
       JARVIS_API_KEY)              value=$(openssl rand -hex 32) ;;
       JARVIS_SETUP_TOKEN)          value=$(openssl rand -hex 32) ;;
+      JARVIS_TELEGRAM_SERVICE_TOKEN) value=$(openssl rand -hex 32) ;;
+      JARVIS_RESEARCH_SERVICE_TOKEN) value=$(openssl rand -hex 32) ;;
+      JARVIS_LEARNING_SERVICE_TOKEN) value=$(openssl rand -hex 32) ;;
       LITELLM_MASTER_KEY)          value=$(openssl rand -hex 32) ;;
       LITELLM_SALT_KEY)            value=$(openssl rand -hex 32) ;;
       POSTGRES_PASSWORD)           value=$(openssl rand -hex 24) ;;
       QDRANT_API_KEY)              value=$(openssl rand -hex 24) ;;
-      INFRA_INGEST_KEY)            value=$(openssl rand -hex 32) ;;
       JARVIS_CONFIG_KEY)           value=$(openssl rand -base64 32 | tr -d '\n') ;;
       JARVIS_MODEL_HMAC_KEY)       value=$(openssl rand -hex 32) ;;
       LANGFUSE_NEXTAUTH_SECRET)    value=$(openssl rand -hex 32) ;;
@@ -190,6 +192,68 @@ sync_data_key() {
   sync_secret "$key" "$filename" "$generator"
 }
 
+# Database login passwords are Docker-secret files only.  Unlike application
+# data keys, they are deliberately not copied into .env: operators rotate or
+# recover these authorities through their isolated credential procedures.
+sync_database_password() {
+  local filename="secrets/$1" value=""
+
+  if [ -e "$filename" ]; then
+    if [ ! -f "$filename" ] || [ ! -r "$filename" ] || [ -L "$filename" ] || [ ! -s "$filename" ]; then
+      warn "$filename is not a readable non-empty regular password file."
+      FAILED=1
+      return
+    fi
+    chmod "$SECRET_FILE_MODE" "$filename"
+    info "$filename already exists — preserving."
+    return
+  fi
+
+  value="$(openssl rand -hex 24)"
+  printf '%s' "$value" > "$filename"
+  chmod "$SECRET_FILE_MODE" "$filename"
+  ok "$filename created."
+}
+
+# Preserve the v1.2.5 cluster-owner password solely for the one-time upgrade
+# bootstrap and existing recovery compatibility. It is never mounted at runtime.
+sync_legacy_postgres_password() {
+  local filename="secrets/postgres_password.txt" value="" clean_env=""
+
+  if [ -e "$filename" ]; then
+    if [ ! -f "$filename" ] || [ ! -r "$filename" ] || [ -L "$filename" ] || [ ! -s "$filename" ]; then
+      warn "$filename is not a readable non-empty regular password file."
+      FAILED=1
+      return
+    fi
+    chmod "$SECRET_FILE_MODE" "$filename"
+    info "$filename already exists — preserving for upgrade and recovery."
+    return
+  fi
+
+  if grep -qE '^POSTGRES_PASSWORD=.+' .env 2>/dev/null; then
+    value="$(grep -E '^POSTGRES_PASSWORD=.+' .env | head -n 1 | cut -d'=' -f2- | tr -d '\r\n')"
+    clean_env="$(mktemp .env.without-postgres.XXXXXX)" || {
+      warn "Could not create a temporary .env file."
+      FAILED=1
+      return
+    }
+    if ! awk 'index($0, "POSTGRES_PASSWORD=") != 1' .env > "$clean_env" \
+      || ! mv "$clean_env" .env; then
+      rm -f "$clean_env"
+      warn "Could not remove the migrated PostgreSQL password from .env."
+      FAILED=1
+      return
+    fi
+    info "Legacy PostgreSQL password moved out of .env."
+  else
+    value="$(openssl rand -hex 24)"
+  fi
+  printf '%s' "$value" > "$filename"
+  chmod "$SECRET_FILE_MODE" "$filename"
+  ok "$filename created for isolated upgrade and recovery use."
+}
+
 # ---------------------------------------------------------------------------
 # Auto-generated secrets
 # ---------------------------------------------------------------------------
@@ -200,17 +264,119 @@ sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
 # click-to-finish link (a fragment never reaches the server/logs); the wizard
 # also accepts it pasted on a second device.
 sync_secret JARVIS_SETUP_TOKEN jarvis_setup_token.txt "openssl rand -hex 32"
+sync_secret JARVIS_TELEGRAM_SERVICE_TOKEN telegram_service_token.txt "openssl rand -hex 32"
+sync_secret JARVIS_RESEARCH_SERVICE_TOKEN research_service_token.txt "openssl rand -hex 32"
+sync_secret JARVIS_LEARNING_SERVICE_TOKEN learning_service_token.txt "openssl rand -hex 32"
+
+# Platform alone receives the Ed25519 private key. Research and Learning mount
+# only the derived public key. The pair is validated on every run so a stale or
+# mismatched public file cannot silently break the signed-identity boundary.
+sync_identity_key_pair() {
+  local private_file="secrets/platform_identity_private_key.txt"
+  local public_file="secrets/platform_identity_public_key.txt"
+  local private_tmp="" public_tmp="" size=""
+
+  for candidate in "$private_file" "$public_file"; do
+    if [ -L "$candidate" ]; then
+      warn "${candidate} is a symbolic link — refusing identity key custody."
+      FAILED=1
+      return
+    fi
+  done
+  if [ -e "$public_file" ] && [ ! -e "$private_file" ]; then
+    warn "${public_file} exists without the Platform private key — refusing an incoherent pair."
+    FAILED=1
+    return
+  fi
+
+  if [ ! -e "$private_file" ]; then
+    private_tmp="$(mktemp secrets/.platform-identity-private.XXXXXX)" || {
+      warn "Could not allocate an identity private-key temporary file."
+      FAILED=1
+      return
+    }
+    public_tmp="$(mktemp secrets/.platform-identity-public.XXXXXX)" || {
+      rm -f "$private_tmp"
+      warn "Could not allocate an identity public-key temporary file."
+      FAILED=1
+      return
+    }
+    if ! openssl genpkey -algorithm ED25519 -out "$private_tmp" >/dev/null 2>&1 \
+      || ! openssl pkey -in "$private_tmp" -pubout -out "$public_tmp" >/dev/null 2>&1; then
+      rm -f "$private_tmp" "$public_tmp"
+      warn "Could not generate the Platform Ed25519 identity key pair."
+      FAILED=1
+      return
+    fi
+    chmod "$SECRET_FILE_MODE" "$private_tmp" "$public_tmp"
+    mv "$private_tmp" "$private_file"
+    mv "$public_tmp" "$public_file"
+    ok "Platform Ed25519 identity key pair generated."
+    return
+  fi
+
+  size="$(LC_ALL=C wc -c < "$private_file" 2>/dev/null || true)"
+  size="${size//[[:space:]]/}"
+  if [ -z "$size" ] || [[ "$size" == *[!0-9]* ]] || [ "$size" -eq 0 ] || [ "$size" -gt 16384 ]; then
+    warn "${private_file} is not a small regular key file."
+    FAILED=1
+    return
+  fi
+  public_tmp="$(mktemp secrets/.platform-identity-public.XXXXXX)" || {
+    warn "Could not allocate an identity public-key validation file."
+    FAILED=1
+    return
+  }
+  if ! openssl pkey -in "$private_file" -pubout -out "$public_tmp" >/dev/null 2>&1; then
+    rm -f "$public_tmp"
+    warn "${private_file} is not a valid Ed25519 private key."
+    FAILED=1
+    return
+  fi
+  if ! openssl pkey -pubin -in "$public_tmp" -text_pub -noout 2>/dev/null \
+    | grep -q '^ED25519 Public-Key:'; then
+    rm -f "$public_tmp"
+    warn "${private_file} does not contain an Ed25519 key."
+    FAILED=1
+    return
+  fi
+  if [ -e "$public_file" ] && ! cmp -s "$public_file" "$public_tmp"; then
+    rm -f "$public_tmp"
+    warn "${public_file} does not match the Platform private key."
+    FAILED=1
+    return
+  fi
+  if [ ! -e "$public_file" ]; then
+    chmod "$SECRET_FILE_MODE" "$public_tmp"
+    mv "$public_tmp" "$public_file"
+    ok "${public_file} derived from the existing private key."
+  else
+    rm -f "$public_tmp"
+    chmod "$SECRET_FILE_MODE" "$public_file"
+    info "Platform Ed25519 identity key pair is valid and in sync."
+  fi
+  chmod "$SECRET_FILE_MODE" "$private_file"
+}
+
+sync_identity_key_pair
 sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 # LITELLM_SALT_KEY encrypts model credentials LiteLLM stores in its database.
 # Without it litellm falls back to the master key as salt, so a master-key
 # rotation would brick every encrypted DB row — pin a dedicated salt instead;
 # never rotate this key manually.
 sync_data_key LITELLM_SALT_KEY litellm_salt_key.txt "openssl rand -hex 32"
-sync_secret POSTGRES_PASSWORD  postgres_password.txt  "openssl rand -hex 24"
+sync_legacy_postgres_password
+sync_database_password postgres_platform_runtime_password.txt
+sync_database_password postgres_research_runtime_password.txt
+sync_database_password postgres_learning_runtime_password.txt
+sync_database_password postgres_migrator_password.txt
+sync_database_password postgres_cluster_bootstrap_password.txt
+sync_database_password postgres_backup_reader_password.txt
+sync_database_password postgres_restore_operator_password.txt
+sync_database_password postgres_erasure_executor_password.txt
+sync_database_password litellm_runtime_password.txt
+sync_database_password litellm_migrator_password.txt
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
-# INFRA_INGEST_KEY authenticates the Vector log-shipper sidecar to POST /infra-events.
-# Mounted by paper_ingestion and vector services via Docker Secret.
-sync_secret INFRA_INGEST_KEY   infra_ingest_key.txt   "openssl rand -hex 32"
 # JARVIS_CONFIG_KEY is the Fernet write-key for the user_config table.
 # sync_secret preserves any existing .env value verbatim; rotating this key
 # would render every encrypted user_config row unreadable, so we never

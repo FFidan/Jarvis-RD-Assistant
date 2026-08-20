@@ -3125,6 +3125,21 @@ class _PauseAfterFetchrow:
         self.paused = asyncio.Event()
         self.release = asyncio.Event()
 
+    async def wait_until_paused(self) -> None:
+        """Block until the watched statement runs, or fail saying it never did.
+
+        Waiting without a bound turns a fragment that no longer matches the
+        production statement into a hang, which surfaces as a job timeout
+        instead of a failure naming the cause.
+        """
+        try:
+            await asyncio.wait_for(self.paused.wait(), timeout=30)
+        except TimeoutError:
+            raise AssertionError(
+                f"no statement containing {self._sql_fragment!r} ran, so the "
+                "concurrency this test sets up never happened"
+            ) from None
+
     async def fetchrow(self, sql: str, *args):
         row = await self._conn.fetchrow(sql, *args)
         if not self.paused.is_set() and self._sql_fragment in sql:
@@ -3158,6 +3173,7 @@ async def test_source_refresh_and_highlight_creation_share_the_paper_row_lock(
     """Concurrent refreshes and annotations keep one generation order."""
     from paper_ingestion.models import HighlightCreate, HighlightRect, Rect
     from paper_ingestion.routers.highlights import create_highlight
+    from paper_ingestion.services.paper_upsert import _PRE_PROMOTION_STATE_SQL
     from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
     source_id = "generation-lock-source"
@@ -3171,12 +3187,12 @@ async def test_source_refresh_and_highlight_creation_share_the_paper_row_lock(
             async with test_db_pool.acquire() as observer_conn:
                 paused_stale_conn = _PauseAfterFetchrow(
                     stale_conn,
-                    "SELECT pdf_url FROM papers",
+                    _PRE_PROMOTION_STATE_SQL,
                 )
                 stale_refresh = asyncio.create_task(
                     upsert_verified_public_paper(paused_stale_conn, source_v1)
                 )
-                await paused_stale_conn.paused.wait()
+                await paused_stale_conn.wait_until_paused()
                 fresh_refresh = asyncio.create_task(
                     upsert_verified_public_paper(fresh_conn, source_v2)
                 )
@@ -3244,7 +3260,7 @@ async def test_source_refresh_and_highlight_creation_share_the_paper_row_lock(
                         user_id,
                     )
                 )
-                await paused_highlight_conn.paused.wait()
+                await paused_highlight_conn.wait_until_paused()
                 promotion_task = asyncio.create_task(
                     upsert_verified_public_paper(promotion_conn, highlight_v2)
                 )
@@ -3328,7 +3344,11 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
 
     promoted = _PROMOTED_ROW
     conn = _promoting_conn(
-        {"visibility_scope": "public", "pdf_url": _SUPERSEDED_PDF_URL},
+        {
+            "id": _PROMOTED_PAPER_ID,
+            "visibility_scope": "public",
+            "pdf_url": _SUPERSEDED_PDF_URL,
+        },
         promoted,
         _RESET_ROW,
     )
@@ -3338,7 +3358,7 @@ async def test_promotion_discards_derived_chunks_when_it_replaces_the_source_url
             conn, _paper_with_pdf_url("promotion-discard", _TRUSTED_PDF_URL)
         )
 
-    conn.execute.assert_awaited_once_with(_DELETE_DERIVED_CHUNKS_SQL, 4242)
+    conn.execute.assert_any_await(_DELETE_DERIVED_CHUNKS_SQL, 4242)
     assert record["pdf_downloaded"] is False
     assert record["pdf_local_path"] is None
     assert record["chunked_at"] is None
@@ -3362,7 +3382,11 @@ async def test_promotion_records_the_id_of_the_paper_it_discarded() -> None:
     from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
     conn = _promoting_conn(
-        {"visibility_scope": "private", "pdf_url": _SUPERSEDED_PDF_URL},
+        {
+            "id": _PROMOTED_PAPER_ID,
+            "visibility_scope": "private",
+            "pdf_url": _SUPERSEDED_PDF_URL,
+        },
         _PROMOTED_ROW,
         _RESET_ROW,
     )
@@ -3390,7 +3414,11 @@ async def test_promotion_that_discards_nothing_records_no_id() -> None:
     from paper_ingestion.services.pdf_workflow import upsert_verified_public_paper
 
     conn = _promoting_conn(
-        {"visibility_scope": "public", "pdf_url": _TRUSTED_PDF_URL},
+        {
+            "id": _PROMOTED_PAPER_ID,
+            "visibility_scope": "public",
+            "pdf_url": _TRUSTED_PDF_URL,
+        },
         _PROMOTED_ROW,
     )
     collected: list[int] = []

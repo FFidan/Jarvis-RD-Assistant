@@ -36,6 +36,7 @@ from pathlib import Path
 
 import asyncpg
 import pytest
+from jarvis_common.testing import TEST_TABLE_SCHEMAS
 
 pytestmark = pytest.mark.live_pg
 
@@ -485,8 +486,8 @@ async def test_baseline_jsonb_columns_are_jsonb_and_roundtrip_object(
 
     nested = {"outer": {"inner": [1, 2, 3]}}
     await conn.execute(
-        "INSERT INTO audit_log (user_id, action, resource, metadata) "
-        "VALUES (NULL, 'baseline-079', 'res', $1)",
+        "INSERT INTO audit_log (user_id, action, resource, metadata, caller_role) "
+        "VALUES (NULL, 'baseline-079', 'res', $1, 'jarvis_platform_runtime')",
         nested,
     )
     kind = await conn.fetchval(
@@ -883,7 +884,8 @@ async def test_pdf_resolutions_table_absent(contract_conn: asyncpg.Connection) -
     """
     row = await contract_conn.fetchrow(
         "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema='public' AND table_name='pdf_resolutions'"
+        "WHERE table_schema = ANY($1::text[]) AND table_name = 'pdf_resolutions'",
+        TEST_TABLE_SCHEMAS,
     )
     assert row is None, (
         "pdf_resolutions table must be absent — migration 0089 dropped it "
@@ -923,7 +925,8 @@ async def test_audit_log_delete_is_silent_noop(baseline_conn: asyncpg.Connection
     (DO INSTEAD NOTHING rule from migration 0090)."""
     conn = baseline_conn
     await conn.execute(
-        "INSERT INTO audit_log (user_id, action, resource) VALUES ('u1', 'baseline-0090', 'r1')"
+        "INSERT INTO audit_log (user_id, action, resource, caller_role) "
+        "VALUES ('u1', 'baseline-0090', 'r1', 'jarvis_platform_runtime')"
     )
     await conn.execute("DELETE FROM audit_log WHERE action = 'baseline-0090'")
     remaining = await conn.fetchval("SELECT COUNT(*) FROM audit_log WHERE action = 'baseline-0090'")
@@ -963,7 +966,7 @@ async def test_author_alert_log_two_col_unique_absent(baseline_conn: asyncpg.Con
     row = await conn.fetchrow(
         """
         SELECT conname FROM pg_constraint
-         WHERE conrelid = 'public.author_alert_log'::regclass
+         WHERE conrelid = 'author_alert_log'::regclass
            AND contype = 'u'
            AND conname = 'author_alert_log_tracked_author_id_paper_id_key'
         """,
@@ -1044,7 +1047,7 @@ async def test_tracked_authors_three_col_unique_constraint(
         """
         SELECT array_length(conkey, 1)
           FROM pg_constraint
-         WHERE conrelid = 'public.tracked_authors'::regclass
+         WHERE conrelid = 'tracked_authors'::regclass
            AND conname = 'tracked_authors_name_s2_unique'
            AND contype = 'u'
         """,
@@ -1305,12 +1308,16 @@ async def test_baseline_and_migration_chain_converge_to_final_contradiction_inde
         await conn.execute(expected_sql)
         try:
             installed = await conn.fetchval(
-                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1",
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE schemaname = ANY($2::text[]) AND indexname = $1",
                 _CONTRADICTION_INDEX_NAME,
+                TEST_TABLE_SCHEMAS,
             )
             expected = await conn.fetchval(
-                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1",
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE schemaname = ANY($2::text[]) AND indexname = $1",
                 _PROBE_INDEX_NAME,
+                TEST_TABLE_SCHEMAS,
             )
         finally:
             await conn.execute(f"DROP INDEX IF EXISTS {_PROBE_INDEX_NAME}")
@@ -1342,7 +1349,7 @@ async def test_migrated_pdf_artifacts_have_generation_columns(
             """
             SELECT table_name, column_name, data_type, is_nullable, column_default
               FROM information_schema.columns
-             WHERE table_schema = 'public'
+             WHERE table_schema = ANY($1::text[])
                AND (table_name, column_name) IN (
                    ('papers', 'content_generation'),
                    ('paper_highlights', 'content_generation'),
@@ -1355,7 +1362,8 @@ async def test_migrated_pdf_artifacts_have_generation_columns(
                    ('paper_contradictions', 'paper_a_content_generation'),
                    ('paper_contradictions', 'paper_b_content_generation')
                )
-            """
+            """,
+            TEST_TABLE_SCHEMAS,
         )
 
     assert {(row["table_name"], row["column_name"]) for row in rows} == expected
@@ -1374,10 +1382,11 @@ async def test_migrated_contradictions_preserve_nullable_storage_but_reject_new_
             """
             SELECT is_nullable
               FROM information_schema.columns
-             WHERE table_schema = 'public'
+             WHERE table_schema = ANY($1::text[])
                AND table_name = 'paper_contradictions'
                AND column_name = 'user_id'
-            """
+            """,
+            TEST_TABLE_SCHEMAS,
         )
         constraint_validated = await conn.fetchval(
             """

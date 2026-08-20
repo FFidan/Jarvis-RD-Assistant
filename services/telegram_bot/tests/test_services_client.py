@@ -2,12 +2,12 @@
 
 Verifies:
 - Correct URL on the right base service (learning_engine vs paper_ingestion)
-- X-Owner-User-Id == str(user_id) and X-API-Key present in headers
+- X-Jarvis-Paired-User-Id == str(user_id) and no general API key in headers
 - Correct query params / request body
 - Parsed return values
 - 404 → None for fetch_project and complete_task
 - 5xx → raise_for_status raises httpx.HTTPStatusError that propagates
-- fetch_new_paper_count sends an ISO date_from ≈ now-hours and returns total
+- fetch_new_paper_count sends today's UTC date as date_from and returns total
 - fetch_upcoming_milestones returns each deadline as a datetime
 - fetch_due_card_count returns the due_now int
 - check_authors returns the dict with matches/new_papers/authors_checked
@@ -16,14 +16,13 @@ Verifies:
 from __future__ import annotations
 
 import ast
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from jarvis_common.testing_telegram import make_bot_config, make_http_response
-from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.services_client import (
     PulsePayloadError,
@@ -33,6 +32,7 @@ from telegram_bot.services_client import (
     create_project,
     fetch_active_focus_session,
     fetch_due_card_count,
+    fetch_inbox_count,
     fetch_new_paper_count,
     fetch_next_review_card,
     fetch_papers_feed,
@@ -41,16 +41,17 @@ from telegram_bot.services_client import (
     fetch_project_milestones,
     fetch_project_tasks,
     fetch_projects,
+    fetch_pulse_generation_status,
     fetch_pulse_today,
     fetch_stats,
     fetch_tasks,
     fetch_upcoming_milestones,
     fetch_weekly_digest,
     get_paper,
-    log_focus_session,
     pause_focus_session,
     record_paper_feedback,
     search_papers,
+    search_papers_feed,
     start_focus_session,
     submit_review_rating,
     trigger_pulse_generation,
@@ -62,7 +63,6 @@ from telegram_bot.services_client import (
 # ---------------------------------------------------------------------------
 
 USER_ID = 42
-API_KEY = "test-api-key"
 
 
 def _focus_payload(*, state: str = "active", source: str = "telegram") -> dict:
@@ -116,7 +116,6 @@ def config() -> BotConfig:
         BotConfig,
         learning_engine_url="http://learn:8001",
         paper_ingestion_url="http://paper:8000",
-        jarvis_api_key=SecretStr(API_KEY),
     )
 
 
@@ -131,14 +130,13 @@ def _make_http(response: MagicMock) -> AsyncMock:
 
 
 def _assert_owner_headers(call_kwargs: dict, user_id: int = USER_ID) -> None:
-    """Assert the standard auth headers appear in *call_kwargs*."""
+    """Assert only the local assertion-exchange marker is present."""
     headers = call_kwargs.get("headers", {})
-    assert headers.get("X-Owner-User-Id") == str(user_id), (
-        f"X-Owner-User-Id expected {user_id!r}, got {headers.get('X-Owner-User-Id')!r}"
+    marker = "X-Jarvis-Paired-User-Id"
+    assert headers.get(marker) == str(user_id), (
+        f"{marker} expected {user_id!r}, got {headers.get(marker)!r}"
     )
-    assert headers.get("X-API-Key") == API_KEY, (
-        f"X-API-Key expected {API_KEY!r}, got {headers.get('X-API-Key')!r}"
-    )
+    assert "X-API-Key" not in headers
 
 
 # ---------------------------------------------------------------------------
@@ -508,14 +506,14 @@ async def test_fetch_new_paper_count_correct_url_and_returns_total(config: BotCo
 
 
 @pytest.mark.asyncio
-async def test_fetch_new_paper_count_date_from_is_iso_approx_now_minus_hours(
+async def test_fetch_new_paper_count_date_from_is_today_utc(
     config: BotConfig,
 ) -> None:
-    """date_from sent to the API is the DATE of now - hours (day granularity)."""
+    """date_from is today's UTC date, so the briefing's "since midnight UTC" is literal."""
     http = _make_http(make_http_response({"total": 0}))
 
     before = datetime.now(UTC)
-    await fetch_new_paper_count(http, config, USER_ID, hours=24)
+    await fetch_new_paper_count(http, config, USER_ID)
     after = datetime.now(UTC)
 
     _, call_kwargs = http.get.call_args
@@ -527,15 +525,26 @@ async def test_fetch_new_paper_count_date_from_is_iso_approx_now_minus_hours(
     # datetime ISO string is rejected with 422. Must be a pure date (no time).
     assert "T" not in date_from_str, f"date_from must be a date (no time), got {date_from_str!r}"
 
-    # It is the calendar date of (now - hours). before/after differ only across
-    # a midnight boundary, so accept either.
-    expected_dates = {
-        (before - timedelta(hours=24)).date().isoformat(),
-        (after - timedelta(hours=24)).date().isoformat(),
-    }
+    # before/after differ only across a midnight boundary, so accept either.
+    expected_dates = {before.date().isoformat(), after.date().isoformat()}
     assert date_from_str in expected_dates, (
-        f"date_from {date_from_str!r} is not the date of now-24h ({expected_dates})"
+        f"date_from {date_from_str!r} is not today's UTC date ({expected_dates})"
     )
+
+
+@pytest.mark.asyncio
+async def test_fetch_inbox_count_reads_the_inbox_view_total(config: BotConfig) -> None:
+    """The inbox count comes from the inbox view's whole-view total, not a page length."""
+    http = _make_http(make_http_response({"total": 473, "papers": []}))
+
+    result = await fetch_inbox_count(http, config, USER_ID)
+
+    call_args, call_kwargs = http.get.call_args
+    url = call_args[0] if call_args else call_kwargs["url"]
+    assert url == "http://paper:8000/api/papers/feed"
+    _assert_owner_headers(call_kwargs)
+    assert call_kwargs["params"] == {"view": "inbox", "limit": 1}
+    assert result == 473
 
 
 @pytest.mark.asyncio
@@ -693,7 +702,7 @@ async def test_submit_review_rating_5xx_propagates(config: BotConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# log_focus_session
+# focus sessions
 # ---------------------------------------------------------------------------
 
 
@@ -743,40 +752,6 @@ async def test_focus_session_client_rejects_malformed_payload(config: BotConfig)
         await fetch_active_focus_session(http, config, USER_ID)
 
 
-@pytest.mark.asyncio
-async def test_log_focus_session_correct_url_and_body(config: BotConfig) -> None:
-    http = _make_http(make_http_response({}))
-
-    await log_focus_session(http, config, USER_ID, 0.5)
-
-    http.post.assert_called_once()
-    call_args, call_kwargs = http.post.call_args
-    url = call_args[0] if call_args else call_kwargs["url"]
-    assert url == "http://learn:8001/api/executive/focus/log"
-    assert call_kwargs.get("json") == {"duration_hours": 0.5}
-    _assert_owner_headers(call_kwargs)
-
-
-@pytest.mark.asyncio
-async def test_log_focus_session_none_user_id_omits_owner_header(config: BotConfig) -> None:
-    """The scheduled-job callback may not carry an owner id (job.data fallback)."""
-    http = _make_http(make_http_response({}))
-
-    await log_focus_session(http, config, None, 0.25)
-
-    _, call_kwargs = http.post.call_args
-    headers = call_kwargs.get("headers", {})
-    assert "X-Owner-User-Id" not in headers
-
-
-@pytest.mark.asyncio
-async def test_log_focus_session_5xx_propagates(config: BotConfig) -> None:
-    http = _make_http(make_http_response({}, status=500))
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await log_focus_session(http, config, USER_ID, 1.0)
-
-
 # ---------------------------------------------------------------------------
 # search_papers
 # ---------------------------------------------------------------------------
@@ -784,8 +759,8 @@ async def test_log_focus_session_5xx_propagates(config: BotConfig) -> None:
 
 @pytest.mark.asyncio
 async def test_search_papers_correct_url_and_body(config: BotConfig) -> None:
-    papers = [{"id": 1, "title": "P1"}]
-    http = _make_http(make_http_response(papers))
+    payload = {"results": [{"title": "P1"}], "total": 1, "per_source_counts": {"arxiv": 1}}
+    http = _make_http(make_http_response(payload))
 
     result = await search_papers(http, config, USER_ID, "transformers")
 
@@ -793,9 +768,14 @@ async def test_search_papers_correct_url_and_body(config: BotConfig) -> None:
     call_args, call_kwargs = http.post.call_args
     url = call_args[0] if call_args else call_kwargs["url"]
     assert url == "http://paper:8000/api/search"
-    assert call_kwargs.get("json") == {"query": "transformers"}
+    # The request model defaults to arXiv alone, so the four sources are explicit.
+    assert call_kwargs.get("json") == {
+        "query": "transformers",
+        "source_types": ["arxiv", "semantic_scholar", "openalex", "pubmed"],
+    }
+    assert call_kwargs["timeout"] > 70.5
     _assert_owner_headers(call_kwargs)
-    assert result == papers
+    assert result == payload
 
 
 @pytest.mark.asyncio
@@ -832,6 +812,22 @@ async def test_fetch_papers_feed_5xx_propagates(config: BotConfig) -> None:
 
     with pytest.raises(httpx.HTTPStatusError):
         await fetch_papers_feed(http, config, USER_ID, view="library", limit=10)
+
+
+@pytest.mark.asyncio
+async def test_search_papers_feed_queries_the_library_view(config: BotConfig) -> None:
+    feed = {"papers": [{"id": 2}], "total": 1, "search_mode": "bm25"}
+    http = _make_http(make_http_response(feed))
+
+    result = await search_papers_feed(http, config, USER_ID, "transformers")
+
+    http.post.assert_not_called()
+    call_args, call_kwargs = http.get.call_args
+    url = call_args[0] if call_args else call_kwargs["url"]
+    assert url == "http://paper:8000/api/papers/feed"
+    assert call_kwargs.get("params") == {"view": "library", "limit": 10, "q": "transformers"}
+    _assert_owner_headers(call_kwargs)
+    assert result == feed
 
 
 # ---------------------------------------------------------------------------
@@ -1046,6 +1042,34 @@ async def test_trigger_pulse_generation_rejects_missing_job_identity(config: Bot
 
 
 # ---------------------------------------------------------------------------
+# fetch_pulse_generation_status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_pulse_generation_status_correct_url(config: BotConfig) -> None:
+    http = _make_http(make_http_response({"job_id": "job-1", "status": "running"}))
+
+    status = await fetch_pulse_generation_status(http, config, USER_ID, "job-1")
+
+    http.get.assert_called_once()
+    call_args, call_kwargs = http.get.call_args
+    url = call_args[0] if call_args else call_kwargs["url"]
+    assert url == "http://paper:8000/api/pulse/generate/job-1"
+    _assert_owner_headers(call_kwargs)
+    assert status.status == "running"
+    assert status.is_terminal is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_pulse_generation_status_rejects_unknown_status(config: BotConfig) -> None:
+    http = _make_http(make_http_response({"job_id": "job-1", "status": "almost"}))
+
+    with pytest.raises(PulsePayloadError, match="job status"):
+        await fetch_pulse_generation_status(http, config, USER_ID, "job-1")
+
+
+# ---------------------------------------------------------------------------
 # fetch_weekly_digest
 # ---------------------------------------------------------------------------
 
@@ -1162,7 +1186,12 @@ def test_backend_transport_confined_to_client_boundary() -> None:
     """
     package_root = Path(__file__).resolve().parents[1] / "telegram_bot"
     services_client_path = package_root / "services_client.py"
-    allowed = {package_root / "config.py", services_client_path}
+    allowed = {
+        package_root / "config.py",
+        package_root / "platform_client.py",
+        package_root / "service_auth.py",
+        services_client_path,
+    }
     forbidden_markers = ("_owner_headers", ".learning_engine_url", ".paper_ingestion_url")
     offenders: dict[str, list[str]] = {}
     for path in sorted(package_root.rglob("*.py")):
@@ -1170,7 +1199,7 @@ def test_backend_transport_confined_to_client_boundary() -> None:
         violations: list[str] = []
         if path not in allowed:
             violations.extend(marker for marker in forbidden_markers if marker in source)
-        if path != services_client_path:
+        if path not in allowed:
             violations.extend(
                 f"outbound .{method}() at line {line}"
                 for line, method in _outbound_transport_calls(source)

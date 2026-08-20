@@ -21,6 +21,8 @@ make_pool_and_conn      canonical mock (pool, conn) factory with optional kwargs
 _make_pool_and_conn     module-level alias preserved for existing importers
 make_request            minimal request mock for handler tests
 make_live_pg_dsn        factory that returns a ``live_pg_dsn`` pytest fixture
+make_dedicated_cluster_pg_dsn
+                        same, on a cluster no other test shares
 make_contract_pg_dsn    factory that returns a session-scoped ``contract_pg_dsn`` fixture
 SharedAcquireCM         async CM yielding a shared asyncpg connection under a reentrant lock
 SharedConnPool          asyncpg.Pool-shaped object backed by a single shared connection
@@ -47,7 +49,12 @@ __all__ = [
     "make_request",
     "shelve_paper",
     "seed_user_row",
+    "TEST_SEARCH_PATH",
+    "TEST_TABLE_SCHEMAS",
+    "make_dedicated_cluster_pg_dsn",
     "make_live_pg_dsn",
+    "open_cross_domain_path",
+    "reset_product_tables",
     "make_live_pg_session_dsn",
     "make_contract_pg_dsn",
     "_make_contract_pool_fixture",
@@ -63,6 +70,7 @@ __all__ = [
     "A_CARD_FRONT",
     # cluster 6 (testing_auth)
     "RoleMiddleware",
+    "SignedIdentityMiddleware",
     # clusters 7-8 (testing_telegram)
     "FakeAcquireCM",
     "FakeTxnCM",
@@ -79,7 +87,7 @@ __all__ = [
     "patch_pi_test_app",
 ]
 
-from jarvis_common.testing_auth import RoleMiddleware  # noqa: F401
+from jarvis_common.testing_auth import RoleMiddleware, SignedIdentityMiddleware  # noqa: F401
 from jarvis_common.testing_contract_apps import (  # noqa: F401
     PITestAppOptions,
     _make_le_contract_app_with_litellm_sidecar,
@@ -92,6 +100,8 @@ from jarvis_common.testing_db import (  # noqa: F401
     A_PAPER_TITLE,
     A_PROJECT_NAME,
     A_TASK_TITLE,
+    TEST_SEARCH_PATH,
+    TEST_TABLE_SCHEMAS,
     FakeRecord,
     SharedAcquireCM,
     SharedConnPool,
@@ -102,11 +112,14 @@ from jarvis_common.testing_db import (  # noqa: F401
     _make_pool_and_conn,
     make_conn,
     make_contract_pg_dsn,
+    make_dedicated_cluster_pg_dsn,
     make_live_pg_dsn,
     make_live_pg_session_dsn,
     make_paper_record,
     make_pool_and_conn,
     make_request,
+    open_cross_domain_path,
+    reset_product_tables,
     seed_user_row,
     shelve_paper,
 )

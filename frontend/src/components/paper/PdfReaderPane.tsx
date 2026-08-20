@@ -9,7 +9,7 @@
  * The pdf.js worker is pinned to the bundled copy (the library otherwise
  * defaults to an unpkg CDN URL, which breaks offline / self-hosted installs).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   PdfLoader,
@@ -21,6 +21,7 @@ import {
 } from 'react-pdf-highlighter-extended';
 import type {
   Highlight as LibHighlight,
+  PdfHighlighterUtils,
   Tip,
 } from 'react-pdf-highlighter-extended';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -37,6 +38,7 @@ import {
 import { zoteroGetLinkage, zoteroPushHighlights } from '@/lib/api/zotero';
 import type { Highlight, HighlightRect } from '@/types';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { PDF_GOTO_EVENT, type PdfGotoDetail } from '@/lib/pdf-events';
 import { useJobStore } from '@/stores/job-store';
 import { errorMessage } from '@/lib/errors';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -275,6 +277,22 @@ function DegradedPanel({ message }: { message: string }) {
 
 // ── Main pane ────────────────────────────────────────────────────────────────
 
+/** Both sides of the quote match are reduced to this form, so hyphenation,
+ *  spacing and punctuation differences between the summary's quote and the
+ *  extracted text layer cannot break the match. */
+const normalizeForMatch = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Long quotes are truncated — the head is enough to locate the passage. */
+const MAX_QUOTE_MATCH_CHARS = 400;
+/** Below this, a match would be coincidental rather than the quote. */
+const MIN_QUOTE_MATCH_CHARS = 12;
+/** Retry length when the full quote is not found verbatim. */
+const QUOTE_MATCH_HEAD_CHARS = 40;
+/** The page's text layer is rendered asynchronously after the scroll. */
+const TEXT_LAYER_SETTLE_MS = 700;
+const QUOTE_FLASH_MS = 2500;
+const QUOTE_FLASH_COLOR = 'rgba(250, 204, 21, 0.6)';
+
 interface PdfReaderPaneProps {
   paperId: number;
 }
@@ -284,6 +302,68 @@ export function PdfReaderPane({ paperId }: PdfReaderPaneProps) {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Evidence anchors ask the reader to open a page and flash the quoted text.
+  // That needs the highlighter's utils handle, so it is captured rather than
+  // discarded.
+  const utilsRef = useRef<PdfHighlighterUtils | null>(null);
+  // A request that arrives while the PDF blob is still downloading has no
+  // viewer to act on. Holding it and replaying it once the viewer mounts keeps
+  // the promise the anchor makes, instead of dropping the jump in silence.
+  const pendingGotoRef = useRef<PdfGotoDetail | null>(null);
+
+  const applyGoto = useCallback(({ page, quote }: PdfGotoDetail) => {
+    const viewer = utilsRef.current?.getViewer();
+    if (!viewer) {
+      pendingGotoRef.current = { page, quote };
+      return;
+    }
+    viewer.scrollPageIntoView({ pageNumber: page });
+    if (!quote) return;
+    // The text layer is one span per LINE, so a quote starting mid-line
+    // never matches a span's head. Strip both sides to a bare alphanumeric
+    // stream (which also neutralises hyphenation and spacing differences),
+    // locate the quote in the page's concatenated text, and pulse every
+    // span overlapping the matched offset range.
+    window.setTimeout(() => {
+      const needle = normalizeForMatch(quote).slice(0, MAX_QUOTE_MATCH_CHARS);
+      if (needle.length < MIN_QUOTE_MATCH_CHARS) return;
+      const pageDiv = viewer.getPageView(page - 1)?.div as HTMLElement | undefined;
+      const spans = [...(pageDiv?.querySelectorAll<HTMLElement>('.textLayer span') ?? [])];
+      let stream = '';
+      const bounds = spans.map((span) => {
+        const start = stream.length;
+        stream += normalizeForMatch(span.textContent ?? '');
+        return { span, start, end: stream.length };
+      });
+      // Full needle first; fall back to its head when extraction noise has
+      // broken the tail of the match.
+      let index = stream.indexOf(needle);
+      let length = needle.length;
+      if (index === -1) {
+        const head = needle.slice(0, QUOTE_MATCH_HEAD_CHARS);
+        index = stream.indexOf(head);
+        length = head.length;
+      }
+      if (index === -1) return;
+      const matched = bounds.filter((b) => b.end > index && b.start < index + length);
+      matched.forEach(({ span }, i) => {
+        span.style.transition = 'background-color 0.4s';
+        span.style.backgroundColor = QUOTE_FLASH_COLOR;
+        if (i === 0) span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        window.setTimeout(() => {
+          span.style.backgroundColor = '';
+        }, QUOTE_FLASH_MS);
+      });
+    }, TEXT_LAYER_SETTLE_MS);
+  }, []);
+
+  useEffect(() => {
+    const onGoto = (event: Event) =>
+      applyGoto((event as CustomEvent<PdfGotoDetail>).detail);
+    window.addEventListener(PDF_GOTO_EVENT, onGoto);
+    return () => window.removeEventListener(PDF_GOTO_EVENT, onGoto);
+  }, [applyGoto]);
 
   // Fetch the PDF as an authenticated blob URL; revoke on unmount (leak guard).
   useEffect(() => {
@@ -471,7 +551,13 @@ export function PdfReaderPane({ paperId }: PdfReaderPaneProps) {
               highlights={libHighlights}
               enableAreaSelection={() => false}
               selectionTip={<SelectionTip onCreate={(input) => createMut.mutate(input)} />}
-              utilsRef={() => {}}
+              utilsRef={(utils) => {
+                utilsRef.current = utils;
+                const pending = pendingGotoRef.current;
+                if (!pending) return;
+                pendingGotoRef.current = null;
+                applyGoto(pending);
+              }}
             >
               <HighlightRenderer onEdit={setEditingId} />
             </PdfHighlighter>

@@ -14,6 +14,8 @@ interface CrossReferencesTabProps {
 }
 
 export function CrossReferencesTab({ summary }: CrossReferencesTabProps) {
+  const refs: CrossReference[] = summary?.cross_references ?? [];
+
   if (!summary) {
     return (
       <EmptyState
@@ -23,8 +25,6 @@ export function CrossReferencesTab({ summary }: CrossReferencesTabProps) {
       />
     );
   }
-
-  const refs: CrossReference[] = summary.cross_references ?? [];
 
   if (refs.length === 0) {
     return (
@@ -42,9 +42,14 @@ export function CrossReferencesTab({ summary }: CrossReferencesTabProps) {
         <Card key={`${ref.related_paper_id}-${ref.relationship}`} className="rounded-md border-hair shadow-none">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">
-              <Link to={`/paper/${ref.related_paper_id}`} className="underline hover:no-underline">
-                Open related paper
-              </Link>
+              {ref.related_title ? (
+                <Link to={`/paper/${ref.related_paper_id}`} className="underline hover:no-underline">
+                  {ref.related_title}
+                  {ref.related_year ? ` (${ref.related_year})` : ''}
+                </Link>
+              ) : (
+                <span>Related paper unavailable (ID {ref.related_paper_id})</span>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">

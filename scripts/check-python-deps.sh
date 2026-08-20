@@ -12,6 +12,8 @@ uv lock --check
 OUTPUT_ROOT="$TMP_DIR" bash "$ROOT_DIR/scripts/export-service-requirements.sh"
 
 for file in \
+  services/platform_api/requirements.txt \
+  services/platform_api/constraints.txt \
   services/paper_ingestion/requirements.txt \
   services/paper_ingestion/requirements-optional.txt \
   services/paper_ingestion/constraints.txt \
@@ -37,12 +39,12 @@ def major_minor_patch(raw: str) -> tuple[int, int, int]:
 
 
 fastapi_version = version("fastapi")
-if major_minor_patch(fastapi_version) >= (0, 141, 0):
+if major_minor_patch(fastapi_version) >= (0, 142, 0):
     raise SystemExit(
-        f"host FastAPI {fastapi_version} is outside the Docker runtime cap <0.141.0"
+        f"host FastAPI {fastapi_version} is outside the Docker runtime cap <0.142.0"
     )
 
-print(f"OK host FastAPI {fastapi_version} matches Docker runtime cap <0.141.0")
+print(f"OK host FastAPI {fastapi_version} matches Docker runtime cap <0.142.0")
 PY
 
 # The checks above prove the exported files faithfully reproduce the dependency

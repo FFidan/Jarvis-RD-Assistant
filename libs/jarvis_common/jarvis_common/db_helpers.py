@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import asyncpg
 from fastapi import HTTPException
@@ -12,6 +12,35 @@ from fastapi import HTTPException
 from jarvis_common.paper_visibility import paper_visibility_sql
 
 logger = logging.getLogger(__name__)
+
+
+class _SQLExecutor(Protocol):
+    async def execute(self, query: str, *args: Any) -> str: ...
+
+
+async def lock_paper_content_generation(conn: _SQLExecutor, paper_id: int) -> None:
+    """Serialize work that depends on one paper's content generation.
+
+    Parameters
+    ----------
+    conn : _SQLExecutor
+        Connection participating in the caller's active transaction.
+    paper_id : int
+        Paper whose derived Learning records must agree with Research content.
+
+    Notes
+    -----
+    Research takes this transaction lock before advancing
+    ``papers.content_generation``. Learning takes the same lock before reading
+    that generation and writing a derived card or review. The shared advisory
+    lock preserves cross-service ordering without giving Learning row-lock or
+    write authority over Research tables.
+    """
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext('paper.content_generation'), $1)",
+        paper_id,
+    )
+
 
 _ALLOWED_TABLES = frozenset(
     {
@@ -482,15 +511,12 @@ async def record_author_alert(
     Returns True if the row was newly inserted, False if a conflict was skipped.
     """
     row = await conn.fetchrow(
-        """INSERT INTO author_alert_log (tracked_author_id, paper_id, user_id)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (tracked_author_id, paper_id, user_id) DO NOTHING
-           RETURNING tracked_author_id""",
+        "SELECT research.record_author_alert_v1($1, $2, $3) AS inserted",
         tracked_author_id,
         paper_id,
         user_id,
     )
-    return row is not None
+    return bool(row and row["inserted"])
 
 
 async def delete_or_404(

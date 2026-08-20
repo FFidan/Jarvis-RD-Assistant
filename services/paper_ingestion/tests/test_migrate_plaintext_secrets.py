@@ -19,7 +19,7 @@ def _make_pool_with_rows(rows: list[dict]):
 
 @pytest.mark.asyncio
 async def test_migrate_rewrites_plaintext_rows(fernet_key):
-    from paper_ingestion.services.config_db import migrate_plaintext_secrets
+    from jarvis_common.config_store import migrate_plaintext_secrets
 
     rows = [
         {"id": 1, "key": "zotero.api_key", "value": "legacy-plaintext"},
@@ -35,9 +35,6 @@ async def test_migrate_rewrites_plaintext_rows(fernet_key):
     # Each call's $2 (the ciphertext) must decrypt back to the original plaintext
     plaintext_by_id = {row["id"]: row["value"] for row in rows}
     for call in conn.execute.await_args_list:
-        sql = call.args[0]
-        assert "UPDATE user_config" in sql
-        assert "encrypted_value = $2" in sql
         row_id = call.args[1]
         ciphertext_bytes = call.args[2]
         # ciphertext is bytes; decode to str then run decrypt_secret
@@ -47,7 +44,7 @@ async def test_migrate_rewrites_plaintext_rows(fernet_key):
 
 @pytest.mark.asyncio
 async def test_migrate_skips_when_no_plaintext_rows(fernet_key):
-    from paper_ingestion.services.config_db import migrate_plaintext_secrets
+    from jarvis_common.config_store import migrate_plaintext_secrets
 
     pool, conn = _make_pool_with_rows([])
     rewritten = await migrate_plaintext_secrets(pool)
@@ -58,7 +55,7 @@ async def test_migrate_skips_when_no_plaintext_rows(fernet_key):
 @pytest.mark.asyncio
 async def test_migrate_skips_null_or_empty_values(fernet_key):
     """Rows where value is empty must not be written."""
-    from paper_ingestion.services.config_db import migrate_plaintext_secrets
+    from jarvis_common.config_store import migrate_plaintext_secrets
 
     rows = [
         {"key": "zotero.api_key", "value": ""},  # empty string -> skipped
@@ -74,23 +71,16 @@ async def test_migrate_skips_null_or_empty_values(fernet_key):
 # ---------------------------------------------------------------------------
 
 
-def test_telegram_bot_token_in_secret_keys():
-    """telegram.bot_token must be in _SECRET_KEYS so it is masked by list_config."""
-    from paper_ingestion.services.config_metadata import _SECRET_KEYS
-
-    assert "telegram.bot_token" in _SECRET_KEYS
-
-
 def test_telegram_bot_token_in_encrypted_keys():
     """telegram.bot_token must be in _ENCRYPTED_KEYS so migrate_plaintext_secrets re-encrypts it."""
-    from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS
 
     assert "telegram.bot_token" in _ENCRYPTED_KEYS
 
 
 def test_telegram_bot_token_not_in_allowed_config_keys():
     """telegram.bot_token must NOT be writable via /api/config (out-of-band setup only)."""
-    from paper_ingestion.services.config_metadata import _ALLOWED_CONFIG_KEYS
+    from jarvis_common.config_metadata import _ALLOWED_CONFIG_KEYS
 
     assert "telegram.bot_token" not in _ALLOWED_CONFIG_KEYS
 
@@ -98,7 +88,7 @@ def test_telegram_bot_token_not_in_allowed_config_keys():
 @pytest.mark.asyncio
 async def test_migrate_rewrites_telegram_bot_token(fernet_key):
     """A plaintext telegram.bot_token row is re-encrypted by migrate_plaintext_secrets."""
-    from paper_ingestion.services.config_db import migrate_plaintext_secrets
+    from jarvis_common.config_store import migrate_plaintext_secrets
 
     raw_token = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
     rows = [{"id": 99, "key": "telegram.bot_token", "value": raw_token}]
@@ -118,7 +108,7 @@ async def test_migrate_rewrites_telegram_bot_token(fernet_key):
 
 def test_resolve_config_value_masks_telegram_bot_token():
     """_resolve_config_value returns masked output for a plaintext telegram.bot_token row."""
-    from paper_ingestion.services.config_db import _resolve_config_value
+    from jarvis_common.config_store import _resolve_config_value
 
     row = {"value": "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", "encrypted_value": None}
     result = _resolve_config_value("telegram.bot_token", row)

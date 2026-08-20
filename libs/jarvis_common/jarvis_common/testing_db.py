@@ -57,6 +57,49 @@ import asyncpg
 import pytest
 
 # ---------------------------------------------------------------------------
+# Cross-domain search path
+# ---------------------------------------------------------------------------
+
+#: Every product schema, plus public, in the order a cross-domain test reads
+#: them. Service roles get a narrower path in production; a test pool reaches
+#: across boundaries to set up and assert, so it needs all four.
+TEST_SEARCH_PATH = "platform, research, learning, ops, public, pg_catalog"
+
+#: The schemas that hold tables, for a test that resets state between cases.
+#: ``public`` is listed because a stray table there is still contamination.
+TEST_TABLE_SCHEMAS = ["platform", "research", "learning", "ops", "public"]
+
+
+async def open_cross_domain_path(conn: asyncpg.Connection) -> None:
+    """Restore the cross-domain path whenever a pool lends a connection.
+
+    ``search_path`` is per-session, so a pooled connection that was reset, or
+    was opened before the path was set, comes back with the server default.
+    Passing this as ``setup=`` re-applies it on every acquire; an unqualified
+    statement fails with ``relation ... does not exist`` without it.
+    """
+    await conn.execute(f"SET search_path TO {TEST_SEARCH_PATH}")
+
+
+async def reset_product_tables(conn: asyncpg.Connection) -> None:
+    """Empty every product table so a case starts from a known state.
+
+    The schema list is read from the catalogue rather than hard-coded, so a new
+    table is covered the day it lands. Scanning ``public`` alone stopped
+    resetting anything once the tables moved into the per-service schemas, which
+    is silent: the suite still passes, on rows a previous case left behind.
+    """
+    rows = await conn.fetch(
+        "SELECT schemaname, tablename FROM pg_tables WHERE schemaname = ANY($1::text[])",
+        TEST_TABLE_SCHEMAS,
+    )
+    if not rows:
+        raise AssertionError(f"no tables found in {TEST_TABLE_SCHEMAS}; the reset would be a no-op")
+    names = ", ".join(f'"{row["schemaname"]}"."{row["tablename"]}"' for row in rows)
+    await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+
+
+# ---------------------------------------------------------------------------
 # Sentinel used to distinguish "not passed" from "explicitly None"
 # ---------------------------------------------------------------------------
 
@@ -345,9 +388,11 @@ def _spin_pg_container(
 ) -> Iterator[str]:
     """Spin up a disposable postgres:16.8 container; yield its DSN; tear down on exit.
 
-    FALLBACK-ONLY: used when ``JARVIS_TEST_PG_ADMIN_DSN`` is unset (local dev with
-    no managed Postgres). CI and opt-in local runs take the managed-server path in
-    ``_managed_or_spin`` and issue zero docker commands.
+    Reached two ways: as the fallback when ``JARVIS_TEST_PG_ADMIN_DSN`` is unset
+    (local dev with no managed Postgres), and deliberately by
+    ``make_dedicated_cluster_pg_dsn`` for the one consumer that needs a cluster
+    nothing else touches. Every other consumer takes the managed-server path in
+    ``_managed_or_spin`` and issues zero docker commands.
 
     Docker invariant: ``--rm`` means the container self-removes when stopped,
     but we still call ``docker rm -f`` in the finally block to ensure cleanup
@@ -663,6 +708,32 @@ def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
     return live_pg_dsn
 
 
+def make_dedicated_cluster_pg_dsn(container_prefix: str):  # -> pytest fixture
+    """Return a fixture yielding a DSN on a cluster no other test shares.
+
+    ``live_pg_dsn`` isolates a *database*. On the managed path every test reaches
+    the same server, so roles and their memberships stay visible to every later
+    test. A consumer that asserts on ``pg_roles`` or ``pg_auth_members`` is
+    reading cluster-wide catalogues and needs a cluster of its own, which only a
+    private container gives it. Taking the same path locally and in CI is the
+    point: a managed-only divergence here is invisible until CI runs.
+    """
+
+    @pytest.fixture()
+    def dedicated_cluster_pg_dsn() -> Iterator[str]:
+        if os.environ.get("JARVIS_RUN_LIVE_PG") != "1":
+            pytest.skip("set JARVIS_RUN_LIVE_PG=1 to run Docker-backed live PostgreSQL tests")
+        if shutil.which("docker") is None:
+            pytest.fail("Docker CLI is required for the dedicated-cluster live PostgreSQL tests")
+        yield from _spin_pg_container(
+            container_prefix,
+            container_suffix="-cluster",
+            password_prefix="jarvis-cluster",
+        )
+
+    return dedicated_cluster_pg_dsn
+
+
 def make_live_pg_session_dsn(container_prefix: str):  # -> pytest fixture (session scope)
     """Return a SESSION-scoped live-PG ``xuser_pg_dsn`` fixture for *container_prefix*.
 
@@ -744,7 +815,6 @@ def _make_contract_pool_fixture():
         db_dir = Path(__file__).resolve().parents[3] / "db"
         init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
         migrations_dir = db_dir / "migrations"
-
         pool = None
         for attempt in range(10):
             try:
@@ -753,6 +823,7 @@ def _make_contract_pool_fixture():
                     min_size=1,
                     max_size=5,
                     init=init_pg_connection,
+                    setup=open_cross_domain_path,
                 )
                 break
             except (OSError, asyncpg.PostgresError):
@@ -826,17 +897,33 @@ class _TaskReentrantAsyncLock:
 class SharedAcquireCM:
     """Async CM returned by SharedConnPool.acquire(); always yields the same conn."""
 
-    def __init__(self, conn: Any, lock: _TaskReentrantAsyncLock) -> None:
+    def __init__(
+        self,
+        conn: Any,
+        lock: _TaskReentrantAsyncLock,
+        session_authorization: str | None,
+    ) -> None:
         """Hold the shared connection and the reentrant lock used to serialize access."""
         self._conn = conn
         self._lock = lock
+        self._session_authorization = session_authorization
+        self._owns_authorization = False
 
     async def __aenter__(self) -> Any:
         await self._lock.acquire()
+        if self._session_authorization is not None and self._lock._depth == 1:
+            await self._conn.execute(
+                f"SET LOCAL SESSION AUTHORIZATION {self._session_authorization}"
+            )
+            self._owns_authorization = True
         return self._conn
 
     async def __aexit__(self, *_: Any) -> None:
-        self._lock.release()
+        try:
+            if self._owns_authorization:
+                await self._conn.execute("RESET SESSION AUTHORIZATION")
+        finally:
+            self._lock.release()
         return None
 
 
@@ -853,14 +940,58 @@ class SharedConnPool:
     against the contract DB.
     """
 
-    def __init__(self, conn: Any) -> None:
-        """Wrap *conn* with a reentrant lock so all pool-shaped calls share one connection."""
+    def __init__(
+        self,
+        conn: Any,
+        *,
+        session_authorization: str | None = None,
+        _lock: _TaskReentrantAsyncLock | None = None,
+    ) -> None:
+        """Wrap *conn* with serialized access and an optional runtime identity.
+
+        ``session_authorization`` is restricted to the three product runtime
+        roles. Contract applications use it so capability checks observe the
+        same login identity as production while direct fixture assertions
+        regain the administrative test identity after each pool operation.
+        """
+        allowed_roles = {
+            "jarvis_platform_runtime",
+            "jarvis_research_runtime",
+            "jarvis_learning_runtime",
+        }
+        if session_authorization is not None and session_authorization not in allowed_roles:
+            raise ValueError("unsupported contract runtime identity")
         self._conn = conn
-        self._lock = _TaskReentrantAsyncLock()
+        self._lock = _lock or _TaskReentrantAsyncLock()
+        self._session_authorization = session_authorization
+
+    def with_session_authorization(self, role: str) -> SharedConnPool:
+        """Return a role-specific view sharing this connection's access lock.
+
+        Parameters
+        ----------
+        role : str
+            Supported product runtime role applied for each acquired operation.
+
+        Returns
+        -------
+        SharedConnPool
+            Pool-shaped view that serializes against every sibling view of the
+            same contract connection.
+        """
+        return SharedConnPool(
+            self._conn,
+            session_authorization=role,
+            _lock=self._lock,
+        )
 
     def acquire(self) -> SharedAcquireCM:  # not async — returns an async-CM
         """Return an async CM that yields the shared connection under the reentrant lock."""
-        return SharedAcquireCM(self._conn, self._lock)
+        return SharedAcquireCM(
+            self._conn,
+            self._lock,
+            self._session_authorization,
+        )
 
     async def close(self) -> None:  # idempotent; the real pool's lifecycle is the fixture's
         """No-op — the underlying connection is managed by the fixture, not this pool shim."""

@@ -154,7 +154,7 @@ export function ScheduleSelect({ value, onChange, disabled, id }: ScheduleSelect
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-end gap-2">
       <div>
         <Label htmlFor={frequencyId} className="mb-1 block text-sm font-medium">
           Frequency
@@ -201,6 +201,7 @@ export function ScheduleSelect({ value, onChange, disabled, id }: ScheduleSelect
 
       {(schedule.kind === 'daily' || schedule.kind === 'weekly') && (
         <div role="group" aria-label="Run time">
+          <Label className="mb-1 block text-sm font-medium">Run time</Label>
           <TimeSelect value={currentTime} onChange={handleTimeChange} disabled={disabled} />
         </div>
       )}

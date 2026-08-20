@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse
-from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
+from jarvis_common.auth import get_current_user_id
 from jarvis_common.paper_state import trash_paper as _trash_paper
 
 from paper_ingestion import papers_service
@@ -37,7 +37,7 @@ async def submit_feedback(
     paper_id: int,
     body: FeedbackRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> FeedbackResponse:
     """Record per-paper recommendation feedback.
 
@@ -126,7 +126,7 @@ async def trash_and_reject_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Trash the paper AND record negative feedback (``source='dismiss_combined'``).
 

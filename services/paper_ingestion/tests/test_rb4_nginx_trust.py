@@ -8,6 +8,9 @@ Verifies that:
   (d) docker-compose.yml dashboard service no longer passes NGINX_TRUSTED_PROXY_CIDR.
   (e) docker-compose.yml parses as valid YAML and (if docker CLI is present)
       passes `docker compose config -q`.
+  (f) every proxying location -- browser-reachable or internal subrequest --
+      rebuilds the forwarding headers and strips browser-controlled identity,
+      and the rendered configuration passes nginx's own syntax check.
 """
 
 from __future__ import annotations
@@ -16,16 +19,50 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-NGINX_CONF = REPO_ROOT / "frontend" / "nginx.conf"
-NGINX_RATE_LIMIT_CONF = REPO_ROOT / "frontend" / "nginx-rate-limit.conf"
-NGINX_SECURITY_HEADERS_CONF = REPO_ROOT / "frontend" / "nginx-security-headers.conf"
+FRONTEND_DIR = REPO_ROOT / "frontend"
+NGINX_CONF = FRONTEND_DIR / "nginx.conf"
+NGINX_RATE_LIMIT_CONF = FRONTEND_DIR / "nginx-rate-limit.conf"
+NGINX_SECURITY_HEADERS_CONF = FRONTEND_DIR / "nginx-security-headers.conf"
+NGINX_IDENTITY_STRIP_CONF = FRONTEND_DIR / "nginx-identity-strip.conf"
+NGINX_FORWARDED_HEADERS_CONF = FRONTEND_DIR / "nginx-forwarded-headers.conf"
+FRONTEND_DOCKERFILE = FRONTEND_DIR / "Dockerfile"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 CADDY_LOCAL_FILE = REPO_ROOT / "caddy" / "Caddyfile.local"
+
+# The forwarding facts nginx must derive from the listener boundary. Every value
+# comes from a map keyed on $server_port/$realip_remote_addr, never from a
+# request header, so a browser cannot choose the client address a backend sees.
+FORWARDING_HEADER_DIRECTIVES = (
+    "proxy_set_header X-Real-IP $jarvis_client_ip;",
+    "proxy_set_header X-Forwarded-For $jarvis_client_ip;",
+    "proxy_set_header X-Forwarded-Proto $jarvis_forwarded_proto;",
+    "proxy_set_header X-Forwarded-Host $http_host;",
+    'proxy_set_header Forwarded "";',
+    "proxy_set_header CF-Connecting-IP $jarvis_cf_connecting_ip;",
+    "proxy_set_header X-Jarvis-CF-Ingress $jarvis_cf_ingress;",
+)
+
+# Substitutions the nginx image's envsubst entrypoint applies to the template,
+# mirroring the dashboard service environment in docker-compose.yml.
+RENDER_ENVIRONMENT = {
+    "DASHBOARD_SERVER_NAME": "",
+    "DASHBOARD_BIND_HOST": "127.0.0.1",
+    "JARVIS_NET_GATEWAY_IP": "10.137.241.1",
+    "JARVIS_CADDY_IP": "10.137.241.251",
+    "JARVIS_CADDY_LOCAL_IP": "10.137.241.252",
+    "JARVIS_CLOUDFLARED_IP": "10.137.241.254",
+}
+# nginx resolves every proxy_pass host while testing a configuration, so the
+# syntax check needs the backend service names to exist.
+RENDER_UPSTREAM_HOSTS = ("platform_api", "paper_ingestion", "learning_engine", "restore-uploader")
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +104,105 @@ def _location_blocks(text: str) -> list[str]:
             pos += 1
         blocks.append(text[match.end() : pos - 1])
     return blocks
+
+
+# ``internal;`` is a standalone directive. Matching it as a bare substring also
+# hits ``proxy_pass .../health/internal;``, which silently dropped two real
+# browser-reachable proxies from every per-block assertion below.
+_INTERNAL_DIRECTIVE = re.compile(r"^\s*internal;\s*$", flags=re.MULTILINE)
+_LOCAL_INCLUDE = re.compile(r"^\s*include /etc/nginx/(nginx-[a-z-]+\.conf);\s*$")
+
+
+def _proxy_blocks(text: str) -> list[str]:
+    """Return the body of every location that proxies to a backend."""
+    return [block for block in _location_blocks(text) if "proxy_pass" in block]
+
+
+def _browser_proxy_blocks(text: str) -> list[str]:
+    """Return externally reachable proxy locations.
+
+    Parameters
+    ----------
+    text : str
+        Renderable nginx configuration.
+
+    Returns
+    -------
+    list[str]
+        Proxy location bodies excluding nginx-only internal subrequests.
+    """
+    return [block for block in _proxy_blocks(text) if not _INTERNAL_DIRECTIVE.search(block)]
+
+
+def _internal_proxy_blocks(text: str) -> list[str]:
+    """Return the proxy locations reachable only as an nginx subrequest."""
+    return [block for block in _proxy_blocks(text) if _INTERNAL_DIRECTIVE.search(block)]
+
+
+def _expand_includes(text: str) -> str:
+    """Return ``text`` with its repo-local nginx includes inlined recursively.
+
+    Directives hoisted into a shared include are still emitted per location, so
+    an assertion about a location's effective header set has to follow the
+    include the same way nginx does.
+
+    Parameters
+    ----------
+    text : str
+        A location body or include file contents.
+
+    Returns
+    -------
+    str
+        The same text with every ``include /etc/nginx/nginx-*.conf;`` replaced
+        by the contents of the matching file under ``frontend/``.
+    """
+    lines: list[str] = []
+    for line in text.splitlines():
+        match = _LOCAL_INCLUDE.match(line)
+        if match:
+            lines.append(_expand_includes((FRONTEND_DIR / match.group(1)).read_text()))
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+@contextmanager
+def _rendered_config_tree(rendered: str) -> Iterator[Path]:
+    """Lay out the rendered dashboard configuration the way the image does.
+
+    The destinations are read from ``frontend/Dockerfile`` rather than repeated
+    here, so an include added to nginx.conf without a matching ``COPY`` fails
+    the syntax check instead of only failing at container start.
+
+    Parameters
+    ----------
+    rendered : str
+        nginx.conf with the envsubst placeholders already resolved.
+
+    Yields
+    ------
+    Path
+        Directory holding a ``conf.d`` tree and an ``include`` directory whose
+        files are mounted directly under ``/etc/nginx``.
+    """
+    copies = re.findall(
+        r"^COPY (nginx-\S+\.conf) (/etc/nginx/\S+)$",
+        FRONTEND_DOCKERFILE.read_text(),
+        flags=re.MULTILINE,
+    )
+    assert copies, "frontend/Dockerfile copies no nginx include files"
+
+    with tempfile.TemporaryDirectory() as name:
+        tree = Path(name)
+        (tree / "conf.d").mkdir()
+        (tree / "include").mkdir()
+        (tree / "conf.d" / "default.conf").write_text(rendered)
+        for source, destination in copies:
+            target = Path(destination)
+            parent = "conf.d" if target.parent.name == "conf.d" else "include"
+            shutil.copy(FRONTEND_DIR / source, tree / parent / target.name)
+        yield tree
 
 
 # ---------------------------------------------------------------------------
@@ -134,18 +270,20 @@ def test_compose_passes_the_dashboard_bind_setting_into_nginx():
 
 def test_nginx_never_preserves_client_forwarded_proto():
     text = _nginx_text()
-    assert "$http_x_forwarded_proto" not in text
-    assert "proxy_set_header X-Forwarded-Proto $jarvis_forwarded_proto;" in text
+    forwarded = NGINX_FORWARDED_HEADERS_CONF.read_text()
+    assert "$http_x_forwarded_proto" not in text + forwarded
+    assert "proxy_set_header X-Forwarded-Proto $jarvis_forwarded_proto;" in forwarded
     assert "3002 https;" in text
 
 
 def test_nginx_rebuilds_forwarding_headers_instead_of_appending_client_input():
     text = _nginx_text()
+    forwarded = NGINX_FORWARDED_HEADERS_CONF.read_text()
     assert "real_ip_header X-Forwarded-For;" in text
-    assert "$proxy_add_x_forwarded_for" not in text
-    assert "proxy_set_header X-Forwarded-For $jarvis_client_ip;" in text
-    assert 'proxy_set_header Forwarded "";' in text
-    assert "proxy_set_header X-Forwarded-Host $http_host;" in text
+    assert "$proxy_add_x_forwarded_for" not in text + forwarded
+    assert "proxy_set_header X-Forwarded-For $jarvis_client_ip;" in forwarded
+    assert 'proxy_set_header Forwarded "";' in forwarded
+    assert "proxy_set_header X-Forwarded-Host $http_host;" in forwarded
 
 
 def test_nginx_preserves_the_validated_external_port_for_generated_links():
@@ -156,12 +294,12 @@ def test_nginx_preserves_the_validated_external_port_for_generated_links():
     ``$http_host`` retains the browser-facing port after the server_name
     allowlist has already validated the hostname.
     """
-    proxied_blocks = [block for block in _location_blocks(_nginx_text()) if "proxy_pass" in block]
-    for block in proxied_blocks:
+    for block in _browser_proxy_blocks(_nginx_text()):
+        expanded = _expand_includes(block)
         assert "proxy_set_header Host $http_host;" in block
-        assert "proxy_set_header X-Forwarded-Host $http_host;" in block
-        assert "proxy_set_header Host $host;" not in block
-        assert "proxy_set_header X-Forwarded-Host $host;" not in block
+        assert "proxy_set_header X-Forwarded-Host $http_host;" in expanded
+        assert "proxy_set_header Host $host;" not in expanded
+        assert "proxy_set_header X-Forwarded-Host $host;" not in expanded
 
 
 def test_local_caddy_preserves_the_browser_host_and_port_for_generated_links():
@@ -195,10 +333,10 @@ def test_nginx_rebuilds_cloudflare_identity_from_pinned_ingress():
     text = _nginx_text()
     assert '"3002:${JARVIS_CLOUDFLARED_IP}" 1;' in text
     assert "$jarvis_cf_connecting_ip" in text
-    proxied_blocks = [block for block in _location_blocks(text) if "proxy_pass" in block]
-    for block in proxied_blocks:
-        assert "proxy_set_header CF-Connecting-IP $jarvis_cf_connecting_ip;" in block
-        assert "proxy_set_header X-Jarvis-CF-Ingress $jarvis_cf_ingress;" in block
+    for block in _browser_proxy_blocks(text):
+        expanded = _expand_includes(block)
+        assert "proxy_set_header CF-Connecting-IP $jarvis_cf_connecting_ip;" in expanded
+        assert "proxy_set_header X-Jarvis-CF-Ingress $jarvis_cf_ingress;" in expanded
 
 
 def test_nginx_does_not_trust_broad_cidr():
@@ -264,22 +402,130 @@ def test_nginx_proxies_backend_liveness_routes():
     """The dashboard can check process liveness without deep dependency probes."""
     text = _nginx_text()
     assert "location = /health/paper_ingestion/live" in text
-    assert "proxy_pass http://paper_ingestion:8000/health/live;" in text
+    assert "proxy_pass http://jarvis_research/health/live;" in text
     assert "location = /health/learning_engine/live" in text
-    assert "proxy_pass http://learning_engine:8001/health/live;" in text
+    assert "proxy_pass http://jarvis_learning/health/live;" in text
+    # The named upstreams exist so connections are reused; they must still
+    # resolve to the backends themselves, or the liveness route proves nothing.
+    assert "upstream jarvis_research {\n    server paper_ingestion:8000;" in text
+    assert "upstream jarvis_learning {\n    server learning_engine:8001;" in text
 
 
-def test_nginx_proxied_locations_strip_owner_header():
-    """Every proxied location must strip a browser-supplied X-Owner-User-Id:
-    only the container-bridge bot (which never traverses nginx) may set it.
-    A future location added without this line — or a deleted strip line —
-    would silently reopen an owner-impersonation hole with no other signal."""
-    proxied_blocks = [block for block in _location_blocks(_nginx_text()) if "proxy_pass" in block]
+def test_nginx_proxied_locations_strip_browser_supplied_identity():
+    """Every proxied location clears the identity headers a browser can forge.
+
+    The health, jobs, and recovery-upload routes used to pass the whole
+    ``X-Jarvis-*`` family straight to their backend. The strip is a single
+    include, so the assertion follows includes rather than accepting either a
+    hoisted include or an inline copy -- the alternative that let those routes
+    stay uncovered.
+    """
+    proxied_blocks = _proxy_blocks(_nginx_text())
     assert len(proxied_blocks) >= 1, "no proxy_pass location blocks found in nginx.conf"
+    identity_strip = NGINX_IDENTITY_STRIP_CONF.read_text()
+    stripped_headers = re.findall(r'proxy_set_header ([A-Za-z0-9-]+) "";', identity_strip)
+    assert "X-Owner-User-Id" in stripped_headers
     for block in proxied_blocks:
-        assert 'proxy_set_header X-Owner-User-Id "";' in block, (
-            'a proxied location block is missing proxy_set_header X-Owner-User-Id "";:\n' + block
-        )
+        expanded = _expand_includes(block)
+        missing = [
+            header
+            for header in stripped_headers
+            if f'proxy_set_header {header} "";' not in expanded
+        ]
+        assert not missing, f"a proxied location forwards {missing} from the browser:\n{block}"
+
+
+def test_nginx_forwarded_header_include_never_carries_host():
+    """The hoisted group holds exactly the seven listener-derived facts.
+
+    ``Host`` must stay per-location: the authorization subrequest pins it to the
+    Platform service name while every other route forwards ``$http_host``. nginx
+    emits repeated ``proxy_set_header`` directives for the same field instead of
+    letting the later one win, so a ``Host`` line here would be sent in addition
+    to -- not instead of -- the per-location value.
+    """
+    forwarded = NGINX_FORWARDED_HEADERS_CONF.read_text()
+    directives = re.findall(r"^proxy_set_header .+;$", forwarded, flags=re.MULTILINE)
+    assert directives == list(FORWARDING_HEADER_DIRECTIVES)
+    assert not re.search(r"^proxy_set_header Host\b", forwarded, flags=re.MULTILINE)
+    # The include is a build artifact: without the COPY the container cannot start.
+    assert (
+        "COPY nginx-forwarded-headers.conf /etc/nginx/nginx-forwarded-headers.conf"
+        in FRONTEND_DOCKERFILE.read_text()
+    )
+
+
+def test_nginx_every_proxy_location_rebuilds_the_forwarding_group():
+    """No proxied route may relay the browser's own forwarding headers."""
+    proxy_blocks = _proxy_blocks(_nginx_text())
+    assert len(proxy_blocks) >= 1, "no proxy_pass location blocks found in nginx.conf"
+    for block in proxy_blocks:
+        expanded = _expand_includes(block)
+        missing = [
+            directive for directive in FORWARDING_HEADER_DIRECTIVES if directive not in expanded
+        ]
+        assert not missing, f"a proxied location does not rebuild {missing}:\n{block}"
+
+
+def test_nginx_internal_authorization_subrequest_rebuilds_the_forwarding_group():
+    """The one endpoint that mints identity must not trust browser input.
+
+    ``/internal/platform-authorize`` is the sole internal proxy. Platform binds
+    the caller's address into rate limiting and audit from what this subrequest
+    forwards, so relaying the browser's ``X-Forwarded-For`` or
+    ``CF-Connecting-IP`` would let a client choose the address recorded against
+    every assertion it obtains.
+    """
+    internal_blocks = _internal_proxy_blocks(_nginx_text())
+    assert len(internal_blocks) == 1, "expected exactly one internal proxy location"
+    authorize = internal_blocks[0]
+    assert "proxy_pass http://jarvis_platform_authorize/internal/authorize;" in authorize
+
+    expanded = _expand_includes(authorize)
+    for directive in FORWARDING_HEADER_DIRECTIVES:
+        assert directive in expanded, f"the authorization subrequest does not set {directive!r}"
+
+    # The subrequest's own transport contract, which the shared group must not
+    # disturb: Platform's host allowlist, and a body-less GET subrequest.
+    assert "proxy_set_header Host platform_api;" in authorize
+    assert "proxy_set_header Host $http_host;" not in expanded
+    assert "proxy_pass_request_body off;" in authorize
+    assert 'proxy_set_header Content-Length "";' in authorize
+
+
+def test_nginx_rendered_config_passes_the_syntax_check():
+    """The template that ships must still parse once envsubst has run.
+
+    Every other assertion here matches text in a file the container renders at
+    start-up. Only nginx itself can tell whether the rendered result -- includes
+    resolved, upstreams present -- is a configuration it will load.
+    """
+    runtime_image = re.search(
+        r"^ARG NGINX_RUNTIME_IMAGE=(\S+)$", FRONTEND_DOCKERFILE.read_text(), flags=re.MULTILINE
+    )
+    assert runtime_image, "frontend/Dockerfile must pin the nginx runtime image"
+
+    rendered = _nginx_text()
+    for name, value in RENDER_ENVIRONMENT.items():
+        rendered = rendered.replace(f"${{{name}}}", value)
+    # Asserted before the skip: substitution coverage needs no container, and a
+    # machine without docker would otherwise lose this check silently too.
+    assert "${" not in rendered, "an envsubst placeholder is missing from RENDER_ENVIRONMENT"
+
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI not installed")
+
+    with _rendered_config_tree(rendered) as tree:
+        command = ["docker", "run", "--rm"]
+        for host in RENDER_UPSTREAM_HOSTS:
+            command += ["--add-host", f"{host}:127.0.0.1"]
+        command += ["-v", f"{tree / 'conf.d'}:/etc/nginx/conf.d:ro"]
+        for include in sorted((tree / "include").iterdir()):
+            command += ["-v", f"{include}:/etc/nginx/{include.name}:ro"]
+        command += ["--entrypoint", "nginx", runtime_image.group(1), "-t"]
+        result = subprocess.run(command, text=True, capture_output=True, timeout=180, check=False)
+
+    assert result.returncode == 0, f"nginx -t rejected the rendered config:\n{result.stderr}"
 
 
 def test_nginx_exposes_exact_static_app_marker():

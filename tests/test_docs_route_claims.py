@@ -40,10 +40,11 @@ _ENV_EXAMPLE = _REPO_ROOT / ".env.example"
 _JARVIS_SETUP_SCRIPT = _REPO_ROOT / "scripts" / "jarvis-setup.sh"
 _LOCAL_CADDY_CONFIG = _REPO_ROOT / "caddy" / "Caddyfile.local"
 _PASSKEY_ROUTER = (
-    _REPO_ROOT / "services" / "paper_ingestion" / "paper_ingestion" / "routers" / "auth_passkeys.py"
+    _REPO_ROOT / "services" / "platform_api" / "platform_api" / "routers" / "auth_passkeys.py"
 )
 _DOCKERIGNORE = _REPO_ROOT / ".dockerignore"
 _NGINX_CONFIG = _REPO_ROOT / "frontend" / "nginx.conf"
+_NGINX_FORWARDED_HEADERS = _REPO_ROOT / "frontend" / "nginx-forwarded-headers.conf"
 _COMPOSE_CONFIG = _REPO_ROOT / "docker-compose.yml"
 _CADDY_CONFIGS = (
     _REPO_ROOT / "caddy" / "Caddyfile",
@@ -432,8 +433,11 @@ def test_published_docs_match_access_reconfiguration_and_cloudflare_trust() -> N
     assert "Never bypass the whole application" in setup
 
     assert "$jarvis_cf_ingress" in nginx
-    assert "X-Jarvis-CF-Ingress" in nginx
     assert "$jarvis_cf_connecting_ip" in nginx
+    # The gateway sets the ingress marker from its shared forwarding include,
+    # which every proxying location pulls in.
+    forwarded_headers = _NGINX_FORWARDED_HEADERS.read_text(encoding="utf-8")
+    assert "proxy_set_header X-Jarvis-CF-Ingress $jarvis_cf_ingress;" in forwarded_headers
 
 
 def test_install_examples_use_host_paths_and_cover_supported_access_profiles() -> None:
@@ -461,7 +465,7 @@ def test_restore_guide_covers_complete_data_and_identity_recovery() -> None:
     assert "PDF archive" in contents
     assert "required" in contents.lower()
     assert "browser upload service" in off_host
-    assert "backup sidecar" in off_host
+    assert "scheduled backup service" in off_host
 
     data_keys = set(
         re.findall(
@@ -540,7 +544,7 @@ def test_telegram_docs_cover_personal_pairing_profile_and_restart_limits() -> No
     """Telegram setup must distinguish per-user pairing from server-level activation."""
     telegram = _read(_TELEGRAM_DOC)
     admin_token = _section(
-        telegram, "Admin: configuring the bot token — Settings → Integrations → Bot Token"
+        telegram, "Admin: the instance bot token — Settings → Integrations → Telegram"
     )
 
     assert "Each user pairs" in telegram
@@ -577,7 +581,38 @@ def test_restore_capability_table_matches_compose_mount_boundaries() -> None:
     assert "backup_trigger:/backup-trigger:ro" in compose
     assert "restore_inbox:/restore-inbox:rw" in compose
     assert "./secrets:/host-secrets:rw" in compose
-    assert "/var/run/docker.sock:/var/run/docker.sock:ro" in compose
+    assert "/var/run/docker.sock:/var/run/docker.sock:ro" not in compose
+
+
+def test_public_docs_describe_platform_owned_identity_and_restore() -> None:
+    """Platform assertions and transient restore authority stay documented."""
+    architecture = _read(_ARCHITECTURE_DOC)
+    deployment = _read(_DEPLOYMENT_DOC)
+    security = _read(_SECURITY_DOC)
+
+    assert "Platform-signed, request-bound assertion" in architecture
+    assert "database-free REST client" in security
+    assert "Scheduled read-only backup" in deployment
+    assert "host-started transient no-listener job" in deployment
+
+
+def test_public_docs_exclude_retired_identity_and_migration_claims() -> None:
+    """Retired identity and migration terminology must not return to public docs."""
+    security = _read(_SECURITY_DOC)
+    contributing = _read(_REPO_ROOT / "CONTRIBUTING.md")
+    testing_contract = _read(_REPO_ROOT / "docs/contracts/07-testing.md")
+    deployment = _read(_DEPLOYMENT_DOC)
+    release = _read(_REPO_ROOT / "docs/RELEASE.md")
+
+    for retired in (
+        "OWNER_OVERRIDE_ALLOWED_CIDRS",
+        "current_user_id_strict_with_owner_override",
+        "remove_owner_override=True",
+    ):
+        assert retired not in security + contributing + testing_contract
+    assert "The only startup ownership migration is 0105" not in deployment
+    assert "2026-09-17" in release
+    assert "fresh-host restore has passed without that role" in release
 
 
 def test_security_copy_limits_owner_recovery_and_suppressed_email_logs() -> None:

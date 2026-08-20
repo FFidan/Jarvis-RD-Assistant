@@ -39,7 +39,7 @@ line.
 ```bash
 uv run python3 scripts/perf/seed_scientific_rag_pack.py \
   --manifest docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl \
-  --api-base http://127.0.0.1:8000 \
+  --api-base http://127.0.0.1:3001 \
   --auth-cookie-file artifacts/perf/<run-id>/jarvis-cookie.txt \
   --check-only \
   --out-dir artifacts/perf/<run-id>
@@ -54,7 +54,7 @@ product-supported APIs, then repeat the check-only command:
 ```bash
 uv run python3 scripts/perf/seed_scientific_rag_pack.py \
   --manifest docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl \
-  --api-base http://127.0.0.1:8000 \
+  --api-base http://127.0.0.1:3001 \
   --auth-cookie-file artifacts/perf/<run-id>/jarvis-cookie.txt \
   --seed \
   --out-dir artifacts/perf/<run-id>

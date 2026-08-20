@@ -1,4 +1,4 @@
-"""Centralized configuration for the Telegram bot."""
+"""Typed configuration for the database-free Telegram bot."""
 
 from __future__ import annotations
 
@@ -7,11 +7,8 @@ import logging
 import os
 from urllib.parse import urlparse
 
-import asyncpg
-from jarvis_common import init_pg_connection
-from jarvis_common.app_factory import build_database_url
 from jarvis_common.config import JarvisCommonSettings
-from jarvis_common.crypto import resolve_secret_row
+from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.secrets_files import read_secret_with_file_fallback
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import SettingsConfigDict
@@ -19,214 +16,222 @@ from pydantic_settings import SettingsConfigDict
 logger = logging.getLogger(__name__)
 
 
-async def _read_db_bot_token(database_url: str) -> str | None:
-    """Return the wizard-saved Telegram bot token from ``user_config``.
-
-    The first-run wizard persists ``telegram.bot_token`` (Fernet-encrypted,
-    ``user_id IS NULL``). Reading it here makes a UI-saved token the source of
-    truth — no .env edit, just a container restart. Returns ``None`` (and never
-    raises) when the row is absent or the DB/key is unavailable, so the env /
-    Docker-secret value remains the fallback.
-    """
-    conn: asyncpg.Connection | None = None
-    try:
-        conn = await asyncio.wait_for(
-            asyncpg.connect(database_url, server_settings={"jit": "off"}),
-            timeout=5.0,
-        )
-        assert conn is not None  # asyncpg.connect() never returns None; guard for type checker
-        await init_pg_connection(conn)
-        row = await conn.fetchrow(
-            "SELECT value, encrypted_value FROM user_config "
-            "WHERE key = 'telegram.bot_token' AND user_id IS NULL",
-        )
-        if row is None:
-            return None
-        token = resolve_secret_row(row)
-        return token or None
-    except Exception:  # noqa: BLE001 — best-effort; env/secret is the fallback
-        logger.debug("telegram.bot_token DB lookup failed; using env", exc_info=True)
-        return None
-    finally:
-        if conn is not None:
-            await conn.close()
-
-
 class BotConfig(JarvisCommonSettings):
-    """Typed pydantic-settings configuration for the Telegram bot.
+    """Telegram runtime configuration without database credentials.
 
-    Extends ``JarvisCommonSettings`` with bot-specific keys.  Every field name
-    is its env var lowercased, except ``telegram_token``, which an ``alias``
-    bridges to ``TELEGRAM_BOT_TOKEN``.
-
-    Env-var table (telegram-bot layer)
-    ----------------------------------------
-    Env var                 Field                   Notes
-    ---                     ---                     ---
-    TELEGRAM_BOT_TOKEN      telegram_token          Required; bot token
-    JARVIS_BASE_URL         jarvis_base_url         Optional; deep-link base
-    DATABASE_URL            database_url            Inherited; fallback DSN
-    PAPER_INGESTION_URL     paper_ingestion_url     Service URL
-    LEARNING_ENGINE_URL     learning_engine_url     Service URL
-    JARVIS_API_KEY          jarvis_api_key          Optional; auth header
-
-    ``from_env`` additionally reads ``TELEGRAM_BOT_TOKEN_FILE`` and
-    ``JARVIS_API_KEY_FILE`` directly to support Docker secrets.  Every other
-    env var this class accepts is inherited from ``JarvisCommonSettings`` and
-    documented there.
+    Parameters
+    ----------
+    telegram_token : SecretStr
+        Telegram Bot API token, resolved from Platform first and the mounted
+        bootstrap secret second.
+    telegram_service_token : SecretStr
+        Dedicated credential accepted only by Platform's Telegram boundary.
+    platform_api_url : str
+        Internal Platform API origin.
+    paper_ingestion_url : str
+        Internal Research API origin.
+    learning_engine_url : str
+        Internal Learning API origin.
+    jarvis_base_url : str or None
+        Optional public dashboard origin used in Telegram deep links.
     """
 
     model_config = SettingsConfigDict(
-        env_file=None, extra="ignore", case_sensitive=False, populate_by_name=True
+        env_file=None,
+        extra="ignore",
+        case_sensitive=False,
+        populate_by_name=True,
     )
 
-    # --- Telegram bot token ---------------------------------------------
     telegram_token: SecretStr = Field(
         default=SecretStr(""),
         alias="TELEGRAM_BOT_TOKEN",
-        description="Telegram bot token (TELEGRAM_BOT_TOKEN).  Required at runtime.",
+        description="Telegram Bot API token.",
     )
-
-    # --- Backend service URLs -------------------------------------------
+    telegram_service_token: SecretStr = Field(
+        default=SecretStr(""),
+        alias="JARVIS_TELEGRAM_SERVICE_TOKEN",
+        description="Dedicated Telegram-to-Platform service credential.",
+    )
+    platform_api_url: str = Field(
+        default="http://platform_api:8003",
+        description="Platform API service URL.",
+    )
     paper_ingestion_url: str = Field(
         default="http://paper_ingestion:8000",
-        description="Paper Ingestion service URL (PAPER_INGESTION_URL).",
+        description="Research API service URL.",
     )
     learning_engine_url: str = Field(
         default="http://learning_engine:8001",
-        description="Learning Engine service URL (LEARNING_ENGINE_URL).",
+        description="Learning API service URL.",
     )
-
-    # --- API auth key ---------------------------------------------------
-    jarvis_api_key: SecretStr | None = Field(  # type: ignore[assignment]
-        default=None,
-        description="JARVIS API key for authenticated backend calls (JARVIS_API_KEY).",
-    )
-
-    # --- Public base URL ------------------------------------------------
     jarvis_base_url: str | None = Field(
         default=None,
         alias="JARVIS_BASE_URL",
-        description=(
-            "Absolute public base URL of the JARVIS dashboard (JARVIS_BASE_URL). "
-            "Used to build working deep-links in Telegram digests; None omits the link."
-        ),
+        description="Optional public dashboard base URL.",
     )
 
-    @field_validator("jarvis_base_url", mode="after")
+    @field_validator(
+        "platform_api_url",
+        "paper_ingestion_url",
+        "learning_engine_url",
+        "jarvis_base_url",
+        mode="after",
+    )
     @classmethod
-    def _validate_base_url(cls, v: str | None) -> str | None:
-        """Require an http(s):// scheme to block XSS / open-redirect via javascript: URLs."""
-        if v is not None and not v.startswith(("http://", "https://")):
-            raise ValueError(f"JARVIS_BASE_URL must start with http:// or https://; got {v!r}")
-        return v
+    def _validate_http_url(cls, value: str | None) -> str | None:
+        """Require a credential-free HTTP or HTTPS origin.
+
+        Parameters
+        ----------
+        value : str or None
+            Configured service or public URL.
+
+        Returns
+        -------
+        str or None
+            Normalized URL without a trailing slash.
+
+        Raises
+        ------
+        ValueError
+            If the URL is not an absolute credential-free HTTP(S) URL.
+        """
+        if value is None:
+            return None
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("service URLs must be absolute http:// or https:// URLs")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("service URLs must not contain credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("service URLs must not contain query or fragment text")
+        return value.rstrip("/")
 
     @classmethod
     def from_env(cls) -> BotConfig:
-        """Build and validate config from environment variables.
+        """Build the bot configuration from environment and secret files.
+
+        Platform is queried for a wizard-saved bot token. The mounted Telegram
+        token remains a bootstrap and outage fallback. PostgreSQL and the
+        configuration-encryption key are intentionally not read.
+
+        Returns
+        -------
+        BotConfig
+            Validated runtime configuration.
 
         Raises
         ------
         SystemExit
-            If required variables are missing (TELEGRAM_BOT_TOKEN, DATABASE_URL).
+            If the dedicated service credential or Telegram token is missing.
         """
-        cfg = cls()
-
-        # Resolve database URL first (Docker-Secret-aware) — we need it both
-        # for the DB-stored token lookup and for the running bot.
-        try:
-            resolved_url = build_database_url()
-        except RuntimeError as exc:
-            logger.critical("Cannot build DATABASE_URL: %s", exc)
-            raise SystemExit(1) from exc
-
-        # DB-first token: a token saved via the first-run wizard
-        # (user_config.telegram.bot_token) wins over the env/Docker-secret
-        # value, so changing it is a UI save + container restart, never an
-        # .env edit. Falls back to the env token when the DB has none.
-        # BotConfig (JarvisCommonSettings) does not apply the `_FILE` secret
-        # indirection, so when only the Docker secret (TELEGRAM_BOT_TOKEN_FILE) is
-        # mounted the bare TELEGRAM_BOT_TOKEN env is empty. Fall back to that secret
-        # file so a preserved .env/secret token works without the first-run wizard.
-        token = read_secret_with_file_fallback(
-            cfg.telegram_token.get_secret_value() or None,
-            os.environ.get("TELEGRAM_BOT_TOKEN_FILE", ""),
+        config = cls()
+        service_token = read_secret_with_file_fallback(
+            config.telegram_service_token.get_secret_value() or None,
+            os.environ.get("JARVIS_TELEGRAM_SERVICE_TOKEN_FILE", ""),
         )
-        db_token = asyncio.run(_read_db_bot_token(resolved_url))
-        if db_token:
-            token = db_token
-            logger.info("Telegram bot token loaded from user_config (DB)")
-
-        if not token:
-            logger.critical("TELEGRAM_BOT_TOKEN is not set (no env value and no DB row)")
+        if not service_token:
+            logger.critical("JARVIS_TELEGRAM_SERVICE_TOKEN is not configured")
             raise SystemExit(1)
 
-        # Resolve JARVIS_API_KEY from a Docker secret file when the bare env is empty.
-        api_key = cfg.jarvis_api_key
-        if not api_key:
-            raw_key = read_secret_with_file_fallback(
-                None, os.environ.get("JARVIS_API_KEY_FILE", "")
+        fallback_token = read_secret_with_file_fallback(
+            config.telegram_token.get_secret_value() or None,
+            os.environ.get("TELEGRAM_BOT_TOKEN_FILE", ""),
+        )
+        platform_token = asyncio.run(
+            _read_platform_bot_token(
+                config.platform_api_url,
+                service_token,
             )
-            if raw_key:
-                api_key = SecretStr(raw_key)
-
-        if not api_key:
-            logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")
-
-        # Return a new instance with the resolved database_url + effective token + api_key.
-        return cfg.model_copy(
+        )
+        token = platform_token or fallback_token
+        if not token:
+            logger.critical("TELEGRAM_BOT_TOKEN is not configured in Platform or its secret file")
+            raise SystemExit(1)
+        return config.model_copy(
             update={
-                "database_url": resolved_url,
+                "telegram_service_token": SecretStr(service_token),
                 "telegram_token": SecretStr(token),
-                "jarvis_api_key": api_key,
             }
         )
 
 
-def _owner_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
-    """Build the standard backend auth headers for a bot→backend HTTP call.
-
-    Always includes ``X-API-Key`` when configured. Adds ``X-Owner-User-Id``
-    when *user_id* is not ``None`` so the backend can scope the response to
-    the correct paired user.
-
-    Lives here (the leaf config module) rather than in ``handlers.helpers`` so
-    that transport-layer modules like ``services_client`` don't have to import
-    the handler chain just to build headers.
-    """
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
-    if user_id is not None:
-        headers["X-Owner-User-Id"] = str(user_id)
-    return headers
-
-
-def _redact_dsn(dsn: str) -> str:
-    """Return a credential-free ``host:port/db`` rendering of a DSN for logging.
-
-    Strips the ``user:password@`` userinfo and any query string (which may
-    carry ``password=``) — only hostname, port, and database path survive.
-    """
-    parsed = urlparse(dsn)
-    host = parsed.hostname or "?"
-    port = f":{parsed.port}" if parsed.port is not None else ""
-    return f"{host}{port}{parsed.path}"
-
-
-async def create_db_pool(database_url: str) -> asyncpg.Pool:
-    """Create an asyncpg connection pool with JSON codec support.
+async def _read_platform_bot_token(platform_url: str, service_token: str) -> str | None:
+    """Return Platform's bot token or ``None`` when unavailable.
 
     Parameters
     ----------
-    database_url : str
-        PostgreSQL connection string.
+    platform_url : str
+        Fixed internal Platform origin.
+    service_token : str
+        Dedicated Telegram service credential.
 
     Returns
     -------
-    asyncpg.Pool
-        Ready-to-use connection pool.
+    str or None
+        Decrypted bot token, or ``None`` on absence or Platform outage.
     """
-    pool = await asyncpg.create_pool(database_url, min_size=2, max_size=5, init=init_pg_connection)
-    logger.info("Database pool created: %s", _redact_dsn(database_url))
-    return pool
+    try:
+        async with pinned_async_client(
+            JARVIS_SERVICE_POLICY,
+            timeout=5.0,
+            headers=_service_headers(service_token),
+        ) as client:
+            response = await client.get(f"{platform_url}/internal/telegram/config")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            token = response.json().get("bot_token")
+            return token if isinstance(token, str) and token else None
+    except Exception:  # noqa: BLE001 - mounted secret is the intentional fallback
+        logger.warning(
+            "Platform Telegram token lookup failed; using mounted fallback", exc_info=True
+        )
+        return None
+
+
+def service_headers(config: BotConfig) -> dict[str, str]:
+    """Return Telegram's dedicated Platform authentication headers.
+
+    Parameters
+    ----------
+    config : BotConfig
+        Runtime configuration containing the service credential.
+
+    Returns
+    -------
+    dict[str, str]
+        Headers for the scoped Platform boundary.
+    """
+    return _service_headers(config.telegram_service_token.get_secret_value())
+
+
+def _service_headers(token: str) -> dict[str, str]:
+    return {
+        "X-Jarvis-Service-Principal": "telegram",
+        "X-Jarvis-Service-Token": token,
+    }
+
+
+def _owner_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
+    """Return the local user-context marker consumed by Telegram's HTTP auth.
+
+    Parameters
+    ----------
+    config : BotConfig
+        Retained for stable call sites; no general API key is read.
+    user_id : int or None
+        Paired JARVIS user identifier.
+
+    Returns
+    -------
+    dict[str, str]
+        Internal client marker. :class:`TelegramBackendAuth` removes it before
+        transport and replaces it with a signed Platform assertion.
+    """
+    del config
+    return {"X-Jarvis-Paired-User-Id": str(user_id)} if user_id is not None else {}
+
+
+__all__ = ["BotConfig", "service_headers"]

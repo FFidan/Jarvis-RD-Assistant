@@ -63,7 +63,7 @@ def _snap_app(tmp_path):
             get_db_pool=get_db_pool,
             limiter=limiter,
             options=PITestAppOptions(
-                remove_owner_override=False,
+                remove_identity_overrides=False,
                 override_db_dependency=True,
                 disable_limiter=True,
                 dependency_overrides={verify_api_key: lambda: None},

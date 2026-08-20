@@ -228,6 +228,99 @@ def test_cli_accepts_plan_and_readme_argument_names(tmp_path: Path) -> None:
     assert args.out_dir == out_dir
 
 
+def test_cli_defaults_to_the_product_gateway() -> None:
+    """Verify the operator default exercises the public gateway boundary."""
+    module = _load_module()
+
+    args = module.parse_args(["--check-only"])
+
+    assert args.api_base == "http://127.0.0.1:3001"
+
+
+def test_pdf_processing_uses_the_public_job_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify processing enqueues and polls without the synchronous query path."""
+    module = _load_module()
+    observed: list[tuple[str, str, float]] = []
+    payloads = iter(
+        [
+            {"job_id": "job-1", "status": "queued"},
+            {"id": "job-1", "status": "running"},
+            {"id": "job-1", "status": "succeeded"},
+        ]
+    )
+
+    class Response:
+        """Minimal context-managed JSON response."""
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode()
+
+    def fake_urlopen(request: Any, *, timeout: float) -> Response:
+        observed.append((request.get_method(), request.full_url, timeout))
+        return Response(next(payloads))
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    client = module.ProductHttpClient("http://127.0.0.1:3001", {})
+
+    client.process_pdf(42)
+
+    assert observed == [
+        ("POST", "http://127.0.0.1:3001/api/process-pdf/42", 120.0),
+        ("GET", "http://127.0.0.1:3001/api/jobs/job-1", 120.0),
+        ("GET", "http://127.0.0.1:3001/api/jobs/job-1", 120.0),
+    ]
+
+
+def test_pdf_processing_fails_closed_on_terminal_job_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify a failed owner job cannot be reported as seeded readiness."""
+    module = _load_module()
+    payloads = iter(
+        [
+            {"job_id": "job-1", "status": "queued"},
+            {"id": "job-1", "status": "failed"},
+        ]
+    )
+
+    class Response:
+        """Minimal context-managed JSON response."""
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode()
+
+    monkeypatch.setattr(
+        module,
+        "urlopen",
+        lambda _request, *, timeout: Response(next(payloads)),
+    )
+    client = module.ProductHttpClient("http://127.0.0.1:3001", {})
+
+    with pytest.raises(module.SeedPackError, match="ended with status failed"):
+        client.process_pdf(42)
+
+
 def test_credential_file_handling_loads_values_without_printing_secrets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

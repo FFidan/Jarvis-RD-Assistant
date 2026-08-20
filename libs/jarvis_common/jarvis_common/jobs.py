@@ -169,16 +169,6 @@ PROCRASTINATE_STATUS_MAP: dict[str, str] = {
     "aborted": "cancelled",
 }
 
-# Pre-built SQL CASE fragment derived from PROCRASTINATE_STATUS_MAP.
-# Used in _list_jobs queries to avoid hand-duplicating the mapping.
-# PROCRASTINATE_STATUS_MAP is a trusted module-level constant (no user input),
-# so string interpolation here is safe.
-_STATUS_CASE_SQL = (
-    "CASE pj.status "
-    + " ".join(f"WHEN '{k}' THEN '{v}'" for k, v in PROCRASTINATE_STATUS_MAP.items())
-    + " ELSE 'running' END"
-)
-
 
 class _PoolListenConnection:
     """Adapter letting asyncpg-listen borrow and release a pooled connection."""
@@ -305,64 +295,21 @@ async def get_procrastinate_job_for_jarvis_id(
 ) -> dict[str, Any] | None:
     """Fetch the matching ``procrastinate_jobs`` row by ``args->>'job_id'``.
 
-    Returns ``None`` when:
-      * no procrastinate row carries this JARVIS job_id, or
-      * the ``procrastinate_jobs`` table does not exist (migration 052 not
-        applied — graceful degradation so legacy-only DBs still work).
-
-    The SELECT LEFT-JOINs ``job_progress`` (migration 054) so callers can
-    surface the latest progress snapshot through the SSE bridge. When
-    migration 054 has not been applied (older DBs), the JOIN is silently
-    dropped and the result still contains the procrastinate columns with
-    ``progress`` / ``progress_message`` as ``None``.
+    Returns ``None`` when no procrastinate row carries this JARVIS job ID.
+    The Operations-owned capability joins progress without exposing generic
+    table access to the Platform runtime. Schema compatibility is verified
+    before application startup, so an absent capability is an outage rather
+    than a legacy fallback.
 
     Raises :class:`JobLookupUnavailable` for any other lookup failure (e.g. a
     DB outage) — an infrastructure failure must not be reported the same way
     as "no such job".
     """
-    sql_with_progress = """
-        SELECT
-          pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
-          jp.progress AS progress,
-          jp.message  AS progress_message,
-          jp.result   AS result,
-          jp.error    AS error,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
-          (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
-        FROM procrastinate_jobs pj
-        LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'
-        WHERE pj.args->>'job_id' = $1
-        ORDER BY pj.id DESC
-        LIMIT 1
-    """
-    sql_without_progress = """
-        SELECT
-          pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
-          NULL::REAL AS progress,
-          NULL::TEXT AS progress_message,
-          NULL::jsonb AS result,
-          NULL::jsonb AS error,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
-          (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
-        FROM procrastinate_jobs pj
-        WHERE pj.args->>'job_id' = $1
-        ORDER BY pj.id DESC
-        LIMIT 1
-    """
     try:
         async with pool.acquire() as conn:
-            try:
-                row = await conn.fetchrow(sql_with_progress, str(jarvis_job_id))
-            except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
-                # job_progress missing (migration 054 not applied) — retry
-                # or terminal-outcome columns missing (migration 058 not applied)
-                # — retry without the JOIN so callers still see procrastinate state.
-                row = await conn.fetchrow(sql_without_progress, str(jarvis_job_id))
-    except asyncpg.UndefinedTableError:
-        # procrastinate_jobs missing (migration 052 not applied).
-        return None
+            row = await conn.fetchrow(
+                "SELECT * FROM ops.jarvis_job_read_v1($1)", str(jarvis_job_id)
+            )
     except Exception as exc:
         logger.warning("procrastinate row lookup failed for job %s", jarvis_job_id, exc_info=True)
         raise JobLookupUnavailable(f"job lookup failed for {jarvis_job_id}") from exc
@@ -383,6 +330,18 @@ async def get_unified(pool: asyncpg.Pool, job_id: str) -> dict[str, Any] | None:
     if prow is None:
         return None
     return procrastinate_row_to_jarvis_row(prow)
+
+
+async def cancel_unified(pool: asyncpg.Pool, job_id: str, user_id: int) -> bool:
+    """Request cancellation through the Operations owner capability."""
+    try:
+        async with pool.acquire() as conn:
+            return bool(
+                await conn.fetchval("SELECT ops.jarvis_job_cancel_v1($1, $2)", job_id, str(user_id))
+            )
+    except Exception as exc:
+        logger.warning("job cancellation lookup failed for %s", job_id, exc_info=True)
+        raise JobLookupUnavailable(f"job cancellation failed for {job_id}") from exc
 
 
 async def _wait_for_job_notification(pool: asyncpg.Pool, job_id: str, timeout: float) -> bool:
@@ -613,77 +572,12 @@ async def list_jobs(
     There is no "return all jobs" mode; to list jobs across all users, query
     the table directly or call this function once per known user.
     """
-    # Fixed-position parameters (matches the $1/$2/$3/$4 placeholders in the query).
-    # NULL params cause the corresponding WHERE clause to be skipped via IS NULL guard.
-    params: list[Any] = [
-        status,  # $1 — status filter or NULL
-        kind,  # $2 — kind filter or NULL
-        user_id,  # $3 — user_id filter or NULL (text)
-        limit,  # $4 — LIMIT
-    ]
-    status_filter_sql = f"""
-        (
-          $1::text IS NULL
-          OR ($1 = 'active' AND {_STATUS_CASE_SQL} IN ('queued', 'running'))
-          OR ($1 <> 'active' AND {_STATUS_CASE_SQL} = $1)
-        )
-    """
-
-    query_with_progress = f"""
-        SELECT pj.args->>'job_id' AS id,
-               pj.task_name AS kind,
-               pj.args->>'user_id' AS user_id,
-               {_STATUS_CASE_SQL} AS status,
-               pj.args - 'job_id' - 'user_id' AS payload,
-               jp.result AS result,
-               jp.error AS error,
-               COALESCE(jp.progress, 0)::float AS progress,
-               jp.message AS progress_message,
-               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
-               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
-               (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at,
-               'procrastinate' AS source
-        FROM procrastinate_jobs pj
-        LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'
-        WHERE pj.args ? 'job_id'
-          AND {status_filter_sql}
-          AND ($2::text IS NULL OR pj.task_name = $2)
-          AND (
-            ($3::text IS NULL AND pj.args->>'user_id' IS NULL)
-            OR ($3::text IS NOT NULL AND pj.args->>'user_id' = $3)
-          )
-        ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
-        LIMIT $4
-    """
-    query_without_progress = f"""
-        SELECT pj.args->>'job_id' AS id,
-               pj.task_name AS kind,
-               pj.args->>'user_id' AS user_id,
-               {_STATUS_CASE_SQL} AS status,
-               pj.args - 'job_id' - 'user_id' AS payload,
-               NULL::jsonb AS result,
-               NULL::jsonb AS error,
-               0::float AS progress,
-               NULL::text AS progress_message,
-               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
-               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
-               (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at,
-               'procrastinate' AS source
-        FROM procrastinate_jobs pj
-        WHERE pj.args ? 'job_id'
-          AND {status_filter_sql}
-          AND ($2::text IS NULL OR pj.task_name = $2)
-          AND (
-            ($3::text IS NULL AND pj.args->>'user_id' IS NULL)
-            OR ($3::text IS NOT NULL AND pj.args->>'user_id' = $3)
-          )
-        ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
-        LIMIT $4
-    """
-
     async with pool.acquire() as conn:
-        try:
-            rows = await conn.fetch(query_with_progress, *params)
-        except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
-            rows = await conn.fetch(query_without_progress, *params)
+        rows = await conn.fetch(
+            "SELECT * FROM ops.jarvis_job_list_v1($1, $2, $3, $4)",
+            status,
+            kind,
+            user_id,
+            limit,
+        )
     return [dict(r) for r in rows]

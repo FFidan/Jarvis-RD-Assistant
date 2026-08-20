@@ -1468,6 +1468,7 @@ cmd_update() {
   # the commit it points at; peel it or this never matches.
   if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${target_ref}^{commit}")" ]; then
     ok "Already up to date (${target_ref})."
+    _version_reconciliation_notice
     _tailscale_upgrade_notice
     return 0
   fi
@@ -1690,7 +1691,7 @@ WITH raw_owner AS (
         CASE
             WHEN NULLIF(btrim(:'owner_env'), '') IS NOT NULL THEN 'environment'
             WHEN EXISTS (
-                SELECT 1 FROM user_config
+                SELECT 1 FROM platform.user_config
                 WHERE user_id IS NULL AND key = 'owner.user_id'
             ) THEN 'database'
             ELSE 'none'
@@ -1699,7 +1700,7 @@ WITH raw_owner AS (
             WHEN NULLIF(btrim(:'owner_env'), '') IS NOT NULL THEN btrim(:'owner_env')
             ELSE (
                 SELECT value #>> '{}'
-                FROM user_config
+                FROM platform.user_config
                 WHERE user_id IS NULL AND key = 'owner.user_id'
                 LIMIT 1
             )
@@ -1716,7 +1717,7 @@ WITH raw_owner AS (
     SELECT parsed_owner.source, parsed_owner.user_id,
            users.email, users.role, users.deleted_at
     FROM parsed_owner
-    LEFT JOIN users ON users.id = parsed_owner.user_id
+    LEFT JOIN platform.users AS users ON users.id = parsed_owner.user_id
 )
 SELECT
     source,
@@ -1762,7 +1763,7 @@ BEGIN
 
     SELECT count(*), min(id)
     INTO target_count, target_user_id
-    FROM users
+    FROM platform.users
     WHERE lower(email) = lower(target_email)
       AND role = 'admin'
       AND deleted_at IS NULL;
@@ -1773,12 +1774,12 @@ BEGIN
 
     SELECT
         EXISTS (
-            SELECT 1 FROM user_config
+            SELECT 1 FROM platform.user_config
             WHERE user_id IS NULL AND key = 'owner.user_id'
         ),
         (
             SELECT value #>> '{}'
-            FROM user_config
+            FROM platform.user_config
             WHERE user_id IS NULL AND key = 'owner.user_id'
             LIMIT 1
         )
@@ -1787,7 +1788,7 @@ BEGIN
     IF current_raw ~ '^[1-9][0-9]{0,17}$' THEN
         current_user_id := current_raw::bigint;
         SELECT EXISTS (
-            SELECT 1 FROM users
+            SELECT 1 FROM platform.users
             WHERE id = current_user_id
               AND role = 'admin'
               AND deleted_at IS NULL
@@ -1805,15 +1806,15 @@ BEGIN
     END;
 
     IF owner_row_exists THEN
-        UPDATE user_config
+        UPDATE platform.user_config
         SET value = to_jsonb(target_user_id), updated_at = NOW()
         WHERE user_id IS NULL AND key = 'owner.user_id';
     ELSE
-        INSERT INTO user_config (user_id, key, value)
+        INSERT INTO platform.user_config (user_id, key, value)
         VALUES (NULL, 'owner.user_id', to_jsonb(target_user_id));
     END IF;
 
-    INSERT INTO audit_log (user_id, action, resource, metadata)
+    INSERT INTO platform.audit_log (user_id, action, resource, metadata)
     VALUES (
         NULL,
         'admin.owner.repair',
@@ -1968,8 +1969,8 @@ cmd_restore_acknowledge() {
 # Recovery: same-host break-glass restore, restore progress, and the off-host
 # request an operator submits by hand.
 #
-# The two commands that TOUCH the backup service (legacy, status) reach it
-# through _backup_volume_compose, whose ownership check is what stops a
+# The restore commands reach Compose through _backup_volume_compose, whose
+# ownership check is what stops a
 # caller-supplied .env from pointing them at a sibling project. `request` makes
 # no compose call at all — it only prints a procedure — so it cannot rely on
 # that fence and instead prints commands already scoped to this install.
@@ -2016,23 +2017,127 @@ _restore_status_flag() {
   printf '%s' "$1" | grep -qE "\"${2}\":true"
 }
 
-_restore_legacy_resume_sidecar() {
-  local rc=$?
-  trap - EXIT
-  set +e
-  # A run that died before restore.sh consumed the request leaves it in the
-  # trigger volume, and the service resumed below would pick it up and fail it
-  # non-interactively — an outcome the operator never asked for and would then
-  # find in `restore status`. restore.sh unlinks the request itself, so after
-  # any later failure this is already a no-op.
-  if [ "$rc" -ne 0 ]; then
-    _backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
-      -c "rm -f ${RESTORE_REQUEST_PATH}" >/dev/null 2>&1 \
-      || warn "An unconsumed restore request may remain. Check: jarvis-research restore status"
+_restore_status_report() {
+  _backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
+    -c "cat ${RESTORE_STATUS_PATH} 2>/dev/null || echo '{}'"
+}
+
+_restore_request_id() {
+  local request
+  request="$(_backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
+    -c "cat ${RESTORE_REQUEST_PATH} 2>/dev/null || true" )" || return 1
+  printf '%s' "$request" | grep -oE '"restore_id":"[0-9a-f]{32}"' | head -1 | cut -d'"' -f4
+}
+
+_restore_require_status() {
+  local expected_id="$1" expected_state="$2" expected_phase="$3" report
+  local state restore_id phase
+  report="$(_restore_status_report)" || return 1
+  state="$(_restore_status_field "$report" state)"
+  restore_id="$(_restore_status_field "$report" restore_id)"
+  phase="$(_restore_status_field "$report" phase)"
+  [ "$state" = "$expected_state" ] && [ "$restore_id" = "$expected_id" ] \
+    && [ "$phase" = "$expected_phase" ]
+}
+
+_restore_recovery_status_is_honest() {
+  local report state
+  report="$(_restore_status_report)" || return 1
+  state="$(_restore_status_field "$report" state)"
+  case "$state" in
+    ''|idle|done) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_restore_pending_authority_id() {
+  local report state phase restore_id
+  report="$(_restore_status_report)" || return 1
+  state="$(_restore_status_field "$report" state)"
+  phase="$(_restore_status_field "$report" phase)"
+  restore_id="$(_restore_status_field "$report" restore_id)"
+  [ "$state" = running ] && [ "$phase" = database_authority ] \
+    && printf '%s' "$restore_id" | grep -Eq '^[0-9a-f]{32}$' \
+    || return 1
+  printf '%s' "$restore_id"
+}
+
+_restore_complete_authority() {
+  local restore_id="$1"
+  _restore_require_status "$restore_id" running database_authority \
+    || die "The restore did not reach database authority reconstruction." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _backup_volume_compose run --rm --no-deps cluster-bootstrap restore-prepare \
+    || die "Restore authority preparation failed." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _restore_require_status "$restore_id" running database_authority \
+    || die "Restore authority preparation did not preserve the expected restore status." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _backup_volume_compose run --rm --no-deps jarvis-migrator \
+    || die "The restored JARVIS schema migration failed." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _restore_require_status "$restore_id" running database_authority \
+    || die "The JARVIS migration did not preserve the expected restore status." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _backup_volume_compose run --rm --no-deps litellm-migrator \
+    || die "The restored LiteLLM schema migration failed." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _restore_require_status "$restore_id" running database_authority \
+    || die "The LiteLLM migration did not preserve the expected restore status." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _backup_volume_compose run --rm --no-deps cluster-bootstrap restore-finalize \
+    || die "Restore authority finalization failed." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _restore_require_status "$restore_id" running database_authority \
+    || die "Restore authority finalization did not preserve the expected restore status." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _backup_volume_compose run --rm --no-deps postgres-restore --complete-authority \
+    || die "The restore could not be marked complete." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _restore_require_status "$restore_id" "done" finalize \
+    || die "The restore completion status is missing, mismatched, or nonterminal." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+}
+
+cmd_restore_run() {
+  [ "$#" -eq 0 ] \
+    || usage_error "restore run takes no arguments." "Run: jarvis-research restore run"
+  _require_docker_daemon
+  _backup_volume_compose ps -q postgres >/dev/null \
+    || die "This install's restore job could not be verified, so no restore was started." \
+      "Nothing was changed. Run: jarvis-research doctor"
+  [ -n "$(_raw_backup_volume_compose ps -q postgres 2>/dev/null | head -1)" ] \
+    || die "The database is not running, so there is nothing to restore into." \
+      "Start it first, then retry: jarvis-research start"
+
+  # Recovery runs separately from request execution, so every exceptional job
+  # invocation is fail-fast and observable instead of being hidden by shell
+  # command chaining inside the container entrypoint.
+  BACKUP_COMPOSE_TIMEOUT_SECONDS="" \
+    _backup_volume_compose run --rm --no-deps postgres-restore --recover \
+    || die "Interrupted-restore recovery failed." \
+      "Check what it reported: jarvis-research restore status"
+  local restore_id
+  if ! _restore_recovery_status_is_honest; then
+    restore_id="$(_restore_pending_authority_id || true)"
+    if printf '%s' "$restore_id" | grep -Eq '^[0-9a-f]{32}$'; then
+      _restore_complete_authority "$restore_id"
+      ok "The interrupted restore completed after authority reconstruction and migrations."
+      return 0
+    fi
+    die "Interrupted-restore recovery left a failed or nonterminal status." \
+      "Maintenance remains active. Check: jarvis-research restore status"
   fi
-  _backup_volume_compose start postgres-backup >/dev/null 2>&1 \
-    || warn "The backup service did not restart. Run: jarvis-research start"
-  exit "$rc"
+  restore_id="$(_restore_request_id || true)"
+  printf '%s' "$restore_id" | grep -Eq '^[0-9a-f]{32}$' \
+    || die "No valid restore request is queued." \
+      "Nothing was restored. Submit a request, then retry: jarvis-research restore run"
+  BACKUP_COMPOSE_TIMEOUT_SECONDS="" \
+    _backup_volume_compose run --rm --no-deps postgres-restore --run-request \
+    || die "The restore job failed." \
+      "Maintenance remains active. Check: jarvis-research restore status"
+  _restore_complete_authority "$restore_id"
+  ok "The restore completed after authority reconstruction and migrations."
 }
 
 cmd_restore_legacy() {
@@ -2085,15 +2190,6 @@ cmd_restore_legacy() {
     || die "The current time could not be read." \
       "Nothing was changed. Run: jarvis-research doctor"
 
-  # The backup service polls the trigger volume every five seconds and consumes a
-  # restore request before anything else, so it is stopped BEFORE the request is
-  # written. Writing first hands the set to a non-interactive service that refuses
-  # it and deletes the request out from under this run.
-  _backup_volume_compose stop postgres-backup >/dev/null \
-    || die "The backup service could not be stopped, so no restore was started." \
-      "Nothing was changed. Run: jarvis-research doctor"
-  trap _restore_legacy_resume_sidecar EXIT
-
   _restore_request_json local "$timestamp" "$restore_id" "$requested_at" "$allow_unknown_schema" \
     | _backup_volume_compose run --rm --no-deps -T --entrypoint sh postgres-backup \
         -c "cat > ${RESTORE_REQUEST_PATH}" \
@@ -2107,11 +2203,11 @@ cmd_restore_legacy() {
   BACKUP_COMPOSE_TIMEOUT_SECONDS="" \
     _backup_volume_compose run --rm --no-deps -i \
       -e JARVIS_RESTORE_ALLOW_LEGACY=1 \
-      --entrypoint /usr/local/bin/restore.sh postgres-backup \
+      --entrypoint /usr/local/bin/restore.sh postgres-restore --run-request \
     || die "The restore did not complete." \
       "Check what it reported: jarvis-research restore status"
-  ok "The restore of backup ${timestamp} finished."
-  info "Review the outcome with: jarvis-research restore status"
+  _restore_complete_authority "$restore_id"
+  ok "The restore of backup ${timestamp} completed after authority reconstruction."
 }
 
 cmd_restore_status() {
@@ -2199,10 +2295,12 @@ from any directory.
 
      ${compose_prefix} cp /path/to/backup_encrypt_key.txt postgres-backup:/restore-inbox/operator_key
 
-3. Only once both copies are in place, submit the request below. The backup
-   service acts on it within seconds, and an empty inbox fails the restore:
+3. Only once both copies are in place, submit the request below, then start the
+   one-shot restore job on the host. The request remains queued until that command:
 
      printf '%s' '${request}' | ${compose_prefix} exec -T postgres-backup sh -c 'cat > ${RESTORE_REQUEST_PATH}'
+
+     jarvis-research restore run
 
 Keep the restore identifier ${restore_id}. After the restore you type it back to
 release outbound quarantine:
@@ -2219,10 +2317,11 @@ cmd_restore() {
   case "$restore_command" in
     acknowledge) cmd_restore_acknowledge "$@" ;;
     legacy)      cmd_restore_legacy "$@" ;;
+    run)         cmd_restore_run "$@" ;;
     status)      cmd_restore_status "$@" ;;
     request)     cmd_restore_request "$@" ;;
     *) usage_error "restore: unknown subcommand '${restore_command}'." \
-         "Run: jarvis-research restore status   (or: restore legacy|request <timestamp>, restore acknowledge <restore-id>)" ;;
+         "Run: jarvis-research restore status   (or: restore run|legacy|request <timestamp>, restore acknowledge <restore-id>)" ;;
   esac
 }
 
@@ -2291,23 +2390,21 @@ cmd_doctor() {
   local latest cur; latest="$(latest_stable_tag origin 2>/dev/null || true)"
   cur="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
   [ -n "$latest" ] && info "Latest published release: ${latest} (installed: ${cur:-unknown})."
+  _version_reconciliation_notice
   _doctor_host_probes
   return "$rc"
 }
 
 _doctor_host_probes() {
-  local compose_file torch cv dri
+  local compose_file torch cv
   compose_file="$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | head -1)"
-  if printf '%s' "$compose_file" | grep -qE 'docker-compose\.(gpu|rocm|vulkan)\.yml'; then
-    dri="${JARVIS_DRI_DIR:-/dev/dri}"
-    local -a nodes=("$dri"/renderD*)
-    if [ ! -e "${nodes[0]}" ]; then
-      warn "A GPU overlay is configured but no ${dri}/renderD* render node is present; the accelerator will be unavailable."
-    else
-      grep -qE '^JARVIS_RENDER_GID=[0-9]+' .env 2>/dev/null || warn "GPU overlay configured but JARVIS_RENDER_GID is not numeric in .env."
-      grep -qE '^JARVIS_VIDEO_GID=[0-9]+'  .env 2>/dev/null || warn "GPU overlay configured but JARVIS_VIDEO_GID is not numeric in .env."
-    fi
-  fi
+  # Each accelerator overlay reaches the GPU by a different route, so each is
+  # probed for the route it actually uses. Probing the wrong one told every
+  # WSL2 + NVIDIA install its accelerator was unavailable.
+  case "$compose_file" in
+    *docker-compose.rocm.yml*|*docker-compose.vulkan.yml*) _doctor_render_node_probe ;;
+    *docker-compose.gpu.yml*)                              _doctor_nvidia_device_probe ;;
+  esac
   torch="$(sed -n 's/^TORCH_VARIANT=//p' .env 2>/dev/null | head -1)"
   if [ "$torch" = "cuda" ]; then
     docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"' \
@@ -2318,6 +2415,55 @@ _doctor_host_probes() {
     warn "Docker Compose ${cv} is older than the tested floor 2.24.4; overlay merges may misbehave."
   fi
   _tailscale_upgrade_notice
+}
+
+# The ROCm and Vulkan overlays pass a DRI render node into the containers, so a
+# missing render node is what makes their accelerator unavailable, and the
+# render/video group ids only matter once that node exists.
+_doctor_render_node_probe() {
+  local dri; dri="${JARVIS_DRI_DIR:-/dev/dri}"
+  local -a nodes=("$dri"/renderD*)
+  if [ ! -e "${nodes[0]}" ]; then
+    warn "The ROCm or Vulkan overlay is configured but no ${dri}/renderD* render node is present; the accelerator will be unavailable."
+    return 0
+  fi
+  grep -qE '^JARVIS_RENDER_GID=[0-9]+' .env 2>/dev/null || warn "The ROCm or Vulkan overlay is configured but JARVIS_RENDER_GID is not numeric in .env."
+  grep -qE '^JARVIS_VIDEO_GID=[0-9]+'  .env 2>/dev/null || warn "The ROCm or Vulkan overlay is configured but JARVIS_VIDEO_GID is not numeric in .env."
+}
+
+# The CUDA overlay reaches the GPU through the NVIDIA container runtime, never a
+# DRI render node: a native Linux host exposes /dev/nvidia*, and a Windows host
+# running Docker in WSL2 exposes /dev/dxg instead.
+_doctor_nvidia_device_probe() {
+  local dev; dev="${JARVIS_DEV_DIR:-/dev}"
+  local -a nvidia_nodes=("$dev"/nvidia*)
+  if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    return 0
+  fi
+  if [ -e "${nvidia_nodes[0]}" ] || [ -e "${dev}/dxg" ]; then
+    return 0
+  fi
+  warn "The CUDA overlay is configured but Docker reports no nvidia runtime and neither ${dev}/nvidia* nor ${dev}/dxg is present; the accelerator will be unavailable. Install the NVIDIA Container Toolkit, then run: jarvis-research doctor"
+}
+
+# The version recorded in .env and the version this checkout represents must
+# agree. When they do not, and no update journal is in flight to explain it,
+# doctor and update say the same thing instead of each reporting a different
+# installed version and leaving the operator with no next step.
+_version_reconciliation_notice() {
+  local recorded checkout
+  if [ -z "$PENDING_FILE_PATH" ]; then
+    _init_pending_file_path || return 0
+  fi
+  if [ -f "$PENDING_FILE_PATH" ] || [ -f "$LEGACY_PENDING_FILE_PATH" ]; then
+    return 0
+  fi
+  recorded="$(sed -n 's/^JARVIS_VERSION=//p' .env 2>/dev/null | head -1)"
+  checkout="$(resolve_checkout_app_version 2>/dev/null || true)"
+  if [ -z "$recorded" ] || [ -z "$checkout" ] || [ "$recorded" = "$checkout" ]; then
+    return 0
+  fi
+  warn "This install records version ${recorded} in .env, but the checkout is version ${checkout}, and no update is in progress. Bring both back in step: cd ${REPO} && ./update.sh --yes"
 }
 
 _tailscale_upgrade_notice() {
@@ -2370,7 +2516,9 @@ Commands:
   owner set <email>  Repair a missing or invalid database owner on this host.
                      A valid owner transfers in Admin Users; OWNER_USER_ID stays
                      host-managed. The email must be typed again to confirm.
-  restore status     Report what the backup service's last or current restore
+  restore run        Start the one-shot host restore job for a queued request.
+                     Its exceptional credential and container are removed when it exits.
+  restore status     Report the last or current restore state.
                      did, including whether manual follow-up is required.
   restore legacy <timestamp>
                      Restore a same-host backup taken before manifest signing.

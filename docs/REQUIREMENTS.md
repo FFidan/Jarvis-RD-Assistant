@@ -57,7 +57,7 @@ bash scripts/check-python-deps.sh            # verify parity
 ```
 
 Groups: `jarvis-common` (shared), `paper-ingestion`, `paper-ingestion-optional`,
-`learning-engine`, `telegram-bot` (plus `-cpu` conflict forks of the paper-ingestion and optional groups that resolve PyTorch from the CPU index). FastAPI pinned `>=0.137.0,<0.141.0`.
+`learning-engine`, `telegram-bot` (plus `-cpu` conflict forks of the paper-ingestion and optional groups that resolve PyTorch from the CPU index). FastAPI pinned `>=0.137.0,<0.142.0`.
 
 Frontend (`frontend/package.json`): React ^19, TypeScript ^5.6, Vite ^8,
 TanStack Query ^5, Zustand ^5, React Router ^7, Recharts ^2.15,
@@ -152,8 +152,8 @@ Observability variables (Langfuse): [docs/contracts/04-observability.md](https:/
 | Dependency | Service | Purpose |
 |------------|---------|---------|
 | `lxml>=6.1.0` | paper_ingestion | PubMed XML parsing + hardened XML in `cached_transport.py` |
-| `qdrant-client>=1.14.3,<1.15.0` | paper_ingestion | Client API used with the tested Qdrant 1.13.2 service, including filtered vector maintenance |
-| `scikit-learn>=1.6.0` | paper_ingestion (optional) | Per-user logistic regression on recommendation feedback |
+| `qdrant-client>=1.14.3,<1.20.0` | paper_ingestion | Client API used with the tested Qdrant 1.13.2 service, including filtered vector maintenance |
+| `scikit-learn>=1.6.0` | paper_ingestion | Per-user logistic regression on recommendation feedback |
 
 ## Secrets & Database
 

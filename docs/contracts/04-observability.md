@@ -15,7 +15,9 @@
 - Privacy rules (§5)
 - The Langfuse SDK initialization in `configure_lifespan`
 
-This contract describes the steady-state Langfuse trace surface.
+This contract describes the optional, vendor-neutral telemetry surface. Langfuse
+4 remains the operator-owned LLM trace sink; optional OTLP traces and Vector
+log aggregation use the same opt-in profile and never affect product work.
 
 ---
 
@@ -33,10 +35,6 @@ This contract describes the steady-state Langfuse trace surface.
 **Out of scope.**
 - Cost dashboards, alerting, retention policy — Langfuse-side configuration
 - Frontend application telemetry (analytics, error reporting) — separate concern
-- Server logs (`logger.info` / `logger.warning`) — not Langfuse traces;
-  contracts for those live in [ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md)
-- Distributed tracing across services — Langfuse covers within-service flows;
-  cross-service trace propagation is not in scope today
 
 ---
 
@@ -69,6 +67,11 @@ Required configuration (see `.env.example`):
 - `LANGFUSE_HOST` (e.g. `http://langfuse:3000`) — plain env var; when empty, `@observe()` decorators are no-ops at runtime.
 - Keypair — **file-only** via Docker Secrets: `LANGFUSE_PUBLIC_KEY_FILE=/run/secrets/langfuse_init_pk` and `LANGFUSE_SECRET_KEY_FILE=/run/secrets/langfuse_init_sk` → resolved by `SecretsSettings.langfuse_public_key` / `langfuse_secret_key` (the `_FILE` convention; never set as plain env vars).
 The application MUST start cleanly without Langfuse running.
+
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is optional and
+`OTEL_EXPORT_TIMEOUT_MS` is bounded and positive. `LOG_FORWARD_ADDRESS` is an
+optional `host:port` UDP destination. It is set only by `make observability-up`
+to `vector:9000`; profile-off creates neither a forwarder nor a network socket.
 
 ---
 
@@ -146,6 +149,10 @@ must fail review.
    truncated (with an explicit `..._truncated` marker) before being sent
    to Langfuse. (Langfuse stores prompts as full text; very long prompts
    bloat the dashboard and storage.)
+   JARVIS disables the SDK decorator's implicit argument and return-value
+   capture at every trace boundary. Actual generation helpers attach only the
+   explicitly bounded prompt and response, so database pools, HTTP clients,
+   retrieval objects, and unbounded embedding response graphs are never serialized.
 3. **Redact API keys in error stacks.** When an exception is captured to
    a span, its stack trace MUST be filtered for known secret patterns
    (`Bearer`, `x-api-key`, `Authorization`). Use a centralized scrubber
@@ -180,33 +187,22 @@ JARVIS contract is self-hosted-first.
 
 ## 7. SDK initialization
 
-Once per service in [`configure_lifespan`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py) at startup. Roughly:
+[`configure_lifespan`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py)
+installs one process-wide OpenTelemetry provider before service startup. The
+provider exists in every profile so local W3C propagation and bounded RED
+diagnostics remain available. Generic OTLP export is added only when the profile
+and endpoint are configured, and its exporter accepts only spans from the
+`jarvis_common.telemetry` instrumentation scope.
 
-```python
-# Pseudocode — mirrors _langfuse_lifespan_hook in jarvis_common/llm_client.py
-def _langfuse_lifespan_hook() -> None:
-    settings = get_jarvis_common_settings()
-    if not settings.observability_enabled:
-        return  # OBSERVABILITY_ENABLED is false; @observe() decorators are no-ops
-    secrets = get_secrets_settings()  # resolves LANGFUSE_PUBLIC_KEY_FILE / _SECRET_KEY_FILE
-    host = settings.langfuse_host
-    pk = secrets.langfuse_public_key.get_secret_value() if secrets.langfuse_public_key else None
-    sk = secrets.langfuse_secret_key.get_secret_value() if secrets.langfuse_secret_key else None
-    if not (host and pk and sk):
-        logger.warning("OBSERVABILITY_ENABLED set but host/keys missing; traces no-op")
-        return
-    from langfuse import Langfuse
-    Langfuse(host=host, public_key=pk, secret_key=sk)
-    # never raises — broad except guards startup
-```
-
-Initialization MUST be idempotent and MUST NOT raise if configuration is
-missing. The `@observe()` decorator from `langfuse.decorators` handles
-the no-op case automatically when the SDK is uninitialized.
-
-The lifespan teardown counterpart (per the equal-length contract enforced by
-[configure_lifespan](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py)) is `langfuse.shutdown()` — flushes pending spans
-to the backend, important for short-lived workers.
+Research and Learning initialize Langfuse 4 through
+`_langfuse_lifespan_hook`. Langfuse attaches its processor to the existing
+provider and retains its explicit generation-span contract. The exporter
+translates only Langfuse-decorated spans to the pinned self-hosted server's
+bounded `/api/public/ingestion` batches; generic request spans are not copied
+into the LLM trace store. Missing
+configuration, quarantine, or exporter failure is non-fatal. Application
+lifecycles perform a bounded provider flush but never shut down the shared
+provider; the SDK owns final shutdown at process exit.
 
 ---
 
@@ -265,7 +261,8 @@ When `OBSERVABILITY_ENABLED` is unset or `false` (the default):
 
 - The Langfuse SDK is **never constructed** — no import, no network socket, no background thread
 - `@observe()` decorators remain in place but are no-ops (langfuse.decorators handles this case)
-- There is **no latency delta, no log noise, no trace export**
+- W3C context and in-process RED counters remain active, but there is no trace
+  exporter, forwarded-log socket, collector thread, or collector log noise
 
 Profile-OFF is the factory default. Enabling observability is an explicit operator opt-in.
 
@@ -281,6 +278,24 @@ the URL is operator-specific and cannot be inferred generically).
 ### 9.6 Diagnostic artifact redaction
 
 Perf and observability bundles are meant to leave the operator machine for agent or human review. Before any tarball is created, bundle builders MUST redact obvious API keys, auth headers, cookies, session files, and secret-like environment values while preserving logs, timings, failure bodies, and metadata needed to diagnose the run. A redaction manifest should be included in the bundle so reviewers can tell whether sanitisation ran.
+
+### 9.7 Socketless logs and signals
+
+Application services retain canonical structured JSON stdout in every profile.
+With observability enabled, a bounded background UDP forwarder sends only safe
+metadata to Vector: timestamp, level, logger, service, request ID, and
+correlation ID. Queue overflow, DNS failure, backpressure, and collector outage
+drop telemetry only; they never delay requests, jobs, backup, restore, or stdout
+emission. Vector has no Docker socket, product API route,
+product-table sink, or persistent log volume; its aggregate is available through
+`docker compose logs vector`. Infrastructure services remain observable through
+their own `docker compose logs` output.
+
+Trace context follows W3C `traceparent`/`tracestate` through gateway, APIs,
+signed internal HTTP, jobs, and outbox delivery. Signals remain low-cardinality:
+request/worker RED outcomes, dependency health, and bounded pool, queue, outbox,
+migration, and backup state. They do not contain prompt, user, cookie, token,
+password, key, DSN, or authorization content.
 
 ---
 
@@ -307,6 +322,10 @@ The implementation MUST satisfy these. Testable.
 7. **Bundle redaction before export.** Any perf or observability tarball that may
    be copied off-box MUST run the artifact redaction step before archive
    creation and include a redaction manifest.
+8. **Socketless forwarding.** The optional aggregate uses application UDP input;
+   it does not mount the Docker socket or bulk-write logs to a product table.
+9. **Export isolation.** Trace and log export queues, timeouts, and shutdown are
+   bounded. Profile-off has no exporter or log-forwarder work.
 
 ---
 
@@ -315,7 +334,6 @@ The implementation MUST satisfy these. Testable.
 | Item | Candidate dispositions |
 |---|---|
 | Token-cost telemetry | (a) Capture token counts in generation spans now; surface aggregate cost dashboard later (b) Add cost projection to span metadata using LiteLLM's reported usage |
-| Cross-service trace propagation | Out of scope today; would require trace ID forwarding through the jobs subsystem and via HTTP headers between paper_ingestion ↔ learning_engine |
 | Sampling at high volume | Defer; revisit if a user reports Langfuse storage growth concerns |
 | Frontend tracing | Out of scope; would require a separate Web SDK integration |
 | Telegram bot LLM calls | None today (telegram_bot has no direct LLM calls) — revisit if telegram-side LLM features are added |

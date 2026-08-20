@@ -23,6 +23,7 @@ import { LinkedPapersTab } from './LinkedPapersTab';
 import { QuestionsSection } from './QuestionsSection';
 import { RecentActivitySection } from './RecentActivitySection';
 import { PROJECT_STATUS_LABELS } from '@/lib/labels/projectStatus';
+import { Link } from 'react-router-dom';
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   active: 'default',
@@ -116,9 +117,9 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
       {/* Breadcrumb + delete */}
       <div className="flex items-center justify-between border-b px-6 py-3">
         <nav aria-label="breadcrumb" className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span>Read</span>
+          <Link to="/projects" className="hover:text-foreground hover:underline">Workspace</Link>
           <span>/</span>
-          <span>Projects</span>
+          <Link to="/projects" className="hover:text-foreground hover:underline">Projects</Link>
           <span>/</span>
           <span className="font-medium text-foreground truncate max-w-[16rem]">{project.name}</span>
         </nav>

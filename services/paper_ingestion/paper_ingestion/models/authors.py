@@ -46,9 +46,12 @@ class AuthorAlertMatch(BaseModel):
 
     ``papers`` carries the keys the Telegram bot's ``format_paper_card``
     consumes (``id, title, authors, published_date, source_type, url,
-    metadata``); values are NULL-tolerant.
+    metadata``); values are NULL-tolerant. ``tracked_author_id`` names the row a
+    delivery acknowledgement refers to, because an author name alone does not
+    identify one of a user's tracked authors.
     """
 
+    tracked_author_id: int
     author_name: str
     papers: list[dict]
 

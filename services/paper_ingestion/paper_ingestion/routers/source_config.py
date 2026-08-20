@@ -31,10 +31,10 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jarvis_common.auth import require_admin, verify_api_key
 from jarvis_common.crypto import encrypt_secret
+from jarvis_common.email import MAX_EMAIL_LENGTH
 from pydantic import BaseModel, Field
 
 from paper_ingestion.deps import get_db_pool
-from paper_ingestion.models.account import MAX_EMAIL_LEN
 from paper_ingestion.sources.registry import get_all_source_types, get_source_class
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class SourceConfigBody(BaseModel):
     """Body for PATCH /api/settings/sources/{source_type}."""
 
     api_key: Annotated[str | None, Field(default=None, max_length=512)]
-    email: Annotated[str | None, Field(default=None, max_length=MAX_EMAIL_LEN)]
+    email: Annotated[str | None, Field(default=None, max_length=MAX_EMAIL_LENGTH)]
 
 
 # ---------------------------------------------------------------------------

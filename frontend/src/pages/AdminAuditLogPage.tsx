@@ -13,20 +13,12 @@
 import { useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { formatDistanceToNow } from 'date-fns';
+import { formatRelativeTime } from '@/lib/relative-time';
 import { listAuditLog, type AuditLogEntry } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
-
-function formatDate(iso: string): string {
-  try {
-    return formatDistanceToNow(new Date(iso), { addSuffix: true });
-  } catch {
-    return iso;
-  }
-}
 
 function formatMetadata(meta: Record<string, unknown> | null): string {
   if (!meta || Object.keys(meta).length === 0) return '—';
@@ -126,7 +118,7 @@ export function AdminAuditLogPage() {
               {entries.map((entry) => (
                 <tr key={entry.id} className="border-b last:border-0">
                   <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                    {formatDate(entry.created_at)}
+                    {formatRelativeTime(entry.created_at)}
                   </td>
                   <td className="px-4 py-3 font-medium">
                     {actionLabel(entry.action) ? (

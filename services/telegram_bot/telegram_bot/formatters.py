@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from telegram_bot.command_catalog import COMMAND_CATALOG
 from telegram_bot.pulse_contract import PulseDeck
+from telegram_bot.vocabulary import is_not_done, project_status_emoji, project_status_label
 
 MAX_MESSAGE_LENGTH = 4096
 TRUNCATION_HEADROOM = 100
@@ -179,6 +180,34 @@ def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
     return truncated + closers + "\n\n<i>... (truncated)</i>"
 
 
+#: How many rows a listing command sends before it stops and says how many
+#: the stage actually holds. Shared so a listing cannot silently truncate.
+LISTING_ROWS = 10
+
+
+def stage_header(title: str, shown: int, total: int | None, described: str) -> str:
+    """Build the one-line header naming a listing, what it holds, and how much.
+
+    Parameters
+    ----------
+    title : str
+        Stage name as the user knows it, e.g. ``"📥 <b>Inbox</b>"``.
+    shown : int
+        Number of rows this message actually lists.
+    total : int | None
+        Rows in the whole stage, or ``None`` when the backend did not say.
+    described : str
+        What membership of the stage means, e.g. ``"papers waiting for triage"``.
+
+    Returns
+    -------
+    str
+        HTML-formatted single-line header.
+    """
+    counted = f"{shown} of {total}" if total is not None else str(shown)
+    return f"{title} — showing {counted} {described}"
+
+
 def _format_authors(authors: list[str], max_display: int = 3) -> str:
     """Format author list, showing first N + 'et al.' if needed."""
     if not authors:
@@ -320,6 +349,50 @@ def format_pulse_deck_status(deck: PulseDeck) -> str:
     return status
 
 
+def format_pulse_deck_scope(deck: PulseDeck, shown: int, base_url: str | None) -> str:
+    """Say how much of the deck this message carries and where the rest lives.
+
+    Parameters
+    ----------
+    deck : PulseDeck
+        Deck being delivered. ``card_count`` is the authoritative total.
+    shown : int
+        Number of cards this message actually delivers.
+    base_url : str or None
+        Public dashboard base URL, or ``None`` when none is configured.
+        Telegram cannot render a relative href, so the deck link is omitted
+        rather than emitted as a dead relative link.
+
+    Returns
+    -------
+    str
+        One line naming the delivered slice and, when possible, linking the
+        full deck.
+    """
+    line = f"Top {shown} of {deck.card_count}"
+    link = format_pulse_deck_link(base_url)
+    return f"{line} — {link}" if link else line
+
+
+def format_pulse_deck_link(base_url: str | None) -> str:
+    """Link to the web deck, or an empty string when no public URL is configured.
+
+    Parameters
+    ----------
+    base_url : str or None
+        Public dashboard base URL. Telegram cannot render a relative href, so
+        an unset base URL yields no link rather than a dead one.
+
+    Returns
+    -------
+    str
+        An anchor element, or ``''``.
+    """
+    if not base_url:
+        return ""
+    return f'<a href="{safe_url(f"{base_url}/pulse")}">See the full deck</a>'
+
+
 def format_paper_detail(paper: dict, summary: dict | None = None) -> str:
     """Format a detailed paper view with summary and findings.
 
@@ -449,24 +522,60 @@ def format_review_stats(stats: dict) -> str:
     )
 
 
+#: How many rows a listed section shows before it summarizes the remainder.
+_LISTED_SECTION_ROWS = 5
+
+
+def _remaining_line(total: int, shown: int) -> list[str]:
+    """Return a single "and N more" line when a section listed only part of its rows."""
+    remaining = total - shown
+    return [f"  … and {remaining} more"] if remaining > 0 else []
+
+
+def _count_line(icon: str, count: int | None, counted: str, unavailable: str) -> str:
+    """Render one briefing count, or say the number could not be read.
+
+    A ``None`` count means the gather behind it failed. Rendering that as a
+    zero would tell the reader there is nothing to do, when the truth is that
+    nothing is known — so the outage is stated instead.
+    """
+    if count is None:
+        return f"{icon} {unavailable}"
+    return f"{icon} <b>{count}</b> {counted}"
+
+
 def format_morning_briefing(
-    new_papers_count: int,
-    due_cards: int,
-    tasks: list[dict],
-    milestones: list[dict],
+    new_papers_count: int | None,
+    inbox_total: int | None,
+    due_cards: int | None,
+    open_tasks: list[dict] | None,
+    milestones: list[dict] | None,
 ) -> str:
     """Format the combined morning briefing message.
 
+    Every count names the window it was measured over and the view it was
+    measured on, so a number in the briefing means the same thing as the
+    matching number on the web.
+
     Parameters
     ----------
-    new_papers_count : int
-        Number of new papers in last 24h.
-    due_cards : int
-        Number of flashcards due for review.
-    tasks : list[dict]
-        In-progress tasks.
-    milestones : list[dict]
-        Upcoming milestones (next 7 days).
+    new_papers_count : int | None
+        Papers added to the caller's library since midnight UTC, or ``None``
+        when that count could not be read.
+    inbox_total : int | None
+        Papers currently in the Inbox view, whenever they arrived, or ``None``
+        when that count could not be read.
+    due_cards : int | None
+        Flashcards whose review is due as of now, or ``None`` when that count
+        could not be read.
+    open_tasks : list[dict] | None
+        Tasks that are not done, under the same rule the My Day view applies,
+        or ``None`` when the list could not be read. An empty list renders as
+        no section; ``None`` says so, because an absent section reads as
+        "nothing outstanding".
+    milestones : list[dict] | None
+        Milestones with a deadline in the next 7 days, or ``None`` when the
+        list could not be read.
 
     Returns
     -------
@@ -476,19 +585,49 @@ def format_morning_briefing(
     now = datetime.now(UTC)
     lines = [f"☀️ <b>Morning Briefing</b> — {now.strftime('%A, %B %d')}\n"]
 
-    lines.append(f"📄 <b>{new_papers_count}</b> new papers today")
-    lines.append(f"📚 <b>{due_cards}</b> cards due for review")
+    lines.append(
+        _count_line(
+            "📄",
+            new_papers_count,
+            "papers added to your library since midnight UTC",
+            "Papers added to your library since midnight UTC are unavailable right now",
+        )
+    )
+    lines.append(
+        _count_line(
+            "📥",
+            inbox_total,
+            "waiting in your inbox",
+            "Your inbox count is unavailable right now",
+        )
+    )
+    lines.append(
+        _count_line(
+            "📚",
+            due_cards,
+            "cards due for review right now",
+            "Cards due for review are unavailable right now",
+        )
+    )
 
-    if tasks:
-        lines.append(f"\n📋 <b>In Progress ({len(tasks)}):</b>")
-        for t in tasks[:5]:
+    if open_tasks is None:
+        lines.append("\n📋 Your open tasks are unavailable right now")
+    elif open_tasks:
+        lines.append(
+            f"\n📋 <b>Open tasks ({len(open_tasks)}):</b> "
+            "<i>to do, in progress or blocked — the same rule as My Day</i>"
+        )
+        for t in open_tasks[:_LISTED_SECTION_ROWS]:
             title = escape(t.get("title", ""))
             project = escape(t.get("project_name", ""))
             lines.append(f"  • {title}" + (f" <i>({project})</i>" if project else ""))
+        lines.extend(_remaining_line(len(open_tasks), _LISTED_SECTION_ROWS))
 
-    if milestones:
-        lines.append(f"\n🎯 <b>Upcoming Milestones ({len(milestones)}):</b>")
-        for m in milestones[:5]:
+    if milestones is None:
+        lines.append("\n🎯 Milestones due in the next 7 days are unavailable right now")
+    elif milestones:
+        lines.append(f"\n🎯 <b>Milestones due in the next 7 days ({len(milestones)}):</b>")
+        for m in milestones[:_LISTED_SECTION_ROWS]:
             name = escape(m.get("name", ""))
             deadline = m.get("deadline", "")
             project = escape(m.get("project_name", ""))
@@ -498,6 +637,7 @@ def format_morning_briefing(
             else:
                 deadline_str = escape(str(deadline))
             lines.append(f"  • {name} ({deadline_str}) <i>{project}</i>")
+        lines.extend(_remaining_line(len(milestones), _LISTED_SECTION_ROWS))
 
     return truncate("\n".join(lines))
 
@@ -508,7 +648,8 @@ def format_project_status(project: dict, tasks: list[dict], milestones: list[dic
     Parameters
     ----------
     project : dict
-        Project record.
+        Project record, as returned by ``GET /api/projects/{id}``: it carries
+        ``paper_count`` and ``open_question_count`` alongside the row columns.
     tasks : list[dict]
         Tasks for this project.
     milestones : list[dict]
@@ -521,36 +662,37 @@ def format_project_status(project: dict, tasks: list[dict], milestones: list[dic
     """
     name = escape(project.get("name", ""))
     status = project.get("status", "active")
-    status_emoji = {"active": "🟢", "paused": "⏸️", "completed": "✅", "archived": "📦"}.get(
-        status, ""
-    )
     description = project.get("description", "") or ""
 
     done_count = sum(1 for t in tasks if t.get("status") == "done")
     total_tasks = len(tasks)
-    progress = f"{done_count}/{total_tasks}" if total_tasks else "No tasks"
+    progress = f"{done_count} of {total_tasks} done" if total_tasks else "No tasks"
 
-    lines = [
-        f"{status_emoji} <b>{name}</b> [{escape(status)}]",
-    ]
+    badge = f"{project_status_emoji(status)} ".lstrip()
+    label = escape(project_status_label(status))
+    lines = [f"{badge}<b>{name}</b>" + (f" — {label}" if label else "")]
     if description:
         lines.append(f"{escape(description[:200])}")
     lines.append(f"\n📋 Tasks: {progress}")
+    lines.append(f"📄 Linked papers: {int(project.get('paper_count') or 0)}")
+    lines.append(f"❓ Open questions: {int(project.get('open_question_count') or 0)}")
 
     if project.get("deadline"):
         lines.append(f"📅 Deadline: {escape(str(project['deadline']))}")
 
     if milestones:
         lines.append(f"\n🎯 <b>Milestones ({len(milestones)}):</b>")
-        for m in milestones[:5]:
+        for m in milestones[:_LISTED_SECTION_ROWS]:
             done = "✅" if m.get("completed") else "⬜"
             lines.append(f"  {done} {escape(m.get('name', ''))}")
 
-    in_progress = [t for t in tasks if t.get("status") == "in_progress"]
-    if in_progress:
-        lines.append("\n🔨 <b>In Progress:</b>")
-        for t in in_progress[:5]:
+    # Same not-done rule as My Day and the briefing, rather than in-progress only.
+    open_tasks = [t for t in tasks if is_not_done(t)]
+    if open_tasks:
+        lines.append(f"\n🔨 <b>Open tasks ({len(open_tasks)}):</b>")
+        for t in open_tasks[:_LISTED_SECTION_ROWS]:
             lines.append(f"  • {escape(t.get('title', ''))}")
+        lines.extend(_remaining_line(len(open_tasks), _LISTED_SECTION_ROWS))
 
     return truncate("\n".join(lines))
 

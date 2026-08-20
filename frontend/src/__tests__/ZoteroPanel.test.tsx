@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   getLinkage: vi.fn(),
   pushPaper: vi.fn(),
   resync: vi.fn(),
+  fetchConfig: vi.fn(),
   trackExternalJob: vi.fn(),
   isRunning: vi.fn<(kind: string, payload: Record<string, unknown>) => boolean>(() => false),
 }));
@@ -37,6 +38,7 @@ vi.mock('@/lib/api', async () => {
     zoteroGetLinkage: mocks.getLinkage,
     zoteroPushPaper: mocks.pushPaper,
     zoteroResync: mocks.resync,
+    fetchConfig: mocks.fetchConfig,
   });
 });
 
@@ -59,6 +61,14 @@ function renderPanel(hasProjectLinks = true) {
     { queryClient },
   );
 }
+
+beforeEach(() => {
+  mocks.fetchConfig.mockResolvedValue([
+    { key: 'zotero.api_key', value: 'configured' },
+    { key: 'zotero.user_id', value: '12345' },
+    { key: 'zotero.library_type', value: 'user' },
+  ]);
+});
 
 describe('ZoteroPanel — setTimeout timer cleanup', () => {
   beforeEach(() => {
@@ -307,6 +317,29 @@ describe('ZoteroPanel — background job handoff', () => {
       'href',
       '/projects',
     );
+  });
+
+  it('names missing Zotero settings before the project prerequisite', async () => {
+    mocks.getLinkage.mockResolvedValue({
+      zotero_item_key: null,
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+    });
+    mocks.fetchConfig.mockResolvedValue([
+      { key: 'zotero.api_key', value: '' },
+      { key: 'zotero.user_id', value: '' },
+      { key: 'zotero.library_type', value: 'user' },
+    ]);
+    renderPanel(false);
+
+    const sendButton = await screen.findByRole('button', { name: 'Send to Zotero' });
+    expect(sendButton).toBeDisabled();
+    expect(sendButton).toHaveAttribute(
+      'title',
+      'Configure your Zotero API key and library in Settings before sending.',
+    );
+    expect(screen.getByRole('link', { name: 'Configure Zotero in Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Projects to Link' })).toBeInTheDocument();
   });
 
   it('does not offer the project-link affordance once the paper has a linked project', async () => {

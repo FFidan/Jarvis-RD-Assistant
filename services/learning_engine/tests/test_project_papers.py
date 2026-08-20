@@ -10,9 +10,11 @@ wrong queue, silently drops the push; both are asserted against here.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from jarvis_common import task_registry
 from jarvis_common.testing_contract_apps import make_contract_client as _client
 
@@ -21,6 +23,84 @@ pytestmark = [
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
+
+
+async def test_research_library_command_is_exact_and_acknowledged(monkeypatch, tmp_path) -> None:
+    """Learning requests one route-bound Research mutation and validates its reply."""
+    import learning_engine.routers.project_papers as project_papers
+
+    token_file = tmp_path / "learning-token"
+    token_file.write_text("learning-secret\n", encoding="utf-8")
+    monkeypatch.setattr(
+        project_papers,
+        "get_learning_engine_settings",
+        lambda: SimpleNamespace(
+            platform_api_url="http://platform.test",
+            paper_ingestion_url="http://research.test",
+            learning_service_token_file=token_file,
+        ),
+    )
+    authorize = AsyncMock(return_value={"X-Jarvis-Identity": "signed"})
+    monkeypatch.setattr(project_papers, "authorize_service_command", authorize)
+    response = MagicMock()
+    response.json.return_value = {"acknowledged": True}
+    client = AsyncMock()
+    client.post.return_value = response
+    request = MagicMock()
+    request.app.state.http_client = client
+
+    await project_papers._add_to_research_library(request, user_id=7, paper_id=42)
+
+    command = authorize.await_args.kwargs["command"]
+    assert command.audience == "research"
+    assert command.method == "POST"
+    assert command.path == "/internal/domains/library"
+    assert command.user_id == 7
+    client.post.assert_awaited_once_with(
+        "http://research.test/internal/domains/library",
+        headers={"X-Jarvis-Identity": "signed"},
+        json={
+            "request_id": command.request_id,
+            "user_id": 7,
+            "paper_id": 42,
+        },
+        timeout=10.0,
+    )
+
+
+async def test_research_library_command_rejects_malformed_acknowledgement(
+    monkeypatch, tmp_path
+) -> None:
+    """Learning reports deterministic unavailability for a malformed owner reply."""
+    import learning_engine.routers.project_papers as project_papers
+
+    token_file = tmp_path / "learning-token"
+    token_file.write_text("learning-secret", encoding="utf-8")
+    monkeypatch.setattr(
+        project_papers,
+        "get_learning_engine_settings",
+        lambda: SimpleNamespace(
+            platform_api_url="http://platform.test",
+            paper_ingestion_url="http://research.test",
+            learning_service_token_file=token_file,
+        ),
+    )
+    monkeypatch.setattr(
+        project_papers,
+        "authorize_service_command",
+        AsyncMock(return_value={"X-Jarvis-Identity": "signed"}),
+    )
+    response = MagicMock()
+    response.json.return_value = {"acknowledged": False}
+    request = MagicMock()
+    request.app.state.http_client = AsyncMock()
+    request.app.state.http_client.post.return_value = response
+
+    with pytest.raises(HTTPException) as exc_info:
+        await project_papers._add_to_research_library(request, user_id=7, paper_id=42)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Paper library is temporarily unavailable"
 
 
 async def _star_paper(conn, paper_id: int, user_id: int) -> None:
@@ -45,7 +125,12 @@ async def _insert_zotero_link(conn, paper_id: int, user_id: int, item_key: str) 
 
 
 async def test_link_paper_enqueues_zotero_push_on_paper_ingestion_queue(
-    contract_two_users, contract_conn, _le_app, _configure_api_key, monkeypatch
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+    _research_library_command,
+    monkeypatch,
 ):
     """Linking a starred paper defers zotero.push by name on the paper_ingestion
     queue with the handler's arg names — not a registry lookup that drops it.
@@ -75,10 +160,20 @@ async def test_link_paper_enqueues_zotero_push_on_paper_ingestion_queue(
     assert kwargs["user_id"] == user_id
     assert kwargs["paper_id"] == paper_id
     assert isinstance(kwargs["job_id"], str) and kwargs["job_id"]
+    # Deferring by name bypasses the registry facade that normally attaches the
+    # propagation entry, so without it the push starts a trace of its own and
+    # cannot be joined to the request that linked the paper.
+    assert kwargs["_jarvis_telemetry"]["correlation_id"] is not None
 
 
 async def test_link_paper_enqueue_failure_is_observable_and_returns_201(
-    contract_two_users, contract_conn, _le_app, _configure_api_key, monkeypatch, caplog
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+    _research_library_command,
+    monkeypatch,
+    caplog,
 ):
     """A defer failure after the link commits stays loud (ERROR log) and the
     endpoint still returns 201 — the link itself is already persisted.
@@ -106,7 +201,12 @@ async def test_link_paper_enqueue_failure_is_observable_and_returns_201(
 
 
 async def test_link_paper_fires_push_via_requesting_users_zotero_link(
-    contract_two_users, contract_conn, _le_app, _configure_api_key, monkeypatch
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+    _research_library_command,
+    monkeypatch,
 ):
     """link_paper fires zotero.push when the requesting user has a paper_user_zotero_links row.
 
@@ -148,7 +248,12 @@ async def test_link_paper_fires_push_via_requesting_users_zotero_link(
 
 
 async def test_link_paper_no_push_when_only_other_user_has_zotero_link(
-    contract_two_users, contract_conn, _le_app, _configure_api_key, monkeypatch
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+    _research_library_command,
+    monkeypatch,
 ):
     """link_paper does NOT fire zotero.push when only a different user holds the zotero link.
 

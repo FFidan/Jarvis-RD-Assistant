@@ -29,17 +29,14 @@ _make_conn = partial(
 
 
 @pytest.mark.asyncio
-async def test_add_to_library_inserts_with_on_conflict_do_nothing():
-    """Happy path — single INSERT with idempotency via ON CONFLICT DO NOTHING."""
+async def test_add_to_library_binds_owner_capability_arguments():
+    """The helper binds the owner, paper, and provenance to one capability call."""
     conn = _make_conn()
 
     await add_to_library(conn, user_id=42, paper_id=7, added_via="manual_save")
 
     conn.execute.assert_awaited_once()
-    sql = conn.execute.await_args.args[0]
     args = conn.execute.await_args.args[1:]
-    assert "INSERT INTO user_library" in sql
-    assert "ON CONFLICT (user_id, paper_id) DO NOTHING" in sql
     assert args == (42, 7, "manual_save")
 
 
@@ -112,6 +109,7 @@ async def test_list_users_with_topic_returns_empty_when_no_subscribers():
 async def test_list_users_subscribe_then_fan_out_inserts_library_row(monkeypatch):
     """Subscribe → fan_out_to_topic_users → user_library row exists (seam test)."""
     conn = _make_conn()
+    conn.fetchval = AsyncMock(return_value=1)
 
     # Simulate one subscriber (user 5) for topic 10.
     conn.fetch = AsyncMock(return_value=[{"user_id": 5}])
@@ -119,10 +117,8 @@ async def test_list_users_subscribe_then_fan_out_inserts_library_row(monkeypatch
     count = await fan_out_to_topic_users(conn, paper_id=42, topic_ids=[10])
 
     assert count == 1
-    conn.execute.assert_awaited_once()
-    sql = conn.execute.await_args.args[0]
-    assert "INSERT INTO user_library" in sql
-    assert "auto_fetch_topic_match" in sql
+    conn.fetchval.assert_awaited_once()
+    assert conn.fetchval.await_args.args[1:] == ([5], 42)
     # Verify topic_id was passed to the subscription query.
     sub_sql, topic_arg = conn.fetch.await_args.args
     assert "user_topic_subscriptions" in sub_sql
@@ -136,9 +132,11 @@ async def test_fan_out_to_topic_users_inserts_one_row_per_user(monkeypatch):
     Reviewer note: ``list_users_with_topic`` is currently a no-op (returns
     ``[]``) so we patch it here to verify that *when* per-user topic
     subscriptions ship, the bulk-INSERT shape is still correct. This is a
-    regression guard for the SQL emitted by ``fan_out_to_topic_users``.
+    regression guard for the owner-capability arguments emitted by
+    ``fan_out_to_topic_users``.
     """
     conn = _make_conn()
+    conn.fetchval = AsyncMock(return_value=3)
 
     # Topic 1 → users [1, 2]; Topic 2 → users [2, 3]; union = {1,2,3}
     user_lists = {1: [1, 2], 2: [2, 3]}
@@ -150,12 +148,8 @@ async def test_fan_out_to_topic_users_inserts_one_row_per_user(monkeypatch):
 
     count = await fan_out_to_topic_users(conn, paper_id=42, topic_ids=[1, 2])
     assert count == 3
-    # One bulk INSERT issued
-    conn.execute.assert_awaited_once()
-    sql = conn.execute.await_args.args[0]
-    assert "INSERT INTO user_library" in sql
-    assert "auto_fetch_topic_match" in sql
-    assert "ON CONFLICT (user_id, paper_id) DO NOTHING" in sql
+    conn.fetchval.assert_awaited_once()
+    assert conn.fetchval.await_args.args[1:] == ([1, 2, 3], 42)
 
 
 @pytest.mark.asyncio
@@ -164,7 +158,7 @@ async def test_fan_out_to_topic_users_empty_topics_returns_zero():
     conn = _make_conn()
     count = await fan_out_to_topic_users(conn, paper_id=42, topic_ids=[])
     assert count == 0
-    conn.execute.assert_not_awaited()
+    conn.fetchval.assert_not_awaited()
 
 
 @pytest.mark.asyncio

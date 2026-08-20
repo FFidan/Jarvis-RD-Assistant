@@ -150,9 +150,10 @@ JARVIS RD Assistant is designed for small teams where multiple researchers share
 - Local uploads, unverified client batches, and personal or group Zotero
   imports remain private unless the signed-in user has added them to their own
   library.
-- The [Research Feed](research-feed.md) Library surface distinguishes **My
-  library** from **Public + mine**. The latter means verified public papers plus
-  the signed-in user's private library, never another user's private imports.
+- On [Papers & Discover](research-feed.md), the Papers surface shows only the
+  signed-in user's own papers. Discover's **Browse public corpus** tab is the
+  one that widens the view: verified public papers plus that user's own library,
+  never another user's private imports.
 
 The canonical matrix and vector-search boundary are documented in
 [Source-aware paper visibility](../SECURITY.md#source-aware-paper-visibility).
@@ -174,5 +175,5 @@ returns a manual one-time link for the administrator to share privately.
 
 ## Related pages
 
-- [Settings](settings.md) — per-section RBAC breakdown; admin-only sections are §II Sources, §III Models, §IV System, and §V Bot Token.
+- [Settings](settings.md) — per-section access breakdown; the admin-only sections are §II Sources, §III Models, and §IV System, plus the instance-bot block inside §V Integrations → Telegram.
 - [First sign-in and setup](getting-started.md) — first administrator and family onboarding.

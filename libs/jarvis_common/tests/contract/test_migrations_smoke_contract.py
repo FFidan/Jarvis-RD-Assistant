@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+import asyncpg
 import pytest
 
 pytestmark = [
@@ -43,7 +44,7 @@ async def test_a269_run_migrations_idempotent(_contract_pool):
 
     # Count rows before second run
     async with _contract_pool.acquire() as conn:
-        count_before = await conn.fetchval("SELECT COUNT(*) FROM schema_migrations")
+        count_before = await conn.fetchval("SELECT COUNT(*) FROM ops.schema_migrations")
 
     assert count_before > 0, "no migrations were applied, so idempotence is untested"
 
@@ -51,7 +52,7 @@ async def test_a269_run_migrations_idempotent(_contract_pool):
     await run_migrations(_contract_pool, migrations_dir=migrations_dir)
 
     async with _contract_pool.acquire() as conn:
-        count_after = await conn.fetchval("SELECT COUNT(*) FROM schema_migrations")
+        count_after = await conn.fetchval("SELECT COUNT(*) FROM ops.schema_migrations")
 
     assert count_after == count_before, (
         f"run_migrations() inserted {count_after - count_before} unexpected row(s) "
@@ -81,6 +82,220 @@ async def test_a269_run_migrations_no_exception_on_already_applied_schema(_contr
     await run_migrations(_contract_pool, migrations_dir=migrations_dir)
 
 
+async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
+    dedicated_cluster_pg_dsn: str,
+) -> None:
+    """0114 moves a version-113 database through the temporary legacy authority.
+
+    Verified: db/migrations/0114_owned_schemas_and_roles.sql — temporary
+    membership revocation and final ``ops.schema_migrations`` record.
+    """
+    db_dir = Path(__file__).resolve().parents[4] / "db"
+    init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
+    legacy_init, marker, _ = init_sql.partition("-- FRESH-INSTALL OWNERSHIP BOUNDARY")
+    assert marker, "fresh ownership boundary marker is missing from db/init.sql"
+
+    bootstrap = await asyncpg.connect(dedicated_cluster_pg_dsn)
+    try:
+        await bootstrap.execute(legacy_init)
+        await bootstrap.execute("DELETE FROM schema_migrations WHERE version >= 102")
+        for migration in sorted((db_dir / "migrations").glob("01[0-1][0-9]_*.sql")):
+            version = int(migration.name.split("_", maxsplit=1)[0])
+            if version >= 114:
+                continue
+            await bootstrap.execute(migration.read_text(encoding="utf-8"))
+            await bootstrap.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
+        await bootstrap.execute(
+            "DO $$ BEGIN "
+            "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jarvis') THEN "
+            "CREATE ROLE jarvis LOGIN SUPERUSER CREATEDB CREATEROLE; END IF; END $$;"
+        )
+        await bootstrap.execute(
+            "CREATE ROLE jarvis_bootstrap LOGIN PASSWORD 'bootstrap-contract-password' "
+            "SUPERUSER CREATEROLE NOINHERIT NOBYPASSRLS; "
+            "GRANT jarvis TO jarvis_bootstrap WITH ADMIN OPTION"
+        )
+        await bootstrap.execute(
+            "CREATE ROLE jarvis_migrator LOGIN PASSWORD 'migration-contract-password' "
+            "NOINHERIT NOBYPASSRLS"
+        )
+        await bootstrap.execute(
+            "CREATE ROLE jarvis_erasure_executor LOGIN "
+            "PASSWORD 'erasure-executor-contract-password' NOSUPERUSER NOCREATEDB "
+            "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+        )
+        await bootstrap.execute(
+            "CREATE ROLE jarvis_platform_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
+            "CREATE ROLE jarvis_research_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
+            "CREATE ROLE jarvis_learning_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
+            "CREATE ROLE jarvis_ops_owner NOLOGIN NOINHERIT NOBYPASSRLS"
+        )
+        await bootstrap.execute(
+            "CREATE SCHEMA platform AUTHORIZATION jarvis_platform_owner; "
+            "CREATE SCHEMA research AUTHORIZATION jarvis_research_owner; "
+            "CREATE SCHEMA learning AUTHORIZATION jarvis_learning_owner; "
+            "CREATE SCHEMA ops AUTHORIZATION jarvis_ops_owner"
+        )
+        await bootstrap.execute(
+            "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
+            "jarvis_ops_owner TO jarvis_bootstrap WITH ADMIN OPTION"
+        )
+        await bootstrap.close()
+        bootstrap = await asyncpg.connect(
+            dedicated_cluster_pg_dsn,
+            user="jarvis_bootstrap",
+            password="bootstrap-contract-password",
+        )
+        # Renaming the historical database owner preserves the complete legacy
+        # ownership graph, including the database and public schema.
+        await bootstrap.execute("ALTER ROLE jarvis RENAME TO jarvis_legacy_rollback")
+        await bootstrap.execute(
+            "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
+            "jarvis_ops_owner TO jarvis_legacy_rollback; "
+            "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
+            "jarvis_ops_owner TO jarvis_migrator WITH ADMIN OPTION"
+        )
+        await bootstrap.execute("GRANT SELECT, INSERT ON schema_migrations TO jarvis_migrator")
+        await bootstrap.execute("GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION")
+        await bootstrap.execute(
+            """
+            INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
+            VALUES
+                ('paper_ingestion', 'paper.process', '{"job_id":"upgrade-known","user_id":7}'::jsonb, 'todo'),
+                ('paper_ingestion', 'legacy.unknown', '{"job_id":"upgrade-history","user_id":7}'::jsonb, 'succeeded')
+            """
+        )
+
+        migrator_pool = await asyncpg.create_pool(
+            dedicated_cluster_pg_dsn,
+            user="jarvis_migrator",
+            password="migration-contract-password",
+            min_size=1,
+            max_size=1,
+        )
+        try:
+            from jarvis_common.migrations import run_migrations
+
+            await run_migrations(migrator_pool, migrations_dir=db_dir / "migrations")
+        finally:
+            await migrator_pool.close()
+
+        await bootstrap.execute(
+            "REVOKE jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
+            "jarvis_ops_owner FROM jarvis_legacy_rollback; "
+            "REVOKE ADMIN OPTION FOR jarvis_platform_owner, jarvis_research_owner, "
+            "jarvis_learning_owner, jarvis_ops_owner FROM jarvis_migrator; "
+            "REVOKE jarvis_legacy_rollback FROM jarvis_migrator"
+        )
+        recorded_hash = await bootstrap.fetchval(
+            "SELECT sha256 FROM ops.schema_migrations WHERE version = 114"
+        )
+        assert recorded_hash == "d05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374"
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 115")
+            == "f0bffa08d071b9bcd576f981d3e9db7074f63c1a2e538a5bd8acf4c181c41d46"
+        )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 116")
+            == "30852fdba224eca98935cf2011dc112532c40e7c61159c5f43cdc8c565b486e3"
+        )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 117")
+            == "73ef094e42223b7c0c75067d2eb3c382fc0e3e6464b8054792539bf743cd7a98"
+        )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 118")
+            == "7f635041cdbc5f267a8d7816d3bdeb9475b5d1a34bc21e0b367d8f51e823ddcf"
+        )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 119")
+            == "9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296"
+        )
+        assert (
+            await bootstrap.fetchval("SELECT sha256 FROM ops.schema_migrations WHERE version = 120")
+            == "bbb454245c41be266b9f5b56d041edecd1a71b448fe9a38f7ab3f52f11216cbf"
+        )
+        current_version = await bootstrap.fetchval("SELECT max(version) FROM ops.schema_migrations")
+        assert current_version == 120
+        assert await bootstrap.fetchrow(
+            """
+            SELECT owner_queue, owner_service FROM ops.procrastinate_jobs
+            WHERE args->>'job_id' = 'upgrade-known'
+            """
+        ) == ("paper_ingestion", "research")
+        assert await bootstrap.fetchrow(
+            """
+            SELECT owner_queue, owner_service FROM ops.procrastinate_jobs
+            WHERE args->>'job_id' = 'upgrade-history'
+            """
+        ) == ("legacy_unknown", "legacy_unknown")
+        executor = await bootstrap.fetchrow(
+            "SELECT rolcanlogin, rolbypassrls, rolinherit FROM pg_roles "
+            "WHERE rolname = 'jarvis_erasure_executor'"
+        )
+        assert executor == (True, False, False)
+        for privilege in ("DELETE", "INSERT", "SELECT", "UPDATE"):
+            assert not await bootstrap.fetchval(
+                "SELECT has_table_privilege('jarvis_erasure_executor', 'platform.users', $1)",
+                privilege,
+            )
+        assert await bootstrap.fetchval(
+            "SELECT has_function_privilege('jarvis_erasure_executor', "
+            "'platform.finalize_erasure(uuid)', 'EXECUTE')"
+        )
+        assert await bootstrap.fetchval(
+            "SELECT has_function_privilege('jarvis_erasure_executor', "
+            "'platform.due_erasure_request_ids(integer)', 'EXECUTE')"
+        )
+        assert not await bootstrap.fetchval(
+            "SELECT has_table_privilege('jarvis_erasure_executor', "
+            "'platform.erasure_requests', 'SELECT')"
+        )
+        assert not await bootstrap.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_auth_members AS membership
+                JOIN pg_roles AS member ON member.oid = membership.member
+                JOIN pg_roles AS granted ON granted.oid = membership.roleid
+                WHERE member.rolname = 'jarvis_migrator'
+                  AND granted.rolname = 'jarvis_legacy_rollback'
+            )
+            """
+        )
+        memberships = await bootstrap.fetch(
+            """
+            SELECT
+                member.rolname AS member_name,
+                granted.rolname AS granted_name,
+                membership.admin_option
+            FROM pg_auth_members AS membership
+            JOIN pg_roles AS member ON member.oid = membership.member
+            JOIN pg_roles AS granted ON granted.oid = membership.roleid
+            WHERE granted.rolname IN (
+                'jarvis_platform_owner', 'jarvis_research_owner',
+                'jarvis_learning_owner', 'jarvis_ops_owner'
+            )
+              AND member.rolname IN (
+                'jarvis_migrator', 'jarvis_legacy_rollback',
+                'jarvis_platform_runtime', 'jarvis_research_runtime',
+                'jarvis_learning_runtime'
+              )
+            ORDER BY member.rolname, granted.rolname
+            """
+        )
+        assert {
+            (row["member_name"], row["granted_name"], row["admin_option"]) for row in memberships
+        } == {
+            ("jarvis_migrator", "jarvis_platform_owner", False),
+            ("jarvis_migrator", "jarvis_research_owner", False),
+            ("jarvis_migrator", "jarvis_learning_owner", False),
+            ("jarvis_migrator", "jarvis_ops_owner", False),
+        }
+    finally:
+        await bootstrap.close()
+
+
 async def test_0102_webauthn_schema_applied(_contract_pool):
     """0102 created the passkey tables + sessions.credential_id and lifted the floor to 102.
 
@@ -96,7 +311,7 @@ async def test_0102_webauthn_schema_applied(_contract_pool):
             r["table_name"]
             for r in await conn.fetch(
                 "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public' "
+                "WHERE table_schema = 'platform' "
                 "AND table_name IN ('webauthn_credentials', 'webauthn_challenges')"
             )
         }
@@ -106,14 +321,14 @@ async def test_0102_webauthn_schema_applied(_contract_pool):
 
         credential_col = await conn.fetchval(
             "SELECT data_type FROM information_schema.columns "
-            "WHERE table_schema = 'public' AND table_name = 'sessions' "
+            "WHERE table_schema = 'platform' AND table_name = 'sessions' "
             "AND column_name = 'credential_id'"
         )
         assert credential_col == "uuid", (
             f"sessions.credential_id missing or wrong type: {credential_col!r}"
         )
 
-        max_version = await conn.fetchval("SELECT max(version) FROM schema_migrations")
+        max_version = await conn.fetchval("SELECT max(version) FROM ops.schema_migrations")
         assert max_version >= 102, f"schema floor not lifted to 102; max applied = {max_version}"
 
 
@@ -139,22 +354,22 @@ async def test_0103_purges_only_group_chat_pairings(contract_conn):
 
     # Two synthetic users (precedent: test_record_author_alert_contract.py:51-54).
     group_user_id: int = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "INSERT INTO platform.users (email, role) VALUES ($1, 'user') RETURNING id",
         f"pair-group-{tag}@contract.example.com",
     )
     private_user_id: int = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "INSERT INTO platform.users (email, role) VALUES ($1, 'user') RETURNING id",
         f"pair-private-{tag}@contract.example.com",
     )
 
     # One stale group pairing (chat_id < 0) and one private pairing (chat_id > 0).
     await contract_conn.execute(
-        "INSERT INTO telegram_user_pairings (user_id, chat_id) VALUES ($1, $2)",
+        "INSERT INTO platform.telegram_user_pairings (user_id, chat_id) VALUES ($1, $2)",
         group_user_id,
         -100123456789,
     )
     await contract_conn.execute(
-        "INSERT INTO telegram_user_pairings (user_id, chat_id) VALUES ($1, $2)",
+        "INSERT INTO platform.telegram_user_pairings (user_id, chat_id) VALUES ($1, $2)",
         private_user_id,
         123456789,
     )
@@ -168,17 +383,18 @@ async def test_0103_purges_only_group_chat_pairings(contract_conn):
         / "0103_purge_group_chat_pairings.sql"
     )
     sql_text = sql_path.read_text()
+    await contract_conn.execute("SET LOCAL search_path TO platform, public")
     await contract_conn.execute(sql_text)
 
     stale_remaining = await contract_conn.fetchval(
-        "SELECT COUNT(*) FROM telegram_user_pairings WHERE user_id = $1 AND chat_id = $2",
+        "SELECT COUNT(*) FROM platform.telegram_user_pairings WHERE user_id = $1 AND chat_id = $2",
         group_user_id,
         -100123456789,
     )
     assert stale_remaining == 0, "0103 did not purge the stale group (chat_id < 0) pairing"
 
     private_remaining = await contract_conn.fetchval(
-        "SELECT COUNT(*) FROM telegram_user_pairings WHERE user_id = $1 AND chat_id = $2",
+        "SELECT COUNT(*) FROM platform.telegram_user_pairings WHERE user_id = $1 AND chat_id = $2",
         private_user_id,
         123456789,
     )
@@ -187,7 +403,7 @@ async def test_0103_purges_only_group_chat_pairings(contract_conn):
     # Idempotent: re-running the same DELETE removes zero further rows and does not error.
     await contract_conn.execute(sql_text)
     negatives_after = await contract_conn.fetchval(
-        "SELECT COUNT(*) FROM telegram_user_pairings WHERE chat_id < 0"
+        "SELECT COUNT(*) FROM platform.telegram_user_pairings WHERE chat_id < 0"
     )
     assert negatives_after == 0, "negative-chat_id pairings still present after re-running 0103"
 
@@ -406,7 +622,7 @@ async def test_0105_never_guesses_or_overwrites_owner(contract_conn):
 async def test_0106_backfills_only_verified_server_scholarly_rows(contract_conn):
     """0106 promotes verified legacy scholarly rows and keeps all others private."""
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email) VALUES ('visibility-0106@contract.example.com') RETURNING id"
+        "INSERT INTO platform.users (email) VALUES ('visibility-0106@contract.example.com') RETURNING id"
     )
     rows = [
         ("visibility-0106-arxiv", "arxiv", "user_initiated", user_id),
@@ -418,7 +634,7 @@ async def test_0106_backfills_only_verified_server_scholarly_rows(contract_conn)
     ]
     await contract_conn.executemany(
         """
-        INSERT INTO papers (
+        INSERT INTO research.papers (
             external_id, source_type, title, authors, url,
             discovery_origin, discovered_by, visibility_scope
         )
@@ -434,12 +650,13 @@ async def test_0106_backfills_only_verified_server_scholarly_rows(contract_conn)
         / "migrations"
         / "0106_paper_visibility_scope.sql"
     ).read_text()
+    await contract_conn.execute("SET LOCAL search_path TO research, platform, public")
     await contract_conn.execute(migration)
 
     result_rows = await contract_conn.fetch(
         """
         SELECT external_id, visibility_scope
-        FROM papers
+        FROM research.papers
         WHERE external_id LIKE 'visibility-0106-%'
         """
     )

@@ -540,7 +540,7 @@ async def test_download_backup_serves_valid_archive(backup_dir, monkeypatch):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             disable_limiter=True,
             dependency_overrides={
                 require_admin: lambda: None,

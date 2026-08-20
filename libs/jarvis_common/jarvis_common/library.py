@@ -90,9 +90,7 @@ async def add_to_library(
         )
     await _execute(
         db,
-        """INSERT INTO user_library (user_id, paper_id, added_via)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (user_id, paper_id) DO NOTHING""",
+        "SELECT research.add_to_library_v1($1, $2, $3)",
         user_id,
         paper_id,
         added_via,
@@ -184,17 +182,9 @@ async def fan_out_to_topic_users(
     if not user_set:
         return 0
 
-    # Bulk INSERT via VALUES expansion — one round-trip rather than N.
-    # We rely on ON CONFLICT DO NOTHING for idempotency.
-    placeholders = ", ".join(
-        f"(${i + 1}, ${len(user_set) + 1}, 'auto_fetch_topic_match')" for i in range(len(user_set))
+    inserted = await db.fetchval(
+        "SELECT research.fan_out_library_v1($1::integer[], $2)",
+        sorted(user_set),
+        paper_id,
     )
-    sql = (
-        "INSERT INTO user_library (user_id, paper_id, added_via) "
-        f"VALUES {placeholders} "
-        "ON CONFLICT (user_id, paper_id) DO NOTHING"
-    )
-    args: list[object] = list(user_set)
-    args.append(paper_id)
-    await _execute(db, sql, *args)
-    return len(user_set)
+    return int(inserted or 0)

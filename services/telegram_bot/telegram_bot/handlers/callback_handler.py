@@ -16,16 +16,29 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Awaitable, Callable
 
+import httpx
 from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot import services_client
+from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_paper_detail, format_project_status
-from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.commands.system_commands import start_focus_and_reply
+from telegram_bot.handlers.helpers import (
+    auth_check,
+    get_config,
+    get_http,
+    get_platform_http,
+    run_detached,
+)
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
+
+#: Callback data of the "Start another" button on a focus-completion message.
+FOCUS_RESTART_CALLBACK = "focus_restart"
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +94,8 @@ async def _callback_auth(
     so that callers can provide a custom message if needed.
     """
     config = get_config(context)
-    db_pool = get_db(context)
-    return await auth_check(update, config, db_pool)
+    platform_client = get_platform_http(context)
+    return await auth_check(update, config, platform_client)
 
 
 # ---------------------------------------------------------------------------
@@ -160,11 +173,16 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await services_client.update_paper_action(
             http, config, jarvis_user_id, paper_id, _PAPER_ACTION_ENDPOINTS[action]
         )
-        await query.answer(text=label)
-        await query.message.reply_text(f"{label} <b>paper {paper_id}</b>.", parse_mode="HTML")
     except Exception:
         logger.exception("Failed to %s paper id=%s", action, paper_id)
         await query.answer(text=f"{action} failed — try again later")
+        return
+
+    # The paper has already moved. Reporting it sits outside the guard so a
+    # failed acknowledgement cannot describe a completed action as a failure,
+    # nor answer the same query a second time (H1).
+    await query.answer(text=label)
+    await query.message.reply_text(f"{label} <b>paper {paper_id}</b>.", parse_mode="HTML")
 
 
 @rate_limit(max_calls=10, window_seconds=60)
@@ -202,10 +220,59 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
         await services_client.record_paper_feedback(
             http, config, jarvis_user_id, paper_id, {"signal": signal, "source": source}
         )
-        await query.answer(text=label)
     except Exception:
         logger.exception("Failed to record feedback for paper id=%s signal=%s", paper_id, signal)
         await query.answer(text="Feedback failed — try again later")
+        return
+
+    # The signal is recorded. Acknowledging it sits outside the guard so a
+    # failed acknowledgement cannot report the recorded signal as lost, nor
+    # answer the same query a second time (H1).
+    await query.answer(text=label)
+
+
+async def _send_project_detail(
+    reply: Callable[..., Awaitable[object]],
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    project_id: int,
+) -> None:
+    """Read one project, its tasks and its milestones, and report through *reply*.
+
+    Parameters
+    ----------
+    reply : callable
+        Coroutine function that sends one message, e.g. ``reply_text``.
+    http : httpx.AsyncClient
+        Client carrying the paired-user marker.
+    config : BotConfig
+        Bot configuration.
+    user_id : int
+        Paired JARVIS user the three reads are scoped to.
+    project_id : int
+        Project the "Details" button named.
+
+    Notes
+    -----
+    Runs detached from the callback: the three reads are sequential, and this
+    application processes updates one at a time.
+    """
+    try:
+        project = await services_client.fetch_project(http, config, user_id, project_id)
+        if project is None:
+            await reply("Project not found.", parse_mode="HTML")
+            return
+        tasks = await services_client.fetch_project_tasks(http, config, user_id, project_id)
+        milestones = await services_client.fetch_project_milestones(
+            http, config, user_id, project_id
+        )
+    except Exception:
+        logger.exception("Failed to load project detail for id=%s", project_id)
+        await reply("⚠️ Couldn't load that right now.", parse_mode="HTML")
+        return
+
+    await reply(format_project_status(project, tasks, milestones), parse_mode="HTML")
 
 
 @rate_limit(max_calls=10, window_seconds=60)
@@ -232,31 +299,20 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 
     config = get_config(context)
     http = get_http(context)
-    try:
-        project = await services_client.fetch_project(http, config, jarvis_user_id, project_id)
-        if project is None:
-            await query.message.reply_text("Project not found.", parse_mode="HTML")
-            return
-        tasks = await services_client.fetch_project_tasks(http, config, jarvis_user_id, project_id)
-        milestones = await services_client.fetch_project_milestones(
-            http, config, jarvis_user_id, project_id
-        )
-    except Exception:
-        logger.exception("Failed to load project detail for id=%s", project_id)
-        await query.message.reply_text("⚠️ Couldn't load that right now.", parse_mode="HTML")
-        return
-
-    text = format_project_status(project, tasks, milestones)
-    await query.message.reply_text(text, parse_mode="HTML")
+    run_detached(
+        context,
+        _send_project_detail(query.message.reply_text, http, config, jarvis_user_id, project_id),
+        description="project detail",
+    )
 
 
 @rate_limit(max_calls=10, window_seconds=60)
 async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``task_done_{id}`` — mark a task done via the Learning Engine REST API.
 
-    Ownership is enforced server-side: the LE ``PUT /api/tasks/{id}`` endpoint scopes
-    by the forwarded ``X-Owner-User-Id`` header, so a non-owned task returns 404 →
-    "not found" with no existence leak.
+    Ownership is enforced server-side: the LE ``PUT /api/tasks/{id}`` endpoint
+    scopes by the identity assertion obtained from Telegram's paired-user
+    marker, so a non-owned task returns 404, with no existence leak.
     """
     query = update.callback_query
     if query is None:
@@ -296,6 +352,32 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+@rate_limit(max_calls=5, window_seconds=60)
+async def focus_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``focus_restart`` — start another session at the user's saved length.
+
+    Shares the ``/focus start`` code path, so the length, the already-active
+    conflict, and the failure copy stay identical to the command.
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    if not isinstance(query.message, Message):
+        await query.answer()
+        return
+
+    authorized, jarvis_user_id = await _callback_auth(update, context)
+    if not authorized:
+        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
+        return
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
+    if context.user_data is not None:
+        context.user_data["jarvis_user_id"] = jarvis_user_id
+
+    await query.answer()
+    await start_focus_and_reply(query.message.reply_text, context, jarvis_user_id, None)
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -318,6 +400,9 @@ def register_callback_handlers(app: Application) -> None:
     )
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
+    app.add_handler(
+        CallbackQueryHandler(focus_restart_callback, pattern=f"^{FOCUS_RESTART_CALLBACK}$")
+    )
     # TG-003: start_review is intentionally NOT registered here.
     # review_handler.ConversationHandler owns the /review flow; a duplicate
     # registration would cause dual-dispatch.

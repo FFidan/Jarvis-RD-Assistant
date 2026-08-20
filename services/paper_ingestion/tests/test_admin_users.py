@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
-import paper_ingestion.routers.admin as admin_router
+import platform_api.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException, Response
 from jarvis_common.email import MagicLinkDelivery
@@ -31,7 +31,8 @@ from tests._auth_fakes import (
 # Test helpers — pool/request stubs delegated to shared _auth_fakes (D5-03)
 # ---------------------------------------------------------------------------
 
-_NOW = datetime.now(UTC)
+# Fixed stand-in for "now": row timestamps must not depend on when the suite runs.
+_FIXED_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 _build_mock_pool = build_mock_pool
 _build_mock_pool_txn = build_mock_pool_with_txn
@@ -58,7 +59,7 @@ def _user_row(
         "id": id,
         "email": email,
         "role": role,
-        "created_at": _NOW - timedelta(days=1),
+        "created_at": _FIXED_NOW - timedelta(days=1),
         "last_login_at": None,
         "deleted_at": deleted_at,
     }
@@ -460,7 +461,7 @@ def _invite_conn() -> AsyncMock:
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
             },
         ]
@@ -582,7 +583,7 @@ async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
         )
     )
 
-    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.admin"):
+    with caplog.at_level(logging.WARNING, logger="platform_api.routers.admin"):
         link = admin_router._build_invite_link(request, "tok123")
 
     assert link == "https://origin/auth/verify#token=tok123"
@@ -590,7 +591,7 @@ async def test_build_invite_link_warns_on_unset_app_base_url_in_production(
     warnings = [
         r
         for r in caplog.records
-        if r.name == "paper_ingestion.routers.admin" and r.levelno == logging.WARNING
+        if r.name == "platform_api.routers.admin" and r.levelno == logging.WARNING
     ]
     assert len(warnings) == 1, (
         "Expected exactly one warning on the admin logger; got "
@@ -623,7 +624,7 @@ async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) 
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
             },
         ]
@@ -642,7 +643,7 @@ async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) 
 
     expected_hash = hashlib.sha256(b"bob@example.com").hexdigest()
 
-    with caplog.at_level(logging.ERROR, logger="paper_ingestion.routers.admin"):
+    with caplog.at_level(logging.ERROR, logger="platform_api.routers.admin"):
         await admin_router.invite_user(body, request)
 
     assert any(expected_hash in r.message for r in caplog.records), (
@@ -722,21 +723,22 @@ async def test_restore_user_allowed_with_model_hmac_key(monkeypatch) -> None:
     """With a real JARVIS_MODEL_HMAC_KEY the restore proceeds and clears deleted_at."""
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
     conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
     conn.fetchrow = AsyncMock(
         side_effect=[
             {
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
-                "deleted_at": _NOW,
+                "deleted_at": _FIXED_NOW,
             },
             {
                 "id": 7,
                 "email": "bob@example.com",
                 "role": "user",
-                "created_at": _NOW,
+                "created_at": _FIXED_NOW,
                 "last_login_at": None,
             },
         ]

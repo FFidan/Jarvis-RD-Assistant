@@ -139,9 +139,10 @@ describe('TelegramBotTokenSection', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
-    await waitFor(() =>
-      expect(screen.getByText(/invalid format/i)).toBeInTheDocument(),
-    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/invalid format/i);
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAttribute('aria-describedby', alert.id);
     expect(mockSave).not.toHaveBeenCalled();
   });
 

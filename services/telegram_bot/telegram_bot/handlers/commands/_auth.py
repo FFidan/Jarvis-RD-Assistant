@@ -7,12 +7,14 @@ import uuid
 from functools import wraps
 from typing import Any
 
-from jarvis_common.event_log import log_event
 from jarvis_common.logging_config import correlation_id_var
+from jarvis_common.telemetry import restored_span
+from opentelemetry.trace import SpanKind
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from telegram_bot.handlers.helpers import auth_check, get_config, get_db
+from telegram_bot.handlers.helpers import auth_check, get_config, get_platform_http
+from telegram_bot.platform_client import record_event
 
 logger = logging.getLogger(__name__)
 
@@ -46,40 +48,53 @@ def auth_required(func: Any) -> Any:
         corr = uuid.uuid4()
         token = correlation_id_var.set(corr)
         try:
-            config = get_config(context)
-            db_pool = get_db(context)
-
-            # --- first-chat auth event (per-session, not module-global) ---
-            if update.effective_chat is not None and context.user_data is not None:
-                if not context.user_data.get("_auth_seen"):
-                    context.user_data["_auth_seen"] = True
-                    await log_event(
-                        pool=db_pool,
-                        level="info",
-                        category="auth",
-                        source="telegram_bot",
-                        message="chat_active",
-                        context={"chat_id": update.effective_chat.id},
-                    )
-
-            # --- auth gate (pairing is the sole identity mechanism) ---
-            authorized, jarvis_user_id = await auth_check(update, config, db_pool)
-            if not authorized:
-                chat_id = update.effective_chat.id if update.effective_chat else "unknown"
-                logger.warning(
-                    "Unauthorised access attempt from chat_id=%s",
-                    chat_id,
-                )
-                if update.message is not None:
-                    await update.message.reply_text(
-                        "🔗 Link your JARVIS account first: open the dashboard → "
-                        "Settings → Integrations → Telegram, then run /pair <code>."
-                    )
-                return
-            if context.user_data is not None:
-                context.user_data["jarvis_user_id"] = jarvis_user_id
-            return await func(update, context)
+            with restored_span(
+                carrier={},
+                service="telegram_bot",
+                name="telegram.command",
+                kind=SpanKind.CONSUMER,
+            ):
+                return await _authenticated_command(func, update, context)
         finally:
             correlation_id_var.reset(token)
 
     return wrapper
+
+
+async def _authenticated_command(
+    func: Any, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> Any:
+    """Run one paired command inside the active Telegram trace root."""
+    config = get_config(context)
+    platform_client = get_platform_http(context)
+
+    # --- first-chat auth event (per-session, not module-global) ---
+    if update.effective_chat is not None and context.user_data is not None:
+        if not context.user_data.get("_auth_seen"):
+            context.user_data["_auth_seen"] = True
+            await record_event(
+                platform_client,
+                config,
+                level="info",
+                category="auth",
+                message="chat_active",
+                context={"chat_id": update.effective_chat.id},
+            )
+
+    # --- auth boundary (pairing is the sole identity mechanism) ---
+    authorized, jarvis_user_id = await auth_check(update, config, platform_client)
+    if not authorized:
+        chat_id = update.effective_chat.id if update.effective_chat else "unknown"
+        logger.warning(
+            "Unauthorised access attempt from chat_id=%s",
+            chat_id,
+        )
+        if update.message is not None:
+            await update.message.reply_text(
+                "🔗 Link your JARVIS account first: open the dashboard → "
+                "Settings → Integrations → Telegram, then run /pair <code>."
+            )
+        return None
+    if context.user_data is not None:
+        context.user_data["jarvis_user_id"] = jarvis_user_id
+    return await func(update, context)

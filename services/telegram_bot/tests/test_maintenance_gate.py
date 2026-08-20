@@ -21,6 +21,16 @@ def _point_sentinels(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(tmp_path / ".outbound-quarantine.json"))
 
 
+def _configure_fluent_builder(builder: MagicMock, app: MagicMock) -> None:
+    """Configure the PTB builder double to return itself at each step."""
+    builder.request.return_value = builder
+    builder.get_updates_request.return_value = builder
+    builder.token.return_value = builder
+    builder.post_init.return_value = builder
+    builder.post_shutdown.return_value = builder
+    builder.build.return_value = app
+
+
 @pytest.mark.asyncio
 async def test_gate_replies_and_stops_handling_under_sentinel(tmp_path, monkeypatch) -> None:
     from telegram_bot.main import _maintenance_gate
@@ -95,13 +105,11 @@ async def test_gate_stops_silently_during_outbound_quarantine(tmp_path, monkeypa
 def test_main_registers_gate_in_group_minus_one() -> None:
     """main() installs the maintenance gate as a group -1 TypeHandler (runs first)."""
     with (
-        patch("telegram_bot.main.reload_fernet_on_sighup"),
         patch("telegram_bot.main.BotConfig.from_env", return_value=MagicMock()),
         patch("telegram_bot.main.Application.builder") as mock_builder,
     ):
         mock_app = MagicMock()
-        chain = mock_builder.return_value.token.return_value.post_init.return_value
-        chain.post_shutdown.return_value.build.return_value = mock_app
+        _configure_fluent_builder(mock_builder.return_value, mock_app)
 
         from telegram_bot.main import _maintenance_gate, main
 
@@ -123,7 +131,6 @@ def test_main_does_not_load_token_or_start_polling_during_quarantine(tmp_path, m
     _point_sentinels(tmp_path, monkeypatch)
     (tmp_path / ".outbound-quarantine.json").touch()
     with (
-        patch("telegram_bot.main.reload_fernet_on_sighup"),
         patch("telegram_bot.main.BotConfig.from_env") as config,
         patch("telegram_bot.main.Application.builder") as builder,
     ):
@@ -165,7 +172,6 @@ def test_main_wires_quarantine_transport_to_both_telegram_channels() -> None:
     normal_request = object()
     updates_request = object()
     with (
-        patch("telegram_bot.main.reload_fernet_on_sighup"),
         patch("telegram_bot.main.BotConfig.from_env", return_value=MagicMock()),
         patch("telegram_bot.main.Application.builder") as application_builder,
         patch(
@@ -175,8 +181,7 @@ def test_main_wires_quarantine_transport_to_both_telegram_channels() -> None:
     ):
         builder = application_builder.return_value
         mock_app = MagicMock()
-        chain = builder.token.return_value.post_init.return_value
-        chain.post_shutdown.return_value.build.return_value = mock_app
+        _configure_fluent_builder(builder, mock_app)
 
         from telegram_bot.main import main
 

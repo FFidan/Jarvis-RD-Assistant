@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import asyncpg  # noqa: E402
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
+from jarvis_common.testing import (  # noqa: E402
+    FakeRecord,
+    SignedIdentityMiddleware,
+    make_pool_and_conn,
+)
 from jarvis_common.testing_contract_apps import PITestAppOptions, patch_pi_test_app
 
-from tests.conftest import FakeRecord, _make_pool_and_conn
+_make_pool_and_conn = make_pool_and_conn
 
 
 def test_smtp_log_only_remediation_does_not_claim_bearer_links_are_logged() -> None:
@@ -42,11 +49,15 @@ def _app(monkeypatch):
     from jarvis_common.settings import get_secrets_settings
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
+    from paper_ingestion.routers.system_readiness import ReadinessCheck
 
     get_secrets_settings.cache_clear()
 
     mock_pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(n=0)
+    mock_pool.get_size.return_value = 1
+    mock_pool.get_idle_size.return_value = 1
+    mock_pool.get_max_size.return_value = 10
+    conn.fetchrow.return_value = FakeRecord(event_count=0)
     monkeypatch.setattr(
         "paper_ingestion.routers.system_readiness.resolve_owner_identity",
         AsyncMock(return_value=OwnerIdentity("database", "valid", 1)),
@@ -62,6 +73,28 @@ def _app(monkeypatch):
             }
         ),
     )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness._job_queue_readiness",
+        AsyncMock(
+            return_value=ReadinessCheck(
+                name="job_queue",
+                status="green",
+                detail="active=0; failures=0; oldest_active_seconds=0",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness._outbox_readiness",
+        AsyncMock(
+            return_value=ReadinessCheck(
+                name="outbox", status="green", detail="lag=0; retries=0; dead_letters=0"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system_readiness._backup_readiness",
+        lambda: ReadinessCheck(name="backup", status="green", detail="result=success"),
+    )
     try:
         with patch_pi_test_app(
             mock_pool,
@@ -69,13 +102,26 @@ def _app(monkeypatch):
             get_db_pool=get_db_pool,
             limiter=limiter,
             options=PITestAppOptions(
-                remove_owner_override=False,
+                remove_identity_overrides=False,
                 override_db_dependency=True,
                 disable_limiter=True,
                 dependency_overrides={verify_api_key: lambda: None},
             ),
         ):
-            yield app, conn
+            app.state.migration_check = SimpleNamespace(
+                current_user="jarvis_research_runtime",
+                packaged_version=114,
+                live_version=114,
+                integrity="ok",
+            )
+            app.state.migration_check_duration_ms = 3
+            signed_app = SignedIdentityMiddleware(
+                app,
+                audience="research",
+                user_id=1,
+                role="admin",
+            )
+            yield signed_app, conn
     finally:
         get_secrets_settings.cache_clear()
 
@@ -89,7 +135,7 @@ async def test_readiness_shape_and_baseline(_app):
     ) as client:
         resp = await client.get("/api/system/readiness")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert set(body.keys()) == {"status", "checks"}
     assert isinstance(body["checks"], list)
@@ -109,6 +155,9 @@ async def test_readiness_shape_and_baseline(_app):
         "smtp",
         "https",
         "audit_log",
+        "job_queue",
+        "outbox",
+        "backup",
         "owner_identity",
         "vector_visibility_metadata",
     } <= names
@@ -125,6 +174,105 @@ async def test_readiness_shape_and_baseline(_app):
     assert by_name["vector_visibility_metadata"]["status"] == "green"
     assert by_name["vector_visibility_metadata"]["detail"] == "complete"
     assert body["status"] == "red"
+
+
+@pytest.mark.asyncio
+async def test_job_queue_diagnostic_reports_pressure_and_failures() -> None:
+    """Queue diagnostics expose counts and age rather than an empty-state claim."""
+    from paper_ingestion.routers.system_readiness import _job_queue_readiness
+
+    pool, _conn = _make_pool_and_conn(
+        fetchrow_return=FakeRecord(failures=2, active=3, oldest_active_seconds=0)
+    )
+
+    check = await _job_queue_readiness(pool)
+
+    assert check.status == "amber"
+    assert check.detail == "active=3; failures=2; oldest_active_seconds=0"
+
+
+@pytest.mark.asyncio
+async def test_outbox_diagnostic_reports_unavailable_query_as_amber() -> None:
+    """A missing diagnostic row is never reported as an empty healthy queue."""
+    from paper_ingestion.routers.system_readiness import _outbox_readiness
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+
+    check = await _outbox_readiness(pool)
+
+    assert check.status == "amber"
+    assert "unavailable" in check.detail
+
+
+@pytest.mark.asyncio
+async def test_outbox_diagnostic_reports_lag_retries_and_dead_letters() -> None:
+    """Readiness reads the durable Research delivery state rather than a placeholder."""
+    from paper_ingestion.routers.system_readiness import _outbox_readiness
+
+    pool, _conn = _make_pool_and_conn(
+        fetchrow_return=FakeRecord(pending=4, retries=2, dead_letters=1, lag_seconds=301)
+    )
+    check = await _outbox_readiness(pool)
+
+    assert check.status == "amber"
+    assert check.detail == "pending=4; retries=2; dead_letters=1; lag_seconds=301"
+
+
+def test_runtime_database_checks_do_not_claim_unknown_metrics_are_healthy() -> None:
+    """Missing migration or pool measurements stay actionable amber."""
+    from paper_ingestion.routers.system_readiness import _runtime_database_checks
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                migration_check=SimpleNamespace(
+                    current_user="jarvis_research_runtime",
+                    packaged_version=117,
+                    live_version=117,
+                    integrity="ok",
+                ),
+                db_pool=SimpleNamespace(),
+            )
+        )
+    )
+
+    checks = {check.name: check for check in _runtime_database_checks(request)}
+
+    assert checks["database_schema"].status == "green"
+    assert checks["migration_check"].status == "amber"
+    assert checks["migration_check"].detail == "outcome=success; duration_ms=unknown"
+    assert checks["database_pool"].status == "amber"
+    assert checks["database_pool"].detail == "size=unknown; idle=unknown; max=unknown"
+
+
+@pytest.mark.asyncio
+async def test_audit_log_permission_denial_is_actionable_amber() -> None:
+    """A denied Platform audit read degrades without exposing database detail."""
+    from paper_ingestion.routers.system_readiness import _audit_log_readiness
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = asyncpg.InsufficientPrivilegeError("platform.audit_log denied")
+
+    check = await _audit_log_readiness(pool)
+
+    assert check.status == "amber"
+    assert check.detail == "InsufficientPrivilegeError"
+    assert "grants" in check.remediation
+    assert "platform.audit_log" not in check.detail
+
+
+def test_backup_diagnostic_reports_failed_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The durable last-run record distinguishes failure from no recent archive."""
+    from paper_ingestion.routers import system_readiness
+
+    monkeypatch.setattr(system_readiness, "_list_entries", lambda: [])
+    monkeypatch.setattr(system_readiness, "_read_last_run", lambda: {"succeeded": False})
+
+    check = system_readiness._backup_readiness()
+
+    assert check.status == "red"
+    assert "result=failure" in check.detail
 
 
 @pytest.mark.asyncio
@@ -329,7 +477,7 @@ async def test_readiness_requires_auth(monkeypatch):
             get_db_pool=get_db_pool,
             limiter=limiter,
             options=PITestAppOptions(
-                remove_owner_override=False,
+                remove_identity_overrides=False,
                 override_db_dependency=True,
                 disable_limiter=True,
             ),

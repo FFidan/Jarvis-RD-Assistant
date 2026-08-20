@@ -1,9 +1,10 @@
 /**
- * PaperResearchLog — Center research-log column for the Paper Detail 3-pane.
+ * PaperResearchLog — the reading column of Paper Detail.
  *
  * Renders all §-sections in a single scrolling column with proper anchor IDs.
  * Each sub-component is already implemented; this file re-composes them as
- * named, anchored sections (no tabs, no pagination).
+ * named, anchored sections (no tabs, no pagination). Contents and the action
+ * panel sit beside or over this column and are owned by the page.
  *
  * Chunks are lazy/collapsed — hidden behind a toggle by default.
  */
@@ -17,12 +18,14 @@ import { Button } from '@/components/ui/button';
 import { EvidenceTab } from './EvidenceTab';
 import { ChunksTab } from './ChunksTab';
 import { CrossReferencesTab } from './CrossReferencesTab';
+import { RelatedWorkSection } from './RelatedWorkSection';
 import { NotesTab } from './NotesTab';
 import { RAGChatSection } from './RAGChatSection';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { formatDate, formatAuthors, cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, ExternalLink, AlertTriangle, ShieldCheck, Wand2 } from 'lucide-react';
 import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
+import { PAPER_STATE_LABELS, paperStateLabel } from '@/lib/labels/paperState';
 
 // The in-PDF reader pulls in pdf.js (~heavy); load it on demand so it only ships
 // to (and renders on) papers that actually have a downloaded PDF.
@@ -164,18 +167,23 @@ export function PaperResearchLog({
   // Resolve lifecycle state for breadcrumb
   const stateLabel =
     surfaceLabel ??
-    (userState?.state
-      ? userState.state.replace('_', ' ')
-      : 'inbox');
+    (userState?.state ? paperStateLabel(userState.state) : PAPER_STATE_LABELS.inbox);
+  const stateTarget = userState?.state === 'inbox'
+    ? '/feed?surface=inbox'
+    : userState?.state === 'trash'
+      ? '/feed?surface=trash'
+      : userState?.state
+        ? `/feed?surface=library&filter=${userState.state}`
+        : '/feed?surface=inbox';
 
   return (
     <div className="space-y-10">
       {/* ── Breadcrumb + score ─────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
         <nav aria-label="breadcrumb" className="flex items-center gap-1.5">
-          <span>Library</span>
+          <Link to="/feed?surface=library" className="hover:text-foreground hover:underline">Papers</Link>
           <span aria-hidden>/</span>
-          <span className="capitalize">{stateLabel}</span>
+          <Link to={stateTarget} className="hover:text-foreground hover:underline">{stateLabel}</Link>
           <span aria-hidden>/</span>
           <span className="text-foreground line-clamp-1 max-w-[200px]" title={paper.title}>
             {paper.title}
@@ -332,7 +340,12 @@ export function PaperResearchLog({
         id="section-findings"
         title={`Evidence / Key Findings${evidenceCount > 0 ? ` (${evidenceCount})` : ''}`}
       >
-        <EvidenceTab summary={summary} paperId={paperId} />
+        <EvidenceTab
+          summary={summary}
+          chunks={chunks}
+          paperId={paperId}
+          pdfAvailable={paper.pdf_downloaded}
+        />
       </ResearchSection>
 
       {/* ── § PDF Reader ─────────────────────────────────────────────── */}
@@ -350,9 +363,18 @@ export function PaperResearchLog({
         )}
       </ResearchSection>
 
-      {/* ── § Cross-references ───────────────────────────────────────── */}
-      <ResearchSection id="section-crossrefs" title={`Cross-references${crossRefCount > 0 ? ` (${crossRefCount})` : ''}`}>
-        <CrossReferencesTab summary={summary} />
+      {/* ── § Related work ───────────────────────────────────────────── */}
+      {/* Citations and similarity are complements: citations are the paper's
+          actual scholarly graph; similarity relates library papers that do
+          not cite each other. */}
+      <ResearchSection id="section-crossrefs" title={`Related work${crossRefCount > 0 ? ` (${crossRefCount})` : ''}`}>
+        <div className="space-y-6">
+          <RelatedWorkSection paperId={paperId} />
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold">Similar in your library</h4>
+            <CrossReferencesTab summary={summary} />
+          </div>
+        </div>
       </ResearchSection>
 
       {/* ── § Contradictions ─────────────────────────────────────────── */}

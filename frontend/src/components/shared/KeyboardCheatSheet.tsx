@@ -24,9 +24,9 @@ const SHORTCUTS: { key: string; action: string; note?: string }[] = [
  * Global keyboard shortcuts dialog. Mounted once at the AppShell level.
  * Visibility controlled by `useKeyboardShortcuts` store; opened by the TopBar icon
  * button (visible on every authenticated page) or by the `?` keypress on the
- * Library.
+ * Papers page.
  *
- * Shortcuts are currently active ONLY on the Library surface — header
+ * Shortcuts are currently active ONLY on the Papers page — the description
  * makes that scope clear so the dialog is informative on other pages.
  */
 export function KeyboardCheatSheet() {
@@ -39,7 +39,7 @@ export function KeyboardCheatSheet() {
         <DialogHeader>
           <DialogTitle>Keyboard Shortcuts</DialogTitle>
           <DialogDescription>
-            Active on the Library (/feed) when no input is focused.
+            Active on the Papers page when no input is focused.
           </DialogDescription>
         </DialogHeader>
         <table className="w-full text-sm">

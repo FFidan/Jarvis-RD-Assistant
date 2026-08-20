@@ -11,8 +11,8 @@ Notes
 * Pydantic-settings reads env vars case-insensitively by default, so the
   snake_case field names match the SHOUTING_CASE env vars (e.g.
   ``dev_mode`` <-> ``DEV_MODE``).
-* ``DEV_MODE``, ``ENVIRONMENT``, and ``OWNER_OVERRIDE_ALLOWED_CIDRS`` now flow
-  through :class:`CoreSettings`.  ``JARVIS_API_KEY`` flows through
+* ``DEV_MODE`` and ``ENVIRONMENT`` flow through :class:`CoreSettings`.
+  ``JARVIS_API_KEY`` flows through
   :class:`SecretsSettings` (cached in ``auth.py`` via ``_CACHED_API_KEY`` +
   ``refresh_api_key_cache()`` so the per-request path never re-reads env).
 * Risky-to-cache values (e.g. ``JARVIS_ENABLE_TEST_JOBS`` which tests flip at
@@ -113,9 +113,8 @@ class CoreSettings(BaseSettings):
     # ProxyHeadersMiddleware. uvicorn matches the immediate socket peer against
     # this list and only then rewrites scope["client"] from X-Forwarded-For.
     # It MUST be numeric (loopback + the dashboard proxy): a bare hostname literal like
-    # "dashboard" can never match a numeric peer, so the rewrite that un-masks an
-    # nginx-relayed browser's real IP never fires and the X-Owner-User-Id guard
-    # (auth.py) would trust a relayed browser request. Compose sets this via
+    # "dashboard" can never match a numeric peer, so the rewrite that exposes an
+    # nginx-relayed browser's real IP never fires. Compose sets this via
     # TRUSTED_PROXY_HOSTS to the dashboard's pinned bridge address. Parsed at the use
     # site — pydantic-settings would otherwise JSON-decode a list-typed field.
     trusted_proxy_hosts: str = "127.0.0.0/8,10.137.241.253/32"
@@ -124,17 +123,6 @@ class CoreSettings(BaseSettings):
     # gateway represents a connection originating on the Docker host itself;
     # remote LAN addresses and sibling containers are intentionally excluded.
     trusted_local_client_cidrs: str = "127.0.0.0/8,::1/128,10.137.241.1/32"
-    # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
-    # Deny-by-default: loopback only. The compose deploy injects the docker
-    # bridge range (OWNER_OVERRIDE_ALLOWED_CIDRS tracks JARVIS_NET_SUBNET), so a
-    # containerized bot is trusted there; any other non-loopback caller must
-    # widen this explicitly.
-    owner_override_allowed_cidrs: str = "127.0.0.0/8"
-    # Comma-separated CIDRs allowed to POST to the infra-ingest endpoint.
-    # Default-deny: empty means infra-ingest is unprovisioned and _check_auth
-    # returns 503. Operator must explicitly opt in by setting the env var,
-    # e.g. INFRA_INGEST_ALLOWED_CIDRS="127.0.0.1/8,::1/128".
-    infra_ingest_allowed_cidrs: str = ""
     # Advanced host override for deployment ownership. Keep the raw text here:
     # the owner resolver must distinguish a malformed authoritative value from
     # a missing value instead of making all CoreSettings consumers fail to load.

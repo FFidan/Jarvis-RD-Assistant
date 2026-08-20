@@ -1,11 +1,10 @@
 /**
- * Sidebar.grouped.test.tsx — unit tests for the grouped roman-numeral sidebar
- * introduced in the Shell/Sidebar+Admin IA redesign.
+ * Sidebar.grouped.test.tsx — unit tests for the grouped roman-numeral sidebar.
  *
  * Covers:
- * - All 5 nav groups render with correct roman numerals
- * - Group Ⅴ Admin is hidden for non-admin users
- * - Group Ⅴ Admin is visible for admin users
+ * - All 4 nav groups render with correct roman numerals
+ * - Group Ⅳ Admin is hidden for non-admin users
+ * - Group Ⅳ Admin is visible for admin users
  * - All group items render for admin users
  * - HealthDots receives adminLink prop for admin users (navigates to system-health)
  * - HealthDots does NOT receive adminLink for non-admin users (in-place expand)
@@ -21,7 +20,6 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import {
   useNavPrefsStore,
   NAV_PREFS_STORE_KEY,
-  ONBOARDING_DISMISSED_KEY,
   initialNavMode,
   type NavMode,
 } from '@/stores/nav-prefs-store';
@@ -113,17 +111,18 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     vi.clearAllMocks();
   });
 
-  it('renders groups Ⅰ through Ⅳ for non-admin user', () => {
+  it('renders groups Ⅰ through Ⅲ for non-admin user', () => {
     renderSidebar({ role: 'user' });
 
     expect(screen.getByText('Today')).toBeInTheDocument();
-    expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
     expect(screen.getByText('Learn')).toBeInTheDocument();
-    // "Ask" appears as both group header label and nav link text — use getAllByText
-    expect(screen.getAllByText('Ask').length).toBeGreaterThanOrEqual(1);
+    // The old one-item "Read"/"Ask" groups are gone: Ask is a Workspace item.
+    expect(screen.queryByText('Read')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Ask')).toHaveLength(1);
   });
 
-  it('does NOT render group Ⅴ Admin for non-admin user', () => {
+  it('does NOT render group Ⅳ Admin for non-admin user', () => {
     renderSidebar({ role: 'user' });
 
     expect(screen.queryByText('Admin')).not.toBeInTheDocument();
@@ -133,14 +132,13 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     expect(screen.queryByRole('link', { name: 'System Logs' })).not.toBeInTheDocument();
   });
 
-  it('renders roman numerals Ⅰ–Ⅳ', () => {
+  it('renders roman numerals Ⅰ–Ⅲ', () => {
     renderSidebar({ role: 'user' });
 
     expect(screen.getByText('Ⅰ')).toBeInTheDocument();
     expect(screen.getByText('Ⅱ')).toBeInTheDocument();
     expect(screen.getByText('Ⅲ')).toBeInTheDocument();
-    expect(screen.getByText('Ⅳ')).toBeInTheDocument();
-    expect(screen.queryByText('Ⅴ')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ⅳ')).not.toBeInTheDocument();
   });
 
   it('renders group Ⅰ Today items', () => {
@@ -149,17 +147,17 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'My Day' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Pulse Deck' })).toBeInTheDocument();
-    // "Research Feed" renamed to "Library"; "Discover" added as sibling
-    expect(screen.getByRole('link', { name: 'Library' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Research Feed' })).not.toBeInTheDocument();
+    // The saved-papers destination is "Papers"; "Discover" is its sibling.
+    expect(screen.getByRole('link', { name: 'Papers' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Library' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Discover' })).toBeInTheDocument();
   });
 
-  it('Library link points to /feed?surface=library', () => {
+  it('Papers link points to /feed?surface=library', () => {
     renderSidebar({ role: 'user' });
 
-    const libraryLink = screen.getByRole('link', { name: 'Library' });
-    expect(libraryLink).toHaveAttribute('href', '/feed?surface=library');
+    const papersLink = screen.getByRole('link', { name: 'Papers' });
+    expect(papersLink).toHaveAttribute('href', '/feed?surface=library');
   });
 
   it('Discover link points to /feed?surface=search', () => {
@@ -176,12 +174,14 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     expect(els.length).toBe(1);
   });
 
-  it('renders group Ⅱ Read items', () => {
+  it('renders group Ⅱ Workspace items, Ask included', () => {
     renderSidebar({ role: 'user' });
 
     expect(screen.getByRole('link', { name: 'Projects' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Ask$/ })).toHaveAttribute('href', '/ask');
     expect(screen.getByRole('link', { name: 'Knowledge Graph' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Citation Graph' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Consensus' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Extraction Table' })).toBeInTheDocument();
   });
 
@@ -190,18 +190,6 @@ describe('Sidebar — grouped nav (non-admin)', () => {
 
     expect(screen.getByRole('link', { name: 'Learning Cards' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
-  });
-
-  it('renders group Ⅳ Ask item', () => {
-    renderSidebar({ role: 'user' });
-
-    // "Ask" appears both as group label text and as nav link text.
-    // Use getByRole to target specifically the nav link.
-    const askLinks = screen.getAllByRole('link', { name: /^Ask$/ });
-    expect(askLinks.length).toBeGreaterThanOrEqual(1);
-    // Verify at least one Ask link points to /ask
-    const askNavLink = askLinks.find((l) => l.getAttribute('href') === '/ask');
-    expect(askNavLink).toBeTruthy();
   });
 
   it('renders Settings link in footer', () => {
@@ -224,11 +212,11 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     expect(homeLink).not.toHaveAttribute('aria-current', 'page');
   });
 
-  it('Library nav link is active on /feed?surface=library', () => {
+  it('Papers nav link is active on /feed?surface=library', () => {
     renderSidebar({ role: 'user', initialPath: '/feed?surface=library' });
 
-    const libraryLink = screen.getByRole('link', { name: 'Library' });
-    expect(libraryLink).toHaveAttribute('aria-current', 'page');
+    const papersLink = screen.getByRole('link', { name: 'Papers' });
+    expect(papersLink).toHaveAttribute('aria-current', 'page');
   });
 
   it('Discover nav link is active on /feed?surface=search', () => {
@@ -238,34 +226,34 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     expect(discoverLink).toHaveAttribute('aria-current', 'page');
   });
 
-  it('Library is not active when Discover is the current surface', () => {
+  it('Papers is not active when Discover is the current surface', () => {
     renderSidebar({ role: 'user', initialPath: '/feed?surface=search' });
 
-    const libraryLink = screen.getByRole('link', { name: 'Library' });
-    expect(libraryLink).not.toHaveAttribute('aria-current', 'page');
+    const papersLink = screen.getByRole('link', { name: 'Papers' });
+    expect(papersLink).not.toHaveAttribute('aria-current', 'page');
   });
 
-  it('Discover is not active when Library is the current surface', () => {
+  it('Discover is not active when Papers is the current surface', () => {
     renderSidebar({ role: 'user', initialPath: '/feed?surface=library' });
 
     const discoverLink = screen.getByRole('link', { name: 'Discover' });
     expect(discoverLink).not.toHaveAttribute('aria-current', 'page');
   });
 
-  it('Library nav link is active on bare /feed (counts toward Library)', () => {
+  it('Papers nav link is active on bare /feed (counts toward Papers)', () => {
     renderSidebar({ role: 'user', initialPath: '/feed' });
 
-    const libraryLink = screen.getByRole('link', { name: 'Library' });
-    expect(libraryLink).toHaveAttribute('aria-current', 'page');
+    const papersLink = screen.getByRole('link', { name: 'Papers' });
+    expect(papersLink).toHaveAttribute('aria-current', 'page');
     const discoverLink = screen.getByRole('link', { name: 'Discover' });
     expect(discoverLink).not.toHaveAttribute('aria-current', 'page');
   });
 
-  it('Library nav link is active on /feed?surface=inbox (Inbox is Library’s first tab)', () => {
+  it('Papers nav link is active on /feed?surface=inbox (Inbox is Papers’ first tab)', () => {
     renderSidebar({ role: 'user', initialPath: '/feed?surface=inbox' });
 
-    const libraryLink = screen.getByRole('link', { name: 'Library' });
-    expect(libraryLink).toHaveAttribute('aria-current', 'page');
+    const papersLink = screen.getByRole('link', { name: 'Papers' });
+    expect(papersLink).toHaveAttribute('aria-current', 'page');
   });
 });
 
@@ -274,26 +262,25 @@ describe('Sidebar — grouped nav (admin)', () => {
     vi.clearAllMocks();
   });
 
-  it('renders all 5 groups for admin user', () => {
+  it('renders all 4 groups for admin user', () => {
     renderSidebar({ role: 'admin' });
 
     expect(screen.getByText('Today')).toBeInTheDocument();
-    expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
     expect(screen.getByText('Learn')).toBeInTheDocument();
-    // "Ask" appears as both group header label and nav link text
-    expect(screen.getAllByText('Ask').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('Admin')).toBeInTheDocument();
   });
 
-  it('renders all roman numerals Ⅰ–Ⅴ for admin', () => {
+  it('renders all roman numerals Ⅰ–Ⅳ for admin', () => {
     renderSidebar({ role: 'admin' });
 
-    ['Ⅰ', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ'].forEach((numeral) => {
+    ['Ⅰ', 'Ⅱ', 'Ⅲ', 'Ⅳ'].forEach((numeral) => {
       expect(screen.getByText(numeral)).toBeInTheDocument();
     });
+    expect(screen.queryByText('Ⅴ')).not.toBeInTheDocument();
   });
 
-  it('renders group Ⅴ Admin items for admin user', () => {
+  it('renders group Ⅳ Admin items for admin user', () => {
     renderSidebar({ role: 'admin' });
 
     expect(screen.getByRole('link', { name: 'User Management' })).toBeInTheDocument();
@@ -325,10 +312,10 @@ describe('Sidebar — nav-group testid uniqueness', () => {
     vi.clearAllMocks();
   });
 
-  it('each nav-group-* testid appears exactly once for non-admin (4 visible groups)', () => {
+  it('each nav-group-* testid appears exactly once for non-admin (3 visible groups)', () => {
     renderSidebar({ role: 'user' });
 
-    const groups = ['today', 'read', 'learn', 'ask'];
+    const groups = ['today', 'workspace', 'learn'];
     for (const label of groups) {
       // getAllByTestId throws if 0; length > 1 would mean duplicate
       const els = document.querySelectorAll(`[data-testid="nav-group-${label}"]`);
@@ -336,10 +323,10 @@ describe('Sidebar — nav-group testid uniqueness', () => {
     }
   });
 
-  it('each nav-group-* testid appears exactly once for admin (5 visible groups)', () => {
+  it('each nav-group-* testid appears exactly once for admin (4 visible groups)', () => {
     renderSidebar({ role: 'admin' });
 
-    const groups = ['today', 'read', 'learn', 'ask', 'admin'];
+    const groups = ['today', 'workspace', 'learn', 'admin'];
     for (const label of groups) {
       const els = document.querySelectorAll(`[data-testid="nav-group-${label}"]`);
       expect(els.length).toBe(1);
@@ -356,7 +343,7 @@ describe('Sidebar — collapsed mode', () => {
     renderSidebar({ role: 'user', collapsed: true });
 
     expect(screen.queryByText('Today')).not.toBeInTheDocument();
-    expect(screen.queryByText('Read')).not.toBeInTheDocument();
+    expect(screen.queryByText('Workspace')).not.toBeInTheDocument();
     expect(screen.queryByText('Learn')).not.toBeInTheDocument();
   });
 
@@ -387,34 +374,32 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     resetResearchMilestones();
   });
 
-  it('fresh profile (no navMode key, tour not dismissed) defaults to simple mode', () => {
-    // No persisted navMode + no onboarding-dismissed flag = first-time researcher.
+  it('defaults to simple mode when nothing has been stored', () => {
     // Exercise the real production initializer, not a re-implementation.
     expect(localStorage.getItem(NAV_PREFS_STORE_KEY)).toBeNull();
-    expect(localStorage.getItem(ONBOARDING_DISMISSED_KEY)).toBeNull();
     expect(initialNavMode()).toBe('simple');
   });
 
-  it('existing user (tour dismissed, no navMode key) does NOT get a reduced nav (no rug-pull)', () => {
-    localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true');
-    expect(initialNavMode()).toBe('full');
+  it('does not consult the onboarding-dismissed key to pick a mode', () => {
+    localStorage.setItem('jarvis-onboarding-dismissed', 'true');
+    expect(initialNavMode()).toBe('simple');
   });
 
-  it('initialNavMode falls back to full (no crash) when localStorage throws', () => {
+  it('needs no localStorage read at all (survives a throwing Storage)', () => {
     const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('SecurityError: localStorage blocked');
     });
-    expect(initialNavMode()).toBe('full');
+    expect(initialNavMode()).toBe('simple');
     spy.mockRestore();
   });
 
   it('shows the documented research-loop essentials and the toggle', () => {
     renderSidebar({ role: 'user', navMode: 'simple' });
 
-    expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'My Day' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Papers' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Discover' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Library' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Projects' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Ask$/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Learning Cards' })).toBeInTheDocument();
 
@@ -422,7 +407,7 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     // in-rail "More" disclosure (it would duplicate the footer toggle).
     expect(screen.queryByTestId('nav-more')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Projects' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Pulse Deck' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Analytics' })).not.toBeInTheDocument();
 
@@ -442,10 +427,10 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     expect(screen.queryByRole('link', { name: 'Knowledge Graph' })).not.toBeInTheDocument();
   });
 
-  it('query-aware highlight still works in simple mode (bare /feed → Library)', () => {
+  it('query-aware highlight still works in simple mode (bare /feed → Papers)', () => {
     renderSidebar({ role: 'user', navMode: 'simple', initialPath: '/feed' });
-    const libraryLink = screen.getByRole('link', { name: 'Library' });
-    expect(libraryLink).toHaveAttribute('aria-current', 'page');
+    const papersLink = screen.getByRole('link', { name: 'Papers' });
+    expect(papersLink).toHaveAttribute('aria-current', 'page');
   });
 
   it('toggle switches simple → full and reveals all groups; route untouched', () => {
@@ -458,10 +443,10 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
     expect(useNavPrefsStore.getState().navMode).toBe('full');
     expect(screen.getByRole('button', { name: 'Simple view' })).toHaveTextContent('Simple view');
     expect(screen.getByText('Today')).toBeInTheDocument();
-    expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
     expect(screen.getByText('Learn')).toBeInTheDocument();
     // Previously-hidden destinations are now directly visible.
-    expect(screen.getByRole('link', { name: 'Projects' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
     expect(screen.queryByTestId('nav-more')).not.toBeInTheDocument();
   });
@@ -492,10 +477,20 @@ describe('Sidebar — simple mode (progressive disclosure)', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Projects');
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Extraction');
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Knowledge Graph');
-    expect(screen.getByTestId('advanced-workspace-cue')).toHaveTextContent('Citation Graph');
+    const cue = screen.getByTestId('advanced-workspace-cue');
+    expect(cue).toHaveTextContent('Extraction Table');
+    expect(cue).toHaveTextContent('Knowledge Graph');
+    expect(cue).toHaveTextContent('Citation Graph');
+    // Anything already in the simple rail is not something the toggle adds,
+    // so offering it would be a promise the rail has already kept.
+    const railLabels = screen
+      .getAllByRole('link')
+      .map((link) => link.textContent?.trim() ?? '')
+      .filter(Boolean);
+    expect(railLabels).toContain('Projects');
+    for (const label of railLabels) {
+      expect(cue).not.toHaveTextContent(label);
+    }
     expect(screen.getAllByTestId('advanced-workspace-cue')).toHaveLength(1);
   });
 

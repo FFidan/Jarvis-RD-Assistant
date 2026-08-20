@@ -269,7 +269,7 @@ async def test_project_papers_attach_validates_paper_ownership(
 
 
 async def test_project_papers_attach_idempotent_envelope(
-    contract_two_users, contract_conn, _le_app, _configure_api_key
+    contract_two_users, contract_conn, _le_app, _configure_api_key, _research_library_command
 ):
     """POST /api/projects/{id}/papers/{paper_id} twice → identical
     {project_id, paper_id} envelope on both calls.
@@ -395,7 +395,13 @@ async def test_get_project_detail_question_count_excludes_other_users_rows(
 
 
 async def test_project_papers_attach_zotero_enqueue_unavailable_is_loud_not_fatal(
-    contract_two_users, contract_conn, _le_app, _configure_api_key, monkeypatch, caplog
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+    _research_library_command,
+    monkeypatch,
+    caplog,
 ):
     """Linking a starred paper still returns 201 when zotero.push is not in the
     task registry, and the skip is logged at ERROR level (not silently swallowed).

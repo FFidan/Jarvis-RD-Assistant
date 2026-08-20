@@ -8,6 +8,10 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
+- **Safer service boundaries and recovery (v1.2.6).** The gateway and Telegram
+  hold narrowly scoped Platform assertions, Platform, Research, Learning, and
+  Operations own their database schemas separately, and restore is a
+  host-started operation rather than a browser action.
 - **Source-aware visibility and library operations (v1.2.0).** A persisted
   source-aware paper-visibility model that every read path shares, whole-library
   processing, incremental discovery with optional automatic summaries, per-paper
@@ -60,6 +64,8 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## In progress
 
+- **Optional diagnostics.** Keeping correlation and bounded health signals
+  available without any of them becoming a required external service.
 - **First-hour local-first polish.** Tighten the early experience so a fresh
   install is more honest and immediately useful: first-party assets only, clearer
   library-preparation actions, current public version wording, and an onboarding

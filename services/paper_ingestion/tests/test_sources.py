@@ -252,7 +252,7 @@ def _recommendations_app(monkeypatch):
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             dependency_overrides={verify_api_key: lambda: None},
         ),

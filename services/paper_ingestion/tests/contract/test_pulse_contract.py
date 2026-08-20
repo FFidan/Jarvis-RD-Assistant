@@ -45,6 +45,7 @@ import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 from jarvis_common.testing_contract_apps import (
     DEFAULT_CONTRACT_API_KEY,
@@ -78,21 +79,28 @@ async def _pi_pulse_app(contract_conn):
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.main import app
 
-    shared = SharedConnPool(contract_conn)
+    shared = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
     with patch_pi_test_app(
         shared,
         app=app,
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             override_db_dependency=True,
             disable_limiter=True,
             mock_http_client=True,
             mock_embedder=True,
         ),
     ) as wired_app:
-        yield wired_app
+        yield SignedIdentityMiddleware(
+            wired_app,
+            audience="research",
+            session_pool=shared.with_session_authorization("jarvis_platform_runtime"),
+        )
 
 
 async def _promote_user_to_admin(conn, user_id: int) -> None:
@@ -231,7 +239,7 @@ async def test_persist_deck_idempotent_replaces_cards(contract_conn, contract_tw
 
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 1, 1)  # far future — no collision with prod data
 
@@ -325,7 +333,7 @@ async def test_persist_deck_skips_unshared_paper_when_feedback_filter_applies(
 
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 2, 1)  # far future — no collision with prod data
 
@@ -500,10 +508,13 @@ async def test_load_profile_user_id_isolates_ratings(contract_conn, contract_two
     from paper_ingestion.pulse.profile import load_profile
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_a_id = contract_two_users.user_a_id
     user_b_id = contract_two_users.user_b_id
     paper_id_a = contract_two_users.paper_id_a
+    paper_title_a = await contract_conn.fetchval(
+        "SELECT title FROM papers WHERE id = $1", paper_id_a
+    )
 
     # Seed a positive recommendation feedback row for user A
     # Unique constraint: (paper_id, user_id, source) — all three needed for ON CONFLICT.
@@ -519,18 +530,18 @@ async def test_load_profile_user_id_isolates_ratings(contract_conn, contract_two
     mock_embedder = AsyncMock()
     mock_embedder.embed_texts.return_value = []
 
-    # load_profile for user A must see the liked paper
+    # load_profile for user A must see the positively rated paper title
     profile_a = await load_profile(pool, embedder=mock_embedder, user_id=user_a_id)
-    assert paper_id_a in profile_a.liked_paper_ids, (
-        f"User A's liked paper {paper_id_a} must appear in load_profile(user_id={user_a_id}). "
-        f"Got liked_paper_ids={profile_a.liked_paper_ids}"
+    assert paper_title_a in profile_a.recent_positive_titles, (
+        f"User A's positively rated paper must appear in load_profile(user_id={user_a_id}). "
+        f"Got recent_positive_titles={profile_a.recent_positive_titles}"
     )
 
-    # load_profile for user B must NOT see user A's liked paper
+    # load_profile for user B must NOT see user A's positively rated paper
     profile_b = await load_profile(pool, embedder=mock_embedder, user_id=user_b_id)
-    assert paper_id_a not in profile_b.liked_paper_ids, (
-        f"User B must not see User A's liked paper {paper_id_a} in their profile. "
-        f"Got liked_paper_ids={profile_b.liked_paper_ids} — user_id isolation failure."
+    assert paper_title_a not in profile_b.recent_positive_titles, (
+        "User B must not see User A's positively rated paper in their profile. "
+        f"Got recent_positive_titles={profile_b.recent_positive_titles}."
     )
 
 
@@ -1113,7 +1124,7 @@ async def test_e1_persist_deck_degraded_reason_stored(contract_conn, contract_tw
     from paper_ingestion.pulse.deck import persist_deck
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 3, 1)
 
@@ -1151,7 +1162,7 @@ async def test_e1_persist_deck_second_call_updates_degraded_reason(
     from paper_ingestion.pulse.deck import persist_deck
     from jarvis_common.testing import SharedConnPool
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date = date(2099, 3, 2)
 
@@ -1304,7 +1315,6 @@ def _empty_pipeline_profile() -> object:
         weights={"embedding": 1.0},
         deck_size=5,
         stage2_top_k=10,
-        liked_paper_ids=[],
         recent_positive_titles=[],
         recent_negative_titles=[],
         lookback_days=7,
@@ -1392,7 +1402,7 @@ async def test_pulse_run_degraded_path_persists_degraded_reason_to_db(
     from paper_ingestion._state import set_services, svc
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date_far = datetime(2099, 6, 1, 4, 0, tzinfo=UTC)
 
@@ -1473,7 +1483,7 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
     from jarvis_common.testing import SharedConnPool
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date_far = datetime(2099, 7, 1, 4, 0, tzinfo=UTC)
 
@@ -1589,7 +1599,7 @@ async def test_pulse_run_omits_card_for_paper_whose_promotion_did_not_complete(
     from paper_ingestion.pulse.deck import load_today
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     unpromoted_id = "promotion-blocked-01"
     promoted_id = "promotion-ok-01"
@@ -1859,43 +1869,43 @@ async def test_pulse_generate_non_admin_returns_403(
     )
 
 
-# POST /api/pulse/generate: ops API-key caller (no admin session) passes the auth gate
-# Verified: routers/pulse.py generate_pulse depends on get_current_user_id_or_bot
-# and require_admin_or_api_key (auth.py:551-553 admits when the session role is absent).
+# POST /api/pulse/generate: an operations-key identity carries no admin authority
+# Verified: routers/pulse.py generate_pulse depends on get_current_user_id
+# and require_admin_or_api_key, which refuses the api-key principal.
 
 
-async def test_pulse_generate_accepts_api_key_caller_without_admin_session(
+async def test_pulse_generate_refuses_an_operations_key_identity(
     _pi_pulse_app,
     _configure_api_key,
     contract_two_users,
 ):
-    """POST /api/pulse/generate must not 401/403 an ops API-key caller.
+    """POST /api/pulse/generate must refuse a caller signed as the operations key.
 
-    The bot and cron reach this endpoint with an API key and no browser session,
-    so request.state.user_role is absent. The gate must be require_admin_or_api_key,
-    which admits a session-less ops caller. Identity resolves through
-    get_current_user_id_or_bot, so that is the dependency the override supplies.
+    The gateway signs that identity without the account checks it applies when
+    minting a browser session from the same key, so it is not administrator
+    authority. The bot reaches this route as the paired Telegram principal and
+    the web app as an administrator session, so neither is affected. Identity
+    resolves through get_current_user_id, so that is the dependency the override
+    supplies.
     """
     from unittest.mock import AsyncMock, patch
 
-    from jarvis_common import get_current_user_id_or_bot
+    from jarvis_common import get_current_user_id
     from jarvis_common.task_registry import _TASK_MAP
 
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)
 
-    _pi_pulse_app.dependency_overrides[get_current_user_id_or_bot] = lambda: (
-        contract_two_users.user_a_id
-    )
+    _pi_pulse_app.dependency_overrides[get_current_user_id] = lambda: contract_two_users.user_a_id
     try:
         with patch.dict(_TASK_MAP, {"pulse.generate": fake_task}):
             async with _client(_pi_pulse_app, None) as c:
                 resp = await c.post("/api/pulse/generate")
     finally:
-        _pi_pulse_app.dependency_overrides.pop(get_current_user_id_or_bot, None)
+        _pi_pulse_app.dependency_overrides.pop(get_current_user_id, None)
 
-    assert resp.status_code not in (401, 403), (
-        f"Session-less ops API-key caller must pass the auth gate on "
+    assert resp.status_code == 403, (
+        f"An operations-key identity must be refused on "
         f"POST /api/pulse/generate; got {resp.status_code}: {resp.text[:300]}"
     )
 
@@ -2259,7 +2269,7 @@ async def test_pulse_scoring_w2_stage3_reasoning_verification_persists(
     stage3_out = await stage3_combine(
         [sc], {"embedding": 0.5, "llm_relevance": 0.3, "llm_novelty": 0.2}
     )
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
 
     await persist_deck(
         pool,
@@ -2683,7 +2693,7 @@ async def test_pulse_run_schema_object_echo_persists_degraded_reason(
     from paper_ingestion.pulse.models import PulseScoringOutput
     import paper_ingestion.pulse.scoring as _scoring
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
     deck_date_far = datetime(2099, 10, 1, 4, 0, tzinfo=UTC)
     candidates = [_pulse_candidate(f"schema-echo-{i}") for i in range(3)]

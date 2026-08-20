@@ -154,13 +154,10 @@ describe('ResearchFeedPage — F4 per-filter subtitles', () => {
     vi.clearAllMocks();
   });
 
-  it('shows generic library subtitle when no filter is active', async () => {
+  it('shows the generic Papers subtitle when no filter is active', async () => {
     renderPage('?surface=library');
     await waitFor(() => {
-      // C-FEED: copy updated to "My library — papers you've saved or own."
-      expect(
-        screen.getByText(/my library.*saved.*own/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/papers you.*saved or own/i)).toBeInTheDocument();
     });
   });
 
@@ -242,11 +239,12 @@ describe('ResearchFeedPage — surface-aware H1', () => {
     vi.clearAllMocks();
   });
 
-  it('shows "Library" H1 on library surface', async () => {
+  it('shows "Papers" H1 on library surface', async () => {
     renderPage('?surface=library');
     await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Library');
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Papers');
     });
+    expect(screen.getByRole('heading', { level: 1 })).not.toHaveTextContent('Library');
   });
 
   it('shows "Discover" H1 on search surface', async () => {
@@ -256,10 +254,10 @@ describe('ResearchFeedPage — surface-aware H1', () => {
     });
   });
 
-  it('shows "Library" H1 on inbox surface (not search)', async () => {
+  it('shows "Papers" H1 on inbox surface (not search)', async () => {
     renderPage('?surface=inbox');
     await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Library');
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Papers');
     });
   });
 });

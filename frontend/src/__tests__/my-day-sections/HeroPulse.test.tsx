@@ -23,10 +23,11 @@ vi.mock('@/stores/pomodoro-store', () => ({
 
 vi.mock('@/lib/api', () => ({
   fetchPulseToday: vi.fn(),
+  fetchConfig: vi.fn(),
   ratePulseCard: vi.fn(),
 }));
 
-const { fetchPulseToday, ratePulseCard } = await import('@/lib/api');
+const { fetchPulseToday, fetchConfig, ratePulseCard } = await import('@/lib/api');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,6 +87,7 @@ function renderHeroPulse(queryClient?: QueryClient) {
 describe('HeroPulse currentIndex clamp and reset', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fetchConfig).mockResolvedValue([]);
     vi.mocked(ratePulseCard).mockResolvedValue(undefined as any);
   });
 
@@ -228,6 +230,7 @@ describe('HeroPulse currentIndex clamp and reset', () => {
 describe('HeroPulse empty-vs-error states (RED-ERROR-EMPTY-STATE)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fetchConfig).mockResolvedValue([]);
   });
 
   it('renders a CALM empty-state CTA (not an error) when there is no deck (404 → null)', async () => {
@@ -239,9 +242,8 @@ describe('HeroPulse empty-vs-error states (RED-ERROR-EMPTY-STATE)', () => {
     expect(
       await screen.findByText(/No Pulse for today yet/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: /Open Library/i }),
-    ).toBeInTheDocument();
+    const cta = screen.getByRole('link', { name: /Open Pulse Deck/i });
+    expect(cta).toHaveAttribute('href', '/pulse');
     // The calm empty state must NOT surface the error sentinel.
     expect(screen.queryByRole('status')).toBeNull();
   });
@@ -253,6 +255,19 @@ describe('HeroPulse empty-vs-error states (RED-ERROR-EMPTY-STATE)', () => {
     const sentinel = await screen.findByRole('status');
     expect(sentinel).toHaveTextContent(/Couldn't load your recommendations/i);
     // It must NOT show the no-data CTA.
-    expect(screen.queryByRole('link', { name: /Open Library/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /Open Pulse Deck/i })).toBeNull();
+  });
+
+  it('links to Settings when Pulse is turned off and there is no card', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(null);
+    vi.mocked(fetchConfig).mockResolvedValue([{ key: 'pulse.enabled', value: false }]);
+    renderHeroPulse();
+
+    expect(await screen.findByText('Pulse is turned off in Settings.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Settings' })).toHaveAttribute(
+      'href',
+      '/settings?section=system&item=pulse',
+    );
+    expect(screen.queryByRole('link', { name: 'Open Pulse Deck' })).not.toBeInTheDocument();
   });
 });

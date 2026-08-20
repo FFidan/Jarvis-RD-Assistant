@@ -80,8 +80,8 @@ describe('LearningCardsPage — mode routing', () => {
     mockGetStats.mockResolvedValue(STATS_WITH_DUE);
     renderPage();
     await waitFor(() => expect(screen.getByText('Learn')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /flashcards/i })).toBeInTheDocument();
-    expect(screen.getByText(/all decks · session/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Learning Cards' })).toBeInTheDocument();
+    expect(screen.getByText(/all decks · review/i)).toBeInTheDocument();
   });
 
   it('shows Library view when due_now === 0', async () => {
@@ -89,22 +89,22 @@ describe('LearningCardsPage — mode routing', () => {
     renderPage();
     // Stats load triggers mode switch to Library (due_now=0 → Library default)
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'Learning Cards' })).toBeInTheDocument(),
     );
   });
 
   it('shows Library view when ?mode=library in URL', async () => {
     mockGetStats.mockResolvedValue(STATS_WITH_DUE);
     renderPage('/cards?mode=library');
-    await waitFor(() => expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Learning Cards' })).toBeInTheDocument());
   });
 
-  it('navigates to Library when breadcrumb Flashcards clicked', async () => {
+  it('navigates to the library when the breadcrumb Learning Cards control is clicked', async () => {
     mockGetStats.mockResolvedValue(STATS_WITH_DUE);
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /flashcards/i }));
-    await userEvent.click(screen.getByRole('button', { name: /flashcards/i }));
-    await waitFor(() => expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument());
+    await waitFor(() => screen.getByRole('button', { name: 'Learning Cards' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Learning Cards' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Learning Cards' })).toBeInTheDocument());
   });
 });
 
@@ -118,14 +118,14 @@ describe('LearningCardsPage — Library view content', () => {
 
   it('renders Generate and New Card buttons in Library', async () => {
     renderPage();
-    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    await waitFor(() => screen.getByRole('heading', { name: 'Learning Cards' }));
     expect(screen.getByRole('button', { name: /generate/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /new card/i })).toBeInTheDocument();
   });
 
   it('renders StatsHeader tiles in Library view', async () => {
     renderPage();
-    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    await waitFor(() => screen.getByRole('heading', { name: 'Learning Cards' }));
     // StatsHeader renders after stats load
     await waitFor(() => expect(screen.getByText('Total Cards')).toBeInTheDocument());
     expect(screen.getByText('Due Now')).toBeInTheDocument();
@@ -135,19 +135,19 @@ describe('LearningCardsPage — Library view content', () => {
   it('does NOT render StatsHeader in review session mode', async () => {
     mockGetStats.mockResolvedValue(STATS_WITH_DUE);
     renderPage();
-    await waitFor(() => screen.getByText(/all decks · session/i));
+    await waitFor(() => screen.getByText(/all decks · review/i));
     expect(screen.queryByText('Total Cards')).toBeNull();
   });
 
   it('shows deck grid in Library', async () => {
     renderPage();
-    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    await waitFor(() => screen.getByRole('heading', { name: 'Learning Cards' }));
     await waitFor(() => expect(screen.getByText('My Deck')).toBeInTheDocument());
   });
 
   it('does not show old Review/Browse tabs', async () => {
     renderPage();
-    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    await waitFor(() => screen.getByRole('heading', { name: 'Learning Cards' }));
     // Old tab structure is gone
     expect(screen.queryByRole('tab', { name: /browse/i })).toBeNull();
   });
@@ -186,14 +186,14 @@ describe('LearningCardsPage — deck list failure in review mode', () => {
   it('shows a deck-name error under the breadcrumb when decks fail to load', async () => {
     mockFetchDecks.mockRejectedValue(new Error('network down'));
     renderPage();
-    await waitFor(() => expect(screen.getByText(/all decks · session/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/all decks · review/i)).toBeInTheDocument());
     expect(await screen.findByText('Failed to load deck names.')).toBeInTheDocument();
   });
 
   it('shows no deck-name error when decks load empty', async () => {
     mockFetchDecks.mockResolvedValue([]);
     renderPage();
-    await waitFor(() => expect(screen.getByText(/all decks · session/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/all decks · review/i)).toBeInTheDocument());
     expect(screen.queryByText('Failed to load deck names.')).toBeNull();
   });
 });
@@ -246,8 +246,8 @@ describe('LearningCardsPage — deck-scope bleed (F8)', () => {
    * Regression guard: after a deck-scoped session, starting a global review
    * via "Review now" must NOT retain the previous sessionDeckId.
    *
-   * Observable: when sessionDeckId is null the breadcrumb reads "All decks · session".
-   * If bleed occurs, it would read "My Deck · session" (the prior deck name).
+   * Observable: when sessionDeckId is null the breadcrumb reads "All decks · Review".
+   * If bleed occurs, it would read "My Deck · Review" (the prior deck name).
    */
   beforeEach(() => {
     vi.clearAllMocks();
@@ -260,7 +260,7 @@ describe('LearningCardsPage — deck-scope bleed (F8)', () => {
     renderPage('/cards?mode=library');
 
     // Wait for Library to render with a deck.
-    await waitFor(() => expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Learning Cards' })).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('My Deck')).toBeInTheDocument());
 
     // Start a deck-scoped review session (simulates handleStartReview(1)).
@@ -269,10 +269,10 @@ describe('LearningCardsPage — deck-scope bleed (F8)', () => {
     await userEvent.click(startReviewBtn);
 
     // We are now in review mode scoped to deck 1 — breadcrumb should show deck name.
-    await waitFor(() => expect(screen.getByText(/my deck · session/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/my deck · review/i)).toBeInTheDocument());
 
     // Navigate back to Library via breadcrumb.
-    await userEvent.click(screen.getByRole('button', { name: /flashcards/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Learning Cards' }));
 
     // Library shows "Review now" CTA (due_now=3).
     await waitFor(() => expect(screen.getByRole('button', { name: /review now/i })).toBeInTheDocument());
@@ -280,9 +280,9 @@ describe('LearningCardsPage — deck-scope bleed (F8)', () => {
     // Click "Review now" — this calls navigateToReview() with no deck argument.
     await userEvent.click(screen.getByRole('button', { name: /review now/i }));
 
-    // ASSERTION: breadcrumb must show "All decks · session" — not "My Deck · session".
+    // ASSERTION: breadcrumb must show "All decks · Review" — not "My Deck · Review".
     // This proves sessionDeckId was reset to null (no bleed from the prior deck session).
-    await waitFor(() => expect(screen.getByText(/all decks · session/i)).toBeInTheDocument());
-    expect(screen.queryByText(/my deck · session/i)).toBeNull();
+    await waitFor(() => expect(screen.getByText(/all decks · review/i)).toBeInTheDocument());
+    expect(screen.queryByText(/my deck · review/i)).toBeNull();
   });
 });

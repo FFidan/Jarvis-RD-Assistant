@@ -122,7 +122,7 @@ vi.mock('@/lib/api', async () => {
     fetchSources: async () => ([
       { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
       { id: 2, source_type: 'semantic_scholar', enabled: true, config: {}, priority: 2, display_order: 2, created_at: '2025-01-01T00:00:00Z' },
-      { id: 3, source_type: 'openalex', enabled: true, config: {}, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
+      { id: 3, source_type: 'openalex', enabled: true, config: { requires_key: true, api_key: 'configured' }, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
       { id: 4, source_type: 'pubmed', enabled: true, config: {}, priority: 4, display_order: 4, created_at: '2025-01-01T00:00:00Z' },
       { id: 5, source_type: 'local', enabled: true, config: {}, priority: 5, display_order: 5, created_at: '2025-01-01T00:00:00Z' },
     ]),
@@ -150,9 +150,9 @@ vi.mock('@/components/chat/StreamingChat', () => ({
   ),
 }));
 
-function renderPage() {
+function renderPage(initialEntry = '/feed') {
   const renderResult = renderWithProviders(
-    <MemoryRouter initialEntries={['/feed']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/feed" element={<ResearchFeedPage />} />
           <Route path="/paper/:paperId" element={<LocationDisplay />} />
@@ -245,28 +245,35 @@ describe('ResearchFeedPage', () => {
     appQueryClient.clear();
   });
 
-  it('renders the page heading as "Library"', () => {
-    renderPage();
-    expect(screen.getByRole('heading', { name: /library/i })).toBeInTheDocument();
+  it('renders the page heading as "Papers"', () => {
+    const { container } = renderPage();
+    expect(screen.getByRole('heading', { name: /^Papers$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Library$/ })).not.toBeInTheDocument();
+    expect(container.querySelector('main')).toBeNull();
+    expect(container.querySelector('section.flex-1')).toBeInTheDocument();
   });
 
-  // ── C-FEED: Discover discoverability + scope-honest copy ─────────────────
+  // ── Papers and Discover are disjoint surfaces ────────────────────────────
 
-  it('renders the primary Discover block at the top of the rail (facet-discover-block)', () => {
+  it('keeps Discover out of the facet rail — the rail filters, the sidebar navigates', () => {
     renderPage();
-    expect(screen.getByTestId('facet-discover-block')).toBeInTheDocument();
-    // The discover block contains the facet-discover button
-    expect(screen.getByTestId('facet-discover-block')).toContainElement(
-      screen.getByTestId('facet-discover'),
-    );
-    // The discover block appears before the Status section items in the DOM
-    const rail = screen.getByTestId('facet-rail');
-    const discoverBlock = screen.getByTestId('facet-discover-block');
-    const inboxItem = screen.getByTestId('facet-status-inbox');
-    const railChildren = Array.from(rail.querySelectorAll('[data-testid]'));
-    const discoverIdx = railChildren.indexOf(discoverBlock);
-    const inboxIdx = railChildren.indexOf(inboxItem);
-    expect(discoverIdx).toBeLessThan(inboxIdx);
+    expect(screen.getByTestId('facet-rail')).toBeInTheDocument();
+    expect(screen.queryByTestId('facet-discover-block')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('facet-discover')).not.toBeInTheDocument();
+  });
+
+  it('labels the all-owned-papers status facet "Saved"', () => {
+    renderPage();
+    expect(screen.getByTestId('facet-status-library')).toHaveTextContent('Saved');
+  });
+
+  it('offers Discover as two tabs and hides the library-scoped rail there', async () => {
+    renderPage('/feed?surface=search');
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Find new papers' })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('tab', { name: 'Browse public corpus' })).toBeInTheDocument();
+    expect(screen.queryByTestId('facet-rail')).not.toBeInTheDocument();
   });
 
   it('shows empty-library Discover CTA when library count is 0 and scope=library', async () => {
@@ -293,26 +300,21 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByTestId('streaming-chat')).not.toBeInTheDocument();
   });
 
-  it('renders the search input with updated placeholder', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+  it('renders the search input with updated placeholder', () => {
+    renderPage('/feed?surface=search');
     expect(
       screen.getByPlaceholderText('Search your selected sources…'),
     ).toHaveAttribute('name', 'external-search');
   });
 
-  it('renders search button', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+  it('renders search button', () => {
+    renderPage('/feed?surface=search');
     expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
   });
 
   it('disables Search button and shows help text when no sources are selected', async () => {
     const user = userEvent.setup();
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     // Wait for all source checkboxes to render
     await waitFor(() => {
@@ -335,9 +337,7 @@ describe('ResearchFeedPage', () => {
   });
 
   it('renders source checkboxes in Search tab for enabled non-local sources', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     // Wait for sources to load
     await waitFor(() => {
@@ -352,10 +352,24 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByLabelText('Uploaded PDF')).not.toBeInTheDocument();
   });
 
+  it('leaves a source without its required key unselected and explains why', async () => {
+    const { fetchSources } = await import('@/lib/api');
+    vi.mocked(fetchSources).mockResolvedValueOnce([
+      { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
+      { id: 3, source_type: 'openalex', enabled: true, config: { requires_key: true, key_env: 'OPENALEX_API_KEY' }, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
+    ]);
+
+    renderPage('/feed?surface=search');
+
+    const openalex = await screen.findByLabelText('OpenAlex');
+    expect(openalex).not.toBeChecked();
+    expect(openalex).toBeDisabled();
+    expect(screen.getByText('API key required')).toBeInTheDocument();
+  });
+
   it('associates every advanced search label with its form control', async () => {
     const user = userEvent.setup();
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
     await user.click(screen.getByRole('button', { name: /toggle filters/i }));
 
     for (const label of ['Year From', 'Year To', 'Sort By', 'Max Results', 'Author']) {
@@ -396,9 +410,8 @@ describe('ResearchFeedPage', () => {
   it('search with only arxiv + pubmed checked passes correct source_types to API', async () => {
     const user = userEvent.setup();
     const { searchPreview } = await import('@/lib/api');
-    renderPage();
+    renderPage('/feed?surface=search');
 
-    await user.click(screen.getByTestId('facet-discover'));
 
     // Wait for checkboxes
     await waitFor(() => {
@@ -461,8 +474,7 @@ describe('ResearchFeedPage', () => {
       },
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Search your selected sources…')).toBeInTheDocument();
@@ -475,6 +487,10 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(screen.getByText(/PubMed rate limit reached/i)).toBeInTheDocument();
     });
+    expect(screen.getByTestId('source-summary-arxiv')).toHaveTextContent('1 result');
+    expect(screen.getByTestId('source-summary-pubmed')).toHaveTextContent(
+      'PubMed rate limit reached. Retry later.',
+    );
     expect(screen.getByText(/Status 429/i)).toBeInTheDocument();
     expect(screen.getByText(/Retry after 2s/i)).toBeInTheDocument();
   });
@@ -521,8 +537,7 @@ describe('ResearchFeedPage', () => {
       source_errors: {},
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'mixed results');
@@ -537,7 +552,8 @@ describe('ResearchFeedPage', () => {
     const matchedCheckbox = screen.getByLabelText('Already in library: Matched Preview Paper');
     expect(matchedCheckbox).toBeDisabled();
     expect(matchedCheckbox).not.toBeChecked();
-    expect(screen.getByRole('button', { name: /save 1 selected/i })).toBeInTheDocument();
+    // Saving is opt-in: a fresh result set starts with nothing selected.
+    expect(screen.getByRole('button', { name: /save 0 selected/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /save all unsaved/i })).toBeEnabled();
 
     await user.click(screen.getByRole('button', { name: /save all unsaved/i }));
@@ -577,8 +593,7 @@ describe('ResearchFeedPage', () => {
       source_errors: {},
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'save unchanged');
@@ -588,6 +603,7 @@ describe('ResearchFeedPage', () => {
       expect(screen.getByText('Unsaved Save Test Paper')).toBeInTheDocument();
     });
 
+    await user.click(screen.getByLabelText('Select Unsaved Save Test Paper'));
     expect(screen.getByRole('button', { name: /save 1 selected/i })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: /save 1 selected/i }));
 
@@ -630,8 +646,7 @@ describe('ResearchFeedPage', () => {
       source_errors: {},
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'saved result');
@@ -673,8 +688,7 @@ describe('ResearchFeedPage', () => {
       source_errors: {},
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'unsaved result');
@@ -740,8 +754,7 @@ describe('ResearchFeedPage', () => {
         source_errors: {},
       });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     const searchButton = screen.getByRole('button', { name: /search/i });
@@ -791,8 +804,7 @@ describe('ResearchFeedPage', () => {
       },
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'error case');
@@ -824,9 +836,8 @@ describe('ResearchFeedPage', () => {
 
   it('shows search results after searching', async () => {
     const user = userEvent.setup();
-    renderPage();
+    renderPage('/feed?surface=search');
 
-    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');
@@ -855,7 +866,7 @@ describe('ResearchFeedPage', () => {
         metadata: {},
         library_match: null,
       },
-      expected: ['Save to Library', 'Open original'],
+      expected: ['Save to your papers', 'Open original'],
       absent: ['Open Paper Detail', 'Open Projects to Link', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
@@ -878,7 +889,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Open Projects to Link'],
-      absent: ['Save to Library', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
+      absent: ['Save to your papers', 'Send to Zotero', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Projects Paper',
@@ -900,7 +911,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Send to Zotero'],
-      absent: ['Save to Library', 'Open Projects to Link', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
+      absent: ['Save to your papers', 'Open Projects to Link', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
     },
     {
       title: 'Saved With Zotero Paper',
@@ -922,7 +933,7 @@ describe('ResearchFeedPage', () => {
         },
       },
       expected: ['Open Paper Detail', 'Open original', 'Open in Zotero desktop', 'Open Zotero Web Library', 'Re-sync Zotero'],
-      absent: ['Save to Library', 'Open Projects to Link', 'Send to Zotero'],
+      absent: ['Save to your papers', 'Open Projects to Link', 'Send to Zotero'],
     },
   ])('shows the correct trailing actions for $title', async ({ result, expected, absent }) => {
     const user = userEvent.setup();
@@ -935,8 +946,7 @@ describe('ResearchFeedPage', () => {
       source_errors: {},
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'row actions');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -991,8 +1001,7 @@ describe('ResearchFeedPage', () => {
       source_errors: {},
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'prelinked');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1041,8 +1050,7 @@ describe('ResearchFeedPage', () => {
       source_errors: {},
     });
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'projects');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1100,8 +1108,7 @@ describe('ResearchFeedPage', () => {
       ),
     );
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero queue');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1163,8 +1170,7 @@ describe('ResearchFeedPage', () => {
       ),
     );
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero lazy');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1214,8 +1220,7 @@ describe('ResearchFeedPage', () => {
     });
     vi.mocked(zoteroPushPaper).mockRejectedValueOnce(new Error('Zotero enqueue failed'));
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero failure');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1285,8 +1290,7 @@ describe('ResearchFeedPage', () => {
     });
     zoteroStream.push('data: {"status":"running","progress":60,"progress_message":"Sending to Zotero"}\n\n');
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero hydrated');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1376,8 +1380,7 @@ describe('ResearchFeedPage', () => {
     });
     zoteroStream.push('data: {"status":"running","progress":50,"progress_message":"Sending to Zotero"}\n\n');
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero success');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1471,9 +1474,8 @@ describe('ResearchFeedPage', () => {
       },
     ]);
 
-    renderPage();
+    renderPage('/feed?surface=search');
 
-    await user.click(screen.getByTestId('facet-discover'));
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'save flow');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1482,6 +1484,7 @@ describe('ResearchFeedPage', () => {
       expect(screen.getByText('Save Flow Paper')).toBeInTheDocument();
     });
 
+    await user.click(screen.getByLabelText('Select Save Flow Paper'));
     await user.click(screen.getByRole('button', { name: /save 1 selected/i }));
 
     await waitFor(() => {
@@ -1489,8 +1492,11 @@ describe('ResearchFeedPage', () => {
     });
     expect(useResearchMilestoneStore.getState().completed.save).toBe(true);
 
-    // Discover (search surface) facet uses aria-pressed (not aria-selected)
-    expect(screen.getByTestId('facet-discover')).toHaveAttribute('aria-pressed', 'true');
+    // Still on Discover, still showing the result that was just saved.
+    expect(screen.getByRole('tab', { name: 'Find new papers' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(screen.getByText('Save Flow Paper')).toBeInTheDocument();
   });
 
@@ -1552,8 +1558,7 @@ describe('ResearchFeedPage', () => {
       },
     ]);
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'in place');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1563,6 +1568,8 @@ describe('ResearchFeedPage', () => {
       expect(screen.getByText('Still Unsaved Paper')).toBeInTheDocument();
     });
 
+    await user.click(screen.getByLabelText('Select Saved In Place Paper'));
+    await user.click(screen.getByLabelText('Select Still Unsaved Paper'));
     await user.click(screen.getByRole('button', { name: /save 2 selected/i }));
 
     await waitFor(() => {
@@ -1632,8 +1639,7 @@ describe('ResearchFeedPage', () => {
       },
     ]);
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'partial selection');
     await user.click(screen.getByRole('button', { name: /search/i }));
 
@@ -1642,7 +1648,8 @@ describe('ResearchFeedPage', () => {
       expect(screen.getByText('Deselected Save Paper')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByLabelText('Select Deselected Save Paper'));
+    // Opt in to exactly one of the two rows.
+    await user.click(screen.getByLabelText('Select Selected Save Paper'));
     await user.click(screen.getByRole('button', { name: /save 1 selected/i }));
 
     await waitFor(() => {
@@ -1698,8 +1705,7 @@ describe('ResearchFeedPage', () => {
       },
     ]);
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'drawer save');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1709,9 +1715,9 @@ describe('ResearchFeedPage', () => {
     });
 
     await user.click(getPreviewRowPrimaryButton('Drawer Save Paper'));
-    expect(screen.getByRole('button', { name: /save to library/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save to your papers/i })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /save to library/i }));
+    await user.click(screen.getByRole('button', { name: /save to your papers/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /open paper detail/i })).toBeInTheDocument();
@@ -1745,8 +1751,7 @@ describe('ResearchFeedPage', () => {
     });
     vi.mocked(batchSavePapers).mockRejectedValueOnce(new Error('Save exploded'));
 
-    renderPage();
-    await user.click(screen.getByTestId('facet-discover'));
+    renderPage('/feed?surface=search');
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'drawer error');
     await user.click(screen.getByRole('button', { name: /search/i }));
 
@@ -1755,7 +1760,7 @@ describe('ResearchFeedPage', () => {
     });
 
     await user.click(getPreviewRowPrimaryButton('Drawer Error Paper'));
-    await user.click(screen.getByRole('button', { name: /save to library/i }));
+    await user.click(screen.getByRole('button', { name: /save to your papers/i }));
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Save exploded');
@@ -1812,10 +1817,9 @@ describe('ResearchFeedPage', () => {
       },
     ]);
 
-    const { queryClient } = renderPage();
+    const { queryClient } = renderPage('/feed?surface=search');
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    await user.click(screen.getByTestId('facet-discover'));
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'invalidate library');
     await user.click(screen.getByRole('button', { name: /search/i }));
 
@@ -1823,6 +1827,7 @@ describe('ResearchFeedPage', () => {
       expect(screen.getByText('Invalidate Library Paper')).toBeInTheDocument();
     });
 
+    await user.click(screen.getByLabelText('Select Invalidate Library Paper'));
     await user.click(screen.getByRole('button', { name: /save 1 selected/i }));
 
     await waitFor(() => {
@@ -1840,9 +1845,8 @@ describe('ResearchFeedPage', () => {
       })),
     );
 
-    renderPage();
+    renderPage('/feed?surface=search');
 
-    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');
@@ -1876,10 +1880,7 @@ describe('ResearchFeedPage', () => {
 
     await waitFor(() => {
       // The Library surface renders a section description and its FeedView
-      // C-FEED: copy updated to "My library — papers you've saved or own."
-      expect(
-        screen.getByText(/my library.*saved.*own/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/papers you.*saved or own/i)).toBeInTheDocument();
     });
   });
 
@@ -1902,14 +1903,13 @@ describe('ResearchFeedPage', () => {
     });
 
     // Library surface renders the section description and the FeedView content
-    // C-FEED: copy updated to "My library — papers you've saved or own."
-    expect(screen.getByText(/my library.*saved.*own/i)).toBeInTheDocument();
+    expect(screen.getByText(/papers you.*saved or own/i)).toBeInTheDocument();
     await screen.findByText('Test Paper One');
   });
 
   // ── 3-pane IA — §Status facet items replace surface chips ─────────────
 
-  it('renders §Status facet items: Inbox | Library | Reading | Reading List | Done | Trash', () => {
+  it('renders §Status facet items: Inbox | Saved | Reading | Reading List | Done | Trash', () => {
     renderPage();
     // 3-pane IA: §Status facet buttons (aria-pressed)
     expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
@@ -1918,8 +1918,6 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByTestId('facet-status-to_read')).toBeInTheDocument();
     expect(screen.getByTestId('facet-status-done')).toBeInTheDocument();
     expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
-    // Discover link (search surface) is in rail
-    expect(screen.getByTestId('facet-discover')).toBeInTheDocument();
     // Ask is NOT a feed surface (F4 owns /ask route)
     expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
   });

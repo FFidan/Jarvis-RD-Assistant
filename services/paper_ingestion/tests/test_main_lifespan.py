@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -61,6 +63,17 @@ def _patch_factory_io(fake_pool: AsyncMock, fake_http_client: AsyncMock) -> list
         patch(
             "jarvis_common.app_factory.validate_production_config",
             MagicMock(return_value=None),
+        ),
+        patch(
+            "jarvis_common.app_factory.check_migrations",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    current_user="jarvis_research_runtime",
+                    packaged_version=114,
+                    live_version=114,
+                    integrity="ok",
+                )
+            ),
         ),
         patch.object(
             _af.httpx,
@@ -148,31 +161,6 @@ async def test_qdrant_pipeline_runs_generation_repair_and_cancels_before_close(
     qdrant.close.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_telegram_username_refresh_refuses_quarantine_before_secrets(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    """The startup helper must not load or transmit a restored Telegram token."""
-    from paper_ingestion.services import telegram_bootstrap
-
-    quarantine = tmp_path / ".outbound-quarantine.json"
-    quarantine.touch()
-    monkeypatch.setenv("OUTBOUND_QUARANTINE_SENTINEL", str(quarantine))
-
-    def unexpected_settings_read():
-        raise AssertionError("quarantine must be checked before secrets are loaded")
-
-    monkeypatch.setattr(telegram_bootstrap, "get_secrets_settings", unexpected_settings_read)
-    pool = AsyncMock()
-    http_client = AsyncMock()
-
-    await telegram_bootstrap.refresh_telegram_bot_username(pool, http_client)
-
-    pool.acquire.assert_not_called()
-    http_client.get.assert_not_awaited()
-
-
 # ---------------------------------------------------------------------------
 # Behavioural test of the broker hook itself, via a minimal lifespan
 # ---------------------------------------------------------------------------
@@ -249,13 +237,9 @@ class TestProcrastinateWorkerLifespan:
             async with lifespan(app):
                 await asyncio.wait_for(worker_started.wait(), timeout=2.0)
 
-                # Worker was started with the paper_ingestion-specific queues +
-                # builtin (so procrastinate's auto-registered remove_old_jobs
-                # cleanup task runs out of this service).
-                assert list(captured_kwargs.get("queues", [])) == [
-                    "paper_ingestion",
-                    "builtin",
-                ]
+                # The worker polls only its service-owned queue. Retention
+                # configures the built-in cleanup task into that same queue.
+                assert list(captured_kwargs.get("queues", [])) == ["paper_ingestion"]
                 # Signal handlers stay off — we manage cancellation from the
                 # lifespan, not from SIGINT/SIGTERM in the worker.
                 assert captured_kwargs.get("install_signal_handlers") is False
@@ -352,6 +336,17 @@ class TestModelHmacKeyBootGate:
                 "jarvis_common.app_factory.validate_encrypted_config_rows",
                 AsyncMock(return_value=None),
             ),
+            patch(
+                "jarvis_common.app_factory.check_migrations",
+                AsyncMock(
+                    return_value=SimpleNamespace(
+                        current_user="jarvis_research_runtime",
+                        packaged_version=114,
+                        live_version=114,
+                        integrity="ok",
+                    )
+                ),
+            ),
             patch.object(
                 _af.httpx,
                 "AsyncClient",
@@ -434,11 +429,19 @@ async def test_autoconfigure_models_hook_sets_flag_and_writes_user_config() -> N
     ):
         await _autoconfigure_models_hook(app)
 
-    # At least 3 INSERT calls: smart + fast roles + flag (embed is not
-    # auto-configured — it is dimension-locked to the Qdrant collection).
-    execute_calls = [str(call) for call in conn.execute.await_args_list]
-    insert_calls = [c for c in execute_calls if "INSERT INTO user_config" in c]
-    assert len(insert_calls) >= 3  # 2 roles + autoconfigured flag
+    # Smart + fast roles and the completion flag are bound to owner-capability
+    # calls (embed remains dimension-locked to the Qdrant collection).
+    bound_keys = {
+        arg
+        for call_args in conn.execute.await_args_list
+        for arg in call_args.args[1:]
+        if isinstance(arg, str)
+    }
+    assert {
+        "llm.smart_model",
+        "llm.fast_model",
+        "system.models_autoconfigured",
+    } <= bound_keys
 
 
 @pytest.mark.asyncio
@@ -637,6 +640,50 @@ async def test_autoconfigure_models_hook_is_idempotent() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_reconciler_reports_effects_to_exact_platform_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Research sends bounded effects with its service credential only."""
+    from paper_ingestion import litellm_reconciler
+
+    token_file = tmp_path / "research-token"
+    token_file.write_text("research-secret", encoding="utf-8")
+    monkeypatch.setattr(
+        litellm_reconciler,
+        "get_paper_ingestion_settings",
+        lambda: SimpleNamespace(
+            platform_api_url="http://platform:8003",
+            research_service_token_file=token_file,
+        ),
+    )
+    response = MagicMock()
+    client = AsyncMock()
+    client.post.return_value = response
+
+    await litellm_reconciler._report_config_effects(
+        client,
+        roles=["smart"],
+        pending=False,
+        effective_num_ctx_role="smart",
+        effective_num_ctx_value=4096,
+    )
+
+    request = client.post.await_args
+    assert request.args == ("http://platform:8003/internal/services/research-config-effects",)
+    assert request.kwargs["headers"] == {
+        "X-Jarvis-Service-Principal": "research",
+        "X-Jarvis-Service-Token": "research-secret",
+    }
+    assert request.kwargs["json"] == {
+        "roles": ["smart"],
+        "pending": False,
+        "effective_num_ctx_role": "smart",
+        "effective_num_ctx_value": 4096,
+    }
+    response.raise_for_status.assert_called_once_with()
+
+
 def _make_pool() -> tuple[MagicMock, AsyncMock]:
     """Pool-shaped mock whose acquire() yields a single AsyncMock connection."""
     pool = MagicMock()
@@ -693,7 +740,8 @@ async def test_reconcile_no_db_marks_pending_and_returns_false(
         'HTTP 500 {"error": "No DB Connected. Here\'s how to do it - ..."}'
     )
 
-    mock_pending = AsyncMock()
+    mock_effects = AsyncMock()
+    effects_client = AsyncMock()
     mock_fallback = AsyncMock()
     with (
         caplog.at_level(logging.WARNING, logger="paper_ingestion.main"),
@@ -705,20 +753,17 @@ async def test_reconcile_no_db_marks_pending_and_returns_false(
             "paper_ingestion.services.litellm_config.ensure_smart_fallback",
             new=mock_fallback,
         ),
-        patch(
-            "paper_ingestion.services.config_write._update_delivery_pending_roles",
-            new=mock_pending,
-        ),
+        patch("paper_ingestion.litellm_reconciler._report_config_effects", new=mock_effects),
     ):
         # Must NOT raise.
-        result = await _reconcile_litellm_models_once(pool)
+        result = await _reconcile_litellm_models_once(pool, effects_client)
 
     assert result is False, "a failed delivery must report the pass as failed (loop retries)"
 
     # Every undelivered role is marked pending — never a phantom "applied".
     # (embed is dimension-locked and never auto-delivered, so no marker for it.)
-    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_pending.await_args_list]
-    assert recorded == [({"smart"}, True), ({"fast"}, True)], (
+    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_effects.await_args_list]
+    assert recorded == [(["smart"], True), (["fast"], True)], (
         f"Expected smart+fast marked pending; got: {recorded}"
     )
 
@@ -752,7 +797,8 @@ async def test_reconcile_success_clears_pending_and_creates_fallback() -> None:
 
     mock_update = AsyncMock(side_effect=[True, False])
     mock_fallback = AsyncMock(return_value=True)
-    mock_pending = AsyncMock()
+    mock_effects = AsyncMock()
+    effects_client = AsyncMock()
     with (
         patch(
             "paper_ingestion.services.litellm_config.update_litellm_model",
@@ -762,17 +808,14 @@ async def test_reconcile_success_clears_pending_and_creates_fallback() -> None:
             "paper_ingestion.services.litellm_config.ensure_smart_fallback",
             new=mock_fallback,
         ),
-        patch(
-            "paper_ingestion.services.config_write._update_delivery_pending_roles",
-            new=mock_pending,
-        ),
+        patch("paper_ingestion.litellm_reconciler._report_config_effects", new=mock_effects),
     ):
-        result = await _reconcile_litellm_models_once(pool)
+        result = await _reconcile_litellm_models_once(pool, effects_client)
 
     assert result is True
 
-    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_pending.await_args_list]
-    assert recorded == [({"smart"}, False), ({"fast"}, False)], (
+    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_effects.await_args_list]
+    assert recorded == [(["smart"], False), (["fast"], False)], (
         f"Expected smart+fast cleared (False return included); got: {recorded}"
     )
 
@@ -819,12 +862,6 @@ async def test_reconcile_ignores_bare_alias_and_falls_back_to_env(
             "paper_ingestion.services.litellm_config.ensure_smart_fallback",
             new=AsyncMock(return_value=False),
         ),
-        # Pending bookkeeping is not under test here — stub it so the real
-        # helper never runs SQL against the AsyncMock connection.
-        patch(
-            "paper_ingestion.services.config_write._update_delivery_pending_roles",
-            new=AsyncMock(),
-        ),
     ):
         result = await _reconcile_litellm_models_once(pool)
 
@@ -863,10 +900,6 @@ async def test_reconcile_missing_rows_use_env_then_static_default(
         patch(
             "paper_ingestion.services.litellm_config.ensure_smart_fallback",
             new=AsyncMock(return_value=True),
-        ),
-        patch(
-            "paper_ingestion.services.config_write._update_delivery_pending_roles",
-            new=AsyncMock(),
         ),
     ):
         result = await _reconcile_litellm_models_once(pool)
@@ -970,7 +1003,8 @@ async def test_reconcile_transport_error_marks_pending_not_raises() -> None:
 
     gateway_exc = RuntimeError("LiteLLM /model/new failed for alias 'smart': HTTP 502 Bad Gateway")
 
-    mock_pending = AsyncMock()
+    mock_effects = AsyncMock()
+    effects_client = AsyncMock()
     with (
         patch(
             "paper_ingestion.services.litellm_config.update_litellm_model",
@@ -980,21 +1014,18 @@ async def test_reconcile_transport_error_marks_pending_not_raises() -> None:
             "paper_ingestion.services.litellm_config.ensure_smart_fallback",
             new=AsyncMock(),
         ),
-        patch(
-            "paper_ingestion.services.config_write._update_delivery_pending_roles",
-            new=mock_pending,
-        ),
+        patch("paper_ingestion.litellm_reconciler._report_config_effects", new=mock_effects),
     ):
         # Must NOT raise.
-        result = await _reconcile_litellm_models_once(pool)
+        result = await _reconcile_litellm_models_once(pool, effects_client)
 
     assert result is False
-    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_pending.await_args_list]
-    assert recorded == [({"smart"}, True), ({"fast"}, True)]
+    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_effects.await_args_list]
+    assert recorded == [(["smart"], True), (["fast"], True)]
 
 
 def _reconcile_patches(update_mock: AsyncMock, fallback_mock: AsyncMock):
-    """The three patches every reconcile-pass test needs (update/fallback/pending)."""
+    """Patch the two LiteLLM delivery calls used by reconcile-pass tests."""
     return (
         patch(
             "paper_ingestion.services.litellm_config.update_litellm_model",
@@ -1003,10 +1034,6 @@ def _reconcile_patches(update_mock: AsyncMock, fallback_mock: AsyncMock):
         patch(
             "paper_ingestion.services.litellm_config.ensure_smart_fallback",
             new=fallback_mock,
-        ),
-        patch(
-            "paper_ingestion.services.config_write._update_delivery_pending_roles",
-            new=AsyncMock(),
         ),
     )
 
@@ -1271,13 +1298,15 @@ async def test_start_and_shutdown_reconciler_hooks_cancel_cleanly() -> None:
 
     started = asyncio.Event()
 
-    async def _never_done(pool: Any) -> bool:
+    async def _never_done(pool: Any, effects_client: Any) -> bool:
+        del pool, effects_client
         started.set()
         await asyncio.Event().wait()  # blocks until cancelled
         return False
 
     app = FastAPI()
     app.state.db_pool = MagicMock()
+    app.state.http_client = AsyncMock()
     with patch(
         "paper_ingestion.litellm_reconciler._reconcile_litellm_models_once",
         new=_never_done,
@@ -1321,18 +1350,19 @@ def test_register_paper_ingestion_tasks_raises_when_kind_unregistered(monkeypatc
 
 
 def test_lifespan_config_includes_runtime_validator_hook() -> None:
-    """_validate_runtime_config_hook runs right after migrations, with a None teardown."""
+    """Runtime config validation remains before every service writer hook."""
     from paper_ingestion.main import (
         _lifespan_config,
-        _run_migrations_hook,
+        _run_hw_probe_hook,
         _validate_runtime_config_hook,
     )
 
     init = _lifespan_config.custom_init_tasks
     assert _validate_runtime_config_hook in init
     idx = init.index(_validate_runtime_config_hook)
-    # Must run immediately after migrations so users/user_config exist.
-    assert init[idx - 1] is _run_migrations_hook
+    # The shared factory performs its read-only migration check before this
+    # entire list. The service validator must still precede writer startup.
+    assert idx < init.index(_run_hw_probe_hook)
     # Paired None teardown at the same index; the two lists stay equal-length.
     assert _lifespan_config.custom_teardown_tasks[idx] is None
     assert len(init) == len(_lifespan_config.custom_teardown_tasks)

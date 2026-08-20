@@ -10,8 +10,9 @@ validator must reject absurd values with HTTP 400.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 import pytest_asyncio
 from jarvis_common import effective_num_ctx, invalidate_effective_num_ctx_cache
@@ -30,48 +31,102 @@ _MACHINE_KEY = "llm.ctx-contract-host.smart_num_ctx"
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def ctx_client(contract_conn, contract_two_users):
-    """ASGI client on the real per-test transaction, admin gate bypassed.
+    """Serve Platform config through the signed in-process Research command."""
+    from functools import partial
 
-    Mirrors the settings-contract fixture: SharedConnPool serves both the
-    Depends(get_db_pool) path and request.app.state.db_pool, and require_admin
-    is patched in the router namespace because set_config calls it directly.
-    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from fastapi import Depends, FastAPI
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import require_admin
+    from jarvis_common.identity_assertions import (
+        IdentityAssertionSigner,
+        IdentityAssertionVerifier,
+        VerificationKey,
+    )
+    from jarvis_common.identity_capabilities import required_identity_scopes
+    from jarvis_common.identity_middleware import IdentityAssertionMiddleware
     from jarvis_common.testing_contract_apps import (
         make_contract_client,
         patch_app_state,
         patch_dependency_overrides,
     )
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-    from paper_ingestion.routers import settings as _settings_mod
+    from paper_ingestion.deps import get_db_pool as get_research_db_pool
+    from paper_ingestion.routers import internal_config
+    from platform_api.deps import get_db_pool as get_platform_db_pool
+    from platform_api.deps import get_identity_signer
+    from platform_api.deps import limiter as platform_limiter
+    from platform_api.main import app as platform_app
 
-    async def _allow_all(request=None) -> None:  # noqa: ARG001
-        return None
-
-    shared = SharedConnPool(contract_conn)
-    _orig_require_admin = _settings_mod.require_admin
-    _settings_mod.require_admin = _allow_all
-    app.state.limiter.enabled = False
+    platform_pool = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_platform_runtime",
+    )
+    research_pool = platform_pool.with_session_authorization("jarvis_research_runtime")
+    await contract_conn.execute(
+        "UPDATE users SET role = 'admin' WHERE id = $1",
+        contract_two_users.user_a_id,
+    )
+    private_key = Ed25519PrivateKey.generate()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="contract-current",
+        signing_key=private_key,
+    )
+    verifier = IdentityAssertionVerifier(
+        issuer="jarvis-platform",
+        audience="research",
+        keys={"contract-current": VerificationKey(private_key.public_key())},
+    )
+    research_app = FastAPI(dependencies=[Depends(verify_api_key)])
+    research_app.include_router(internal_config.router)
+    research_app.add_middleware(
+        IdentityAssertionMiddleware,
+        verifier=verifier,
+        scope_resolver=partial(required_identity_scopes, "research"),
+    )
+    platform_limiter.enabled = False
     invalidate_effective_num_ctx_cache()
     try:
-        with (
-            patch_app_state(app, {"db_pool": shared, "http_client": AsyncMock()}),
-            patch_dependency_overrides(
-                app,
-                set_overrides={
-                    get_db_pool: lambda: shared,
-                    verify_api_key: lambda: None,
-                    require_admin: _allow_all,
-                },
-            ),
-        ):
-            async with make_contract_client(app, contract_two_users.cookie_a) as client:
-                yield client
+        research_transport = httpx.ASGITransport(app=research_app)
+        async with httpx.AsyncClient(
+            transport=research_transport,
+            base_url="http://paper_ingestion:8000",
+        ) as research_client:
+            with (
+                patch_app_state(
+                    research_app,
+                    {
+                        "db_pool": research_pool,
+                        "http_client": AsyncMock(spec=httpx.AsyncClient),
+                        "scheduler": MagicMock(),
+                    },
+                ),
+                patch_dependency_overrides(
+                    research_app,
+                    set_overrides={
+                        get_research_db_pool: lambda: research_pool,
+                        verify_api_key: lambda: None,
+                    },
+                ),
+                patch_app_state(
+                    platform_app,
+                    {"db_pool": platform_pool, "http_client": research_client},
+                ),
+                patch_dependency_overrides(
+                    platform_app,
+                    set_overrides={
+                        get_platform_db_pool: lambda: platform_pool,
+                        get_identity_signer: lambda: signer,
+                        verify_api_key: lambda: None,
+                    },
+                ),
+            ):
+                async with make_contract_client(
+                    platform_app,
+                    contract_two_users.cookie_a,
+                ) as client:
+                    yield client
     finally:
-        _settings_mod.require_admin = _orig_require_admin
-        app.state.limiter.enabled = True
+        platform_limiter.enabled = True
         invalidate_effective_num_ctx_cache()
 
 
@@ -150,7 +205,10 @@ async def test_num_ctx_write_delivers_and_updates_budget_reader(
         assert row is not None, "delivery success must write the system llm.smart_num_ctx row"
         assert row["value"] == 2048
 
-        shared = SharedConnPool(contract_conn)
+        shared = SharedConnPool(
+            contract_conn,
+            session_authorization="jarvis_research_runtime",
+        )
         invalidate_effective_num_ctx_cache()
         assert await effective_num_ctx(shared, "smart") == 2048, (
             "budget reader must return the delivered context"
@@ -161,7 +219,10 @@ async def test_num_ctx_write_delivers_and_updates_budget_reader(
                 await update_litellm_model(
                     "llm.smart_model",
                     model_id,
-                    db_pool=SharedConnPool(contract_conn),
+                    db_pool=SharedConnPool(
+                        contract_conn,
+                        session_authorization="jarvis_research_runtime",
+                    ),
                     machine_id="ctx-contract-host",
                     num_ctx=prior_num_ctx,
                 )
@@ -169,8 +230,10 @@ async def test_num_ctx_write_delivers_and_updates_budget_reader(
                 pass
 
 
-async def test_failed_delivery_keeps_previous_budget(contract_conn, ctx_client, monkeypatch):
-    """Fail-closed: a delivery failure writes no rows, so the budget keeps the old value."""
+async def test_failed_delivery_persists_pending_value_and_keeps_previous_budget(
+    contract_conn, ctx_client, monkeypatch
+):
+    """A failed apply remains visibly pending without raising the active budget."""
     from fastapi import HTTPException
 
     import paper_ingestion.services.config_write as _config_write
@@ -187,21 +250,26 @@ async def test_failed_delivery_keeps_previous_budget(contract_conn, ctx_client, 
         f"/api/config/{_MACHINE_KEY}",
         json={"key": _MACHINE_KEY, "value": 4096},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 202
+    assert resp.json()["delivery_state"] == "pending"
 
     machine_row = await contract_conn.fetchrow(
         "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL", _MACHINE_KEY
     )
-    assert machine_row is None, "failed delivery must not commit the per-machine row"
+    assert machine_row is not None and machine_row["value"] == 4096
     system_row = await contract_conn.fetchrow(
         "SELECT value FROM user_config WHERE key = 'llm.smart_num_ctx' AND user_id IS NULL"
     )
     assert system_row is not None and system_row["value"] == 8192
 
     invalidate_effective_num_ctx_cache()
-    assert await effective_num_ctx(SharedConnPool(contract_conn), "smart") == 8192, (
-        "budget must never exceed the last successfully delivered context"
-    )
+    assert (
+        await effective_num_ctx(
+            SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime"),
+            "smart",
+        )
+        == 8192
+    ), "budget must never exceed the last successfully delivered context"
 
 
 async def test_num_ctx_validator_rejects_out_of_bounds_writes(ctx_client):

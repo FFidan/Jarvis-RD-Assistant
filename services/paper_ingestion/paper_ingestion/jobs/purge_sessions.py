@@ -15,7 +15,7 @@ is spent and safe to delete outright — no grace window applies.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from apscheduler.triggers.cron import CronTrigger
 from jarvis_common.maintenance import skip_for_maintenance
@@ -26,16 +26,10 @@ logger = logging.getLogger(__name__)
 # training (03:30), before the Pulse deck (04:00).
 _PURGE_SESSIONS_CRON = "35 3 * * *"
 
-_DELETE_STALE_SESSIONS = (
-    "DELETE FROM sessions "
-    "WHERE (expires_at < now() - INTERVAL '30 days') "
-    "OR (revoked_at IS NOT NULL AND revoked_at < now() - INTERVAL '7 days')"
-)
 
-_DELETE_EXPIRED_CHALLENGES = "DELETE FROM webauthn_challenges WHERE expires_at < now()"
-
-
-async def _run_purge(pool: Any, sql: str, noun: str) -> None:
+async def _run_purge(
+    pool: Any, operation: Literal["sessions", "webauthn_challenges"], noun: str
+) -> None:
     """Run one purge DELETE, log the deleted-row count, and swallow any DB error.
 
     Calls ``pool.execute`` directly (single statement, no ``acquire`` needed —
@@ -43,14 +37,9 @@ async def _run_purge(pool: Any, sql: str, noun: str) -> None:
     is logged and swallowed so it never crashes the scheduler.
     """
     try:
-        result = await pool.execute(sql)
-        try:
-            deleted = int(result.split()[-1])
-        except Exception:
-            logger.debug(
-                "purge_sessions: could not parse delete-count from %r", result, exc_info=True
-            )
-            deleted = -1
+        deleted = int(
+            await pool.fetchval("SELECT platform.purge_identity_retention_v1($1)", operation)
+        )
         logger.info("purge_sessions: deleted %d stale %s", deleted, noun)
     except Exception:
         logger.exception("purge_sessions: failed to purge stale %s", noun)
@@ -62,8 +51,8 @@ async def purge_stale_sessions(pool: Any) -> None:
     Each DELETE is issued and error-handled independently so a failure of one
     does not skip the other.
     """
-    await _run_purge(pool, _DELETE_STALE_SESSIONS, "session(s)")
-    await _run_purge(pool, _DELETE_EXPIRED_CHALLENGES, "webauthn challenge(s)")
+    await _run_purge(pool, "sessions", "session(s)")
+    await _run_purge(pool, "webauthn_challenges", "webauthn challenge(s)")
 
 
 async def purge_stale_sessions_task(app: Any) -> None:

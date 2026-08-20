@@ -14,6 +14,12 @@ from decimal import Decimal, DecimalException
 from typing import Any, Literal, cast, get_args
 
 import httpx
+from jarvis_common.llm_provider_registry import (
+    ProviderDefinition,
+    provider_for_id,
+    provider_for_prefix,
+    validate_custom_openai_base_url_for_outbound,
+)
 from jarvis_common.maintenance import ensure_outbound_egress_allowed
 from jarvis_common.model_catalog import (
     MetadataField,
@@ -22,16 +28,11 @@ from jarvis_common.model_catalog import (
     Provider,
     Role,
 )
+from jarvis_common.provider_test import _OPENAI_COMPATIBLE_MODEL_URLS
 
 from paper_ingestion.services.litellm_config import (
     get_provider_api_key,
     get_provider_base_url,
-)
-from paper_ingestion.services.llm_provider_registry import (
-    ProviderDefinition,
-    provider_for_id,
-    provider_for_prefix,
-    validate_custom_openai_base_url_for_outbound,
 )
 from paper_ingestion.services.model_identifiers import (
     NAMESPACED_PROVIDER_KINDS,
@@ -39,7 +40,6 @@ from paper_ingestion.services.model_identifiers import (
     validate_namespaced_model_suffix,
 )
 from paper_ingestion.services.model_lifecycle import MODEL_CATALOG, normalize_model_tag
-from paper_ingestion.services.provider_test import _OPENAI_COMPATIBLE_MODEL_URLS
 
 __all__ = [
     "ProviderModelList",

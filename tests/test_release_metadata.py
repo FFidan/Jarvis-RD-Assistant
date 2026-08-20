@@ -20,6 +20,20 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _image_scan_contract(workflow: str, step_name: str) -> tuple[str, dict[str, str]]:
+    step = workflow.split(f"- name: {step_name}", 1)[1].split("\n      - name:", 1)[0]
+    action = re.search(r"^\s*uses:\s*(\S+)", step, re.MULTILINE)
+    assert action is not None, f"{step_name} no longer invokes an action"
+    settings = dict(
+        re.findall(
+            r"^\s*(scan-type|severity|ignore-unfixed|exit-code):\s*(\S+)",
+            step,
+            re.MULTILINE,
+        )
+    )
+    return action.group(1), settings
+
+
 def test_changelog_records_the_latest_releases() -> None:
     changelog = _read("CHANGELOG.md")
 
@@ -138,6 +152,30 @@ def test_release_docs_match_the_exact_sha_publish_and_promotion_contract() -> No
     assert "downloads its named digest receipt from that exact run" in release_words
 
 
+def test_scheduled_image_scan_matches_publish_scan_contract() -> None:
+    publish_workflow = _read(".github/workflows/ghcr-publish.yml")
+    scheduled_workflow = _read(".github/workflows/nightly-llm-smoke.yml")
+
+    publish_contract = _image_scan_contract(publish_workflow, "Vulnerability report")
+    scheduled_contract = _image_scan_contract(scheduled_workflow, "Scan the pinned image")
+
+    # Both sides are read from the workflows, so an empty match on both would
+    # agree with itself and prove nothing. Pin what must have been found.
+    assert set(publish_contract[1]) == {
+        "scan-type",
+        "severity",
+        "ignore-unfixed",
+        "exit-code",
+    }, f"the publish scan no longer states its blocking contract: {publish_contract[1]}"
+
+    assert scheduled_contract[0] == publish_contract[0], (
+        "scheduled image scan action differs from the publish scan action"
+    )
+    assert scheduled_contract[1] == publish_contract[1], (
+        "scheduled image scan settings differ from the publish scan settings"
+    )
+
+
 def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> None:
     release = _read("docs/RELEASE.md")
     lifecycle = _read("scripts/lifecycle-smoke.sh")
@@ -165,8 +203,8 @@ def test_release_support_matrix_matches_lifecycle_compatibility_contracts() -> N
     }
 
     assert documented == expected
-    assert retained_origins[0] == "v1.2.0"
-    assert retained_origins[-1] == "v1.2.4"
+    assert retained_origins[0] == "v1.2.1"
+    assert retained_origins[-1] == "v1.2.5"
     assert "v1.1.3" not in documented
 
     # The runbook and the matrix are prose; this input is what a dispatched run
@@ -247,7 +285,7 @@ def test_live_postgres_jobs_reuse_one_non_skipping_result_validator() -> None:
     assert "--collect-only" not in workflow
 
 
-def test_schema_101_fixture_is_single_sourced_and_collected_by_contract_ci() -> None:
+def test_schema_101_contract_fixture_and_full_recovery_origin_are_collected() -> None:
     fixture = ROOT / "db/testdata/schema-101-seed.sql"
     restore_roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
     contract = _read(
@@ -256,7 +294,10 @@ def test_schema_101_fixture_is_single_sourced_and_collected_by_contract_ci() -> 
     workflow = _read(".github/workflows/ci.yml")
 
     assert fixture.is_file()
-    assert "db/testdata/schema-101-seed.sql" in restore_roundtrip
+    assert "db/testdata/schema-101-seed.sql" in contract
+    assert '"$REPO_ROOT/db/init.sql"' in restore_roundtrip
+    assert "/^-- FRESH-INSTALL OWNERSHIP BOUNDARY$/" in restore_roundtrip
+    assert "DELETE FROM schema_migrations WHERE version > 101" in restore_roundtrip
     assert "CREATE TABLE schema_migrations" not in restore_roundtrip
     assert "pytest.mark.contract" in contract
     assert "pytest.mark.integration" not in contract
@@ -384,7 +425,7 @@ def test_frontend_parser_fixes_reuse_the_existing_security_job() -> None:
 
 
 def test_release_version_pins_are_complete_and_consistent() -> None:
-    version = "1.2.5"
+    version = "1.2.6"
     package = json.loads(_read("frontend/package.json"))
     package_lock = json.loads(_read("frontend/package-lock.json"))
     citation = _read("CITATION.cff")
@@ -396,9 +437,9 @@ def test_release_version_pins_are_complete_and_consistent() -> None:
     assert package_lock["version"] == version
     assert package_lock["packages"][""]["version"] == version
     assert re.search(rf"^version: {re.escape(version)}$", citation, re.MULTILINE)
-    assert "date-released: 2026-08-13" in citation
+    assert "date-released: 2026-08-21" in citation
     assert f'name = "jarvis-rd-assistant"\nversion = "{version}"' in lock
-    assert compose.count(f"JARVIS_VERSION:-{version}") == 8
+    assert compose.count(f"JARVIS_VERSION:-{version}") == 12
     assert "JARVIS_VERSION:-1.2.4" not in compose
 
 
@@ -662,15 +703,20 @@ def test_restore_release_mode_owns_a_generated_compose_project() -> None:
     assert "_project_resources_owned" in roundtrip
     assert "com.docker.compose.project" in roundtrip
     assert "PROJECT_OWNERSHIP_CONFIRMED" in roundtrip
-    assert "down -v --remove-orphans" in roundtrip
+    assert "down --remove-orphans" in roundtrip
+    assert "down -v" not in roundtrip
+    assert "retained disposable volumes" in roundtrip
     assert "fixture project: %s" in roundtrip
 
 
 def test_restore_release_fixture_contains_current_migration_prerequisites() -> None:
     roundtrip = _read("scripts/tests/test_restore_roundtrip.sh")
     seed = _read("db/testdata/schema-101-seed.sql")
+    full_baseline = _read("db/init.sql").split("-- FRESH-INSTALL OWNERSHIP BOUNDARY", maxsplit=1)[0]
 
-    assert "db/testdata/schema-101-seed.sql" in roundtrip
+    assert '"$REPO_ROOT/db/init.sql"' in roundtrip
+    assert "ALTER TABLE magic_link_tokens ALTER COLUMN user_id SET NOT NULL" in roundtrip
+    assert "CREATE TABLE public.llm_usage_log" in full_baseline
     assert "CREATE TABLE papers(" in seed
     assert "source_type text" in seed
     assert "discovery_origin text NOT NULL" in seed
@@ -731,6 +777,22 @@ def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:
     )
     assert "backup_trigger:/backup-trigger:ro" in fixture_compose
     assert "./provider-state:/provider-state:ro" in fixture_compose
+    fixture_litellm = fixture_compose.split("  litellm:\n", 1)[1].split("\n  postgres-backup:", 1)[
+        0
+    ]
+    assert "litellm-migrator:\n        condition: service_completed_successfully" in (
+        fixture_litellm
+    )
+    assert "litellm-db-init:\n        condition: service_completed_successfully" not in (
+        fixture_litellm
+    )
+    fixture_backup = fixture_compose.split("  postgres-backup:\n", 1)[1].split(
+        "\n  postgres-restore:", 1
+    )[0]
+    assert "litellm-migrator:\n        condition: service_completed_successfully" in (
+        fixture_backup
+    )
+    assert "litellm:\n        condition: service_healthy" not in fixture_backup
     assert "provider_hit_count" in roundtrip
     assert "link_host_secret postgres_password" in roundtrip
     assert 'ln -sfn "${name}.txt" "$WORK/host-secrets/$name"' in roundtrip
@@ -745,11 +807,12 @@ def test_restore_release_gate_proves_direct_litellm_quarantine() -> None:
     recreated = roundtrip.index("dc up -d --force-recreate litellm postgres-backup")
     recovery_control = roundtrip.index(
         'wait_for 120 "restore review control after service recreation" \\\n'
-        "        quarantine_recovery_control_available"
+        "    quarantine_recovery_control_available"
     )
     acknowledgement = roundtrip.index('acknowledge_restore_review "$OFF_HOST_RESTORE_ID"')
     resumed = roundtrip.index(
-        'wait_for 120 "direct LiteLLM route after exact review acknowledgement" litellm_chat_works'
+        'wait_for 120 "direct LiteLLM route after exact review acknowledgement" \\\n'
+        '        litellm_chat_works "$TARGET_LITELLM_MASTER"'
     )
 
     assert baseline < quarantined < recreated < recovery_control < acknowledgement < resumed
@@ -820,7 +883,7 @@ def test_every_python_image_declares_an_import_smoke_target() -> None:
     workflow = _read(".github/workflows/ghcr-publish.yml")
     entries = _build_matrix_entries(workflow)
 
-    assert len(entries) == 11, [entry["slug"] for entry in entries]
+    assert len(entries) == 13, [entry["slug"] for entry in entries]
     for entry in entries:
         dockerfile = ROOT / entry["file"].removeprefix("./")
         base = _final_base_image(dockerfile)
@@ -986,6 +1049,7 @@ def test_a_partial_promotion_cannot_finish_as_a_successful_release() -> None:
     promote_job = workflow.split("\n  promote:", 1)[1].split("\n  promotion-gate:", 1)[0]
     assert "fail-fast: false" in promote_job
     assert re.findall(r"- slug: ([a-z-]+)", promote_job) == [
+        "platform-api",
         "paper-ingestion-cpu",
         "paper-ingestion-cuda",
         "learning-engine",

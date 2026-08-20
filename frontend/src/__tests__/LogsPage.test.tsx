@@ -38,7 +38,7 @@ import { useUIStore } from '@/stores/ui-store';
 import { ErrorSparkLine, buildSparkBuckets } from '@/components/logs/ErrorSparkLine';
 import { listEvents } from '@/lib/logs';
 import type { SystemEvent } from '@/lib/logs';
-import { formatTimestamp, formatTime } from '@/lib/relative-time';
+import { formatRelativeTime, formatTimestamp, formatTime } from '@/lib/relative-time';
 import { listAuditLog } from '@/lib/api';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
 
@@ -241,7 +241,10 @@ describe('AdminAuditLogPage — readable AI configuration actions', () => {
 
   it('adds readable labels while preserving raw action and resource values', async () => {
     const queryClient = createTestQueryClient();
-    renderWithProviders(<AdminAuditLogPage />, { queryClient });
+    renderWithProviders(
+      <MemoryRouter><AdminAuditLogPage /></MemoryRouter>,
+      { queryClient },
+    );
 
     expect(await screen.findByText('Model route changed')).toBeInTheDocument();
     expect(screen.getByText('Secret replaced')).toBeInTheDocument();
@@ -256,7 +259,10 @@ describe('AdminAuditLogPage — readable AI configuration actions', () => {
 
   it('keeps the server-side action-prefix filter contract', async () => {
     const queryClient = createTestQueryClient();
-    renderWithProviders(<AdminAuditLogPage />, { queryClient });
+    renderWithProviders(
+      <MemoryRouter><AdminAuditLogPage /></MemoryRouter>,
+      { queryClient },
+    );
 
     await userEvent.type(screen.getByLabelText('Filter by action prefix'), 'llm.route');
     await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
@@ -622,6 +628,13 @@ describe('LiveTab — Recent Events show date in timestamp', () => {
     // formatter (asserted against that same formatter, locale-independent).
     expect(screen.getByText(formatTimestamp(ISO))).toBeInTheDocument();
     expect(screen.getByText(formatTimestamp(iso2))).toBeInTheDocument();
+  });
+});
+
+describe('shared relative time formatting', () => {
+  it('uses a neutral missing value and preserves invalid input', () => {
+    expect(formatRelativeTime(null)).toBe('—');
+    expect(formatRelativeTime('not-a-date')).toBe('not-a-date');
   });
 });
 

@@ -10,7 +10,7 @@ import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import Response
 from jarvis_common import ErrorResponse
-from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
+from jarvis_common.auth import get_current_user_id
 from jarvis_common.library import add_to_library, is_in_library
 from jarvis_common.paper_state import upsert_paper_user_state
 from jarvis_common.paper_visibility import PUBLIC_VISIBILITY_SCOPE
@@ -72,7 +72,7 @@ async def get_paper_detail(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> PaperDetailResponse:
     """Get a paper with its summary, chunks, user state, and most recent feedback."""
     async with db_pool.acquire() as conn:
@@ -92,7 +92,9 @@ async def get_paper_detail(
             user_id,
         )
         current_cross_references = (
-            await filter_current_cross_references(conn, list(summary_row["cross_references"] or []))
+            await filter_current_cross_references(
+                conn, list(summary_row["cross_references"] or []), user_id
+            )
             if summary_row
             else []
         )

@@ -1,5 +1,6 @@
 """Top-level write_config orchestration and LiteLLM runtime update helper."""
 
+import asyncio
 import logging
 import re
 import socket
@@ -12,31 +13,34 @@ from jarvis_common.auth import (
     API_KEY_LOGIN_CONFIG_KEY,
     invalidate_api_key_login_cache,
 )
-from jarvis_common.crypto import encrypt_secret, mask_secret
-from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
-from pydantic import BaseModel, model_serializer
-
-from paper_ingestion.integrations.zotero_client import (
-    BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
-    refresh_configured_private_hosts,
-)
-from paper_ingestion.services.config_db import _write_config_row
-from paper_ingestion.services.config_metadata import (
+from jarvis_common.config_metadata import (
     _ENCRYPTED_KEYS,
     _ZOTERO_LIBRARY_SCOPE_KEYS,
+    ROLE_TO_ALIAS,
     _classify_config_key,
     _classify_litellm_runtime_key,
     _is_cloud_model_assignment,
 )
-from paper_ingestion.services.config_validators import (
+from jarvis_common.config_store import _write_config_row
+from jarvis_common.config_validators import (
     _CONFIG_VALIDATORS,
     _validate_bool,
-    _validate_num_ctx_bounds,
     _validate_positive_int,
 )
-from paper_ingestion.services.model_assignment import (
-    reload_telegram_nudges,
-    validate_model_assignment,
+from jarvis_common.crypto import encrypt_secret, mask_secret
+from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
+from pydantic import BaseModel, model_serializer
+
+from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL_NAME
+from paper_ingestion.integrations.zotero_client import (
+    BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY,
+    refresh_configured_private_hosts,
+)
+from paper_ingestion.services.model_assignment import validate_model_assignment
+from paper_ingestion.services.model_lifecycle import (
+    catalog_entry_for_model,
+    detect_hardware,
+    safe_num_ctx,
 )
 from paper_ingestion.services.scheduler_effects import (
     apply_fetch_interval,
@@ -68,6 +72,43 @@ _ZOTERO_POLL_RECONCILE_KEYS = frozenset(
         "zotero.group_id",
     }
 )
+
+# Must stay at or above the largest caller's reserved response allowance.
+_NUM_CTX_MIN = 2048
+_NUM_CTX_HARD_CEILING = 262144
+
+
+async def _validate_num_ctx_bounds(value: int, *, model_id: str | None) -> None:
+    """Bound a context-window write to the assigned model and current hardware.
+
+    Parameters
+    ----------
+    value : int
+        Requested context-window size.
+    model_id : str or None
+        Assigned model identifier, when one is configured.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is below the usable floor or above the resolved safe bound.
+    """
+    if value < _NUM_CTX_MIN:
+        raise ValueError(f"num_ctx must be at least {_NUM_CTX_MIN}")
+
+    entry = catalog_entry_for_model(model_id) if model_id else None
+    if entry is None:
+        upper = _NUM_CTX_HARD_CEILING
+    else:
+        upper = entry.max_num_ctx if entry.max_num_ctx is not None else entry.context_tokens
+        if entry.provider == "ollama":
+            hardware = await asyncio.to_thread(detect_hardware)
+            if hardware.vram_gb > 0.0:
+                embed_entry = catalog_entry_for_model(EMBEDDING_MODEL_NAME)
+                embed_reserve_gb = embed_entry.vram_gb if embed_entry is not None else 0.0
+                upper = min(upper, safe_num_ctx(entry, hardware, embed_reserve_gb))
+    if value > upper:
+        raise ValueError(f"num_ctx must be at most {upper} for the assigned model on this hardware")
 
 
 @dataclass(frozen=True)
@@ -109,6 +150,10 @@ class ConfigWriteResult(BaseModel):
 
     display_value: Any
     schedule_apply_warnings: list[str] = []
+    litellm_delivery_roles: list[str] = []
+    litellm_delivery_pending: bool | None = None
+    effective_num_ctx_role: str | None = None
+    effective_num_ctx_value: int | None = None
 
     @model_serializer
     def _serialize(self) -> Any:  # noqa: PLR6301
@@ -157,7 +202,6 @@ async def _apply_litellm_runtime_update(
     from fastapi import HTTPException  # noqa: PLC0415
 
     from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
-        ROLE_TO_ALIAS,
         _config_lock,
         update_litellm_model,
     )
@@ -236,8 +280,6 @@ async def _pending_roles_for_runtime_key(
     runtime_key: dict[str, str],
 ) -> set[str]:
     """Return the model roles (smart/fast/embed) whose LiteLLM routing *key* affects."""
-    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS  # noqa: PLC0415
-
     if runtime_key["kind"] in ("model_role", "num_ctx"):
         return {ROLE_TO_ALIAS[runtime_key["role_key"]]}
     # thinking_disabled: affects every role currently routed to this model.
@@ -304,18 +346,19 @@ async def _apply_schedules(
     scheduler: Any,
     key: str,
     value: Any,
-    cron_ctx: tuple[str | None, int | None],
+    cron_ctx: tuple[str | None, int | None] | tuple[str | None, int | None, bool],
 ) -> list[str]:
     """Apply scheduler side-effects for cron/interval keys; return names of any that failed.
 
-    *cron_ctx* is ``(old_cron, row_user_id)`` — the pulse rollback value and the
-    scoped user-id needed for personal scheduler reconciliation.
+    *cron_ctx* carries ``(old_cron, row_user_id)`` and, for non-persisting
+    delivery calls, an optional false persistence flag.
 
     Each apply is wrapped in a broad try/except so a scheduler failure never blocks the
     response (the DB commit already stands).  The startup reconciler re-reads cron from DB
     on boot, so any live inconsistency is transient.
     """
-    old_cron, row_user_id = cron_ctx
+    old_cron, row_user_id, *persistence = cron_ctx
+    persist = persistence[0] if persistence else True
     runtime = _schedule_runtime(scheduler)
     failed: list[str] = []
 
@@ -326,6 +369,7 @@ async def _apply_schedules(
                 scheduler=runtime.scheduler,
                 new_cron=value,
                 old_cron=old_cron,
+                rollback_persisted=persist,
             )
         except Exception as exc:
             logger.warning(
@@ -353,7 +397,7 @@ async def _apply_schedules(
 
     if key == "automation.fetch_interval_hours":
         try:
-            apply_fetch_interval(scheduler=runtime.scheduler, hours=max(int(value), 1))
+            apply_fetch_interval(scheduler=runtime.scheduler, hours=value)
         except Exception as exc:
             logger.warning(
                 "fetch_interval scheduler apply failed (value saved): %s", exc, exc_info=True
@@ -388,14 +432,11 @@ async def _clear_zotero_library_cache(
         user_id,
     )
     await conn.execute(
-        """UPDATE projects
-              SET zotero_collection_key = NULL
-            WHERE user_id = $1 AND zotero_collection_key IS NOT NULL""",
+        "SELECT learning.clear_zotero_collection_keys_v1($1)",
         user_id,
     )
     await conn.execute(
-        """DELETE FROM user_config
-            WHERE user_id = $1 AND key = 'zotero.last_library_version'""",
+        "SELECT platform.set_research_config_v1($1, 'zotero.last_library_version', NULL, 'delete')",
         user_id,
     )
 
@@ -411,25 +452,58 @@ async def write_config(
     caller_user_id: int | None,
     update_litellm_model_fn: Any = None,
     app: Any | None = None,
+    persist: bool = True,
+    apply_effects: bool = True,
+    zotero_scope_changed: bool = False,
 ) -> "ConfigWriteResult":
-    """Persist a config value and apply all related side-effects.
+    """Validate a configuration command and apply Research-owned effects.
 
-    This is the core of what was previously the ``set_config`` handler body.
-    Returns a :class:`ConfigWriteResult` carrying the display value (masked if
-    the key is an encrypted secret) and any scheduler-apply warnings.
+    Parameters
+    ----------
+    db_pool:
+        Research database pool used by validators and local effects.
+    scheduler:
+        Scheduler receiving cron changes.
+    http_client:
+        Client used for model validation and provider effects.
+    ollama_url:
+        Base URL of the configured Ollama service.
+    key, value:
+        Validated configuration key and desired value.
+    caller_user_id:
+        User owning a personal value, or ``None`` for system values.
+    update_litellm_model_fn:
+        Optional LiteLLM delivery adapter.
+    app:
+        Application state used to resolve the active scheduler.
+    persist:
+        Persist through the Platform capability when ``True``. Platform
+        delivery commands set this to ``False`` because Platform has already
+        committed the authoritative value and durable delivery record.
+    apply_effects:
+        Apply provider and scheduler effects when ``True``. Validation-only
+        commands set this to ``False``.
+    zotero_scope_changed:
+        Whether Platform observed a material Zotero library identity change
+        before persisting the desired value.
 
-    Raises ``fastapi.HTTPException`` on validation failure, model-assignment
-    rejection, or LiteLLM update failure.  Scheduler-apply failures are caught
-    and surfaced in ``ConfigWriteResult.schedule_apply_warnings`` rather than
-    raised — the DB commit always stands. For LiteLLM runtime keys a delivery
-    failure means NO row is written (fail-closed), except the "No DB Connected"
-    case (LiteLLM degraded to DB-less mode), where the row is committed and the
-    role is recorded in ``llm.delivery_pending`` while the boot reconciler keeps
-    retrying.
+    Returns
+    -------
+    ConfigWriteResult
+        Display-safe value and any non-fatal scheduler warnings.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        If validation, model assignment, or a required LiteLLM update fails.
+
+    Notes
+    -----
+    Scheduler failures are returned as warnings. LiteLLM writes remain
+    fail-closed except for its explicit database-unavailable state, which is
+    recorded as pending for the existing boot reconciler.
     """
     from fastapi import HTTPException  # noqa: PLC0415
-
-    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS  # noqa: PLC0415
 
     runtime_key = _classify_litellm_runtime_key(key)
 
@@ -485,6 +559,10 @@ async def write_config(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if not apply_effects:
+        display_value = mask_secret(str(value)) if key in _ENCRYPTED_KEYS else value
+        return ConfigWriteResult(display_value=display_value)
+
     # LiteLLM runtime keys: deliver FIRST, commit the row only on success
     # (fail-closed). The old order (commit, then deliver) produced phantom
     # state — GET /api/system/models reported the new model while LiteLLM kept
@@ -521,6 +599,22 @@ async def write_config(
             roles = set()
         else:
             roles = await _pending_roles_for_runtime_key(db_pool, runtime_key)
+        pending_state = (outcome == "pending_restart") if roles else None
+        effective_role = (
+            runtime_key["role"]
+            if runtime_key["kind"] == "num_ctx" and outcome == "applied"
+            else None
+        )
+        if not persist:
+            if effective_role is not None:
+                invalidate_effective_num_ctx_cache()
+            return ConfigWriteResult(
+                display_value=value,
+                litellm_delivery_roles=sorted(roles),
+                litellm_delivery_pending=pending_state,
+                effective_num_ctx_role=effective_role,
+                effective_num_ctx_value=int(value) if effective_role is not None else None,
+            )
         # Row commit + pending bookkeeping happen in ONE transaction on ONE
         # connection: a pending-write failure rolls back the row commit (no
         # committed-row-without-marker window), and the FOR UPDATE inside the
@@ -549,7 +643,7 @@ async def write_config(
 
     # Read old cron values before overwriting (for rollback)
     old_pulse_cron: str | None = None
-    if key == "pulse.cron":
+    if persist and key == "pulse.cron":
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT value FROM user_config WHERE key = 'pulse.cron' AND user_id IS NULL"
@@ -560,32 +654,36 @@ async def write_config(
     # DB write first — DB is the source of truth. A material Zotero library
     # identity change invalidates its remote-object cache in the same
     # transaction, so readers can never observe new credentials with old keys.
-    async with db_pool.acquire() as conn, conn.transaction():
-        previous_scope_row = None
-        if key in _ZOTERO_LIBRARY_SCOPE_KEYS and row_user_id is not None:
-            previous_scope_row = await conn.fetchrow(
-                """SELECT value FROM user_config
-                    WHERE user_id = $1 AND key = $2
-                    FOR UPDATE""",
-                row_user_id,
-                key,
-            )
-        if key in _ENCRYPTED_KEYS:
-            ciphertext_bytes = encrypt_secret(str(value)).encode("ascii")
-            await _write_config_row(
-                conn,
-                user_id=row_user_id,
-                key=key,
-                value=None,
-                encrypted_value=ciphertext_bytes,
-            )
-        else:
-            await _write_config_row(conn, user_id=row_user_id, key=key, value=value)
-        if (
-            key in _ZOTERO_LIBRARY_SCOPE_KEYS
-            and row_user_id is not None
-            and (previous_scope_row is None or previous_scope_row["value"] != value)
-        ):
+    if persist:
+        async with db_pool.acquire() as conn, conn.transaction():
+            previous_scope_row = None
+            if key in _ZOTERO_LIBRARY_SCOPE_KEYS and row_user_id is not None:
+                previous_scope_row = await conn.fetchrow(
+                    """SELECT value FROM user_config
+                        WHERE user_id = $1 AND key = $2
+                        FOR UPDATE""",
+                    row_user_id,
+                    key,
+                )
+            if key in _ENCRYPTED_KEYS:
+                ciphertext_bytes = encrypt_secret(str(value)).encode("ascii")
+                await _write_config_row(
+                    conn,
+                    user_id=row_user_id,
+                    key=key,
+                    value=None,
+                    encrypted_value=ciphertext_bytes,
+                )
+            else:
+                await _write_config_row(conn, user_id=row_user_id, key=key, value=value)
+            if (
+                key in _ZOTERO_LIBRARY_SCOPE_KEYS
+                and row_user_id is not None
+                and (previous_scope_row is None or previous_scope_row["value"] != value)
+            ):
+                await _clear_zotero_library_cache(conn, user_id=row_user_id)
+    elif key in _ZOTERO_LIBRARY_SCOPE_KEYS and row_user_id is not None and zotero_scope_changed:
+        async with db_pool.acquire() as conn, conn.transaction():
             await _clear_zotero_library_cache(conn, user_id=row_user_id)
 
     # Drop the in-process API-key-login cache so the next mint sees the new
@@ -600,17 +698,13 @@ async def write_config(
         scheduler=_schedule_runtime(scheduler, app),
         key=key,
         value=value,
-        cron_ctx=(_old_cron, row_user_id),
+        cron_ctx=(_old_cron, row_user_id, persist),
     )
 
     # Better BibTeX host allowlist refresh — the client caches it, so without
     # this the saved hosts would not take effect until the next restart.
     if key == BBT_ALLOWED_PRIVATE_HOSTS_CONFIG_KEY:
         await refresh_configured_private_hosts(db_pool)
-
-    # Telegram nudge reload on timezone change
-    if key == "user.timezone":
-        await reload_telegram_nudges()
 
     display_value = mask_secret(str(value)) if key in _ENCRYPTED_KEYS else value
     return ConfigWriteResult(display_value=display_value, schedule_apply_warnings=schedule_warnings)

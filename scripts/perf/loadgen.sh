@@ -15,9 +15,9 @@
 #     "Pulse" — it does NOT drive Pulse; Scenario C does.)
 #
 #   Scenario C — authenticated LLM hot-path drive:
-#     Bootstraps a real owner session via POST /api/auth/api-key-session
-#     (exchanges the existing JARVIS_API_KEY for a jarvis_session cookie —
-#     no email/magic-link needed), then drives the four flag-gated
+#     Reuses the real owner session minted before Scenario A via
+#     POST /api/auth/api-key-session (no email/magic-link needed), then drives
+#     the four flag-gated
 #     perf_probe.py sites so they actually emit spans:
 #       • POST /api/papers/search-hybrid → embed_texts_post + hybrid_search_bm25_sql
 #       • POST /api/ask (decompose)      → prepare_cross_paper_rag + embed_texts_post
@@ -32,20 +32,26 @@
 #                          or higher for stress testing.
 #   PERF_SUSTAIN_SECS      Duration of the Scenario B sustained window.
 #                          Default: 15 seconds.
+#   LOADGEN_SUSTAIN_BATCHES
+#                          Fixed Scenario B cycles in strict evidence mode.
+#                          Default: 1.
 #   RAG_CONCURRENCY        Concurrency for the heavy Scenario C /api/ask
 #                          (cross-paper RAG) batch.  Default: min(PERF_CONCURRENCY,3)
 #                          — RAG is LLM-bound; a high fan-out just queues on the
 #                          single shared ollama and skews latency.
+#   SEARCH_BATCHES         Back-to-back hybrid-search batches. Default: 1.
+#   RAG_BATCHES            Back-to-back RAG batches. Default: 1.
 #   OUT_DIR                Where to write output files.
 #                          Default: artifacts/perf/<UTC-timestamp>/ (auto-created).
-#   PAPER_INGESTION_HOST_PORT  Override the backend port (default 8010).
+#   JARVIS_BASE_URL         Product gateway URL (default http://localhost:3001).
 #
 # Output (additive — never overwrites backend-timings.csv):
 #   loadgen-concurrency.csv   per-request latencies for both scenarios
 #   loadgen-summary.csv       p50/p95/p99 + throughput (req/s) per scenario
 #
-# Contract: never fails the build — unreachable server / missing tools log
-# warnings and the script exits 0.
+# Contract: default mode never fails the build — unreachable server / missing
+# tools log warnings and the script exits 0. LOADGEN_STRICT=1 is the explicit
+# release-evidence mode and fails closed instead.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -67,9 +73,11 @@ if [[ -f "${API_KEY_FILE}" ]]; then
   API_KEY="$(cat "${API_KEY_FILE}")"
 fi
 
-# -- Backend base URL --------------------------------------------------------
-PAPER_INGEST_PORT="${PAPER_INGESTION_HOST_PORT:-8010}"
-PAPER_INGEST_BASE="http://localhost:${PAPER_INGEST_PORT}"
+# -- Product gateway ---------------------------------------------------------
+# The fixed profile exercises the same Platform assertion and owner-service
+# path as a browser. Direct Research access would bypass the authentication hop
+# and cannot mint the owner session used by Scenario C.
+JARVIS_BASE_URL="${JARVIS_BASE_URL:-http://localhost:${DASHBOARD_HOST_PORT:-3001}}"
 
 # -- Concurrency knobs -------------------------------------------------------
 # PERF_CONCURRENCY: number of parallel curl workers fired per batch.
@@ -79,6 +87,7 @@ PERF_CONCURRENCY="${PERF_CONCURRENCY:-10}"
 
 # PERF_SUSTAIN_SECS: how long Scenario B fires repeated concurrent batches.
 PERF_SUSTAIN_SECS="${PERF_SUSTAIN_SECS:-15}"
+LOADGEN_SUSTAIN_BATCHES="${LOADGEN_SUSTAIN_BATCHES:-1}"
 
 # RAG_CONCURRENCY: Scenario C /api/ask fan-out. RAG is LLM-bound on one shared
 # ollama; default to a small value (≤3) so the probe measures real per-request
@@ -99,6 +108,24 @@ fi
 # behaviour (backward-compatible with the existing profiling workflow).
 LOADGEN_STRICT="${LOADGEN_STRICT:-0}"
 
+# LOADGEN_MIN_SAMPLES applies only to strict evidence. It is intentionally
+# separate from the developer-friendly defaults so ordinary profiling remains
+# backward-compatible.
+LOADGEN_MIN_SAMPLES="${LOADGEN_MIN_SAMPLES:-1}"
+LOADGEN_FANOUT_BATCHES="${LOADGEN_FANOUT_BATCHES:-1}"
+if [[ -n "${PERF_WARM_SETTLE_SECS:-}" ]]; then
+  :
+elif [[ "${LOADGEN_STRICT}" == "1" ]]; then
+  PERF_WARM_SETTLE_SECS=6
+else
+  PERF_WARM_SETTLE_SECS=0
+fi
+
+# A prior failed capture must not survive a new strict run that later passes.
+if [[ "${LOADGEN_STRICT}" == "1" ]]; then
+  rm -f "${OUT_DIR}/loadgen-FATAL.txt"
+fi
+
 # RAG_BATCHES: how many back-to-back batches of RAG_CONCURRENCY /api/ask
 # requests to fire for scenario_c_rag. Default 1 = EXACT legacy behaviour
 # (n = RAG_CONCURRENCY → make profile unchanged). The confirmatory bench
@@ -106,13 +133,14 @@ LOADGEN_STRICT="${LOADGEN_STRICT:-0}"
 # RAG_BATCHES×RAG_CONCURRENCY samples instead of a statistically
 # meaningless "max of 4/8".
 RAG_BATCHES="${RAG_BATCHES:-1}"
+SEARCH_BATCHES="${SEARCH_BATCHES:-1}"
 
 # _strict_or_skip <reason> : in strict mode, record + exit 3; else return 0
 # so the caller's legacy "log WARN + exit 0" path runs unchanged.
 _strict_or_skip() {
   if [[ "${LOADGEN_STRICT}" == "1" ]]; then
-    echo "loadgen FATAL: $* at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      >> "${OUT_DIR}/loadgen-FATAL.txt"
+    rm -f "${DETAIL_CSV}" "${SUMMARY_CSV}"
+    echo "loadgen FATAL: $*" > "${OUT_DIR}/loadgen-FATAL.txt"
     exit 3
   fi
   return 0
@@ -123,13 +151,45 @@ _strict_or_skip() {
 # ---------------------------------------------------------------------------
 log() { echo "[loadgen] $*" >&2; }
 
+_is_positive_integer() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+_is_nonnegative_integer() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+_is_decimal() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
 # Output files (additive — separate from backend-timings.csv)
 DETAIL_CSV="${OUT_DIR}/loadgen-concurrency.csv"
 SUMMARY_CSV="${OUT_DIR}/loadgen-summary.csv"
 
+if [[ "${LOADGEN_STRICT}" == "1" ]] && ! _is_positive_integer "${LOADGEN_MIN_SAMPLES}"; then
+  _strict_or_skip "LOADGEN_MIN_SAMPLES must be a positive integer"
+fi
+if [[ "${LOADGEN_STRICT}" == "1" ]] && ! _is_positive_integer "${LOADGEN_SUSTAIN_BATCHES}"; then
+  _strict_or_skip "LOADGEN_SUSTAIN_BATCHES must be a positive integer"
+fi
+if [[ "${LOADGEN_STRICT}" == "1" ]] && ! _is_positive_integer "${LOADGEN_FANOUT_BATCHES}"; then
+  _strict_or_skip "LOADGEN_FANOUT_BATCHES must be a positive integer"
+fi
+if [[ "${LOADGEN_STRICT}" == "1" ]] && ! _is_positive_integer "${SEARCH_BATCHES}"; then
+  _strict_or_skip "SEARCH_BATCHES must be a positive integer"
+fi
+if [[ "${LOADGEN_STRICT}" == "1" ]] && ! _is_positive_integer "${RAG_BATCHES}"; then
+  _strict_or_skip "RAG_BATCHES must be a positive integer"
+fi
+if [[ "${LOADGEN_STRICT}" == "1" ]] && ! _is_nonnegative_integer "${PERF_WARM_SETTLE_SECS}"; then
+  _strict_or_skip "PERF_WARM_SETTLE_SECS must be a non-negative integer"
+fi
+
 # Temp directory for per-worker result files
 TMPDIR_LG="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_LG}"' EXIT
+COOKIE_JAR="${TMPDIR_LG}/jarvis_session.cookies"
 
 # ---------------------------------------------------------------------------
 # Reachability guard — degrade gracefully when the server is not running.
@@ -141,13 +201,31 @@ trap 'rm -rf "${TMPDIR_LG}"' EXIT
 # route (added 2026-05-17) — it answers in milliseconds regardless of deps.
 # Timeout raised to 10s for slow-boot / GPU-saturated boxes.
 # ---------------------------------------------------------------------------
-if ! curl -s -o /dev/null --max-time 10 "${PAPER_INGEST_BASE}/health/live" \
-     -H "X-API-Key: ${API_KEY}" -H "Accept: application/json" 2>/dev/null; then
-  log "WARN: backend not reachable at ${PAPER_INGEST_BASE} — skipping loadgen scenarios"
+if ! curl -s -o /dev/null --max-time 10 "${JARVIS_BASE_URL}/health/live" \
+     -H "Accept: application/json" 2>/dev/null; then
+  log "WARN: product gateway not reachable at ${JARVIS_BASE_URL} — skipping loadgen scenarios"
   log "      Start the stack with 'make up' and re-run to collect concurrency metrics."
-  _strict_or_skip "backend not reachable at ${PAPER_INGEST_BASE}/health/live"
+  _strict_or_skip "product gateway not reachable at ${JARVIS_BASE_URL}/health/live"
   exit 0
 fi
+
+# Exchange the deployment API key once for the same owner session used by a
+# browser. User-scoped routes intentionally reject the raw key. The key rides in on
+# stdin as a curl config line; passing it as -H would publish it in the process list.
+auth_code=$(curl -s -o "${TMPDIR_LG}/auth_resp.json" -w '%{http_code}' \
+              --max-time 15 -X POST "${JARVIS_BASE_URL}/api/auth/api-key-session" \
+              -H "Content-Type: application/json" --config - \
+              -c "${COOKIE_JAR}" -d '{}' <<EOF 2>/dev/null || echo "000"
+header = "X-API-Key: ${API_KEY}"
+EOF
+)
+if [[ "${auth_code}" != "200" ]] || ! grep -q 'jarvis_session' "${COOKIE_JAR}" 2>/dev/null; then
+  log "WARN: api-key-session → HTTP ${auth_code} (need single-tenant + an admin"
+  log "      user, or API_KEY_LOGIN_ENABLED). Skipping authenticated load."
+  _strict_or_skip "owner session mint failed (api-key-session HTTP ${auth_code})"
+  exit 0
+fi
+log "Owner session minted"
 
 # ---------------------------------------------------------------------------
 # Core: fire PERF_CONCURRENCY concurrent curl requests against one endpoint,
@@ -165,8 +243,8 @@ _fire_batch() {
       result=$(curl -s -o /dev/null \
                     --max-time 30 \
                     -w "%{time_total},%{http_code}" \
-                    "${PAPER_INGEST_BASE}${path}" \
-                    -H "X-API-Key: ${API_KEY}" \
+                    "${JARVIS_BASE_URL}${path}" \
+                    -b "${COOKIE_JAR}" \
                     -H "Accept: application/json" 2>/dev/null \
                || echo "ERR,000")
       echo "${scenario},${path},${result}"
@@ -193,7 +271,7 @@ _fire_post_batch() {
       result=$(curl -s -o /dev/null \
                     --max-time "${RAG_MAX_SECONDS:-600}" \
                     -w "%{time_total},%{http_code}" \
-                    -X POST "${PAPER_INGEST_BASE}${path}" \
+                    -X POST "${JARVIS_BASE_URL}${path}" \
                     -b "${COOKIE_JAR}" \
                     -H "Content-Type: application/json" \
                     -H "Accept: application/json" \
@@ -261,11 +339,96 @@ _emit_stats() {
   ' "${TMPDIR_LG}/sorted_${label}.txt"
 }
 
+_elapsed_seconds() {
+  local start_ns="$1"
+  local end_ns="$2"
+  awk -v start="${start_ns}" -v end="${end_ns}" 'BEGIN {
+    elapsed = (end - start) / 1000000000
+    if (elapsed <= 0) elapsed = 0.001
+    printf "%.6f", elapsed
+  }'
+}
+
+_warm_get_path() {
+  local path="$1"
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    "${JARVIS_BASE_URL}${path}" -b "${COOKIE_JAR}" -H "Accept: application/json" \
+    2>/dev/null || echo "000")
+  if ! [[ "${code}" =~ ^2[0-9][0-9]$ ]]; then
+    log "WARN: warm-up GET failed for ${path} (HTTP ${code})"
+    [[ "${LOADGEN_STRICT}" == "1" ]] && _strict_or_skip "warm-up GET failed for ${path}"
+  fi
+}
+
+_warm_post_path() {
+  local path="$1"
+  local body="$2"
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "${RAG_MAX_SECONDS:-600}" \
+    -X POST "${JARVIS_BASE_URL}${path}" -b "${COOKIE_JAR}" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    -d "${body}" 2>/dev/null || echo "000")
+  if ! [[ "${code}" =~ ^2[0-9][0-9]$ ]]; then
+    log "WARN: warm-up POST failed for ${path} (HTTP ${code})"
+    [[ "${LOADGEN_STRICT}" == "1" ]] && _strict_or_skip "warm-up POST failed for ${path}"
+  fi
+}
+
+# Validate the completed fixed profile only in strict evidence mode. Any
+# failure removes both CSVs so callers cannot mistake partial output for a
+# successful measurement.
+_validate_strict_evidence() {
+  local scenario requests p50 p95 p99 rps extra
+  local -A seen=()
+  local required
+
+  while IFS=, read -r scenario requests p50 p95 p99 rps extra; do
+    [[ -z "${scenario}" ]] && continue
+    if [[ -n "${extra}" ]] || ! _is_positive_integer "${requests}" ||
+      (( requests < LOADGEN_MIN_SAMPLES )) || ! _is_decimal "${p50}" ||
+      ! _is_decimal "${p95}" || ! _is_decimal "${p99}" || ! _is_decimal "${rps}"; then
+      _strict_or_skip "invalid or undersampled summary row for ${scenario}"
+    fi
+    case "${scenario}" in
+      scenario_a_fanout|scenario_b_pulse|scenario_c_search_hybrid|scenario_c_rag_ask) ;;
+      *) _strict_or_skip "unexpected summary scenario ${scenario}" ;;
+    esac
+    if [[ -n "${seen[${scenario}]:-}" ]]; then
+      _strict_or_skip "duplicate summary scenario ${scenario}"
+    fi
+    seen["${scenario}"]=1
+  done < <(tail -n +2 "${SUMMARY_CSV}")
+
+  for required in scenario_a_fanout scenario_b_pulse scenario_c_search_hybrid scenario_c_rag_ask; do
+    [[ -n "${seen[${required}]:-}" ]] || _strict_or_skip "missing summary scenario ${required}"
+  done
+
+  while IFS=, read -r scenario _ seconds http_code extra; do
+    if [[ -n "${extra}" ]] || [[ "${seconds}" == "ERR" ]] ||
+      ! [[ "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+      _strict_or_skip "failed request in ${scenario}"
+    fi
+  done < <(tail -n +2 "${DETAIL_CSV}")
+}
+
 # ---------------------------------------------------------------------------
 # Write CSV headers
 # ---------------------------------------------------------------------------
 echo "scenario,endpoint,seconds,http_code" > "${DETAIL_CSV}"
 echo "scenario,requests,p50_s,p95_s,p99_s,throughput_rps" > "${SUMMARY_CSV}"
+
+# Verify the corpus before benchmark traffic can consume route budgets. The
+# same snapshot is reported for Scenario C; retrieval still enforces current
+# visibility on every measured request.
+corpus_body=$(curl -fsS --max-time 10 -b "${COOKIE_JAR}" \
+  "${JARVIS_BASE_URL}/api/papers/brief" 2>/dev/null || true)
+corpus_n=$( { printf '%s' "${corpus_body}" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]' || true; } \
+  | wc -l | tr -d ' ')
+if [[ "${corpus_n}" == "0" ]]; then
+  log "WARN: empty corpus — pulse/RAG spans may be empty"
+  _strict_or_skip "empty corpus — no embedded papers; scenario_c_rag_ask would be meaningless"
+fi
 
 # ---------------------------------------------------------------------------
 # Scenario A — Dashboard fan-out
@@ -281,31 +444,43 @@ A_ENDPOINTS=(
   "/health"
 )
 
-A_START="$(date +%s)"
+for endpoint in "${A_ENDPOINTS[@]}"; do
+  _warm_get_path "${endpoint}"
+done
+_warm_post_path "/api/papers/search-hybrid" \
+  '{"query":"transformer attention mechanism","limit":10}'
+_warm_post_path "/api/ask" \
+  '{"question":"What methods and results are discussed across these papers?","decompose":true}'
+if (( PERF_WARM_SETTLE_SECS > 0 )); then
+  log "Warm-up complete; settling ${PERF_WARM_SETTLE_SECS}s before measurement"
+  sleep "${PERF_WARM_SETTLE_SECS}"
+fi
+A_START="$(date +%s%N)"
 : > "${TMPDIR_LG}/scen_a_latencies.txt"   # empty latency collector
 
-for endpoint in "${A_ENDPOINTS[@]}"; do
-  log "  → ${endpoint} (×${PERF_CONCURRENCY} concurrent)"
+for (( fanout_batch=1; fanout_batch<=LOADGEN_FANOUT_BATCHES; fanout_batch++ )); do
+  for endpoint in "${A_ENDPOINTS[@]}"; do
+    log "  → ${endpoint} (×${PERF_CONCURRENCY} concurrent)"
 
-  # Clean up per-worker files from any prior batch; _fire_batch writes
-  # result_<i>.txt per worker and then concatenates them into results.txt.
-  rm -f "${TMPDIR_LG}"/result_*.txt
-  _fire_batch "scenario_a" "${endpoint}"
+    # Clean up per-worker files from any prior batch; _fire_batch writes
+    # result_<i>.txt per worker and then concatenates them into results.txt.
+    rm -f "${TMPDIR_LG}"/result_*.txt
+    _fire_batch "scenario_a" "${endpoint}"
 
-  # Append detail rows to the CSV and extract latencies for stats
-  while IFS= read -r row; do
-    echo "${row}" >> "${DETAIL_CSV}"
-    # row format: scenario_a,/path,<seconds>,<code>  — extract field 3
-    lat=$(echo "${row}" | awk -F',' '{print $3}')
-    if [[ "${lat}" != "ERR" ]]; then
-      echo "${lat}" >> "${TMPDIR_LG}/scen_a_latencies.txt"
-    fi
-  done < "${TMPDIR_LG}/results.txt"
+    # Append detail rows to the CSV and extract latencies for stats
+    while IFS= read -r row; do
+      echo "${row}" >> "${DETAIL_CSV}"
+      # row format: scenario_a,/path,<seconds>,<code>  — extract field 3
+      lat=$(echo "${row}" | awk -F',' '{print $3}')
+      if [[ "${lat}" != "ERR" ]]; then
+        echo "${lat}" >> "${TMPDIR_LG}/scen_a_latencies.txt"
+      fi
+    done < "${TMPDIR_LG}/results.txt"
+  done
 done
 
-A_END="$(date +%s)"
-A_ELAPSED=$(( A_END - A_START ))
-[[ ${A_ELAPSED} -le 0 ]] && A_ELAPSED=1   # guard divide-by-zero
+A_END="$(date +%s%N)"
+A_ELAPSED="$(_elapsed_seconds "${A_START}" "${A_END}")"
 
 _emit_stats "scenario_a_fanout" "${TMPDIR_LG}/scen_a_latencies.txt" "${A_ELAPSED}" \
   >> "${SUMMARY_CSV}"
@@ -316,17 +491,22 @@ log "Scenario A complete in ${A_ELAPSED}s"
 # Repeat concurrent batches against /health + /api/papers/feed for
 # PERF_SUSTAIN_SECS seconds.  Simulates Pulse refresh background traffic.
 # ---------------------------------------------------------------------------
-log "Scenario B: Pulse sustained-load (${PERF_SUSTAIN_SECS}s window, ${PERF_CONCURRENCY} concurrent)"
+if [[ "${LOADGEN_STRICT}" == "1" ]]; then
+  log "Scenario B: fixed sustained-load (${LOADGEN_SUSTAIN_BATCHES} batch cycle(s), ${PERF_CONCURRENCY} concurrent)"
+else
+  log "Scenario B: Pulse sustained-load (${PERF_SUSTAIN_SECS}s window, ${PERF_CONCURRENCY} concurrent)"
+fi
 PULSE_ENDPOINTS=(
   "/health"
   "/api/papers/feed?limit=20"
 )
 
 : > "${TMPDIR_LG}/scen_b_latencies.txt"
-B_START="$(date +%s)"
-B_END_DEADLINE=$(( B_START + PERF_SUSTAIN_SECS ))
+B_START="$(date +%s%N)"
+B_END_DEADLINE=$(( $(date +%s) + PERF_SUSTAIN_SECS ))
 
-while [[ "$(date +%s)" -lt "${B_END_DEADLINE}" ]]; do
+_run_sustain_cycle() {
+  local endpoint row lat
   for endpoint in "${PULSE_ENDPOINTS[@]}"; do
     rm -f "${TMPDIR_LG}"/result_*.txt
     _fire_batch "scenario_b" "${endpoint}"
@@ -339,11 +519,20 @@ while [[ "$(date +%s)" -lt "${B_END_DEADLINE}" ]]; do
       fi
     done < "${TMPDIR_LG}/results.txt"
   done
-done
+}
 
-B_END="$(date +%s)"
-B_ELAPSED=$(( B_END - B_START ))
-[[ ${B_ELAPSED} -le 0 ]] && B_ELAPSED=1
+if [[ "${LOADGEN_STRICT}" == "1" ]]; then
+  for (( sustain_batch=1; sustain_batch<=LOADGEN_SUSTAIN_BATCHES; sustain_batch++ )); do
+    _run_sustain_cycle
+  done
+else
+  while [[ "$(date +%s)" -lt "${B_END_DEADLINE}" ]]; do
+    _run_sustain_cycle
+  done
+fi
+
+B_END="$(date +%s%N)"
+B_ELAPSED="$(_elapsed_seconds "${B_START}" "${B_END}")"
 
 _emit_stats "scenario_b_pulse" "${TMPDIR_LG}/scen_b_latencies.txt" "${B_ELAPSED}" \
   >> "${SUMMARY_CSV}"
@@ -351,62 +540,45 @@ log "Scenario B complete in ${B_ELAPSED}s"
 
 # ---------------------------------------------------------------------------
 # Scenario C — authenticated LLM hot-path drive
-# Mints a real owner session from the API key, then drives the four
-# perf_probe.py sites so they emit spans.  Best-effort: any precondition
-# failure logs a warning and skips (exit 0 contract preserved).
+# Reuses the owner session established before Scenario A, then drives the four
+# perf_probe.py sites so they emit spans. Best-effort mode retains its
+# non-failing contract when the corpus is empty.
 # ---------------------------------------------------------------------------
-COOKIE_JAR="${TMPDIR_LG}/jarvis_session.cookies"
-
 log "Scenario C: authenticated LLM hot-path drive"
-auth_code=$(curl -s -o "${TMPDIR_LG}/auth_resp.json" -w '%{http_code}' \
-              --max-time 15 -X POST "${PAPER_INGEST_BASE}/api/auth/api-key-session" \
-              -H "X-API-Key: ${API_KEY}" -H "Content-Type: application/json" \
-              -c "${COOKIE_JAR}" -d '{}' 2>/dev/null || echo "000")
-
-if [[ "${auth_code}" != "200" ]] || ! grep -q 'jarvis_session' "${COOKIE_JAR}" 2>/dev/null; then
-  log "WARN: api-key-session → HTTP ${auth_code} (need single-tenant + an admin"
-  log "      user, or API_KEY_LOGIN_ENABLED). Skipping Scenario C — the LLM"
-  log "      hot-path probes will not emit this run."
-  _strict_or_skip "Scenario C session mint failed (api-key-session HTTP ${auth_code}) — no scenario_c_rag_ask possible"
-else
-  log "  session minted (owner: $(grep -o '\"email\":\"[^\"]*\"' "${TMPDIR_LG}/auth_resp.json" 2>/dev/null | head -1))"
-
-  # Corpus presence — informational; pulse/RAG spans need ≥1 embedded paper.
-  corpus_n=$(curl -s --max-time 10 -b "${COOKIE_JAR}" \
-               "${PAPER_INGEST_BASE}/api/papers/brief" 2>/dev/null \
-             | grep -o '"id"' | wc -l | tr -d ' ' || echo 0)
   log "  corpus: ~${corpus_n} papers visible"
-  if [[ "${corpus_n}" == "0" ]]; then
-    log "  WARN: empty corpus — pulse/RAG spans may be empty (query-embed + BM25 still fire)"
-    _strict_or_skip "empty corpus — no embedded papers; scenario_c_rag_ask would be meaningless"
-  fi
 
-  # Fire Pulse FIRST: it's an async deferred job (rate-limit 3/hour). Firing
-  # early lets the worker run pulse_stage2_llm concurrently with the search/RAG
-  # batches below so its span lands before profile.sh collects the JSONL.
-  pulse_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-                 -X POST "${PAPER_INGEST_BASE}/api/pulse/generate" \
-                 -b "${COOKIE_JAR}" -H "Content-Type: application/json" \
-                 -d '{}' 2>/dev/null || echo "000")
-  echo "scenario_c_pulse,/api/pulse/generate,0,${pulse_code}" >> "${DETAIL_CSV}"
-  log "  POST /api/pulse/generate → HTTP ${pulse_code} (async; stage-2 runs in worker)"
+  # Developer profiling captures a Pulse trace alongside the hot paths. A
+  # strict comparison excludes that asynchronous, rate-limited job so every
+  # candidate measures the same fixed request population without background
+  # model work contaminating one side of the comparison.
+  if [[ "${LOADGEN_STRICT}" != "1" ]]; then
+    pulse_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+                   -X POST "${JARVIS_BASE_URL}/api/pulse/generate" \
+                   -b "${COOKIE_JAR}" -H "Content-Type: application/json" \
+                   -d '{}' 2>/dev/null || echo "000")
+    log "  POST /api/pulse/generate → HTTP ${pulse_code} (async; stage-2 runs in worker)"
+  fi
 
   # Batch 1 — hybrid search: embed_texts_post + hybrid_search_bm25_sql
   : > "${TMPDIR_LG}/scen_c_search_lat.txt"
-  C1_START="$(date +%s)"
-  _fire_post_batch "scenario_c_search" "/api/papers/search-hybrid" \
-    '{"query":"transformer attention mechanism","limit":10}' "${PERF_CONCURRENCY}"
-  _drain_results "${TMPDIR_LG}/scen_c_search_lat.txt"
-  C1_ELAPSED=$(( $(date +%s) - C1_START )); [[ ${C1_ELAPSED} -le 0 ]] && C1_ELAPSED=1
+  C1_START="$(date +%s%N)"
+  _search_b=1
+  while [[ ${_search_b} -le ${SEARCH_BATCHES} ]]; do
+    _fire_post_batch "scenario_c_search" "/api/papers/search-hybrid" \
+      '{"query":"transformer attention mechanism","limit":10}' "${PERF_CONCURRENCY}"
+    _drain_results "${TMPDIR_LG}/scen_c_search_lat.txt"
+    _search_b=$(( _search_b + 1 ))
+  done
+  C1_ELAPSED="$(_elapsed_seconds "${C1_START}" "$(date +%s%N)")"
   _emit_stats "scenario_c_search_hybrid" "${TMPDIR_LG}/scen_c_search_lat.txt" "${C1_ELAPSED}" \
     >> "${SUMMARY_CSV}"
-  log "  search-hybrid ×${PERF_CONCURRENCY} done in ${C1_ELAPSED}s"
+  log "  search-hybrid ×${PERF_CONCURRENCY}×${SEARCH_BATCHES} batches done in ${C1_ELAPSED}s"
 
   # Batch 2 — cross-paper RAG: prepare_cross_paper_rag + embed_texts_post.
   # RAG_BATCHES back-to-back batches accumulate into one latency file so p95
   # is over n = RAG_BATCHES×RAG_CONCURRENCY (default 1 = legacy n=conc).
   : > "${TMPDIR_LG}/scen_c_rag_lat.txt"
-  C2_START="$(date +%s)"
+  C2_START="$(date +%s%N)"
   _rag_b=1
   while [[ ${_rag_b} -le ${RAG_BATCHES} ]]; do
     _fire_post_batch "scenario_c_rag" "/api/ask" \
@@ -415,7 +587,7 @@ else
     _drain_results "${TMPDIR_LG}/scen_c_rag_lat.txt"
     _rag_b=$(( _rag_b + 1 ))
   done
-  C2_ELAPSED=$(( $(date +%s) - C2_START )); [[ ${C2_ELAPSED} -le 0 ]] && C2_ELAPSED=1
+  C2_ELAPSED="$(_elapsed_seconds "${C2_START}" "$(date +%s%N)")"
   _emit_stats "scenario_c_rag_ask" "${TMPDIR_LG}/scen_c_rag_lat.txt" "${C2_ELAPSED}" \
     >> "${SUMMARY_CSV}"
   log "  /api/ask ×${RAG_CONCURRENCY}×${RAG_BATCHES} batches (decompose) done in ${C2_ELAPSED}s"
@@ -425,6 +597,9 @@ else
   settle="${PERF_PULSE_SETTLE_SECS:-25}"
   log "  settling ${settle}s for the async Pulse stage-2 worker span"
   sleep "${settle}"
+
+if [[ "${LOADGEN_STRICT}" == "1" ]]; then
+  _validate_strict_evidence
 fi
 
 # ---------------------------------------------------------------------------

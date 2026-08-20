@@ -15,7 +15,7 @@ import httpx
 import pytest
 import respx
 from paper_ingestion.integrations.zotero_client import ZOTERO_API_BASE, ZoteroClient
-from paper_ingestion.services.config_validators import _validate_group_id, _validate_library_type
+from jarvis_common.config_validators import _validate_group_id, _validate_library_type
 
 # ---------------------------------------------------------------------------
 # ZoteroClient URL routing

@@ -7,22 +7,32 @@ interface ChunksTabProps {
   chunks: Chunk[];
 }
 
-function ChunkItem({ chunk }: { chunk: Chunk }) {
+export function passageAnchorId(chunkId: number): string {
+  return `source-passage-${chunkId}`;
+}
+
+function ChunkItem({ chunk, total }: { chunk: Chunk; total: number }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="rounded-md border">
+    <div
+      id={passageAnchorId(chunk.id)}
+      data-chunk-index={chunk.chunk_index}
+      className="scroll-mt-4 rounded-md border"
+    >
       <button
         type="button"
         className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium hover:bg-muted/50"
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
       >
         {open ? (
           <ChevronDown className="h-4 w-4 shrink-0" />
         ) : (
           <ChevronRight className="h-4 w-4 shrink-0" />
         )}
-        Passage {chunk.chunk_index} (Page {chunk.page_number ?? '?'})
+        {/* chunk_index is 0-based in storage; readers count from one. */}
+        Passage {chunk.chunk_index + 1} of {total} (Page {chunk.page_number ?? '?'})
       </button>
       {open && (
         <div className="border-t px-4 py-3">
@@ -51,7 +61,7 @@ export function ChunksTab({ chunks }: ChunksTabProps) {
       <p className="text-sm text-muted-foreground">{chunks.length} passages from the PDF</p>
       <div className="space-y-2">
         {chunks.map((chunk) => (
-          <ChunkItem key={chunk.id} chunk={chunk} />
+          <ChunkItem key={chunk.id} chunk={chunk} total={chunks.length} />
         ))}
       </div>
     </div>

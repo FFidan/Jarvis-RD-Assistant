@@ -1,16 +1,24 @@
-"""System release-readiness endpoint: GET /api/system/readiness."""
+"""System release-readiness endpoints: readiness reporting and outbox recovery."""
 
+from datetime import UTC, datetime
 from typing import Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
 from jarvis_common import require_admin_or_api_key
+from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.owner import resolve_owner_identity
 from jarvis_common.settings import CoreSettings, get_core_settings, get_secrets_settings
 from pydantic import BaseModel
 
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.payload_schema import visibility_checkpoint_progress
+from paper_ingestion.repos.domain_events import requeue_dead_lettered_events
+from paper_ingestion.services.backup_archive import (
+    _last_run_succeeded,
+    _list_entries,
+    _read_last_run,
+)
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -95,6 +103,238 @@ def _development_flag_checks(core: CoreSettings) -> list[ReadinessCheck]:
     ]
 
 
+def _runtime_database_checks(request: Request) -> list[ReadinessCheck]:
+    """Return the schema role and pool diagnostics captured at startup."""
+    migration_check = getattr(request.app.state, "migration_check", None)
+    if migration_check is None:
+        return [
+            ReadinessCheck(
+                name="database_schema",
+                status="red",
+                detail="runtime schema check unavailable",
+                remediation="Run the one-shot migrator and restart paper_ingestion.",
+            )
+        ]
+
+    pool = request.app.state.db_pool
+
+    def pool_metric(name: str) -> int | None:
+        getter = getattr(pool, name, None)
+        value = getter() if callable(getter) else None
+        return value if isinstance(value, int) else None
+
+    pool_size = pool_metric("get_size")
+    pool_idle = pool_metric("get_idle_size")
+    pool_max = pool_metric("get_max_size")
+    pool_metrics_available = None not in (pool_size, pool_idle, pool_max)
+    pool_wait_pressure = pool_metrics_available and pool_size == pool_max and pool_idle == 0
+    migration_duration_ms = getattr(request.app.state, "migration_check_duration_ms", None)
+    migration_duration_available = isinstance(migration_duration_ms, int)
+
+    def metric_detail(value: int | None) -> str:
+        return str(value) if value is not None else "unknown"
+
+    return [
+        ReadinessCheck(
+            name="database_schema",
+            status="green" if migration_check.integrity == "ok" else "red",
+            detail=(
+                f"role={migration_check.current_user}; "
+                f"packaged={migration_check.packaged_version}; "
+                f"live={migration_check.live_version}; integrity={migration_check.integrity}"
+            ),
+            remediation="Run the one-shot migrator before starting writers."
+            if migration_check.integrity != "ok"
+            else "",
+        ),
+        ReadinessCheck(
+            name="migration_check",
+            status="green" if migration_duration_available else "amber",
+            detail=(
+                "outcome=success; duration_ms="
+                f"{migration_duration_ms if migration_duration_available else 'unknown'}"
+            ),
+            remediation=(
+                "Check migration startup instrumentation and restart paper_ingestion."
+                if not migration_duration_available
+                else ""
+            ),
+        ),
+        ReadinessCheck(
+            name="database_pool",
+            status="amber" if not pool_metrics_available or pool_wait_pressure else "green",
+            detail=(
+                f"size={metric_detail(pool_size)}; idle={metric_detail(pool_idle)}; "
+                f"max={metric_detail(pool_max)}"
+            ),
+            remediation=(
+                "Check database pool metrics before treating capacity as healthy."
+                if not pool_metrics_available
+                else "Reduce concurrent work or increase the configured pool maximum."
+                if pool_wait_pressure
+                else ""
+            ),
+        ),
+        ReadinessCheck(
+            name="correlation",
+            status="green",
+            detail=str(correlation_id_var.get() or "unavailable"),
+        ),
+    ]
+
+
+async def _job_queue_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
+    """Report durable queue age and failure counts without telemetry exporters."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE jobs.status = 'failed')::int AS failures,
+                    COUNT(*) FILTER (WHERE jobs.status IN ('todo', 'doing'))::int AS active,
+                    COALESCE(
+                        MAX(GREATEST(0, EXTRACT(EPOCH FROM (
+                            NOW() - COALESCE(jobs.scheduled_at, events.enqueued_at, NOW())
+                        )))) FILTER (WHERE jobs.status IN ('todo', 'doing')),
+                        0
+                    )::int AS oldest_active_seconds
+                FROM ops.procrastinate_jobs AS jobs
+                LEFT JOIN (
+                    SELECT job_id, MIN(at) AS enqueued_at
+                    FROM ops.procrastinate_events
+                    GROUP BY job_id
+                ) AS events ON events.job_id = jobs.id
+                """
+            )
+        failures = int(row["failures"] if row is not None else 0)
+        active = int(row["active"] if row is not None else 0)
+        oldest = int(row["oldest_active_seconds"] if row is not None else 0)
+        degraded = failures > 0 or oldest > 300
+        return ReadinessCheck(
+            name="job_queue",
+            status="amber" if degraded else "green",
+            detail=f"active={active}; failures={failures}; oldest_active_seconds={oldest}",
+            remediation=(
+                "Inspect failed jobs and worker heartbeats; retry only after the cause is fixed."
+                if degraded
+                else ""
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — readiness reports bounded failure type
+        return ReadinessCheck(
+            name="job_queue",
+            status="amber",
+            detail=f"unavailable: {type(exc).__name__}",
+            remediation="Check the operations schema grants and worker database connectivity.",
+        )
+
+
+async def _outbox_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
+    """Report durable lag, retry, and dead-letter facts for the Research outbox."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT
+                    COUNT(*) FILTER (
+                        WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
+                    )::int AS pending,
+                    COUNT(*) FILTER (
+                        WHERE attempts > 0 AND delivered_at IS NULL AND dead_lettered_at IS NULL
+                    )::int AS retries,
+                    COUNT(*) FILTER (WHERE dead_lettered_at IS NOT NULL)::int AS dead_letters,
+                    COALESCE(MAX(EXTRACT(EPOCH FROM NOW() - created_at)) FILTER (
+                        WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
+                    ), 0)::int AS lag_seconds
+                FROM domain_events"""
+            )
+            if row is None:
+                raise RuntimeError("outbox diagnostic returned no row")
+            pending, retries, dead_letters, lag = (
+                int(row["pending"]),
+                int(row["retries"]),
+                int(row["dead_letters"]),
+                int(row["lag_seconds"]),
+            )
+    except Exception as exc:  # noqa: BLE001 — readiness reports bounded failure type
+        return ReadinessCheck(
+            name="outbox",
+            status="amber",
+            detail=f"unavailable: {type(exc).__name__}",
+            remediation="Check the operations schema grants and database connectivity.",
+        )
+    return ReadinessCheck(
+        name="outbox",
+        status="amber" if retries or dead_letters or lag > 300 else "green",
+        detail=(
+            f"pending={pending}; retries={retries}; dead_letters={dead_letters}; lag_seconds={lag}"
+        ),
+        remediation=(
+            "Inspect Learning command delivery and dead letters before cutover."
+            if retries or dead_letters or lag > 300
+            else ""
+        ),
+    )
+
+
+def _backup_readiness() -> ReadinessCheck:
+    """Report the latest durable backup result and age from the read-only mount."""
+    entries = _list_entries()
+    run = _read_last_run()
+    succeeded = _last_run_succeeded(run)
+    last_success = entries[0].modified_at if entries else None
+    age_seconds: int | None = None
+    if last_success is not None:
+        if last_success.tzinfo is None:
+            last_success = last_success.replace(tzinfo=UTC)
+        age_seconds = max(0, int((datetime.now(UTC) - last_success).total_seconds()))
+    stale = age_seconds is None or age_seconds > 129_600
+    status: ReadinessStatus = (
+        "red" if succeeded is False else "amber" if succeeded is None or stale else "green"
+    )
+    result = "unknown" if succeeded is None else "success" if succeeded else "failure"
+    return ReadinessCheck(
+        name="backup",
+        status=status,
+        detail=(
+            f"result={result}; age_seconds={age_seconds if age_seconds is not None else 'unknown'}"
+        ),
+        remediation=(
+            "Inspect the backup sidecar result and take a fresh verified backup."
+            if status != "green"
+            else ""
+        ),
+    )
+
+
+async def _cutover_readiness_checks(request: Request) -> list[ReadinessCheck]:
+    """Collect profile-independent queue, outbox, and backup diagnostics."""
+    return [
+        await _job_queue_readiness(request.app.state.db_pool),
+        await _outbox_readiness(request.app.state.db_pool),
+        _backup_readiness(),
+    ]
+
+
+async def _audit_log_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
+    """Report Platform audit availability through its exact Research capability."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT latest_event_at, event_count FROM platform.audit_readiness_v1()"
+            )
+        if row is None:
+            raise RuntimeError("audit readiness capability returned no row")
+        count = int(row["event_count"])
+        return ReadinessCheck(name="audit_log", status="green", detail=f"{count} rows")
+    except Exception as exc:  # noqa: BLE001 — expose bounded type, never raw DB detail
+        return ReadinessCheck(
+            name="audit_log",
+            status="amber",
+            detail=type(exc).__name__,
+            remediation="The audit log could not be queried. Check connectivity and grants.",
+        )
+
+
 async def _vector_visibility_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
     """Report whether every vector uses the active visibility generation.
 
@@ -146,6 +386,12 @@ async def _vector_visibility_readiness(db_pool: asyncpg.Pool) -> ReadinessCheck:
         )
 
 
+class OutboxRequeueResponse(BaseModel):
+    """How many dead-lettered events were returned to the delivery queue."""
+
+    requeued: int
+
+
 @router.get(
     "/readiness",
     response_model=ReadinessResponse,
@@ -179,6 +425,8 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
     checks: list[ReadinessCheck] = []
 
     checks.extend(_development_flag_checks(core))
+    checks.extend(_runtime_database_checks(request))
+    checks.extend(await _cutover_readiness_checks(request))
 
     # Environment.
     env_value = core.environment
@@ -326,30 +574,26 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
         )
     )
 
-    # Audit log — count rows; informational only.
-    try:
-        async with request.app.state.db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT COUNT(*) AS n FROM audit_log")
-        n = row["n"] if row is not None else 0
-        checks.append(
-            ReadinessCheck(
-                name="audit_log",
-                status="green",
-                detail=f"{n} rows",
-                remediation="",
-            )
-        )
-    except Exception as exc:  # noqa: BLE001 — surface class name, not raw message
-        checks.append(
-            ReadinessCheck(
-                name="audit_log",
-                status="amber",
-                detail=type(exc).__name__,
-                remediation="The audit_log table could not be queried. Check connectivity.",
-            )
-        )
-
+    checks.append(await _audit_log_readiness(request.app.state.db_pool))
     checks.append(await _vector_visibility_readiness(request.app.state.db_pool))
 
     aggregate = max(checks, key=lambda c: _STATUS_RANK[c.status]).status
     return ReadinessResponse(status=aggregate, checks=checks)
+
+
+@router.post(
+    "/outbox/requeue",
+    response_model=OutboxRequeueResponse,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
+@limiter.limit("6/minute")
+async def requeue_outbox_dead_letters(request: Request) -> OutboxRequeueResponse:
+    """Return dead-lettered outbox events to the delivery queue.
+
+    Dead-lettering is otherwise terminal, and an undelivered ``paper.deleted``
+    keeps a deleted paper's Research-private rows retained indefinitely. The
+    readiness report counts these events; without this an operator can see the
+    backlog but has no way to clear it once the outage behind it is fixed.
+    """
+    requeued = await requeue_dead_lettered_events(request.app.state.db_pool)
+    return OutboxRequeueResponse(requeued=requeued)

@@ -80,7 +80,7 @@ export const restoreStatusSchema = z.looseObject({
 });
 
 export const restoreRequestResponseSchema = z.looseObject({
-  status: z.literal('scheduled'),
+  status: z.literal('requested'),
   status_token: z.string(),
   restore_id: z.string(),
   source: restoreSourceSchema,

@@ -9,12 +9,12 @@ goes through :func:`auth_check`:
 
 from __future__ import annotations
 
-from functools import partial
+from unittest.mock import AsyncMock
 
 import pytest
 from jarvis_common.testing import (
+    PTBContextOptions,
     make_bot_config,
-    make_pool_and_conn,
     make_ptb_context,
     make_telegram_update,
 )
@@ -22,22 +22,15 @@ from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands.system_commands import start_command
 
 
-def _make_pool(*, pairing_row=None):
-    return make_pool_and_conn(fetchrow_return=pairing_row, direct_methods=True)[0]
-
-
-_make_context = partial(
-    make_ptb_context,
-    config=make_bot_config(BotConfig),
-)
-
-
 @pytest.mark.asyncio
 async def test_start_paired_chat_sends_welcome() -> None:
-    """A paired chat (pairing row exists) gets the welcome message."""
-    pool = _make_pool(pairing_row={"user_id": 1})
+    """A Platform-paired chat gets the welcome message."""
+    platform_client = AsyncMock()
     update = make_telegram_update(chat_id=42, text="/start")
-    context = _make_context(pool)
+    context = make_ptb_context(
+        platform_client,
+        make_bot_config(BotConfig),
+    )
 
     await start_command(update, context)
 
@@ -48,10 +41,14 @@ async def test_start_paired_chat_sends_welcome() -> None:
 
 @pytest.mark.asyncio
 async def test_start_unpaired_chat_shows_pair_guidance() -> None:
-    """An unpaired chat (no pairing row) gets the /pair guidance, not welcome."""
-    pool = _make_pool(pairing_row=None)
+    """An unpaired chat gets the /pair guidance, not welcome."""
+    platform_client = AsyncMock()
     update = make_telegram_update(chat_id=42, text="/start")
-    context = _make_context(pool)
+    context = make_ptb_context(
+        platform_client,
+        make_bot_config(BotConfig),
+        options=PTBContextOptions(paired_user_id=None),
+    )
 
     await start_command(update, context)
 

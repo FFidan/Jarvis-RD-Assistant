@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,6 +82,179 @@ async def test_citations_batch_fetch_counts_successes_and_failures() -> None:
     assert sync.await_args_list[0].args[2] == 10
     assert sync.await_args_list[1].args[2] == 20
     assert [call.args[0] for call in ctx.update_progress.await_args_list] == [0.5, 1.0]
+
+
+def _citation_source() -> MagicMock:
+    source = MagicMock()
+    source.fetch_citations = AsyncMock(return_value=[])
+    source.fetch_references = AsyncMock(return_value=[])
+    return source
+
+
+@pytest.mark.asyncio
+async def test_resolved_bibliography_uses_reference_edge_insertion() -> None:
+    from paper_ingestion.citations import sync_bibliography_references
+
+    conn = AsyncMock()
+    references = [{"paperId": "reference-1", "title": "Referenced paper"}]
+    with patch(
+        "paper_ingestion.citations._sync_citation_direction",
+        AsyncMock(return_value=(1, 1)),
+    ) as sync_direction:
+        result = await sync_bibliography_references(conn, references, 7)
+
+    assert result == (1, 1)
+    sync_direction.assert_awaited_once_with(
+        conn,
+        references,
+        7,
+        related_paper_is_source=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_citation_sync_translates_doi_identifier_for_semantic_scholar() -> None:
+    """The citation client must receive S2's DOI form, not the stored prefix."""
+    from paper_ingestion.citations import sync_citations_for_paper
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {
+        "external_id": "doi:10.1000/example",
+        "metadata": {},
+    }
+    source = _citation_source()
+
+    await sync_citations_for_paper(conn, source, 7)
+
+    source.fetch_citations.assert_awaited_once_with("DOI:10.1000/example")
+    source.fetch_references.assert_awaited_once_with("DOI:10.1000/example")
+
+
+@pytest.mark.asyncio
+async def test_citation_sync_prefers_semantic_scholar_metadata_identifier() -> None:
+    """A canonical S2 identifier remains authoritative over a stored DOI."""
+    from paper_ingestion.citations import sync_citations_for_paper
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {
+        "external_id": "doi:10.1000/example",
+        "metadata": {"s2_id": "canonical-s2-id"},
+    }
+    source = _citation_source()
+
+    await sync_citations_for_paper(conn, source, 7)
+
+    source.fetch_citations.assert_awaited_once_with("canonical-s2-id")
+    source.fetch_references.assert_awaited_once_with("canonical-s2-id")
+
+
+@pytest.mark.asyncio
+async def test_citation_sync_skips_local_uploads() -> None:
+    """A local upload has no external scholarly identifier to send to S2."""
+    from paper_ingestion.citations import sync_citations_for_paper
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {
+        "external_id": "local:uploaded-paper.pdf",
+        "metadata": {"s2_id": "must-not-be-used"},
+    }
+    source = _citation_source()
+
+    result = await sync_citations_for_paper(conn, source, 7)
+
+    assert result.citations_added == 0
+    assert result.references_added == 0
+    source.fetch_citations.assert_not_awaited()
+    source.fetch_references.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "expected_identifier"),
+    [
+        ({"doi": "10.1000/openalex"}, "DOI:10.1000/openalex"),
+        ({}, "URL:https://openalex.org/W123456789"),
+    ],
+)
+async def test_citation_sync_translates_openalex_identifier(
+    metadata: dict, expected_identifier: str
+) -> None:
+    """OpenAlex papers use a DOI when known and their canonical URL otherwise."""
+    from paper_ingestion.citations import sync_citations_for_paper
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {
+        "external_id": "openalex:W123456789",
+        "metadata": metadata,
+    }
+    source = _citation_source()
+
+    await sync_citations_for_paper(conn, source, 7)
+
+    source.fetch_citations.assert_awaited_once_with(expected_identifier)
+    source.fetch_references.assert_awaited_once_with(expected_identifier)
+
+
+@pytest.mark.asyncio
+async def test_citation_sync_failure_does_not_modify_stored_edges() -> None:
+    """Provider failures perform no edge writes or deletes."""
+    from paper_ingestion.citations import sync_citations_for_paper
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {"external_id": "s2:paper-7", "metadata": {}}
+    source = _citation_source()
+    source.fetch_citations.side_effect = RuntimeError("unavailable")
+    source.fetch_references.side_effect = RuntimeError("unavailable")
+
+    await sync_citations_for_paper(conn, source, 7)
+
+    conn.fetchval.assert_not_awaited()
+    # No edge was inserted or deleted, and no freshness was claimed: a stamp
+    # here would hide the paper from the staleness sweep for a refresh
+    # interval on the strength of a fetch that never arrived.
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_citation_refresh_uses_thirty_day_staleness_window() -> None:
+    """Fresh graph data is reused while older graph data is synchronized."""
+    from paper_ingestion.citations import _refresh_stale_citations
+
+    now = datetime(2026, 8, 15, tzinfo=UTC)
+    pool, conn = make_pool_and_conn(with_transaction=False)
+    conn.fetch.return_value = [
+        {"id": 10, "citations_fetched_at": now - timedelta(days=29)},
+        {"id": 20, "citations_fetched_at": now - timedelta(days=31)},
+    ]
+
+    with patch(
+        "paper_ingestion.citations.sync_citations_for_paper",
+        AsyncMock(),
+    ) as sync:
+        await _refresh_stale_citations(pool, _citation_source(), [10, 20], now=now)
+
+    sync.assert_awaited_once()
+    assert sync.await_args.args[2] == 20
+
+
+@pytest.mark.asyncio
+async def test_citation_refresh_failure_returns_without_graph_mutation() -> None:
+    """A refresh error is contained before the stored graph is read."""
+    from paper_ingestion.citations import _refresh_stale_citations
+
+    now = datetime(2026, 8, 15, tzinfo=UTC)
+    pool, conn = make_pool_and_conn(with_transaction=False)
+    conn.fetch.return_value = [{"id": 20, "citations_fetched_at": now - timedelta(days=31)}]
+
+    with patch(
+        "paper_ingestion.citations.sync_citations_for_paper",
+        AsyncMock(side_effect=RuntimeError("unavailable")),
+    ):
+        await _refresh_stale_citations(pool, _citation_source(), [20], now=now)
+
+    conn.execute.assert_not_awaited()
+    conn.fetchval.assert_not_awaited()
 
 
 @pytest.mark.asyncio

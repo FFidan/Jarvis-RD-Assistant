@@ -46,7 +46,7 @@ def _make_raw_peer_client(app, *, raw_peer: str, base_url: str):
 
 async def test_a16_verify_valid_token_returns_session_cookie(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -71,7 +71,7 @@ async def test_a16_verify_valid_token_returns_session_cookie(
         expires_at,
     )
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/verify", json={"token": raw_token})
 
     assert resp.status_code == 200, (
@@ -92,7 +92,7 @@ async def test_a16_verify_valid_token_returns_session_cookie(
 
 async def test_a16_verify_expired_token_returns_400(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -117,7 +117,7 @@ async def test_a16_verify_expired_token_returns_400(
         expires_at,
     )
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/verify", json={"token": raw_token})
 
     assert resp.status_code == 400, (
@@ -127,7 +127,7 @@ async def test_a16_verify_expired_token_returns_400(
 
 async def test_a16_verify_already_used_token_returns_400(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -152,7 +152,7 @@ async def test_a16_verify_already_used_token_returns_400(
         now - timedelta(minutes=1),  # already used
     )
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/verify", json={"token": raw_token})
 
     assert resp.status_code == 400, (
@@ -167,7 +167,7 @@ async def test_a16_verify_already_used_token_returns_400(
 
 async def test_a18_logout_revokes_session_row_in_db(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -176,7 +176,7 @@ async def test_a18_logout_revokes_session_row_in_db(
     Verified: auth.py:467-514 logout at HEAD d21aaea8.
     Survivor-of: test_auth_magic_link.py logout tests.
     """
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with _make_client(_platform_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.post("/api/auth/logout")
 
     assert resp.status_code == 204, (
@@ -201,14 +201,14 @@ async def test_a18_logout_revokes_session_row_in_db(
 
 
 async def test_a18_logout_without_session_returns_204(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """Covers map row A18: logout without session cookie is idempotent → 204.
 
     Verified: auth.py:479 missing cookie early-return at HEAD d21aaea8.
     """
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/logout")
 
     assert resp.status_code == 204, (
@@ -218,7 +218,7 @@ async def test_a18_logout_without_session_returns_204(
 
 async def test_a18_logout_does_not_reissue_renewed_cookie(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -234,7 +234,7 @@ async def test_a18_logout_does_not_reissue_renewed_cookie(
     Verified: auth.py logout (session_renewed=None before delete_cookie);
     session_middleware.py dispatch re-issue branch.
     """
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+    async with _make_client(_platform_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.post("/api/auth/logout")
 
     assert resp.status_code == 204, (
@@ -275,7 +275,7 @@ async def test_a18_logout_does_not_reissue_renewed_cookie(
 
 async def test_request_link_email_change_token_does_not_suppress_login(
     contract_two_users,
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
 ):
@@ -306,8 +306,8 @@ async def test_request_link_email_change_token_does_not_suppress_login(
         "changed@contract.example.com",
     )
 
-    with patch("paper_ingestion.routers.auth.send_magic_link", AsyncMock()):
-        async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    with patch("platform_api.routers.auth.send_magic_link", AsyncMock()):
+        async with _make_unauthenticated_client(_platform_app_with_pool) as c:
             resp = await c.post("/api/auth/request-link", json={"email": email_a})
 
     assert resp.status_code == 200, (
@@ -339,7 +339,7 @@ async def test_cooldown_probe_answers_per_link_kind(contract_two_users, contract
     import secrets
     from datetime import UTC, datetime, timedelta
 
-    from paper_ingestion.routers._auth_shared import magic_link_on_cooldown
+    from platform_api.routers._auth_shared import magic_link_on_cooldown
 
     expires_at = datetime.now(UTC) + timedelta(minutes=15)
 
@@ -380,7 +380,7 @@ async def test_cooldown_probe_answers_per_link_kind(contract_two_users, contract
 
 
 async def test_a17_api_key_session_non_ascii_returns_403(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
 ):
     """POST /api/auth/api-key-session with a non-ASCII body key → 403, not 500.
@@ -393,7 +393,7 @@ async def test_a17_api_key_session_non_ascii_returns_403(
 
     Verified against: auth.py api_key_session hmac.compare_digest call.
     """
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         # Submit a body containing non-ASCII characters in the api_key field.
         resp = await c.post(
             "/api/auth/api-key-session",
@@ -419,7 +419,7 @@ async def test_a17_api_key_session_non_ascii_returns_403(
 def _reset_api_key_login_cache():
     """Isolate process-local auth state between contract cases."""
     from jarvis_common.auth import invalidate_api_key_login_cache
-    from paper_ingestion.deps import limiter
+    from platform_api.deps import limiter
 
     invalidate_api_key_login_cache()
     limiter.reset()
@@ -439,7 +439,7 @@ async def _seed_user_with_role(conn, email: str, role: str) -> int:
 
 
 async def test_owner_exempt_mints_on_multi_user_box_flag_off(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -450,7 +450,7 @@ async def test_owner_exempt_mints_on_multi_user_box_flag_off(
     monkeypatch.setenv("OWNER_USER_ID", str(owner_id))
     monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 200, (
@@ -462,7 +462,7 @@ async def test_owner_exempt_mints_on_multi_user_box_flag_off(
 
 
 async def test_owner_session_mint_waits_for_admin_role_mutation_lock(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     _contract_pool,
     contract_conn,
@@ -472,7 +472,7 @@ async def test_owner_session_mint_waits_for_admin_role_mutation_lock(
     owner_id = await _seed_user_with_role(contract_conn, "locked-owner@example.com", "admin")
     monkeypatch.setenv("OWNER_USER_ID", str(owner_id))
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as client:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as client:
         async with _contract_pool.acquire() as lock_conn:
             async with lock_conn.transaction():
                 await lock_conn.execute(
@@ -491,7 +491,7 @@ async def test_owner_session_mint_waits_for_admin_role_mutation_lock(
 
 
 async def test_non_admin_owner_user_id_still_409s(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -506,7 +506,7 @@ async def test_non_admin_owner_user_id_still_409s(
     monkeypatch.setenv("OWNER_USER_ID", str(member_id))
     monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 409, (
@@ -516,7 +516,7 @@ async def test_non_admin_owner_user_id_still_409s(
 
 
 async def test_malformed_owner_user_id_returns_actionable_409_without_fallback(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -526,7 +526,7 @@ async def test_malformed_owner_user_id_returns_actionable_409_without_fallback(
     monkeypatch.setenv("OWNER_USER_ID", "not-a-user-id")
     monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as client:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as client:
         response = await client.post("/api/auth/api-key-session", json={})
 
     assert response.status_code == 409, response.text
@@ -536,7 +536,7 @@ async def test_malformed_owner_user_id_returns_actionable_409_without_fallback(
 
 
 async def test_malformed_database_owner_returns_actionable_409_without_fallback(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -553,7 +553,7 @@ async def test_malformed_database_owner_returns_actionable_409_without_fallback(
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as client:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as client:
         response = await client.post("/api/auth/api-key-session", json={})
 
     assert response.status_code == 409, response.text
@@ -563,7 +563,7 @@ async def test_malformed_database_owner_returns_actionable_409_without_fallback(
 
 
 async def test_flag_on_without_owner_user_id_refuses_fallback_409(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -574,7 +574,7 @@ async def test_flag_on_without_owner_user_id_refuses_fallback_409(
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 409, (
@@ -585,7 +585,7 @@ async def test_flag_on_without_owner_user_id_refuses_fallback_409(
 
 
 async def test_non_owner_multi_user_flag_off_still_403(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -596,7 +596,7 @@ async def test_non_owner_multi_user_flag_off_still_403(
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 403, (
@@ -605,7 +605,7 @@ async def test_non_owner_multi_user_flag_off_still_403(
 
 
 async def test_single_user_login_unchanged(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -615,7 +615,7 @@ async def test_single_user_login_unchanged(
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 200, (
@@ -626,7 +626,7 @@ async def test_single_user_login_unchanged(
 
 
 async def test_db_override_enables_multi_user_login(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -650,7 +650,7 @@ async def test_db_override_enables_multi_user_login(
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 409, (
@@ -667,7 +667,7 @@ async def test_db_override_enables_multi_user_login(
 
 
 async def test_db_owner_row_exempts_when_env_unset(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -686,7 +686,7 @@ async def test_db_owner_row_exempts_when_env_unset(
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 200, (
@@ -698,7 +698,7 @@ async def test_db_owner_row_exempts_when_env_unset(
 
 
 async def test_sec2_409_message_names_both_env_and_wizard(
-    _pi_app_with_pool,
+    _platform_app_with_pool,
     _configure_api_key,
     contract_conn,
     monkeypatch,
@@ -710,7 +710,7 @@ async def test_sec2_409_message_names_both_env_and_wizard(
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 409, (
@@ -746,10 +746,10 @@ async def _seed_login_token(conn, user_id: int) -> str:
     return raw_token
 
 
-async def test_verify_gate_refuses_lan_plaintext(_pi_app_with_pool, _configure_api_key):
+async def test_verify_gate_refuses_lan_plaintext(_platform_app_with_pool, _configure_api_key):
     """POST /api/auth/verify from a non-loopback socket peer is rejected before lookup."""
     async with _make_raw_peer_client(
-        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+        _platform_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
     ) as c:
         resp = await c.post("/api/auth/verify", json={"token": "any-token-1234567890abcd"})
 
@@ -760,12 +760,12 @@ async def test_verify_gate_refuses_lan_plaintext(_pi_app_with_pool, _configure_a
 
 
 async def test_verify_gate_allows_loopback_host(
-    contract_two_users, _pi_app_with_pool, _configure_api_key, contract_conn
+    contract_two_users, _platform_app_with_pool, _configure_api_key, contract_conn
 ):
     """POST /api/auth/verify from a loopback Host → gate passes → 200."""
     raw_token = await _seed_login_token(contract_conn, contract_two_users.user_a_id)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/verify", json={"token": raw_token})
 
     assert resp.status_code == 200, (
@@ -774,13 +774,13 @@ async def test_verify_gate_allows_loopback_host(
 
 
 async def test_verify_gate_refuses_forged_forwarded_https_from_untrusted_peer(
-    contract_two_users, _pi_app_with_pool, _configure_api_key, contract_conn
+    contract_two_users, _platform_app_with_pool, _configure_api_key, contract_conn
 ):
     """A public socket peer cannot turn cleartext into HTTPS with a header."""
     raw_token = await _seed_login_token(contract_conn, contract_two_users.user_a_id)
 
     async with _make_raw_peer_client(
-        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+        _platform_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
     ) as c:
         resp = await c.post(
             "/api/auth/verify",
@@ -802,13 +802,13 @@ async def test_verify_gate_refuses_forged_forwarded_https_from_untrusted_peer(
 
 
 async def test_verify_gate_allows_https_from_pinned_dashboard_peer(
-    contract_two_users, _pi_app_with_pool, _configure_api_key, contract_conn
+    contract_two_users, _platform_app_with_pool, _configure_api_key, contract_conn
 ):
     """The dashboard proxy's normalized HTTPS scheme remains usable."""
     raw_token = await _seed_login_token(contract_conn, contract_two_users.user_a_id)
 
     async with _make_raw_peer_client(
-        _pi_app_with_pool, raw_peer="10.137.241.253", base_url=_LAN_BASE_URL
+        _platform_app_with_pool, raw_peer="10.137.241.253", base_url=_LAN_BASE_URL
     ) as c:
         resp = await c.post(
             "/api/auth/verify",
@@ -822,11 +822,11 @@ async def test_verify_gate_allows_https_from_pinned_dashboard_peer(
 
 
 async def test_request_link_gate_refuses_lan_plaintext_and_forged_localhost(
-    _pi_app_with_pool, _configure_api_key
+    _platform_app_with_pool, _configure_api_key
 ):
     """Email addresses are not accepted over raw LAN HTTP."""
     async with _make_raw_peer_client(
-        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+        _platform_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
     ) as c:
         resp = await c.post(
             "/api/auth/request-link",
@@ -838,16 +838,16 @@ async def test_request_link_gate_refuses_lan_plaintext_and_forged_localhost(
 
 
 async def test_api_key_session_gate_refuses_lan_plaintext(
-    _pi_app_with_pool, _configure_api_key, monkeypatch
+    _platform_app_with_pool, _configure_api_key, monkeypatch
 ):
     """POST /api/auth/api-key-session from a non-loopback socket peer is rejected.
 
     The gate detail names the supported routes, distinguishing it from the
     invalid-key 403.
     """
-    monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
+    monkeypatch.setattr(_platform_app_with_pool.state.limiter, "enabled", False)
     async with _make_raw_peer_client(
-        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+        _platform_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
     ) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
@@ -858,15 +858,15 @@ async def test_api_key_session_gate_refuses_lan_plaintext(
 
 
 async def test_api_key_session_gate_allows_loopback_host(
-    _pi_app_with_pool, _configure_api_key, contract_conn, monkeypatch
+    _platform_app_with_pool, _configure_api_key, contract_conn, monkeypatch
 ):
     """POST /api/auth/api-key-session from a loopback Host → gate passes → 200."""
-    monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
+    monkeypatch.setattr(_platform_app_with_pool.state.limiter, "enabled", False)
     admin_id = await _seed_user_with_role(contract_conn, "gate-loopback-admin@example.com", "admin")
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
 
-    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+    async with _make_unauthenticated_client(_platform_app_with_pool) as c:
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 200, (
@@ -876,16 +876,16 @@ async def test_api_key_session_gate_allows_loopback_host(
 
 
 async def test_api_key_session_gate_refuses_forged_forwarded_https(
-    _pi_app_with_pool, _configure_api_key, contract_conn, monkeypatch
+    _platform_app_with_pool, _configure_api_key, contract_conn, monkeypatch
 ):
     """A public peer cannot spoof the trusted dashboard's HTTPS signal."""
-    monkeypatch.setattr(_pi_app_with_pool.state.limiter, "enabled", False)
+    monkeypatch.setattr(_platform_app_with_pool.state.limiter, "enabled", False)
     admin_id = await _seed_user_with_role(contract_conn, "gate-fwd-admin@example.com", "admin")
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
     monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
 
     async with _make_raw_peer_client(
-        _pi_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
+        _platform_app_with_pool, raw_peer="203.0.113.7", base_url=_LAN_BASE_URL
     ) as c:
         resp = await c.post(
             "/api/auth/api-key-session",

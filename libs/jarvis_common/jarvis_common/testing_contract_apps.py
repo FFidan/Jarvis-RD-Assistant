@@ -38,13 +38,8 @@ _MISSING = object()
 class PITestAppOptions:
     """Explicit seams for a temporary Paper Ingestion test application."""
 
-    remove_owner_override: bool
-    """Drop the autouse identity stubs so the app resolves identity for real.
-
-    Removes every seam that would otherwise hand routes a fixed user: both the
-    owner-override resolver and ``get_current_user_id``, which routes reach
-    through their own sub-dependant.
-    """
+    remove_identity_overrides: bool
+    """Drop the autouse identity stubs so the app resolves identity for real."""
 
     override_db_dependency: bool = False
     disable_limiter: bool = False
@@ -201,7 +196,7 @@ def patch_pi_test_app(
     ``pool`` may be ``None`` for tests that route all data access through
     dependency overrides and must leave ``app.state.db_pool`` untouched.
     """
-    from jarvis_common import current_user_id_strict_with_owner_override, get_current_user_id
+    from jarvis_common import current_user_id_strict, get_current_user_id
 
     if pool is None and options.override_db_dependency:
         raise ValueError("override_db_dependency requires a pool")
@@ -216,8 +211,8 @@ def patch_pi_test_app(
     if options.override_db_dependency:
         overrides[get_db_pool] = lambda: pool
     removals = set(options.dependency_absent)
-    if options.remove_owner_override:
-        removals |= {current_user_id_strict_with_owner_override, get_current_user_id}
+    if options.remove_identity_overrides:
+        removals |= {current_user_id_strict, get_current_user_id}
 
     limiter_was_enabled = limiter.enabled
     if options.disable_limiter:

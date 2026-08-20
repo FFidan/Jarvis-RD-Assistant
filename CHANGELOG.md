@@ -10,6 +10,105 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
+## v1.2.6 (2026-08-21)
+
+This release gives every service sole ownership of its own data and makes each
+one prove who it is on every call between them. It also rebuilds the reading
+surfaces around the way papers are actually read, and makes the Telegram client
+say what it is really counting.
+
+### Added
+
+- **A separate identity and configuration service.** Sign-in, sessions,
+  passkeys, accounts, setup, auditing, configuration and Telegram pairing now
+  belong to one service that owns them. Requests reach it through the same
+  address as before; nothing changes for a reader.
+- **Account erasure a researcher can rely on.** An account can be erased, and
+  the deletion is carried out across every part of the deployment that holds
+  anything about it: records, extracted text, search vectors and the documents
+  stored on disk. A thirty-day window applies before it becomes irreversible,
+  each part of the deployment confirms its own work, and the erasure is only
+  recorded as finished once nothing is left behind. Papers only that account
+  held go with it; papers another researcher holds, and papers the deployment
+  publishes, stay.
+- **Signed identity between services.** The gateway asks the identity service to
+  authorize each request and passes on a signature bound to that exact method,
+  path and request. A service will not act on an identity it cannot verify, and
+  it cannot mint one for itself.
+- **Owned schemas and least-privilege database roles.** Each service connects as
+  a role that can reach only its own data, through named capabilities for the
+  operations that cross a boundary. Migrations run under an authority of their
+  own, and recovery reconstructs the same boundary a fresh installation builds.
+- **Reading-first paper detail.** Opening a paper opens the paper. Contents and
+  actions dock beside it, findings link to the passage they came from, and
+  related work is separated into papers this one cites and papers that resemble
+  it.
+- **A grouped navigation rail, and Papers apart from Discover.** The library and
+  the search for new work are now two places rather than two modes of one, and
+  My Day shows the single thing to do next.
+- **Appearance, timer and navigation preferences follow the account.** Theme,
+  accent, typography, density, focus lengths and rail state move with the
+  researcher between browsers instead of living in one of them.
+- **Citations for uploaded documents.** A document a researcher uploads is
+  matched to its references by the identifier it actually carries, and reports
+  which tier of matching produced each one.
+- **A personal ranking signal.** Once a researcher has rated enough papers,
+  their own ratings inform their deck order. The choice is theirs, it is
+  explained where it takes effect, and it can be reversed.
+- **A scheduled scan of the pinned images.** The images a release runs on are
+  scanned on a schedule rather than only while a release is being cut, so an
+  advisory published between releases is visible before the next one.
+
+### Fixed
+
+- **Signing out ends the session.** The rolling session refresh was attached to
+  every response that arrived with a valid session, including the sign-out
+  response that had just cleared it, and it was written last. A browser kept a
+  working session after signing out. The refresh is now skipped whenever the
+  handler has already decided the session's fate.
+- **Account erasure cannot be hurried.** The service that requests an erasure
+  could also write the records that decide whether it may proceed. It can no
+  longer set the deletion clock, record another domain's confirmation, or remove
+  an account outside the completion path, so the thirty-day window a researcher
+  relies on is enforced where it is measured.
+- **Search looks for what was typed.** A phrase is searched as a phrase, a
+  field-qualified query is passed through, and a source that could not be
+  reached is named instead of being reported as no results.
+- **Counts say what they counted.** Facet counts reflect the filters already
+  applied, and every number the Telegram client reports names its window and the
+  view it came from.
+- **One command no longer blocks the rest.** Asking the Telegram client to
+  generate a deck made it stop answering every other chat until the work
+  finished. It now acknowledges the request and delivers the deck when it is
+  ready.
+- **The reading and library surfaces describe what they do.** Labels, disabled
+  states and empty states across the reading, library and Pulse surfaces were
+  reworded to match the behavior behind them, and the guards under them were
+  tightened to match the words.
+- **The application is reachable by keyboard.** Navigation, the grading controls
+  and the reading surfaces can be operated and read without a mouse.
+
+### Changed
+
+- **The Telegram client no longer holds a database credential.** It reaches the
+  deployment only through service interfaces, and is given exactly the two
+  secrets it needs.
+- **One database authority has no login at all.** The role an upgrade rollback
+  uses is reached only from inside the database, so it no longer has a password
+  or a secret file of its own. An existing installation drops the credential on
+  its next start, and the deployment carries one secret fewer.
+- **Quick Rating is gone.** Rating and flagging a paper from the reading surface
+  were removed; notes live with the paper and remain editable.
+- **Project status reads the same everywhere.** The words the Telegram client
+  prints for a project's state are the words the web interface shows, pinned so
+  the two cannot drift apart.
+- **Generation traces carry only what they are given.** Optional tracing no
+  longer captures whole call frames; a trace records explicitly chosen,
+  size-limited content and is transmitted only when tracing is enabled.
+- **The manual describes the shipped application.** Navigation, paper detail,
+  the feed, settings and the Telegram guide were rewritten against the
+  interface this release ships.
+
 ## v1.2.5 (2026-08-13)
 
 This release makes the research loop consistent across the Web interface,

@@ -17,7 +17,7 @@ from jarvis_common.maintenance import OutboundEgressBlockedError
 from jarvis_common.pinned_transport import LOCAL_DEVELOPMENT_POLICY, PinnedAsyncTransport
 from jarvis_common.testing import FakeRecord
 from paper_ingestion.services import provider_models
-from paper_ingestion.services.llm_provider_registry import (
+from jarvis_common.llm_provider_registry import (
     PROVIDER_REGISTRY,
     provider_for_id,
 )
@@ -386,7 +386,7 @@ async def test_custom_model_list_rebind_is_blocked_after_public_validation(monke
         return [(socket.AF_INET, "127.0.0.1")]
 
     monkeypatch.setattr(
-        "paper_ingestion.services.llm_provider_registry.socket.getaddrinfo",
+        "jarvis_common.llm_provider_registry.socket.getaddrinfo",
         public_validation_answer,
     )
     transport = PinnedAsyncTransport(

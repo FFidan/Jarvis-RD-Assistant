@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { BulkToolbar } from '@/components/feed/BulkToolbar';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { createTestQueryClient, renderWithProviders } from '@/__tests__/test-utils';
+import type { FeedScope } from '@/types';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -23,9 +24,10 @@ function makeQueryClient() {
 function renderToolbar(
   surface: Parameters<typeof BulkToolbar>[0]['surface'],
   papersOnPage: number[] = [1, 2, 3],
+  scope: FeedScope = 'library',
 ) {
   return renderWithProviders(
-    <BulkToolbar surface={surface} papersOnPage={papersOnPage} />,
+    <BulkToolbar surface={surface} scope={scope} papersOnPage={papersOnPage} />,
     { queryClient: makeQueryClient() },
   );
 }
@@ -69,6 +71,15 @@ describe('BulkToolbar', () => {
     renderToolbar('library');
     expect(screen.getByRole('button', { name: /Mark Reading/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Mark Done/i })).toBeInTheDocument();
+  });
+
+  it('corpus scope offers only saving, even on the library surface', () => {
+    useBulkSelection.setState({ selectedIds: new Set([1]) });
+    renderToolbar('library', [1], 'corpus');
+    expect(screen.getByRole('button', { name: 'Save to Reading List' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark Reading' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark Done' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Move to Trash' })).not.toBeInTheDocument();
   });
 
   it('surface=trash shows Restore action', () => {

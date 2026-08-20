@@ -23,7 +23,7 @@ from typing import Any
 import asyncpg
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common.auth import get_current_user_id, get_current_user_id_or_bot
+from jarvis_common.auth import get_current_user_id
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.library import add_to_library
 
@@ -202,7 +202,7 @@ async def search_papers(
     body: SearchRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
-    user_id: int = Depends(get_current_user_id_or_bot),
+    user_id: int = Depends(get_current_user_id),
 ) -> MultiSourceSearchResponse:
     """Search for papers across one or more sources and upsert results into the database.
 

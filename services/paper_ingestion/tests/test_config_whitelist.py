@@ -3,16 +3,17 @@
 import socket
 
 import pytest
-from paper_ingestion.services.config_metadata import (
+from jarvis_common.config_metadata import (
     _ALLOWED_CONFIG_KEYS,
     PERSONAL_KEYS,
     SYSTEM_KEYS,
     _classify_config_key,
 )
-from paper_ingestion.services.config_validators import _CONFIG_VALIDATORS
+from jarvis_common.config_validators import _CONFIG_VALIDATORS
 
 _LANGFUSE_KEY = "observability.langfuse_dashboard_url"
 _ONBOARDING_DISMISSED_KEY = "onboarding.dismissed"
+_CLASSIFIER_OPT_IN_KEY = "pulse.classifier_opt_in"
 
 # Keys the frontend renders in IngestionSection.tsx CONFIG_METADATA
 _FRONTEND_KEYS = {
@@ -33,12 +34,91 @@ _REMOVED_NOTIFICATION_KEYS = {
 
 # New user-preferences key replacing notifications.timezone
 _USER_PREF_KEYS = {"user.timezone"}
+_UI_PREF_VALUES = {
+    "ui.appearance": {
+        "theme": "dark",
+        "accent": "forest",
+        "type": "editorial",
+        "density": "compact",
+    },
+    "ui.timer": {
+        "workMinutes": 50,
+        "shortBreakMinutes": 10,
+        "longBreakMinutes": 25,
+        "targetCycles": 6,
+    },
+    "ui.nav_mode": "full",
+}
+_MALFORMED_UI_PREF_VALUES = {
+    "ui.appearance": {
+        "accent": "forest",
+        "type": "editorial",
+        "density": "compact",
+    },
+    "ui.timer": {
+        "workMinutes": "50",
+        "shortBreakMinutes": 10,
+        "longBreakMinutes": 25,
+        "targetCycles": 6,
+    },
+    "ui.nav_mode": "wide",
+}
+
+
+# The only writable key with no entry in _CONFIG_VALIDATORS. Its bool guard lives
+# in config_write.py instead, because the read side of the toggle belongs to
+# jarvis_common.auth rather than the shared validator registry.
+_VALIDATOR_EXEMPT_KEYS = frozenset({"auth.api_key_login_enabled"})
 
 
 def test_frontend_metadata_keys_all_allowed():
     """Every key the frontend CONFIG_METADATA renders must be in the backend whitelist."""
     missing = _FRONTEND_KEYS - _ALLOWED_CONFIG_KEYS
     assert not missing, f"Frontend keys not in backend whitelist: {missing}"
+
+
+def test_every_writable_config_key_is_validated_or_deliberately_exempt():
+    """A writable key with no validator stores whatever the request body carried.
+
+    The write path looks the key up in ``_CONFIG_VALIDATORS`` and simply skips
+    validation when it is absent, so an unlisted key is persisted unchecked and
+    the defect only surfaces later, in whatever reads it.
+    """
+    from jarvis_common.llm_provider_registry import PROVIDER_CONFIG_KEYS
+
+    writable = set(_ALLOWED_CONFIG_KEYS) | set(PROVIDER_CONFIG_KEYS)
+    assert _VALIDATOR_EXEMPT_KEYS <= writable, (
+        f"exemption names a key nothing admits: {sorted(_VALIDATOR_EXEMPT_KEYS - writable)}"
+    )
+    assert _VALIDATOR_EXEMPT_KEYS.isdisjoint(_CONFIG_VALIDATORS), (
+        "an exempt key gained a validator; drop it from the exemption set so the "
+        f"check keeps covering it: {sorted(_VALIDATOR_EXEMPT_KEYS & set(_CONFIG_VALIDATORS))}"
+    )
+    unvalidated = writable - set(_CONFIG_VALIDATORS) - _VALIDATOR_EXEMPT_KEYS
+    assert not unvalidated, f"writable keys with no validator: {sorted(unvalidated)}"
+
+
+@pytest.mark.parametrize("key", ["recommendation.liked_weight", "recommendation.project_weight"])
+def test_recommendation_weights_accept_the_slider_range_and_reject_the_rest(key: str):
+    """The Settings sliders emit 0 to 1; anything else silently skews ranking."""
+    validator = _CONFIG_VALIDATORS[key]
+    validator(0.0)
+    validator(0.65)
+    validator(1)
+    for rejected in (-0.1, 1.5, "0.5", True, None):
+        with pytest.raises(ValueError):
+            validator(rejected)
+
+
+def test_numeric_range_rejects_an_unrepresentable_integer_as_a_value_error():
+    """The write path maps only ValueError to a 400, so overflow must not escape.
+
+    A JSON integer larger than a float clears the ``isinstance`` guard and then
+    raises ``OverflowError`` out of the conversion, which the write path does
+    not catch — a malformed request body answered with a 500.
+    """
+    with pytest.raises(ValueError):
+        _CONFIG_VALIDATORS["pulse.l2_lambda"](10**400)
 
 
 def test_removed_notification_keys_rejected():
@@ -59,6 +139,72 @@ def test_user_timezone_allowed():
     assert not missing, f"User-pref keys not in backend whitelist: {missing}"
 
 
+@pytest.mark.parametrize(("key", "value"), _UI_PREF_VALUES.items())
+def test_ui_preferences_are_allowed_personal_and_validated(key: str, value: object):
+    """Each interface preference passes every registry required by the write path."""
+    assert key in _ALLOWED_CONFIG_KEYS
+    assert key in PERSONAL_KEYS
+    assert key not in SYSTEM_KEYS
+    assert _classify_config_key(key) == "personal"
+    _CONFIG_VALIDATORS[key](value)
+
+
+@pytest.mark.parametrize(("key", "value"), _MALFORMED_UI_PREF_VALUES.items())
+def test_ui_preference_validators_reject_malformed_values(key: str, value: object):
+    """Malformed interface preferences cannot reach persistence."""
+    with pytest.raises(ValueError):
+        _CONFIG_VALIDATORS[key](value)
+
+
+def test_focus_timer_contract_matches_the_web_app_definition():
+    """The browser and the validator must agree on the accepted timer ranges.
+
+    The web app writes these preferences and discards a stored one that falls
+    outside its own bounds, while the validator rejects a write outside these.
+    Two independent copies drift into a timer the user can set but not save, or
+    one that is saved and then silently ignored on the next load.
+    """
+    import re
+    from pathlib import Path
+
+    from jarvis_common.config_validators import TIMER_DEFAULTS, TIMER_RANGES
+
+    repo_root = Path(__file__).resolve().parents[3]
+    store = (repo_root / "frontend/src/stores/pomodoro-store.ts").read_text(encoding="utf-8")
+
+    ranges_block = re.search(r"export const TIMER_RANGES\b[^{]*\{(.*?)\}", store, re.S)
+    assert ranges_block is not None, "pomodoro-store.ts does not export TIMER_RANGES"
+    declared_ranges = {
+        field: (int(low), int(high))
+        for field, low, high in re.findall(
+            r"(\w+):\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]", ranges_block.group(1)
+        )
+    }
+    assert declared_ranges == TIMER_RANGES
+
+    defaults_block = re.search(r"export const TIMER_DEFAULTS\b[^{]*\{(.*?)\}", store, re.S)
+    assert defaults_block is not None, "pomodoro-store.ts does not export TIMER_DEFAULTS"
+    declared_defaults = {
+        field: int(value) for field, value in re.findall(r"(\w+):\s*(\d+)", defaults_block.group(1))
+    }
+    assert declared_defaults == TIMER_DEFAULTS
+
+    # Both readers must consume the shared constant rather than restate it.
+    section = (repo_root / "frontend/src/components/settings/TimerSection.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "TIMER_RANGES" in section
+    assert not re.search(r"\b(?:min|max)=\{\s*\d", section), (
+        "TimerSection.tsx still hard-codes a slider bound"
+    )
+
+    sync = (repo_root / "frontend/src/hooks/usePreferenceSync.ts").read_text(encoding="utf-8")
+    assert "TIMER_RANGES" in sync
+    assert not re.search(r"isIntegerBetween\([^)]*,\s*\d+\s*,\s*\d+\s*\)", sync), (
+        "usePreferenceSync.ts still hard-codes a stored-preference bound"
+    )
+
+
 def test_onboarding_dismissal_is_allowed_and_personal():
     """Tour dismissal must round-trip for each user, not become a system setting."""
     assert _ONBOARDING_DISMISSED_KEY in _ALLOWED_CONFIG_KEYS
@@ -69,6 +215,19 @@ def test_onboarding_dismissal_is_allowed_and_personal():
     validator(True)
     with pytest.raises(ValueError):
         validator("true")
+
+
+def test_classifier_opt_in_is_allowed_personal_and_boolean():
+    """Classifier opt-in must be writable by the user who owns the model."""
+    assert _CLASSIFIER_OPT_IN_KEY in _ALLOWED_CONFIG_KEYS
+    assert _CLASSIFIER_OPT_IN_KEY in PERSONAL_KEYS
+    assert _CLASSIFIER_OPT_IN_KEY not in SYSTEM_KEYS
+    assert _classify_config_key(_CLASSIFIER_OPT_IN_KEY) == "personal"
+    validator = _CONFIG_VALIDATORS[_CLASSIFIER_OPT_IN_KEY]
+    validator(True)
+    validator(False)
+    with pytest.raises(ValueError):
+        validator("false")
 
 
 def test_unknown_key_not_allowed():
@@ -151,7 +310,7 @@ def test_validate_langfuse_dashboard_url_rejects_ssrf_boundaries(unsafe_url):
     every other HTTP host is treated as a potential SSRF vector to internal
     services or cloud metadata endpoints.
     """
-    from paper_ingestion.services.config_validators import _validate_langfuse_dashboard_url
+    from jarvis_common.config_validators import _validate_langfuse_dashboard_url
 
     with pytest.raises(ValueError, match=r"localhost|127\.0\.0\.1|https"):
         _validate_langfuse_dashboard_url(unsafe_url)
@@ -192,7 +351,7 @@ def test_smtp_port_rejects_string():
 # --- fsrs.learning_steps boundary cases (CFG-RECVAL-1) ---
 
 
-from paper_ingestion.services.config_validators import _validate_fsrs_learning_steps  # noqa: E402
+from jarvis_common.config_validators import _validate_fsrs_learning_steps  # noqa: E402
 
 
 def test_fsrs_learning_steps_single_step_accepted():
@@ -281,19 +440,29 @@ def test_api_key_login_key_allowed_and_system_scoped():
 
 
 def test_provider_registry_keys_are_system_scoped_secret_and_encrypted():
-    """Every provider registry config key must be admin/system scoped and protected."""
-    from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
-    from paper_ingestion.services.llm_provider_registry import PROVIDER_CONFIG_KEYS
+    """Provider credentials are protected; a provider endpoint stays readable.
 
+    Encrypting a base URL stored it as ciphertext with no readable value, so the
+    settings page showed the custom endpoint as unset while the runtime still
+    dialled it. Only the API key of a provider belongs in these two sets.
+    """
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS
+    from jarvis_common.llm_provider_registry import (
+        PROVIDER_API_KEY_CONFIG_KEYS,
+        PROVIDER_BASE_URL_CONFIG_KEYS,
+        PROVIDER_CONFIG_KEYS,
+    )
+
+    assert PROVIDER_BASE_URL_CONFIG_KEYS, "a provider base-URL key must exist to be classified"
     assert PROVIDER_CONFIG_KEYS <= SYSTEM_KEYS
-    assert PROVIDER_CONFIG_KEYS <= _SECRET_KEYS
-    assert PROVIDER_CONFIG_KEYS <= _ENCRYPTED_KEYS
+    assert PROVIDER_API_KEY_CONFIG_KEYS <= _ENCRYPTED_KEYS
+    assert not (PROVIDER_BASE_URL_CONFIG_KEYS & _ENCRYPTED_KEYS)
     assert all(_classify_config_key(key) == "system" for key in PROVIDER_CONFIG_KEYS)
 
 
 def test_provider_registry_keys_have_validators():
     """Every provider registry config key must be writable only through a validator."""
-    from paper_ingestion.services.llm_provider_registry import PROVIDER_CONFIG_KEYS
+    from jarvis_common.llm_provider_registry import PROVIDER_CONFIG_KEYS
 
     missing = PROVIDER_CONFIG_KEYS - set(_CONFIG_VALIDATORS)
     assert not missing
@@ -308,7 +477,7 @@ def test_one_unreadable_secret_does_not_break_the_configuration_listing() -> Non
     would use to re-enter the value. The field must also stay distinguishable
     from an absent one, or a broken credential reads as a missing credential.
     """
-    from paper_ingestion.services.config_db import _resolve_config_value
+    from jarvis_common.config_store import _resolve_config_value
 
     key = "llm.providers.openrouter.api_key"
     row = {"key": key, "encrypted_value": b"not-decryptable", "value": None}
@@ -318,6 +487,66 @@ def test_one_unreadable_secret_does_not_break_the_configuration_listing() -> Non
     assert resolved is not None
     assert "not-decryptable" not in str(resolved)
     assert _resolve_config_value(key, {"key": key, "encrypted_value": None, "value": None}) is None
+
+
+@pytest.mark.usefixtures("fernet_key")
+def test_provider_base_url_stays_readable_while_its_api_key_is_masked() -> None:
+    """A configured endpoint must be shown, and its credential must not be."""
+    from jarvis_common.config_store import _resolve_config_value
+    from jarvis_common.crypto import encrypt_secret
+
+    endpoint = "https://llm.example.com/v1"
+    resolved_url = _resolve_config_value(
+        "llm.providers.custom_openai_compatible.base_url",
+        {"value": endpoint, "encrypted_value": None},
+    )
+    resolved_key = _resolve_config_value(
+        "llm.providers.custom_openai_compatible.api_key",
+        {"value": None, "encrypted_value": encrypt_secret("sk-live-secret").encode("ascii")},
+    )
+
+    assert resolved_url == endpoint
+    assert resolved_key is not None
+    assert "sk-live-secret" not in str(resolved_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fernet_key")
+async def test_startup_migration_makes_a_stored_endpoint_readable_again() -> None:
+    """An endpoint an earlier release encrypted must come back as a readable row.
+
+    Those rows hold ciphertext with ``value`` NULL. Without this one-shot pass the
+    endpoint would read as never configured on the settings page while the runtime
+    kept dialling it, and only re-saving it by hand would agree the two again.
+    """
+    from unittest.mock import AsyncMock
+
+    from jarvis_common.config_store import migrate_plaintext_secrets
+    from jarvis_common.crypto import encrypt_secret
+    from jarvis_common.testing import make_pool_and_conn
+
+    key = "llm.providers.custom_openai_compatible.base_url"
+    endpoint = "https://llm.example.com/v1"
+    pool, conn = make_pool_and_conn(with_transaction=False)
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [],  # no legacy plaintext secret rows to re-encrypt
+            [
+                {
+                    "user_id": None,
+                    "key": key,
+                    "encrypted_value": encrypt_secret(endpoint).encode("ascii"),
+                }
+            ],
+        ]
+    )
+
+    moved = await migrate_plaintext_secrets(pool)
+
+    assert moved == 1
+    assert [call.args for call in conn.execute.await_args_list] == [
+        ("SELECT platform.upsert_config_v1($1, $2, $3::jsonb, NULL)", None, key, endpoint)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -377,7 +606,7 @@ def test_blocked_custom_endpoint_ip_covers_private_ranges(address: str, blocked:
     """Resolved-address guard blocks private/reserved ranges but allows loopback and public."""
     import ipaddress
 
-    from paper_ingestion.services.llm_provider_registry import _blocked_custom_endpoint_ip
+    from jarvis_common.llm_provider_registry import _blocked_custom_endpoint_ip
 
     assert _blocked_custom_endpoint_ip(ipaddress.ip_address(address)) is blocked
 
@@ -385,7 +614,7 @@ def test_blocked_custom_endpoint_ip_covers_private_ranges(address: str, blocked:
 @pytest.mark.asyncio
 async def test_custom_openai_outbound_guard_rejects_link_local_resolution(monkeypatch):
     """Outbound custom endpoints must reject hostnames resolving to link-local IPs."""
-    from paper_ingestion.services import llm_provider_registry as registry
+    from jarvis_common import llm_provider_registry as registry
 
     def fake_getaddrinfo(*_args):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
@@ -399,7 +628,7 @@ async def test_custom_openai_outbound_guard_rejects_link_local_resolution(monkey
 @pytest.mark.asyncio
 async def test_custom_openai_outbound_guard_rejects_implicit_loopback(monkeypatch):
     """DNS names resolving to loopback are blocked unless the host is explicit loopback."""
-    from paper_ingestion.services import llm_provider_registry as registry
+    from jarvis_common import llm_provider_registry as registry
 
     def fake_getaddrinfo(*_args):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
@@ -413,7 +642,7 @@ async def test_custom_openai_outbound_guard_rejects_implicit_loopback(monkeypatc
 @pytest.mark.asyncio
 async def test_custom_openai_outbound_guard_allows_explicit_loopback():
     """Explicit loopback development endpoints remain valid for custom providers."""
-    from paper_ingestion.services.llm_provider_registry import (
+    from jarvis_common.llm_provider_registry import (
         validate_custom_openai_base_url_for_outbound,
     )
 

@@ -17,21 +17,24 @@ Related docs:
   chunking, embeddings, RAG, extraction, Pulse, Zotero, and source integrations.
 - `learning_engine` - FastAPI service for FSRS cards, reviews, projects,
   analytics, and card generation.
+- `platform_api` - identity assertions, configuration and provider state,
+  pairing, audit, erasure coordination, and public operator jobs.
 - `telegram_bot` - optional push-notification and interaction service. It is a
-  thin REST client: commands, inline callbacks, and scheduled jobs (daily
-  briefing, deadline warnings, author alerts) all call the `learning_engine`
-  and `paper_ingestion` REST APIs using `X-Owner-User-Id` owner-override.
-  Direct Postgres access is limited to the bot's own pairing table
-  (`telegram_user_pairings`) and the nudge scheduler — all product-data tenant
-  scoping is enforced server-side by the service endpoints the bot calls.
+  database-free REST client; Platform supplies route-bound assertions and the
+  owning APIs retain pairing and product-data authorization.
 - `frontend` - React dashboard served through nginx. Host port defaults to
   `3001`; container port is `3000`.
 - `postgres` - primary state store.
 - `qdrant` - vector store for semantic search.
 - `litellm` and `ollama` - LLM gateway and local model runtime.
 
-Services communicate over the Docker `jarvis` network. The frontend proxies API
-requests through nginx to `paper_ingestion` and `learning_engine`.
+Services communicate over the Docker `jarvis` network. nginx obtains a
+Platform-signed, request-bound assertion for browser API requests; Platform is
+the only assertion signer.
+
+W3C trace and correlation context can cross these boundaries. Diagnostics and
+metadata-only UDP forwarding are optional and bounded; Vector forwards
+structured stdout without a Docker socket or product-table sink.
 
 ## Backend Packages
 
@@ -148,33 +151,16 @@ HTTP client.
 
 ### Cross-Service Auth Boundary (resolver DI)
 
-`jarvis_common.auth` exposes three production user-id resolvers:
-
-- **`current_user_id_strict`** — session-only. Hard 401 without a valid session
-  cookie. No `X-Owner-User-Id` path.
-- **`current_user_id_with_owner_override`** — session-first, honors a verified
-  `X-Owner-User-Id` header when a valid `X-API-Key` is present, but returns
-  `None` (does not raise) when no identity can be resolved. Used by endpoints
-  that may be reached unauthenticated.
-- **`current_user_id_strict_with_owner_override`** (and its `Depends()` wrapper
-  `get_current_user_id`) — the raising variant of the above: same
-  `X-Owner-User-Id` override path but a hard 401 when no identity resolves.
-  Required for cross-service callers (the Telegram bot) making per-user
-  requests.
-
-The override-capable resolver is applied **selectively, by reachability** — only
-on endpoints that a header-authenticated caller actually reaches per-user.
-Everything else uses session-only `current_user_id_strict` by design (smaller
-attack surface). `scripts/check-no-unsafe-resolver.py` enforces that every
-router endpoint has one of the three safe resolvers; it does not mandate the
-override-capable one because the session-only choice is intentional.
+`jarvis_common.auth` resolves browser sessions and verifies Platform-issued,
+route-bound service assertions. Service capabilities are exact and deny by
+default; product APIs do not accept a generic downstream owner override.
 
 ### Telegram Pairing
 
 The dashboard issues short-lived pairing tokens in `telegram_pairing_tokens`;
 the bot stores durable chat ownership in `telegram_user_pairings` (see
-`db/init.sql`). A chat is authenticated **exclusively** via the `/pair <token>`
-flow — the token is generated in Settings → Integrations → Telegram and
+`db/init.sql`). A chat is authenticated **exclusively** via the `/pair <code>`
+flow — the code is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
 `/pair`. The legacy dashboard-code pairing path is no longer active. Pairing
@@ -214,11 +200,40 @@ of accepted deferrals and their explicit reopen criteria.
 ## Persistence
 
 Fresh schema is defined in `db/init.sql`; existing installs advance through
-`db/migrations/`. The migration runner applies migrations on
-`paper_ingestion` startup. The current migration count and range are documented in
+`db/migrations/`. The dedicated one-shot migrator applies migrations before
+product readiness. Runtime services perform read-only schema-floor and
+integrity checks; they do not run DDL at startup. The current migration count and range are documented in
 [`db/migrations/README.md`](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.
+
+### Database ownership contract
+
+`db/ownership-manifest.json` is the executable
+v1.2.6 ownership contract. It assigns every current table, sequence, function,
+type, trigger, rule, and background-job kind to exactly one of four domains:
+
+- Platform owns identity, sessions, configuration, pairing, audit, and system
+  events.
+- Research owns papers, discovery, ingestion, extraction, retrieval, Pulse,
+  recommendations, and source state.
+- Learning owns cards, reviews, projects, tasks, journal entries, daily
+  activity, and scheduled nudges.
+- Operations owns migration metadata and PostgreSQL-backed job infrastructure.
+
+The manifest also records computed-SQL sources, supported database scripts,
+and every temporary cross-domain write. `scripts/database_inventory.py --check`
+compares those declarations with the current schema and production Python. An
+unowned object, an unreviewed computed query path, or an unclassified
+cross-domain write fails validation.
+
+The database has physical `platform`, `research`, `learning`, and `ops`
+schemas. Each domain has a NOLOGIN owner and distinct runtime role; the
+one-shot migration authority and isolated LiteLLM migrator are separate from
+their runtimes. Runtime roles cannot perform DDL or assume owner roles.
+
+Cross-domain mutation uses an owner API, an idempotent outbox/inbox, or a fixed
+database capability. The manifest records the permitted seams and their owners.
 
 ## Frontend Contract Boundary
 

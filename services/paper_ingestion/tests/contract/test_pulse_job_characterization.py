@@ -76,7 +76,6 @@ def _minimal_profile() -> MagicMock:
         weights={"embedding": 1.0},
         deck_size=5,
         stage2_top_k=10,
-        liked_paper_ids=[],
         recent_positive_titles=[],
         recent_negative_titles=[],
         lookback_days=7,
@@ -138,7 +137,7 @@ async def test_run_pulse_returns_stats_with_all_contract_keys(
     """
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
 
     with _zero_candidate_patches():
@@ -179,7 +178,7 @@ async def test_run_pulse_zero_candidates_returns_degraded_reason(
     """
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
 
     # Ensure a unique deck date distinct from test 1 to avoid UPSERT collision
@@ -233,7 +232,7 @@ async def test_run_pulse_classifier_training_enqueue_success_path(
     """
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
 
     # Fabricate a minimal ctx that satisfies the `if ctx:` guard.
@@ -337,7 +336,7 @@ async def test_run_pulse_stage2_schema_echo_persists_degraded_reason(
     """
     from paper_ingestion.pulse.job import run_pulse
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(contract_conn, session_authorization="jarvis_research_runtime")
     user_id = contract_two_users.user_a_id
 
     # Far-future, distinct from sibling tests, to avoid UPSERT collisions.

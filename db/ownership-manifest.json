@@ -1,0 +1,609 @@
+{
+  "format_version": 1,
+  "target_release": "v1.2.6",
+  "privilege_enforcement": "enforced",
+  "restore_authority": {
+    "path": "db/restore-authority.sql",
+    "sha256": "796294cd92f4f77dde24e2fd4738f1b742dfeb181156ee58b4b56af7089129d5",
+    "schema_version": 120
+  },
+  "compatibility_baseline": {
+    "source_release": "v1.2.5",
+    "tag_object": "c295d59725445023ffefb70e5d313053ce559ed0",
+    "commit": "a0ccaa480ae2f8443c00f35a22a1d44980bfb0fc",
+    "tree": "4260322d3b4354a943c57cf40c51f87c31706989",
+    "unhashed_revisions": {
+      "first": 1,
+      "last": 101,
+      "marker": "squashed_baseline_source_unavailable"
+    },
+    "retained_migrations": [
+      {
+        "path": "0102_webauthn_credentials.sql",
+        "sha256": "f51c3cc62b967d409df7499ead7a94048c541ac268d8e7cb447d9b03abe7bdfa"
+      },
+      {
+        "path": "0103_purge_group_chat_pairings.sql",
+        "sha256": "226474caf5f3a430fc3f4d743d1281e7bc0bad2d8980aa40c1f2924a3774dbc0"
+      },
+      {
+        "path": "0104_drop_paper_chunks_user_ownership.sql",
+        "sha256": "769d1200264aa4c0beb3b6ad36f962a1a0dc520a86712e82b15f26eaa2c79739"
+      },
+      {
+        "path": "0105_backfill_owner_user_id.sql",
+        "sha256": "b4efa848f481af8f2fa90d245c6121f1dc90ecc484001882e547aaa1b4073aa3"
+      },
+      {
+        "path": "0106_paper_visibility_scope.sql",
+        "sha256": "b57b13bbc0a5ca75d4dabf76f59933600729c5052a0c9588bd47e1c42c25a0c1"
+      },
+      {
+        "path": "0107_scope_contradiction_uniqueness_to_owner.sql",
+        "sha256": "46172fdc5701b936ad2883a0bf1cff2c88acc3f828ab04502d23bb54a5978283"
+      },
+      {
+        "path": "0108_record_zotero_analysis_enqueue.sql",
+        "sha256": "3258edd25894f27cf4ba3c30f743138229219ddd763838200c6e93d41a49f193"
+      },
+      {
+        "path": "0109_track_paper_content_generation.sql",
+        "sha256": "1c4396cba72df96c0cd86eeff08f073bc6868a7bed8ecc2633e6a722bfdaf53b"
+      },
+      {
+        "path": "0110_require_contradiction_owner.sql",
+        "sha256": "1b18c151f5d578167a4287fc6186539e91838825982ce5d362d205a7768e538c"
+      },
+      {
+        "path": "0111_full_digest_local_ids.sql",
+        "sha256": "2948ac6cef69a389a43cc86493b81bfab3ebf35084c5a95a2092d95e3e29db87"
+      },
+      {
+        "path": "0112_durable_focus_sessions.sql",
+        "sha256": "f6fe06effb8f3c3df36baa07e0a065a25ff102c5bec192df2c826367d4c1a200"
+      },
+      {
+        "path": "0113_restore_zotero_project_collections.sql",
+        "sha256": "46898962d09327d0c7ffd5ac13d272d8e092ea41a9ca1c664436b2f6a35431f6"
+      },
+      {
+        "path": "0114_owned_schemas_and_roles.sql",
+        "sha256": "d05ecc9f04e1fed68246e958d3afbff3a8d72bda522095c75e941aac13b59374"
+      },
+      {
+        "path": "0115_cross_domain_boundaries.sql",
+        "sha256": "f0bffa08d071b9bcd576f981d3e9db7074f63c1a2e538a5bd8acf4c181c41d46"
+      },
+      {
+        "path": "0116_unified_job_facade.sql",
+        "sha256": "30852fdba224eca98935cf2011dc112532c40e7c61159c5f43cdc8c565b486e3"
+      },
+      {
+        "path": "0117_owner_capabilities.sql",
+        "sha256": "73ef094e42223b7c0c75067d2eb3c382fc0e3e6464b8054792539bf743cd7a98"
+      },
+      {
+        "path": "0118_enforce_runtime_privileges.sql",
+        "sha256": "7f635041cdbc5f267a8d7816d3bdeb9475b5d1a34bc21e0b367d8f51e823ddcf"
+      },
+      {
+        "path": "0119_erasure_executor_capability.sql",
+        "sha256": "9297e47bd11d6cc1547887aa01305261add7c26cabc2ff28ab08ce71497e4296"
+      },
+      {
+        "path": "0120_erasure_capability_boundary.sql",
+        "sha256": "bbb454245c41be266b9f5b56d041edecd1a71b448fe9a38f7ab3f52f11216cbf"
+      }
+    ]
+  },
+  "domains": {
+    "platform": {
+      "schema": "platform",
+      "owner_role": "jarvis_platform_owner",
+      "runtime_role": "jarvis_platform_runtime"
+    },
+    "research": {
+      "schema": "research",
+      "owner_role": "jarvis_research_owner",
+      "runtime_role": "jarvis_research_runtime"
+    },
+    "learning": {
+      "schema": "learning",
+      "owner_role": "jarvis_learning_owner",
+      "runtime_role": "jarvis_learning_runtime"
+    },
+    "operations": {
+      "schema": "ops",
+      "owner_role": "jarvis_ops_owner",
+      "runtime_role": null
+    }
+  },
+  "privileged_roles": {
+    "cluster_bootstrap_role": "jarvis_cluster_bootstrap",
+    "migrator_role": "jarvis_migrator",
+    "compatibility_role": "jarvis_legacy_rollback",
+    "backup_reader_role": "jarvis_backup_reader",
+    "restore_operator_role": "jarvis_restore_operator",
+    "erasure_executor_role": "jarvis_erasure_executor",
+    "litellm_runtime_role": "jarvis_litellm_runtime",
+    "litellm_migrator_role": "jarvis_litellm_migrator"
+  },
+  "compatibility_role_retirement": {
+    "earliest_date": "2026-09-17",
+    "release_condition": "v1.2.6 is published and its supported rollback window is closed",
+    "required_evidence": [
+      "the exact v1.2.5 rollback path is no longer supported",
+      "a current fresh-host restore has passed without the compatibility role"
+    ]
+  },
+  "tables": {
+    "platform": [
+      "audit_log",
+      "audit_subjects",
+      "config_deliveries",
+      "erasure_acknowledgements",
+      "erasure_requests",
+      "llm_usage_log",
+      "magic_link_tokens",
+      "sessions",
+      "system_events",
+      "telegram_pairing",
+      "telegram_pairing_tokens",
+      "telegram_user_pairings",
+      "user_config",
+      "users",
+      "webauthn_challenges",
+      "webauthn_credentials"
+    ],
+    "research": [
+      "author_alert_log",
+      "domain_events",
+      "pending_paper_deletions",
+      "zotero_push_claims",
+      "entities",
+      "entity_relationships",
+      "extraction_templates",
+      "paper_chunks",
+      "paper_citations",
+      "paper_contradictions",
+      "paper_entities",
+      "paper_extractions",
+      "paper_highlights",
+      "paper_notes",
+      "paper_recommendations",
+      "paper_sources",
+      "paper_summaries",
+      "paper_topics",
+      "paper_user_state",
+      "paper_user_zotero_links",
+      "papers",
+      "pulse_cards",
+      "pulse_decks",
+      "pulse_models",
+      "recommendation_feedback",
+      "source_health",
+      "source_run_history",
+      "thread",
+      "topics",
+      "tracked_authors",
+      "user_library",
+      "user_topic_subscriptions"
+    ],
+    "learning": [
+      "cards",
+      "domain_commands",
+      "daily_intent",
+      "daily_log",
+      "decks",
+      "focus_sessions",
+      "journal_entries",
+      "milestones",
+      "project_papers",
+      "project_questions",
+      "projects",
+      "review_logs",
+      "scheduled_nudges",
+      "task_paper_links",
+      "tasks"
+    ],
+    "operations": [
+      "job_progress",
+      "procrastinate_events",
+      "procrastinate_jobs",
+      "procrastinate_periodic_defers",
+      "procrastinate_workers",
+      "job_owner_registry",
+      "schema_migrations"
+    ]
+  },
+  "sequences": {
+    "platform": [
+      "audit_log_id_seq",
+      "llm_usage_log_id_seq",
+      "system_events_id_seq",
+      "user_config_id_seq",
+      "users_id_seq"
+    ],
+    "research": [
+      "author_alert_log_id_seq",
+      "entities_id_seq",
+      "entity_relationships_id_seq",
+      "extraction_templates_id_seq",
+      "paper_chunks_id_seq",
+      "paper_citations_id_seq",
+      "paper_contradictions_id_seq",
+      "paper_extractions_id_seq",
+      "paper_notes_id_seq",
+      "paper_recommendations_id_seq",
+      "paper_sources_id_seq",
+      "paper_summaries_id_seq",
+      "paper_user_state_id_seq",
+      "papers_id_seq",
+      "pulse_cards_id_seq",
+      "pulse_decks_id_seq",
+      "pulse_models_id_seq",
+      "recommendation_feedback_id_seq",
+      "source_health_id_seq",
+      "source_run_history_id_seq",
+      "thread_id_seq",
+      "topics_id_seq",
+      "tracked_authors_id_seq"
+    ],
+    "learning": [
+      "cards_id_seq",
+      "daily_log_id_seq",
+      "decks_id_seq",
+      "journal_entries_id_seq",
+      "milestones_id_seq",
+      "project_questions_id_seq",
+      "projects_id_seq",
+      "review_logs_id_seq",
+      "scheduled_nudges_id_seq",
+      "tasks_id_seq"
+    ],
+    "operations": [
+      "procrastinate_events_id_seq",
+      "procrastinate_jobs_id_seq",
+      "procrastinate_periodic_defers_id_seq"
+    ]
+  },
+  "functions": {
+    "platform": [
+      "platform.advance_visibility_checkpoint_v1",
+      "platform.append_audit_event",
+      "platform.append_system_event_v1",
+      "platform.audit_readiness_v1",
+      "platform.begin_erasure_destructive_v1",
+      "platform.claim_visibility_lease_v1",
+      "platform.complete_visibility_checkpoint_v1",
+      "platform.due_erasure_request_ids",
+      "platform.erasure_transition_allowed_v1",
+      "platform.finalize_erasure",
+      "platform.mint_session_v1",
+      "platform.purge_identity_retention_v1",
+      "platform.purge_system_events_v1",
+      "platform.record_erasure_ack_v1",
+      "platform.record_erasure_retry_v1",
+      "platform.reencrypt_config_v1",
+      "platform.renew_session_v1",
+      "platform.request_erasure_v1",
+      "platform.resume_erasure_v1",
+      "platform.restore_account_v1",
+      "platform.rotate_visibility_checkpoint_v1",
+      "platform.set_account_deleted_v1",
+      "platform.set_research_config_v1",
+      "platform.transition_erasure_v1",
+      "platform.upsert_config_v1",
+      "set_updated_at"
+    ],
+    "research": [
+      "papers_search_vector_update",
+      "research.add_to_library_v1",
+      "research.claim_source_slot_v1",
+      "research.erase_user_data",
+      "research.fan_out_library_v1",
+      "research.record_author_alert_v1",
+      "research.restore_paper_v1",
+      "research.star_paper_v1",
+      "research.trash_paper_v1",
+      "research.update_paper_feedback_v1",
+      "research.update_source_health_v1",
+      "research.upsert_paper_state_v1"
+    ],
+    "learning": [
+      "learning.clear_zotero_collection_keys_v1",
+      "learning.erase_user_data",
+      "learning.update_scheduled_nudge_v1"
+    ],
+    "operations": [
+      "procrastinate_cancel_job_v1",
+      "procrastinate_defer_jobs_v1",
+      "procrastinate_defer_periodic_job_v2",
+      "procrastinate_fetch_job_v2",
+      "procrastinate_finish_job_v1",
+      "procrastinate_notify_queue_abort_job_v1",
+      "procrastinate_notify_queue_job_inserted_v1",
+      "procrastinate_prune_stalled_workers_v1",
+      "procrastinate_register_worker_v1",
+      "procrastinate_retry_job_v1",
+      "procrastinate_retry_job_v2",
+      "procrastinate_trigger_abort_requested_events_procedure_v1",
+      "procrastinate_trigger_function_scheduled_events_v1",
+      "procrastinate_trigger_function_status_events_insert_v1",
+      "procrastinate_trigger_function_status_events_update_v1",
+      "procrastinate_unlink_periodic_defers_v1",
+      "procrastinate_unregister_worker_v1",
+      "procrastinate_update_heartbeat_v1",
+      "ops.enforce_job_owner_metadata_v1",
+      "ops.jarvis_job_read_v1",
+      "ops.jarvis_job_list_v1",
+      "ops.jarvis_job_cancel_v1",
+      "ops.purge_orphaned_job_progress_v1",
+      "ops.record_job_outcome_v1",
+      "ops.record_job_progress_v1",
+      "ops.redact_erased_user_jobs_v1"
+    ]
+  },
+  "types": {
+    "platform": [],
+    "research": [],
+    "learning": [],
+    "operations": [
+      "procrastinate_job_event_type",
+      "procrastinate_job_status",
+      "procrastinate_job_to_defer_v1"
+    ]
+  },
+  "triggers": {
+    "platform": [
+      "trg_user_config_updated_at"
+    ],
+    "research": [
+      "papers_search_vector_trigger",
+      "set_updated_at_paper_user_state",
+      "trg_extraction_templates_updated_at",
+      "trg_paper_contradictions_updated_at"
+    ],
+    "learning": [
+      "trg_cards_updated_at",
+      "trg_projects_updated_at",
+      "trg_tasks_updated_at"
+    ],
+    "operations": [
+      "procrastinate_jobs_notify_queue_job_aborted_v1",
+      "procrastinate_jobs_notify_queue_job_inserted_v1",
+      "procrastinate_trigger_abort_requested_events_v1",
+      "procrastinate_trigger_delete_jobs_v1",
+      "procrastinate_trigger_scheduled_events_v1",
+      "procrastinate_trigger_status_events_insert_v1",
+      "procrastinate_trigger_status_events_update_v1",
+      "procrastinate_jobs_owner_guard_v1"
+    ]
+  },
+  "rules": {
+    "platform": [
+      "no_delete_audit_log",
+      "no_update_audit_log"
+    ],
+    "research": [],
+    "learning": [],
+    "operations": []
+  },
+  "queues": {
+    "paper_ingestion": {
+      "domain": "research",
+      "job_kinds": [
+        "citations.batch_fetch",
+        "contradictions.scan",
+        "digest.weekly",
+        "extraction.batch",
+        "extraction.single",
+        "model.pull",
+        "paper.analyze",
+        "paper.process",
+        "paper.summarize",
+        "papers.batch_process",
+        "papers.batch_summarize",
+        "papers.process_library",
+        "papers.scan_local",
+        "pulse.generate",
+        "pulse.train_classifier",
+        "zotero.push",
+        "zotero.push_highlights",
+        "zotero.resync",
+        "zotero.sync_annotations",
+        "zotero.sync_from_zotero"
+      ]
+    },
+    "learning_engine": {
+      "domain": "learning",
+      "job_kinds": [
+        "card.generate",
+        "card.generate_batch"
+      ]
+    }
+  },
+  "reviewed_dynamic_sql": {
+    "libs/jarvis_common/jarvis_common/db_helpers.py": 3,
+    "libs/jarvis_common/jarvis_common/jobs.py": 1,
+    "libs/jarvis_common/jarvis_common/migrations.py": 1,
+    "services/learning_engine/learning_engine/routers/cards.py": 3,
+    "services/learning_engine/learning_engine/routers/decks.py": 1,
+    "services/learning_engine/learning_engine/routers/executive.py": 1,
+    "services/learning_engine/learning_engine/routers/export.py": 1,
+    "services/learning_engine/learning_engine/routers/projects.py": 2,
+    "services/learning_engine/learning_engine/routers/review.py": 2,
+    "services/learning_engine/learning_engine/routers/tasks.py": 1,
+    "services/paper_ingestion/paper_ingestion/citations.py": 1,
+    "services/paper_ingestion/paper_ingestion/converters.py": 2,
+    "services/paper_ingestion/paper_ingestion/extraction/entities_sql.py": 9,
+    "services/paper_ingestion/paper_ingestion/ingestion/recommender.py": 2,
+    "services/paper_ingestion/paper_ingestion/ingestion/search.py": 2,
+    "services/paper_ingestion/paper_ingestion/integrations/_zotero_poll.py": 1,
+    "services/paper_ingestion/paper_ingestion/papers_service.py": 1,
+    "services/learning_engine/learning_engine/generation_service.py": 2,
+    "services/paper_ingestion/paper_ingestion/repos/domain_events.py": 2,
+    "services/paper_ingestion/paper_ingestion/pulse/deck.py": 5,
+    "services/paper_ingestion/paper_ingestion/pulse/profile.py": 1,
+    "services/paper_ingestion/paper_ingestion/rag/streaming.py": 2,
+    "services/paper_ingestion/paper_ingestion/routers/authors.py": 1,
+    "services/paper_ingestion/paper_ingestion/routers/dashboard_api.py": 2,
+    "services/paper_ingestion/paper_ingestion/routers/discovery.py": 2,
+    "services/paper_ingestion/paper_ingestion/routers/extractions.py": 1,
+    "services/paper_ingestion/paper_ingestion/routers/knowledge_graph.py": 5,
+    "services/paper_ingestion/paper_ingestion/routers/notes.py": 7,
+    "services/paper_ingestion/paper_ingestion/routers/papers_bulk.py": 1,
+    "services/paper_ingestion/paper_ingestion/routers/papers_feed.py": 2,
+    "services/paper_ingestion/paper_ingestion/routers/pdf_files.py": 1,
+    "services/paper_ingestion/paper_ingestion/routers/recommendation_feedback.py": 2,
+    "services/paper_ingestion/paper_ingestion/routers/search_helpers.py": 2,
+    "services/paper_ingestion/paper_ingestion/routers/threads.py": 10,
+    "services/paper_ingestion/paper_ingestion/scheduler.py": 1,
+    "services/paper_ingestion/paper_ingestion/services/contradictions_extract.py": 2,
+    "services/paper_ingestion/paper_ingestion/services/contradictions_persist.py": 2,
+    "services/paper_ingestion/paper_ingestion/services/feed_query.py": 5,
+    "services/paper_ingestion/paper_ingestion/services/paper_locks.py": 1,
+    "services/paper_ingestion/paper_ingestion/services/paper_upsert.py": 1,
+    "services/paper_ingestion/paper_ingestion/services/pdf_workflow.py": 1,
+    "services/paper_ingestion/paper_ingestion/services/summarization.py": 3,
+    "services/platform_api/platform_api/routers/_auth_shared.py": 1,
+    "services/platform_api/platform_api/routers/audit_admin.py": 1,
+    "services/platform_api/platform_api/routers/auth_passkeys.py": 2,
+    "services/platform_api/platform_api/routers/logs.py": 2
+  },
+  "reviewed_query_aliases": [
+    "current_contradictions"
+  ],
+  "supported_database_callers": [
+    "scripts/_db.py",
+    "scripts/backup.sh",
+    "scripts/jarvis-research.sh",
+    "scripts/litellm-entrypoint.sh",
+    "scripts/perf/import_fixed_pack_arxiv.py",
+    "scripts/postgres-role-bootstrap.sh",
+    "scripts/profile.sh",
+    "scripts/reembed.py",
+    "scripts/restore.sh",
+    "scripts/rotate_config_key.py"
+  ],
+  "transition_seams": [
+    {
+      "name": "dedicated_migration_metadata",
+      "current_writer": "jarvis_common",
+      "relations": [
+        "schema_migrations"
+      ],
+      "destination": "operations",
+      "replacement": "dedicated migrator CLI metadata write"
+    }
+  ],
+  "erasure": {
+    "states": [
+      "requested",
+      "qdrant_pending",
+      "research_pending",
+      "learning_pending",
+      "ready",
+      "executing",
+      "complete",
+      "retry_wait",
+      "attention_required"
+    ],
+    "initial_state": "requested",
+    "terminal_states": [
+      "complete"
+    ],
+    "transitions": {
+      "requested": [
+        "qdrant_pending"
+      ],
+      "qdrant_pending": [
+        "research_pending",
+        "retry_wait",
+        "attention_required"
+      ],
+      "research_pending": [
+        "learning_pending",
+        "retry_wait",
+        "attention_required"
+      ],
+      "learning_pending": [
+        "ready",
+        "retry_wait",
+        "attention_required"
+      ],
+      "ready": [
+        "executing"
+      ],
+      "executing": [
+        "complete",
+        "retry_wait",
+        "attention_required"
+      ],
+      "retry_wait": [
+        "qdrant_pending",
+        "research_pending",
+        "learning_pending",
+        "attention_required"
+      ],
+      "attention_required": [
+        "qdrant_pending",
+        "research_pending",
+        "learning_pending"
+      ],
+      "complete": []
+    },
+    "idempotency": {
+      "request_key": "request_id",
+      "one_active_request_per_user": true,
+      "acknowledgement_key": [
+        "request_id",
+        "domain"
+      ]
+    },
+    "required_acknowledgements": [
+      "qdrant",
+      "research",
+      "learning"
+    ],
+    "qdrant_acknowledgement": [
+      "request_id",
+      "user_id",
+      "collection",
+      "filter_fingerprint",
+      "deleted_points",
+      "redacted_points",
+      "residual_points",
+      "scan_completed_at",
+      "acknowledged_at"
+    ],
+    "completion_invariants": [
+      "residual_points_is_zero",
+      "all_domain_acknowledgements_are_durable",
+      "relational_finalization_is_dml_only",
+      "account_remains_disabled_until_complete"
+    ],
+    "retry": {
+      "state": "retry_wait",
+      "terminal_state": "attention_required",
+      "max_attempts": 8,
+      "initial_delay_seconds": 30,
+      "backoff_multiplier": 2,
+      "maximum_delay_seconds": 3600,
+      "persist_resume_state": true,
+      "alert_after_attempt": 3,
+      "alert_on": [
+        "qdrant_unavailable",
+        "residual_points",
+        "domain_cleanup_failure",
+        "retry_exhausted"
+      ]
+    },
+    "audit_subject": {
+      "schema": "platform",
+      "table": "audit_subjects",
+      "purpose": "erasable identity and metadata mapping for immutable audit events",
+      "runtime_mutation": "DML only"
+    }
+  }
+}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 import httpx
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot import services_client
@@ -16,6 +16,11 @@ from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.types import TaskRow
 
 logger = logging.getLogger(__name__)
+
+#: Most "Mark done" buttons attached to one /tasks reply. Telegram caps how
+#: large an inline keyboard may be, and a wall of buttons stops being usable
+#: well before that cap; the remaining tasks stay reachable through /done.
+_MAX_TASK_BUTTONS = 10
 
 
 @rate_limit(max_calls=5, window_seconds=60)
@@ -65,7 +70,15 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             line += f" <i>({project_name})</i>"
         lines.append(line)
 
-    await update.message.reply_text(truncate("\n".join(lines)), parse_mode="HTML")
+    buttons = [
+        [InlineKeyboardButton(f"Mark done: [{row['id']}]", callback_data=f"task_done_{row['id']}")]
+        for row in rows[:_MAX_TASK_BUTTONS]
+    ]
+    await update.message.reply_text(
+        truncate("\n".join(lines)),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 
 @rate_limit(max_calls=10, window_seconds=60)
@@ -75,7 +88,9 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if update.message is None:
         return
     if not context.args:
-        await update.message.reply_text("Usage: /done &lt;task_id&gt;", parse_mode="HTML")
+        await update.message.reply_text(
+            "Usage: /done &lt;task_id&gt; — /tasks lists the ids.", parse_mode="HTML"
+        )
         return
 
     try:

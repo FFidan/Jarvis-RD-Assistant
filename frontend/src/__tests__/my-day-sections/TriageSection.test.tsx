@@ -124,7 +124,7 @@ describe('TriageSection', () => {
 
   it('renders both action item and foundational paper rows when data is present', async () => {
     vi.mocked(fetchFeed).mockResolvedValue({
-      papers: [makeFeedPaper()],
+      papers: [makeFeedPaper({ has_chunks: false })],
       total: 1,
     });
     vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([
@@ -141,11 +141,28 @@ describe('TriageSection', () => {
     expect(screen.getByText(/Triage/i)).toBeInTheDocument();
   });
 
+  it('shows only papers whose text has not been processed', async () => {
+    vi.mocked(fetchFeed).mockResolvedValue({
+      papers: [
+        makeFeedPaper({ id: 1, title: 'Still needs processing', has_chunks: false }),
+        makeFeedPaper({ id: 2, title: 'Already processed', has_chunks: true }),
+      ],
+      total: 2,
+    });
+    vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);
+
+    renderSubject();
+
+    expect(await screen.findByText('Still needs processing')).toBeInTheDocument();
+    expect(screen.queryByText('Already processed')).not.toBeInTheDocument();
+    expect(screen.getByText('1 item')).toBeInTheDocument();
+  });
+
   it('a rejected startJob fires toast.error instead of silently swallowing it', async () => {
     const user = userEvent.setup();
     startJobMock.mockRejectedValue(new Error('queue full'));
     vi.mocked(fetchFeed).mockResolvedValue({
-      papers: [makeFeedPaper({ pdf_downloaded: true })],
+      papers: [makeFeedPaper({ pdf_downloaded: true, has_chunks: false })],
       total: 1,
     });
     vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);

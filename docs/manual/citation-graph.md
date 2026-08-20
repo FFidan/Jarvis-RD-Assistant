@@ -77,4 +77,4 @@ Edges represent citation relationships. An edge labelled **"influential"** indic
 
 - [Knowledge Graph](knowledge-graph.md) — concept-level entity graph.
 - [Paper Detail](paper-detail.md) — cross-references section shows direct citation neighbours for a single paper.
-- [Research Feed & Library](research-feed.md) — where you search for and save papers, including ones you noticed while browsing the graph.
+- [Papers & Discover](research-feed.md) — where you search for and save papers, including ones you noticed while browsing the graph.

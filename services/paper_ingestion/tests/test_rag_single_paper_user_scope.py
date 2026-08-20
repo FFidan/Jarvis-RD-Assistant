@@ -69,7 +69,7 @@ async def test_ask_paper_forwards_user_id_to_prepare_single_paper_rag() -> None:
         get_db_pool=get_db_pool,
         limiter=limiter,
         options=PITestAppOptions(
-            remove_owner_override=False,
+            remove_identity_overrides=False,
             dependency_overrides={
                 get_db_pool: lambda: pool,
                 get_http_client: lambda: AsyncMock(spec=httpx.AsyncClient),

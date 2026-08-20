@@ -32,6 +32,7 @@ export interface AppearancePrefs {
 }
 
 const STORAGE_KEY = 'jarvis.appearance';
+export const APPEARANCE_CHANGED_EVENT = 'jarvis:appearance-changed';
 
 export function loadAppearance(): AppearancePrefs {
   try {
@@ -46,6 +47,7 @@ export function saveAppearance(prefs: Partial<AppearancePrefs>) {
   const next = { ...current, ...prefs };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   applyAppearance(next);
+  window.dispatchEvent(new CustomEvent<AppearancePrefs>(APPEARANCE_CHANGED_EVENT, { detail: next }));
 }
 
 export function applyAppearance(prefs: AppearancePrefs) {

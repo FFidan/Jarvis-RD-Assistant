@@ -10,6 +10,7 @@ import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
 import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
 import { ConnectivityBanner } from '@/components/layout/ConnectivityBanner';
 import { MaintenanceBanner } from '@/components/shared/MaintenanceBanner';
+import { useCommandPalette } from '@/stores/command-palette-store';
 
 // Keep the tour dependency chunk out of the eager bundle. The tour is only
 // shown to first-time users.
@@ -23,6 +24,7 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const openCommandPalette = useCommandPalette((state) => state.open);
   usePomodoroTick();
   useThemeEffect();
   useAppearance();
@@ -39,8 +41,20 @@ export function AppShell({ children }: AppShellProps) {
     return registerVisibilityHydrate();
   }, []);
 
+  const handleMobileSearch = () => {
+    setMobileOpen(false);
+    openCommandPalette();
+  };
+
   return (
     <div className="flex h-[100dvh] overflow-hidden">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-paper focus:px-4 focus:py-2 focus:text-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
+
       {/* Desktop sidebar */}
       <div className="hidden md:block">
         <Sidebar />
@@ -50,7 +64,7 @@ export function AppShell({ children }: AppShellProps) {
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-64 p-0" style={{ paddingLeft: 'env(safe-area-inset-left)' }}>
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <Sidebar />
+          <Sidebar drawer onSearch={handleMobileSearch} />
         </SheetContent>
       </Sheet>
 
@@ -59,7 +73,13 @@ export function AppShell({ children }: AppShellProps) {
         <MaintenanceBanner />
         <TopBar onMenuClick={() => setMobileOpen(true)} />
         <ConnectivityBanner />
-        <main className="flex-1 overflow-y-auto bg-paper p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">{children}</main>
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 overflow-y-auto bg-paper p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+        >
+          {children}
+        </main>
       </div>
 
       <Toaster position="bottom-right" toastOptions={{ style: { paddingBottom: 'env(safe-area-inset-bottom)' } }} />

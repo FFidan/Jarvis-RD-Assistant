@@ -5,6 +5,7 @@ name: GHCR publish
 # verification run named by an annotated stable tag on that commit.
 #
 # Image mapping:
+#   compose `jarvis/platform_api`    -> ghcr.io/limitcycle-oss/jarvis-platform-api
 #   compose `jarvis/paper_ingestion` -> ghcr.io/limitcycle-oss/jarvis-paper-ingestion
 #   compose `jarvis/learning_engine` -> ghcr.io/limitcycle-oss/jarvis-learning-engine
 #   compose `jarvis/telegram_bot`    -> ghcr.io/limitcycle-oss/jarvis-telegram-bot
@@ -135,12 +136,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Build contexts differ by need: paper-ingestion, learning-engine and
-        # telegram-bot build from the repository root because their Dockerfiles
+        # Build contexts differ by need: platform-api, paper-ingestion,
+        # learning-engine and telegram-bot build from the repository root because their Dockerfiles
         # COPY libs/jarvis_common; restore-uploader and the dashboard are
         # self-contained and build from their own directories. Reproducing a
         # build by hand requires the same context as its matrix entry.
         include:
+          - slug: platform-api
+            image: jarvis-platform-api
+            context: .
+            file: services/platform_api/Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            smoke_import: platform_api.main
+          - slug: platform-api
+            image: jarvis-platform-api
+            context: .
+            file: services/platform_api/Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            smoke_import: platform_api.main
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
             context: .
@@ -286,7 +303,7 @@ jobs:
 
       - name: Log in to GHCR
         if: needs.preflight.outputs.mode == 'verify'
-        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c  # v4.5.2
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -373,6 +390,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - slug: platform-api
+            image: jarvis-platform-api
+            suffix: ""
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
             suffix: ""
@@ -414,7 +434,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c  # v4.5.2
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -520,6 +540,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - slug: platform-api
+            image: jarvis-platform-api
+            suffix: ""
           - slug: paper-ingestion-cpu
             image: jarvis-paper-ingestion
             suffix: ""
@@ -559,7 +582,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c  # v4.5.2
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

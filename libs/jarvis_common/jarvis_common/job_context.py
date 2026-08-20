@@ -20,9 +20,9 @@ directly to persist interrupted outcomes.
   payload into the same table, best-effort.
 - ``is_cancelled``: bridges to procrastinate's ``should_abort()`` so
   abort-requested propagates to handler bodies.
-- ``job_id``: prefers the JARVIS UUID stored in ``task_kwargs['job_id']``
-  (set by every enqueue path) and falls back to ``str(procrastinate.job.id)``
-  (the bigint id) only when the kwarg is missing.
+- ``job_id``: the JARVIS UUID stored in ``task_kwargs['job_id']``, which every
+  enqueue path sets. It is empty when the kwarg is missing, because the
+  procrastinate bigint id is not a JARVIS job id and nothing can look it up.
 """
 
 from __future__ import annotations
@@ -85,14 +85,7 @@ class ProcrastinateJobContextShim:
             return
         try:
             await self._pool.execute(
-                """
-                INSERT INTO job_progress (jarvis_job_id, progress, message, updated_at)
-                VALUES ($1, $2, $3, NOW())
-                ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET progress   = EXCLUDED.progress,
-                      message    = EXCLUDED.message,
-                      updated_at = EXCLUDED.updated_at
-                """,
+                "SELECT ops.record_job_progress_v1($1, $2, $3)",
                 self.job_id,
                 float(progress),
                 message,
@@ -144,15 +137,7 @@ class ProcrastinateJobContextShim:
             return True
         try:
             await self._pool.execute(
-                """
-                INSERT INTO job_progress (jarvis_job_id, progress, result, error, updated_at)
-                VALUES ($1, CASE WHEN $4 THEN 0.0 ELSE 1.0 END, $2, $3, NOW())
-                ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET progress   = COALESCE(job_progress.progress, EXCLUDED.progress),
-                      result     = EXCLUDED.result,
-                      error      = EXCLUDED.error,
-                      updated_at = EXCLUDED.updated_at
-                """,
+                "SELECT ops.record_job_outcome_v1($1, $2::jsonb, $3::jsonb, $4)",
                 self.job_id,
                 result,
                 error,
@@ -203,9 +188,8 @@ def make_ctx_shim(
         that exercise the shim directly.
     job_id:
         Explicit override for the JARVIS job UUID.  When omitted, derived from
-        ``procrastinate_ctx.job.task_kwargs['job_id']`` (the JARVIS UUID),
-        falling back to ``str(procrastinate_ctx.job.id)`` (the procrastinate
-        bigint id), and finally to ``""``.
+        ``procrastinate_ctx.job.task_kwargs['job_id']`` (the JARVIS UUID), and
+        ``""`` when that kwarg is absent.
     pool:
         asyncpg pool used by :meth:`ProcrastinateJobContextShim.update_progress`
         to UPSERT into ``job_progress``.  When ``None``, progress reporting is
@@ -222,10 +206,7 @@ def make_ctx_shim(
             try:
                 kwargs = procrastinate_ctx.job.task_kwargs or {}
                 kwarg_id = kwargs.get("job_id")
-                if kwarg_id:
-                    job_id = str(kwarg_id)
-                else:
-                    job_id = str(procrastinate_ctx.job.id)
+                job_id = str(kwarg_id) if kwarg_id else ""
             except AttributeError:
                 job_id = ""
         else:

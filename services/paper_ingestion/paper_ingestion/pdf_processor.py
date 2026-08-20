@@ -20,7 +20,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 import pypdfium2 as pdfium  # page snapshot generation only; text extraction uses Docling
-from jarvis_common.maintenance import maintenance_active
+from jarvis_common.maintenance import ensure_outbound_egress_allowed, maintenance_active
 from jarvis_common.paths import secure_path
 from jarvis_common.settings import get_core_settings
 
@@ -478,8 +478,15 @@ async def _resolve_validated_pdf_url(
     http_client: httpx.AsyncClient,
     pdf_url: str,
 ) -> str:
-    """Follow the bounded HEAD redirect chain, validating every target."""
+    """Follow the bounded HEAD redirect chain, validating every target.
+
+    Raises
+    ------
+    OutboundEgressBlockedError
+        If outbound quarantine begins before any of the requests is sent.
+    """
     current_url = pdf_url
+    ensure_outbound_egress_allowed("PDF download")
     response = await http_client.request("HEAD", current_url, timeout=30.0, follow_redirects=False)
     for _ in range(4):
         if response.status_code not in (301, 302, 303, 307, 308):
@@ -489,6 +496,7 @@ async def _resolve_validated_pdf_url(
             break
         current_url = urljoin(current_url, location)
         await _validate_pdf_url(current_url)
+        ensure_outbound_egress_allowed("PDF download")
         response = await http_client.request(
             "HEAD", current_url, timeout=30.0, follow_redirects=False
         )
@@ -533,6 +541,8 @@ class PDFProcessor:
             If the URL fails SSRF validation or exceeds size limit.
         httpx.HTTPStatusError
             If the download fails.
+        jarvis_common.maintenance.OutboundEgressBlockedError
+            If outbound quarantine begins before any of the requests is sent.
         """
         await _validate_pdf_url(pdf_url)
 
@@ -560,6 +570,7 @@ class PDFProcessor:
         try:
             # Drop any stale temp so the first chunk starts a fresh file at byte 0.
             await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
+            ensure_outbound_egress_allowed("PDF download")
             async with self.http_client.stream(
                 "GET", current_url, timeout=120.0, follow_redirects=False
             ) as stream_resp:

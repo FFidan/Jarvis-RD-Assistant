@@ -2,7 +2,7 @@
 
 Exercises ``_apply_default_authenticated_user`` context manager covering:
 - module-level symbol monkeypatch of ``current_user_id_strict*`` resolvers
-- ``app.dependency_overrides`` entry for ``current_user_id_strict_with_owner_override``
+- ``app.dependency_overrides`` entry for ``current_user_id_strict``
 - cleanup-on-exit restoration of both
 """
 
@@ -54,9 +54,7 @@ def test_apply_default_authenticated_user_patches_resolvers(
     """Context manager patches each strict resolver to AsyncMock(return_value=1)."""
     import pkgutil
 
-    routers_pkg = _make_fake_routers_pkg(
-        ("current_user_id_strict", "current_user_id_strict_with_owner_override")
-    )
+    routers_pkg = _make_fake_routers_pkg(("current_user_id_strict",))
     monkeypatch.setattr(
         pkgutil,
         "iter_modules",
@@ -65,24 +63,21 @@ def test_apply_default_authenticated_user_patches_resolvers(
 
     submodule = sys.modules["fake_routers_pkg.sub"]
     original_strict = submodule.current_user_id_strict
-    original_owner = submodule.current_user_id_strict_with_owner_override
 
     with _apply_default_authenticated_user(fake_app, routers_pkg):
         assert submodule.current_user_id_strict is not original_strict
-        assert submodule.current_user_id_strict_with_owner_override is not original_owner
 
     # post-exit: originals restored
     assert submodule.current_user_id_strict is original_strict
-    assert submodule.current_user_id_strict_with_owner_override is original_owner
 
 
 def test_apply_default_authenticated_user_sets_and_clears_dep_override(
     monkeypatch: pytest.MonkeyPatch, fake_app: Any
 ) -> None:
-    """Context manager adds + removes the owner-override dep entry that returns 1."""
+    """Context manager adds and removes the strict identity override."""
     import pkgutil
 
-    from jarvis_common.auth import current_user_id_strict_with_owner_override
+    from jarvis_common.auth import current_user_id_strict
 
     routers_pkg = _make_fake_routers_pkg(())
     monkeypatch.setattr(
@@ -91,13 +86,13 @@ def test_apply_default_authenticated_user_sets_and_clears_dep_override(
         lambda _paths: [pkgutil.ModuleInfo(cast(Any, _FakeFinder()), "sub", False)],
     )
 
-    assert current_user_id_strict_with_owner_override not in fake_app.dependency_overrides
+    assert current_user_id_strict not in fake_app.dependency_overrides
 
     with _apply_default_authenticated_user(fake_app, routers_pkg):
-        override = fake_app.dependency_overrides[current_user_id_strict_with_owner_override]
+        override = fake_app.dependency_overrides[current_user_id_strict]
         assert override() == 1
 
-    assert current_user_id_strict_with_owner_override not in fake_app.dependency_overrides
+    assert current_user_id_strict not in fake_app.dependency_overrides
 
 
 def test_apply_default_authenticated_user_preserves_existing_override(
@@ -106,7 +101,7 @@ def test_apply_default_authenticated_user_preserves_existing_override(
     """If override already present (test set it), context manager leaves it alone on exit."""
     import pkgutil
 
-    from jarvis_common.auth import current_user_id_strict_with_owner_override
+    from jarvis_common.auth import current_user_id_strict
 
     routers_pkg = _make_fake_routers_pkg(())
     monkeypatch.setattr(
@@ -116,13 +111,13 @@ def test_apply_default_authenticated_user_preserves_existing_override(
     )
 
     sentinel = lambda: 99  # noqa: E731
-    fake_app.dependency_overrides[current_user_id_strict_with_owner_override] = sentinel
+    fake_app.dependency_overrides[current_user_id_strict] = sentinel
 
     with _apply_default_authenticated_user(fake_app, routers_pkg):
         # Inner override NOT replaced
-        assert fake_app.dependency_overrides[current_user_id_strict_with_owner_override] is sentinel
+        assert fake_app.dependency_overrides[current_user_id_strict] is sentinel
 
-    assert fake_app.dependency_overrides[current_user_id_strict_with_owner_override] is sentinel
+    assert fake_app.dependency_overrides[current_user_id_strict] is sentinel
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +137,7 @@ def test_apply_default_authenticated_user_restores_overrides_on_exception(
     """
     import pkgutil
 
-    from jarvis_common.auth import current_user_id_strict_with_owner_override
+    from jarvis_common.auth import current_user_id_strict
 
     routers_pkg = _make_fake_routers_pkg(())
     monkeypatch.setattr(
@@ -152,15 +147,15 @@ def test_apply_default_authenticated_user_restores_overrides_on_exception(
     )
 
     # Record the pre-state: override dict should be empty before entering.
-    assert current_user_id_strict_with_owner_override not in fake_app.dependency_overrides
+    assert current_user_id_strict not in fake_app.dependency_overrides
     pre_state_keys = set(fake_app.dependency_overrides.keys())
 
     with pytest.raises(RuntimeError, match="boom"):
         with _apply_default_authenticated_user(fake_app, routers_pkg):
             # Override is active inside the block.
-            assert current_user_id_strict_with_owner_override in fake_app.dependency_overrides
+            assert current_user_id_strict in fake_app.dependency_overrides
             raise RuntimeError("boom")
 
     # Post-exit: dependency_overrides must be back to the pre-state.
     assert set(fake_app.dependency_overrides.keys()) == pre_state_keys
-    assert current_user_id_strict_with_owner_override not in fake_app.dependency_overrides
+    assert current_user_id_strict not in fake_app.dependency_overrides

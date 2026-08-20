@@ -15,7 +15,7 @@ const startWorkMock = vi.fn();
 vi.mock('@/stores/pomodoro-store', () => ({
   usePomodoroStore: Object.assign(
     (selector?: (state: any) => any) => {
-      const state = { phase: 'idle', attachedItem: null };
+      const state = { phase: 'idle', attachedItem: null, workMinutes: 45 };
       return selector ? selector(state) : state;
     },
     { getState: () => ({ startWork: startWorkMock }) },
@@ -78,8 +78,10 @@ describe('TaskRow', () => {
     const user = userEvent.setup();
     renderRow();
 
-    // The focus button is in the DOM but visually hidden (opacity-0); it is still interactive
-    const focusBtn = screen.getByTitle(/Start 25:00 Pomodoro/i);
+    // The focus button is in the DOM but visually hidden (opacity-0); it is still
+    // interactive. Its tooltip names the CONFIGURED duration (45 in this mock),
+    // never a hardcoded 25.
+    const focusBtn = screen.getByTitle(/Start 45:00 Pomodoro/i);
     await user.click(focusBtn);
 
     expect(startWorkMock).toHaveBeenCalledOnce();
@@ -137,6 +139,28 @@ describe('TaskRow', () => {
   it('the "Mark task done" control carries data-touch-target (44px tap uplift)', () => {
     renderRow();
     expect(screen.getByRole('button', { name: /Mark task done/i })).toHaveAttribute('data-touch-target');
+  });
+
+  it('gives the completion control a 24px mouse target without enlarging its dot', () => {
+    renderRow();
+    const button = screen.getByRole('button', { name: /Mark task done/i });
+    const dot = button.querySelector('span');
+    expect(dot).not.toBeNull();
+
+    const dotHeightClass = [...dot!.classList].find((name) => /^h-\d+(?:\.\d+)?$/.test(name));
+    const paddingClass = [...button.classList].find((name) => /^p-\[\d+px\]$/.test(name));
+    const marginClass = [...button.classList].find((name) => /^-m-\[\d+px\]$/.test(name));
+    expect(dotHeightClass).toBeDefined();
+    expect(paddingClass).toBeDefined();
+    expect(marginClass).toBeDefined();
+
+    const dotHeight = Number(dotHeightClass!.slice(2)) * 4;
+    const padding = Number(paddingClass!.match(/\d+/)?.[0]);
+    const margin = Number(marginClass!.match(/\d+/)?.[0]);
+    const targetHeight = dotHeight + padding * 2;
+    expect(targetHeight).toBeGreaterThanOrEqual(24);
+    expect(dotHeight).toBe(14);
+    expect(targetHeight - margin * 2).toBe(14);
   });
 
   it('the delete button becomes visible on keyboard focus', () => {

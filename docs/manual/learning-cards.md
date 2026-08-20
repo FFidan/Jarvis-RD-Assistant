@@ -1,12 +1,12 @@
-<!-- verified-against-UI: 2026-06-06 | routes: /cards, /cards?mode=review, /cards?mode=library -->
+<!-- verified-against-UI: 2026-08-19 | routes: /cards, /cards?mode=review, /cards?mode=library -->
 
 # Learning Cards
 
-_This area is evolving; verified 2026-06-06._
+The **Learning Cards** page at `/cards` is a spaced-repetition study system built on the FSRS (Free Spaced Repetition Scheduler) algorithm. It keeps key facts from your papers fresh by scheduling each one just before you would forget it.
 
-The **Learning Cards** page at `/cards` is a spaced-repetition study system built on the FSRS (Free Spaced Repetition Scheduler) algorithm. It keeps key facts from your research papers fresh with scientifically-spaced review intervals.
+The page has two modes and picks the useful one for you: **review** (`?mode=review`) when cards are due, and **library** (`?mode=library`) when none are. There are no tabs — a **Review now** button takes you into a session, and the breadcrumb at the top of a session takes you back to the library.
 
-The page opens in **review mode** (`?mode=review`) when you have cards due for review; otherwise it defaults to **library mode** (`?mode=library`). You can switch between modes using tabs at the top of the page.
+Its settings live in **Settings → Research → Learning Cards**; see [Settings](settings.md).
 
 ---
 
@@ -28,7 +28,7 @@ Below the stats, **DeckBrowser** lists your decks. Each deck entry shows its nam
 
 ### CardList
 
-The card list below the deck browser shows all cards, or the cards within a selected deck. Each card shows its front (question) face. Clicking a card expands it to show both front and back.
+Selecting a deck lists its cards below the browser. Each card shows its front (question) face; clicking one expands it to show the answer as well.
 
 ### Generating cards
 
@@ -38,9 +38,9 @@ Click **Generate** to open the **GenerateCardsDialog**. Select one or more paper
 
 Click **New Card** to open the **CreateCardForm** and write a card by hand. Fill in the front (question), back (answer), and optionally assign it to an existing deck or create a new one.
 
-### Review now button
+### Review now
 
-If cards are due, a **"Review now (N)"** button appears showing the count. Clicking it switches to review mode.
+When cards are due, a **Review now (N)** button in the header shows the count and starts a session across all decks. **Start review** on a single deck scopes the session to that deck instead.
 
 ---
 
@@ -71,7 +71,7 @@ The FSRS algorithm uses your rating to compute the next review date for the card
 
 ### SessionComplete
 
-When all due cards in the session have been reviewed, the **SessionComplete** screen shows a summary: cards reviewed, ratings breakdown, and estimated next review dates. A button returns you to the library or to the full `/cards` page.
+When every due card in the session has been reviewed, a summary replaces the card canvas and a button returns you to the library.
 
 ---
 
@@ -85,4 +85,5 @@ Card ratings made while offline are stored in an **IndexedDB outbox**. When your
 
 - [Paper Detail](paper-detail.md) — trigger card generation for a specific paper from the right-hand actions sidebar.
 - [Analytics](analytics.md) — review activity and FSRS retention charts.
-- [My Day & Home](home-my-day.md) — LearningFocusSection shows today's due-card count with a link here.
+- [My Day & Home](home-my-day.md) — the Learning & focus chip shows today's due-card count and links here.
+- [Settings](settings.md) — FSRS retention and learning steps, under §VI Research → Learning Cards.

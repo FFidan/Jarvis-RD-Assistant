@@ -154,7 +154,7 @@ def test_live_foreign_lock_refuses_restore_without_mutation_then_retry_progresse
     # occurred while the foreign lock was held.
     state.unlink()
     retried = _run_restore(tmp_path, destructive_log)
-    assert retried.returncode == 0, retried.stderr
+    assert retried.returncode != 0, "malformed retained requests must fail closed"
     assert not (tmp_path / "trigger" / ".restore_request.json").exists()
     assert (tmp_path / "trigger" / ".restore_status.json").read_bytes() != inputs[
         tmp_path / "trigger" / ".restore_status.json"
@@ -233,7 +233,7 @@ def test_preparing_update_yields_to_restore_without_late_activation(tmp_path: Pa
         # The retained request now wins admission and reaches validation.  It is
         # intentionally malformed so no database or search-index command can run.
         retried = _run_restore(tmp_path, destructive_log)
-        assert retried.returncode == 0, retried.stderr
+        assert retried.returncode != 0, "malformed retained requests must fail closed"
         assert not (trigger / ".restore_request.json").exists()
         assert destructive_log.read_text(encoding="utf-8") == ""
     finally:

@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import logging
 
-import asyncpg
 import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
-from telegram_bot.formatters import format_pulse_card, format_pulse_deck_status, truncate
+from telegram_bot.formatters import (
+    format_pulse_card,
+    format_pulse_deck_scope,
+    format_pulse_deck_status,
+    truncate,
+)
 from telegram_bot.notification_policy import ScheduledNotificationPolicy
+from telegram_bot.platform_client import list_user_pairings
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +65,7 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> None:
         logger.exception("Failed to send Pulse message")
 
 
-async def _deliver_pulse_to_chat(
+async def deliver_pulse_to_chat(
     http_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
@@ -81,8 +85,8 @@ async def _deliver_pulse_to_chat(
     chat_id : int
         Target Telegram chat ID.
     user_id : int
-        DB user PK. Adds ``X-Owner-User-Id`` header so the backend
-        returns per-user Pulse data.
+        DB user PK. The client auth flow exchanges its local paired-user
+        marker for a route-bound assertion before backend transport.
     """
     try:
         deck = await services_client.fetch_pulse_today(http_client, config, user_id)
@@ -125,8 +129,10 @@ async def _deliver_pulse_to_chat(
             )
         return
 
-    await _send(bot, chat_id, f"<b>{format_pulse_deck_status(deck)}</b>")
-    for card in deck.cards[:PULSE_TELEGRAM_TOP_N]:
+    delivered = deck.cards[:PULSE_TELEGRAM_TOP_N]
+    scope = format_pulse_deck_scope(deck, len(delivered), config.jarvis_base_url)
+    await _send(bot, chat_id, f"<b>{format_pulse_deck_status(deck)}</b>\n{scope}")
+    for card in delivered:
         await _send(
             bot,
             chat_id,
@@ -137,7 +143,7 @@ async def _deliver_pulse_to_chat(
 
 async def run_research_pulse(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
+    platform_client: httpx.AsyncClient,
     bot: Bot,
     config: BotConfig,
     *,
@@ -145,22 +151,22 @@ async def run_research_pulse(
 ) -> None:
     """Fetch today's Pulse deck and deliver the top cards to Telegram.
 
-    Iterates ``telegram_user_pairings`` and delivers per-user Pulse by sending
-    ``X-Owner-User-Id`` + ``X-API-Key`` headers to the backend.  Skips with a
-    warning when no pairings exist.
+    Iterates ``telegram_user_pairings`` and delivers per-user Pulse through
+    Telegram's route-bound backend assertion flow. Skips with a warning when
+    no pairings exist.
 
     Parameters
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool used to list active pairings.
+    platform_client : httpx.AsyncClient
+        Scoped Platform client used to list active pairings.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
-        Bot configuration (service URLs and API key).
+        Bot configuration (service URLs).
     """
-    pairings = await _owner.list_user_pairings(db_pool)
+    pairings = await list_user_pairings(platform_client, config)
     if not pairings:
         logger.warning(
             "research_pulse skipped: no Telegram pairings exist — use /pair in Telegram to set up"
@@ -172,4 +178,4 @@ async def run_research_pulse(
             pairing.user_id, "research_pulse"
         ):
             continue
-        await _deliver_pulse_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)
+        await deliver_pulse_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)

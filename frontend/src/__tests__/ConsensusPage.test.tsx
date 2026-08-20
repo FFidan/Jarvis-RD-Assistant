@@ -220,7 +220,7 @@ describe('ConsensusPage', () => {
     });
 
     renderPage();
-    await userEvent.click(await screen.findByRole('button', { name: /run consensus scan/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /scan for contradictions/i }));
 
     expect(await screen.findByText(/process some papers first/i)).toBeInTheDocument();
     expect(jobStoreMock.trackExternalJob).not.toHaveBeenCalled();
@@ -249,13 +249,13 @@ describe('ConsensusPage', () => {
     expect(await screen.findByText('No related-paper claims yet')).toBeInTheDocument();
     expect(screen.getByText(/last contradiction scan failed/i)).toBeInTheDocument();
     expect(screen.getByText('Model route unavailable')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /run consensus scan/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /scan for contradictions/i })).toBeInTheDocument();
   });
 
   it('runs a consensus scan from the empty-state CTA', async () => {
     fetchConsensusMock.mockResolvedValue({ total: 0, claims: [] });
     renderPage();
-    const cta = await screen.findByRole('button', { name: /run consensus scan/i });
+    const cta = await screen.findByRole('button', { name: /scan for contradictions/i });
     await userEvent.click(cta);
     expect(scanContradictionsMock).toHaveBeenCalledTimes(1);
   });
@@ -280,7 +280,7 @@ describe('ConsensusPage', () => {
 
     renderPage();
 
-    expect(await screen.findByRole('button', { name: /run consensus scan/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /scan for contradictions/i })).toBeInTheDocument();
   });
 
   it('shows scanning state for a library-wide scan', async () => {

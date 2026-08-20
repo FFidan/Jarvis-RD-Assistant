@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Any
 
-from jarvis_common.crypto import reload_fernet_on_sighup
+from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.maintenance import (
     ensure_outbound_egress_allowed,
@@ -25,12 +25,20 @@ from jarvis_common.maintenance import (
 from jarvis_common.pinned_transport import JARVIS_SERVICE_POLICY, pinned_async_client
 from jarvis_common.sentry import maybe_init_sentry
 from jarvis_common.settings import get_core_settings
+from jarvis_common.telemetry import configure_telemetry, flush_telemetry
 from telegram import BotCommand, Update
-from telegram.ext import Application, ApplicationHandlerStop, ContextTypes, TypeHandler
+from telegram.ext import (
+    Application,
+    ApplicationHandlerStop,
+    ContextTypes,
+    MessageHandler,
+    TypeHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
 from telegram_bot.command_catalog import menu_command_specs
-from telegram_bot.config import BotConfig, create_db_pool
+from telegram_bot.config import BotConfig, service_headers
 from telegram_bot.handlers import (
     get_review_conversation_handler,
     register_callback_handlers,
@@ -38,6 +46,7 @@ from telegram_bot.handlers import (
 )
 from telegram_bot.internal_api import start_internal_server
 from telegram_bot.scheduler import JarvisScheduler
+from telegram_bot.service_auth import TelegramBackendAuth
 
 configure_logging("telegram_bot", log_level=get_core_settings().log_level)
 maybe_init_sentry("telegram_bot")
@@ -100,7 +109,7 @@ async def _secrets_rotation_watcher(started_at: float, poll_interval_s: float = 
 async def post_init(application: Application) -> None:
     """Initialize shared resources after the Application is built.
 
-    Creates database pool and HTTP client, stores them in bot_data.
+    Creates scoped Platform and backend HTTP clients and starts the scheduler.
 
     Parameters
     ----------
@@ -113,19 +122,33 @@ async def post_init(application: Application) -> None:
         If restored credentials await review before Telegram resources start.
     """
     ensure_outbound_egress_allowed("Telegram bot startup")
+    settings = get_jarvis_common_settings()
+    otlp_endpoint = settings.otel_exporter_otlp_traces_endpoint
+    # Switched by the collector endpoint alone, on the same terms as every
+    # service: observability_enabled is the Langfuse master gate, and reusing it
+    # here would drop the bot's spans from a trace the other services complete.
+    configure_telemetry(
+        service="telegram_bot",
+        enabled=otlp_endpoint is not None,
+        otlp_endpoint=otlp_endpoint,
+        timeout_ms=settings.otel_export_timeout_ms,
+    )
     config: BotConfig = application.bot_data["config"]
-    application.bot_data["db_pool"] = await create_db_pool(config.database_url)
+    platform_client = pinned_async_client(
+        JARVIS_SERVICE_POLICY,
+        timeout=10.0,
+        headers=service_headers(config),
+    )
+    application.bot_data["platform_client"] = platform_client
     application.bot_data["http_client"] = pinned_async_client(
         JARVIS_SERVICE_POLICY,
         timeout=30.0,
-        headers=(
-            {"X-API-Key": config.jarvis_api_key.get_secret_value()} if config.jarvis_api_key else {}
-        ),
+        auth=TelegramBackendAuth(config, platform_client),
     )
 
     # Start scheduler
     scheduler = JarvisScheduler(
-        db_pool=application.bot_data["db_pool"],
+        platform_client=platform_client,
         http_client=application.bot_data["http_client"],
         bot=application.bot,
         config=config,
@@ -133,9 +156,9 @@ async def post_init(application: Application) -> None:
     await scheduler.load_and_start()
     application.bot_data["scheduler"] = scheduler
 
-    # Start internal HTTP API in the background (for reload-nudges endpoint)
+    # Start the private liveness API in the background.
     _internal_api_task = asyncio.get_running_loop().create_task(
-        start_internal_server(scheduler, application.bot_data["db_pool"]),
+        start_internal_server(),
         name="internal_api",
     )
     application.bot_data["internal_api_task"] = _internal_api_task
@@ -160,7 +183,7 @@ async def post_init(application: Application) -> None:
         [BotCommand(spec.name, spec.description) for spec in menu_command_specs()]
     )
 
-    logger.info("Bot initialized: db_pool, http_client, scheduler, and internal API ready")
+    logger.info("Bot initialized: scoped HTTP clients, scheduler, and liveness API ready")
 
 
 async def post_shutdown(application: Application) -> None:
@@ -171,36 +194,42 @@ async def post_shutdown(application: Application) -> None:
     application : Application
         The python-telegram-bot Application instance.
     """
-    import telegram_bot.internal_api as _iapi  # local import to avoid circular refs
+    try:
+        import telegram_bot.internal_api as _iapi  # local import to avoid circular refs
 
-    # Gracefully stop the internal uvicorn server
-    if _iapi._server_state.server is not None:
-        _iapi._server_state.server.should_exit = True
-    if _iapi._server_state.task is not None:
-        try:
-            await asyncio.wait_for(_iapi._server_state.task, timeout=5.0)
-        except TimeoutError:
-            logger.warning("Internal API server task did not stop within 5 s — continuing shutdown")
-        except asyncio.CancelledError:
-            logger.warning("Internal API server task was cancelled during shutdown")
+        # Gracefully stop the internal uvicorn server
+        if _iapi._server_state.server is not None:
+            _iapi._server_state.server.should_exit = True
+        if _iapi._server_state.task is not None:
+            try:
+                await asyncio.wait_for(_iapi._server_state.task, timeout=5.0)
+            except TimeoutError:
+                logger.warning(
+                    "Internal API server task did not stop within 5 s — continuing shutdown"
+                )
+            except asyncio.CancelledError:
+                logger.warning("Internal API server task was cancelled during shutdown")
 
-    watcher_task = application.bot_data.get("secrets_rotation_watcher_task")
-    if watcher_task is not None:
-        watcher_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await watcher_task
+        watcher_task = application.bot_data.get("secrets_rotation_watcher_task")
+        if watcher_task is not None:
+            watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await watcher_task
 
-    scheduler = application.bot_data.get("scheduler")
-    if scheduler:
-        await scheduler.stop()
+        scheduler = application.bot_data.get("scheduler")
+        if scheduler:
+            await scheduler.stop()
 
-    http_client = application.bot_data.get("http_client")
-    if http_client:
-        await http_client.aclose()
+        http_client = application.bot_data.get("http_client")
+        if http_client:
+            await http_client.aclose()
 
-    db_pool = application.bot_data.get("db_pool")
-    if db_pool:
-        await db_pool.close()
+        platform_client = application.bot_data.get("platform_client")
+        if platform_client:
+            await platform_client.aclose()
+    finally:
+        # The global provider survives bot restarts; only flush this lifecycle.
+        flush_telemetry()
 
     logger.info("Bot shutdown: resources released")
 
@@ -228,6 +257,17 @@ async def _maintenance_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     raise ApplicationHandlerStop
 
 
+async def _unrecognized_text(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer plain text so a message the bot cannot act on is never dropped silently.
+
+    Registered last in the default group, so every command, conversation state,
+    and callback claims its own updates first.
+    """
+    if update.message is None:
+        return
+    await update.message.reply_text("I only understand commands — try /help")
+
+
 def main() -> None:
     """Build the bot application and start polling for updates.
 
@@ -243,8 +283,6 @@ def main() -> None:
     """
     if skip_for_maintenance("Telegram polling"):
         return
-
-    reload_fernet_on_sighup()
 
     try:
         config = BotConfig.from_env()
@@ -271,6 +309,7 @@ def main() -> None:
     register_command_handlers(application)
     application.add_handler(get_review_conversation_handler())
     register_callback_handlers(application)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _unrecognized_text))
 
     logger.info("JARVIS Telegram Bot starting")
     application.run_polling(allowed_updates=["message", "callback_query"])

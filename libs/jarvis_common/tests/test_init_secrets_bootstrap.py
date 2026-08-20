@@ -1,7 +1,7 @@
 """Regression tests for scripts/init-secrets.sh idempotent bootstrap.
 
 A fresh ``cp .env.example .env`` leaves the core secret keys as EMPTY
-placeholders (``POSTGRES_PASSWORD=`` etc.). The bootstrapper must fill them in
+placeholders. The bootstrapper must fill them in
 place — no duplicate lines — and write the matching ``secrets/*.txt`` files that
 ``docker-compose.yml`` mounts as Docker secrets. The earlier readback-based
 writer appended a second ``KEY=value`` line and then read back the *empty*
@@ -28,13 +28,26 @@ SECRET_FILE_MODE = 0o644
 # The "core" keys that ship as empty placeholders in .env.example and are
 # consumed by docker-compose.yml as `_FILE` Docker secrets.
 CORE_KEYS = {
-    "POSTGRES_PASSWORD": "postgres_password.txt",
     "JARVIS_API_KEY": "jarvis_api_key.txt",
     "QDRANT_API_KEY": "qdrant_api_key.txt",
     "JARVIS_CONFIG_KEY": "jarvis_config_key.txt",
     "JARVIS_MODEL_HMAC_KEY": "jarvis_model_hmac_key.txt",
     "LITELLM_MASTER_KEY": "litellm_master_key.txt",
     "LANGFUSE_INIT_USER_PASSWORD": "langfuse_init_user_password.txt",
+}
+
+DATABASE_PASSWORD_FILES = {
+    "postgres_password.txt",
+    "postgres_platform_runtime_password.txt",
+    "postgres_research_runtime_password.txt",
+    "postgres_learning_runtime_password.txt",
+    "postgres_migrator_password.txt",
+    "postgres_cluster_bootstrap_password.txt",
+    "postgres_backup_reader_password.txt",
+    "postgres_restore_operator_password.txt",
+    "postgres_erasure_executor_password.txt",
+    "litellm_runtime_password.txt",
+    "litellm_migrator_password.txt",
 }
 
 pytestmark = pytest.mark.skipif(
@@ -87,28 +100,63 @@ def test_fills_empty_placeholders_and_writes_secret_files(tmp_path: Path) -> Non
             f"{key} appears more than once in .env (duplicate-append bug):\n"
             f"{(tmp_path / '.env').read_text()}"
         )
+    for filename in DATABASE_PASSWORD_FILES:
+        secret_file = tmp_path / "secrets" / filename
+        assert secret_file.exists() and secret_file.read_text().strip()
+        assert _mode(secret_file) == SECRET_FILE_MODE
+
+
+def test_database_password_files_are_preserved_without_env_copies(tmp_path: Path) -> None:
+    """Database login passwords remain file-only and stable across reruns."""
+    _stage(tmp_path, "")
+    first = _run(tmp_path)
+    assert first.returncode == 0, first.stderr
+    before = {
+        filename: (tmp_path / "secrets" / filename).read_text()
+        for filename in DATABASE_PASSWORD_FILES
+    }
+
+    second = _run(tmp_path)
+    assert second.returncode == 0, second.stderr
+    assert {
+        filename: (tmp_path / "secrets" / filename).read_text()
+        for filename in DATABASE_PASSWORD_FILES
+    } == before
+    env_text = (tmp_path / ".env").read_text()
+    assert "PLATFORM_RUNTIME_PASSWORD=" not in env_text
+    assert "LITELLM_MIGRATOR_PASSWORD=" not in env_text
+
+
+def test_legacy_postgres_env_password_moves_to_isolated_upgrade_file(tmp_path: Path) -> None:
+    """An existing v1.2.5 password remains usable without staying in ``.env``."""
+    _stage(tmp_path, "POSTGRES_PASSWORD=existing-v125-password\n")
+
+    result = _run(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "secrets" / "postgres_password.txt").read_text() == (
+        "existing-v125-password"
+    )
+    assert "POSTGRES_PASSWORD=" not in (tmp_path / ".env").read_text()
+    assert not (tmp_path / "secrets" / "postgres_legacy_rollback_password.txt").exists()
 
 
 def test_is_idempotent_and_preserves_existing_values(tmp_path: Path) -> None:
-    _stage(tmp_path, "POSTGRES_PASSWORD=\nJARVIS_CONFIG_KEY=\n")
+    _stage(tmp_path, "JARVIS_CONFIG_KEY=\n")
 
     first = _run(tmp_path)
     assert first.returncode == 0, first.stderr
-    pw1 = (tmp_path / "secrets" / "postgres_password.txt").read_text()
     cfg1 = (tmp_path / "secrets" / "jarvis_config_key.txt").read_text()
-    (tmp_path / "secrets" / "postgres_password.txt").chmod(0o600)
 
     second = _run(tmp_path)
     assert second.returncode == 0, second.stderr
 
     # Values must be preserved across runs (rotating JARVIS_CONFIG_KEY would
     # render every encrypted user_config row unreadable).
-    assert (tmp_path / "secrets" / "postgres_password.txt").read_text() == pw1
     assert (tmp_path / "secrets" / "jarvis_config_key.txt").read_text() == cfg1
     assert _mode(tmp_path / "secrets") == SECRET_DIR_MODE
-    assert _mode(tmp_path / "secrets" / "postgres_password.txt") == SECRET_FILE_MODE
     assert _mode(tmp_path / "secrets" / "jarvis_config_key.txt") == SECRET_FILE_MODE
-    for key in ("POSTGRES_PASSWORD", "JARVIS_CONFIG_KEY"):
+    for key in ("JARVIS_CONFIG_KEY",):
         assert _count_lines(tmp_path / ".env", key) == 1, "duplicate KEY= line after re-run"
 
 
@@ -119,8 +167,7 @@ def test_restored_data_keys_are_file_authoritative_but_host_credentials_are_not(
         tmp_path,
         "JARVIS_CONFIG_KEY=stale-config-env\n"
         "JARVIS_MODEL_HMAC_KEY=stale-hmac-env-value-that-is-long-enough\n"
-        "LITELLM_SALT_KEY=stale-salt-env\n"
-        "POSTGRES_PASSWORD=target-postgres-env\n",
+        "LITELLM_SALT_KEY=stale-salt-env\n",
     )
     secrets = tmp_path / "secrets"
     secrets.mkdir()
@@ -134,7 +181,6 @@ def test_restored_data_keys_are_file_authoritative_but_host_credentials_are_not(
     }
     for filename, value in restored.values():
         (secrets / filename).write_text(value)
-    (secrets / "postgres_password.txt").write_text("source-postgres-file")
 
     result = _run(tmp_path)
 
@@ -147,8 +193,6 @@ def test_restored_data_keys_are_file_authoritative_but_host_credentials_are_not(
     for key, (filename, value) in restored.items():
         assert env_values[key] == value
         assert (secrets / filename).read_text() == value
-    assert env_values["POSTGRES_PASSWORD"] == "target-postgres-env"
-    assert (secrets / "postgres_password.txt").read_text() == "target-postgres-env"
 
 
 def test_restored_data_key_validation_does_not_require_gnu_stat(tmp_path: Path) -> None:

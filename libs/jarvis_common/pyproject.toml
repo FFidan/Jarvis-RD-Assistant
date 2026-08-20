@@ -11,13 +11,14 @@ maintainers = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
+    "apscheduler>=3.10.0",
     "asyncpg>=0.30.0",
     "asyncpg-listen>=0.0.9",
     "cryptography>=50.0.0",
     # Matches the services. The route-table walk this package ships needs the
     # 0.137 routing API, and below it the check that pins the impersonation
     # route set degrades to a silent skip.
-    "fastapi>=0.137.0,<0.141.0",
+    "fastapi>=0.137.0,<0.142.0",
     "gitpython>=3.1.58",  # >=3.1.58 clears the current GitPython advisory set
     "httpx>=0.27.0",
     "httpcore>=1.0,<1.1",  # direct API used by pinned outbound transport

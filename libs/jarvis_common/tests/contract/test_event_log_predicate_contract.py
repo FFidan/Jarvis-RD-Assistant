@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import uuid
 
+import asyncpg
 import pytest
+import pytest_asyncio
+from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.testing import SharedConnPool
 
 pytestmark = [
@@ -23,7 +26,31 @@ pytestmark = [
 ]
 
 
-async def test_a254_log_event_inserts_row_with_correct_fields(contract_conn):
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def event_runtime_conn(contract_pg_dsn, _contract_pool):
+    """Yield the real Platform runtime identity authorized for event append."""
+    password = "event-runtime-contract-password"
+    bootstrap = await asyncpg.connect(contract_pg_dsn)
+    try:
+        await bootstrap.execute(
+            "ALTER ROLE jarvis_platform_runtime LOGIN PASSWORD 'event-runtime-contract-password'"
+        )
+    finally:
+        await bootstrap.close()
+    runtime = await asyncpg.connect(
+        contract_pg_dsn,
+        user="jarvis_platform_runtime",
+        password=password,
+    )
+    try:
+        await init_pg_connection(runtime)
+        await runtime.execute("SET search_path TO platform, ops, public, pg_catalog")
+        yield runtime
+    finally:
+        await runtime.close()
+
+
+async def test_a254_log_event_inserts_row_with_correct_fields(event_runtime_conn):
     """A254: log_event inserts a row into system_events with the correct scalar fields.
 
     Verified: event_log.py:46-58 — INSERT INTO system_events (level, category,
@@ -31,7 +58,7 @@ async def test_a254_log_event_inserts_row_with_correct_fields(contract_conn):
     """
     from jarvis_common.event_log import log_event
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(event_runtime_conn)
     cid = uuid.uuid4()
 
     await log_event(
@@ -44,7 +71,7 @@ async def test_a254_log_event_inserts_row_with_correct_fields(contract_conn):
         correlation_id=cid,
     )
 
-    row = await contract_conn.fetchrow(
+    row = await event_runtime_conn.fetchrow(
         "SELECT level, category, source, message, correlation_id "
         "FROM system_events WHERE message = $1",
         "a254_contract_smoke",
@@ -56,7 +83,7 @@ async def test_a254_log_event_inserts_row_with_correct_fields(contract_conn):
     assert str(row["correlation_id"]) == str(cid)
 
 
-async def test_a254_log_event_jsonb_context_not_double_encoded(contract_conn):
+async def test_a254_log_event_jsonb_context_not_double_encoded(event_runtime_conn):
     """A254: context dict is stored as JSONB and auto-decoded by asyncpg — not as a string.
 
     Verified: event_log.py:54 — $5::jsonb cast; asyncpg JSONB codec auto-decodes.
@@ -65,7 +92,7 @@ async def test_a254_log_event_jsonb_context_not_double_encoded(contract_conn):
     """
     from jarvis_common.event_log import log_event
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(event_runtime_conn)
     payload = {"nested": {"x": 1}, "list": [1, 2, 3]}
     marker = f"a254_jsonb_{uuid.uuid4().hex[:8]}"
 
@@ -78,7 +105,7 @@ async def test_a254_log_event_jsonb_context_not_double_encoded(contract_conn):
         context=payload,
     )
 
-    stored = await contract_conn.fetchval(
+    stored = await event_runtime_conn.fetchval(
         "SELECT context FROM system_events WHERE message = $1",
         marker,
     )
@@ -87,7 +114,7 @@ async def test_a254_log_event_jsonb_context_not_double_encoded(contract_conn):
     assert stored == payload
 
 
-async def test_a254_log_event_per_source_scoping(contract_conn):
+async def test_a254_log_event_per_source_scoping(event_runtime_conn):
     """A254: multiple log_event calls with different sources produce distinct rows.
 
     Proves actor/source-column scoping — a query filtered by source returns only
@@ -95,7 +122,7 @@ async def test_a254_log_event_per_source_scoping(contract_conn):
     """
     from jarvis_common.event_log import log_event
 
-    pool = SharedConnPool(contract_conn)
+    pool = SharedConnPool(event_runtime_conn)
     suffix = uuid.uuid4().hex[:8]
     src_a = f"source_a_{suffix}"
     src_b = f"source_b_{suffix}"
@@ -104,15 +131,36 @@ async def test_a254_log_event_per_source_scoping(contract_conn):
     await log_event(pool=pool, level="info", category="source", source=src_a, message=msg)
     await log_event(pool=pool, level="warning", category="source", source=src_b, message=msg)
 
-    count_a = await contract_conn.fetchval(
+    count_a = await event_runtime_conn.fetchval(
         "SELECT COUNT(*) FROM system_events WHERE source = $1 AND message = $2",
         src_a,
         msg,
     )
-    count_b = await contract_conn.fetchval(
+    count_b = await event_runtime_conn.fetchval(
         "SELECT COUNT(*) FROM system_events WHERE source = $1 AND message = $2",
         src_b,
         msg,
     )
     assert count_a == 1, f"Expected 1 row for {src_a}, got {count_a}"
     assert count_b == 1, f"Expected 1 row for {src_b}, got {count_b}"
+
+
+async def test_rejected_event_does_not_abort_callers_transaction(contract_conn):
+    """A rejected best-effort event leaves the caller's transaction usable."""
+    from jarvis_common.event_log import log_event
+
+    pool = SharedConnPool(
+        contract_conn,
+        session_authorization="jarvis_research_runtime",
+    )
+
+    await log_event(
+        pool=pool,
+        level="info",
+        category="job",
+        source="x" * 201,
+        message="rejected_event",
+    )
+
+    transaction_probe = await contract_conn.fetchval("SELECT 1")
+    assert transaction_probe == 1
