@@ -92,7 +92,7 @@ required.
 | `/review` | Start a flashcard review |
 | `/stats` | Show learning statistics |
 | `/cancel` | Cancel the active flashcard review; this conversation-only command is intentionally absent from Telegram's global menu |
-| `/projects` | List your projects, except archived ones |
+| `/projects` | List your projects, except archived ones, up to 10 per run with a header naming the full count |
 | `/newproject <name>` | Create a project |
 | `/tasks` | List in-progress tasks |
 | `/done <id>` | Mark a task complete |
@@ -118,7 +118,10 @@ Use `/next` or open Pulse after the job completes.
 Where a command prints a project's status, it uses the same words the web app
 does: **In progress**, **Draft**, **Completed**, and **Archived**. `/projects`
 lists everything except Archived, because archiving is the one status that means
-"put away deliberately".
+"put away deliberately". Each project arrives as its own message, so the run
+stops after ten and opens with a header saying how many there are — the same
+"showing 10 of 23" line `/papers` and `/inbox` print. Open the web project list
+to see the rest.
 
 `/briefing` states the window and the view behind each number rather than
 printing bare counts: papers added to your library since midnight UTC, papers

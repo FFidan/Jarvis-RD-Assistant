@@ -9,7 +9,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot import services_client
-from telegram_bot.formatters import escape, sanitize_user_input, truncate
+from telegram_bot.formatters import (
+    LISTING_ROWS,
+    escape,
+    sanitize_user_input,
+    stage_header,
+    truncate,
+)
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import get_config, get_http, get_jarvis_user_id
 from telegram_bot.handlers.rate_limit import rate_limit
@@ -37,12 +43,17 @@ def _project_keyboard(project_id: int | str) -> InlineKeyboardMarkup:
 @rate_limit(max_calls=5, window_seconds=60)
 @auth_required
 async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/projects`` — list every non-archived project with its status label.
+    """Handle ``/projects`` — list non-archived projects with their status labels.
 
     The list is not narrowed to ``active``: a paused or completed project is
     still one the user is working with, and hiding it made the command
     disagree with the project list on the web. Only archived projects — the
     ones deliberately put away — are left out.
+
+    One message per project is sent, so the listing stops at
+    :data:`~telegram_bot.formatters.LISTING_ROWS` and its header states the
+    full count: an uncapped run floods the chat and can be cut short by
+    Telegram's own throttling with nothing explaining the missing rows.
     """
     if update.message is None:
         return
@@ -67,7 +78,13 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    for row in rows:
+    listed = rows[:LISTING_ROWS]
+    await update.message.reply_text(
+        stage_header("📁 <b>Projects</b>", len(listed), len(rows), "projects you are working on"),
+        parse_mode="HTML",
+    )
+
+    for row in listed:
         project: ProjectRow = {
             "id": row["id"],
             "name": row["name"],
@@ -108,13 +125,17 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         result = await services_client.create_project(http, config, user_id, name=name)
         project_id = result["id"]
-        await update.message.reply_text(
-            f"✅ Project <b>{escape(name)}</b> created (ID: {project_id}).",
-            parse_mode="HTML",
-        )
     except Exception:
         logger.exception("Failed to create project %r", name)
         await update.message.reply_text(
             "Failed to create project. Please try again later.",
             parse_mode="HTML",
         )
+        return
+
+    # The project exists from here on. Confirming it sits outside the guard so
+    # a failed confirmation cannot tell the user the project was never created.
+    await update.message.reply_text(
+        f"✅ Project <b>{escape(name)}</b> created (ID: {project_id}).",
+        parse_mode="HTML",
+    )

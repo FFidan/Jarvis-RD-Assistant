@@ -173,11 +173,16 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await services_client.update_paper_action(
             http, config, jarvis_user_id, paper_id, _PAPER_ACTION_ENDPOINTS[action]
         )
-        await query.answer(text=label)
-        await query.message.reply_text(f"{label} <b>paper {paper_id}</b>.", parse_mode="HTML")
     except Exception:
         logger.exception("Failed to %s paper id=%s", action, paper_id)
         await query.answer(text=f"{action} failed — try again later")
+        return
+
+    # The paper has already moved. Reporting it sits outside the guard so a
+    # failed acknowledgement cannot describe a completed action as a failure,
+    # nor answer the same query a second time (H1).
+    await query.answer(text=label)
+    await query.message.reply_text(f"{label} <b>paper {paper_id}</b>.", parse_mode="HTML")
 
 
 @rate_limit(max_calls=10, window_seconds=60)
@@ -215,10 +220,15 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
         await services_client.record_paper_feedback(
             http, config, jarvis_user_id, paper_id, {"signal": signal, "source": source}
         )
-        await query.answer(text=label)
     except Exception:
         logger.exception("Failed to record feedback for paper id=%s signal=%s", paper_id, signal)
         await query.answer(text="Feedback failed — try again later")
+        return
+
+    # The signal is recorded. Acknowledging it sits outside the guard so a
+    # failed acknowledgement cannot report the recorded signal as lost, nor
+    # answer the same query a second time (H1).
+    await query.answer(text=label)
 
 
 async def _send_project_detail(
