@@ -124,7 +124,6 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
         result = await services_client.create_project(http, config, user_id, name=name)
-        project_id = result["id"]
     except Exception:
         logger.exception("Failed to create project %r", name)
         await update.message.reply_text(
@@ -133,9 +132,12 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    # The project exists from here on. Confirming it sits outside the guard so
-    # a failed confirmation cannot tell the user the project was never created.
+    # The project exists from here on. Reading its identifier and confirming it
+    # both sit outside the guard, so neither an unexpected response shape nor a
+    # failed confirmation can tell the user the project was never created.
+    project_id = result.get("id")
+    identifier = f" (ID: {project_id})" if project_id is not None else ""
     await update.message.reply_text(
-        f"✅ Project <b>{escape(name)}</b> created (ID: {project_id}).",
+        f"✅ Project <b>{escape(name)}</b> created{identifier}.",
         parse_mode="HTML",
     )

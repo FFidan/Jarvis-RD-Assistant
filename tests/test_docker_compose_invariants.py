@@ -1090,10 +1090,20 @@ def _workflow(name: str) -> dict[str, Any]:
     return yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text())
 
 
-def _built_images(job: dict[str, Any]) -> set[tuple[str, str]]:
-    """Return the normalized (context, dockerfile) pairs a build matrix covers."""
+def _built_images(job: dict[str, Any]) -> set[tuple[str, str, str]]:
+    """Return the (context, dockerfile, build arguments) a build matrix covers.
+
+    The build arguments are part of the identity: one Dockerfile builds both the
+    default and the CUDA paper-ingestion images, and they are published as
+    separate tags. Keying on the file alone would report the CUDA image as
+    covered by the build of the default one.
+    """
     return {
-        (posixpath.normpath(entry["context"]), posixpath.normpath(entry["file"]))
+        (
+            posixpath.normpath(entry["context"]),
+            posixpath.normpath(entry["file"]),
+            " ".join(sorted(str(entry.get("build_args", "")).split())),
+        )
         for entry in job["strategy"]["matrix"]["include"]
     }
 

@@ -183,6 +183,34 @@ def test_unprotected_health_route_needs_no_assertion() -> None:
     assert response.json() == {"ok": True}
 
 
+def test_a_route_the_classifier_refuses_is_not_served() -> None:
+    """A route the capability classifier cannot place must fail closed.
+
+    The classifier raises for any path it does not recognize, which is what
+    makes an unlisted internal route refuse rather than serve unauthenticated.
+    That decision lives entirely in the middleware's handling of the error, so
+    without this the whole boundary rests on an untested except branch.
+    """
+    app = FastAPI()
+
+    @app.get("/internal/unlisted")
+    async def unlisted() -> dict[str, bool]:
+        return {"served": True}
+
+    def refuse_everything(method: str, path: str) -> tuple[str, ...] | None:
+        raise ValueError("request path is outside the identity capability boundary")
+
+    app.add_middleware(IdentityAssertionMiddleware, scope_resolver=refuse_everything)
+
+    response = TestClient(app).get("/internal/unlisted")
+
+    assert response.status_code == 401, (
+        "an unclassifiable route was served — the classifier's refusal is being "
+        "treated as 'no identity required'"
+    )
+    assert response.json() != {"served": True}
+
+
 def test_missing_state_verifier_fails_closed() -> None:
     app, signer = _app_and_signer(install_state_verifier=False)
 

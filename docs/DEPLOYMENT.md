@@ -451,6 +451,44 @@ fi
 The old API key stops working after those services restart. Update any external
 client that uses it before ending your current local session.
 
+### How the database logins are separated
+
+Each service holds its own PostgreSQL login instead of one shared superuser
+account, so a service can only reach the data it owns. This matters to an
+operator in three places: which password files exist, what to expect in the
+logs at first start, and what to check when a permission error appears.
+
+**Schemas and their owners.** Four schemas — `platform`, `research`, `learning`
+and `ops` — are each owned by a role that no service logs in as
+(`jarvis_platform_owner` and its three counterparts). Services log in as a
+matching runtime role (`jarvis_platform_runtime`, `jarvis_research_runtime`,
+`jarvis_learning_runtime`), which can read and write the data but cannot alter
+the tables. Each runtime role's `search_path` names its own schema first, so an
+unqualified table name resolves there. What a service may reach is decided by
+the grants, not by that ordering — the `search_path` is a convenience, not the
+boundary.
+
+**The remaining logins are task-scoped** and idle the rest of the time:
+`jarvis_migrator` applies schema changes, `jarvis_backup_reader` reads for
+backups, `jarvis_restore_operator` writes during a restore,
+`jarvis_erasure_executor` completes account erasure, `jarvis_legacy_rollback`
+exists only to undo an upgrade, and the two `jarvis_litellm_*` roles serve the
+model proxy. `jarvis_cluster_bootstrap` creates all of them at first start and
+is not used afterwards.
+
+**At first start** `scripts/postgres-role-bootstrap.sh` creates every role from
+the `postgres_*_password.txt` files listed in the secret inventory above. It
+refuses to create a role whose password file is empty or missing rather than
+creating one without a password, so a failure here means a missing secret file,
+not a broken database.
+
+**When a permission error appears,** the role in the message is the one to look
+at: `permission denied for schema research` from the Learning service is a
+service reaching for data it does not own, which is the boundary working. A
+genuine misconfiguration usually shows up as a login failure instead. Note that
+the pre-1.2.6 shared `jarvis` login is now `NOLOGIN` and is no longer used by
+any service.
+
 ### Web UI configuration
 
 All ongoing configuration goes through the web wizard and Settings — no `.env` editing needed beyond what `setup.sh` writes:

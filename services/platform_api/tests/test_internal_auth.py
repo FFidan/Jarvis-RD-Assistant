@@ -327,6 +327,17 @@ def test_browser_admin_assertion_still_reaches_an_operations_route() -> None:
     assert _admin_gate_status(principal="browser", user_role="admin") == 200
 
 
+def test_paired_telegram_assertion_still_reaches_an_operations_route() -> None:
+    """A relaying principal carries no browser role, and the gate must admit it.
+
+    ``/pulse_now`` reaches an operations route as the paired Telegram principal
+    with no ``user_role`` at all. The gate refuses a *non-administrator* role
+    rather than a missing one, and that distinction is what this pins: tightening
+    it to refuse every non-administrator would close the route to the bot.
+    """
+    assert _admin_gate_status(principal="telegram", user_role=None) == 200
+
+
 def test_application_auth_defers_only_to_gateway_route_authentication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

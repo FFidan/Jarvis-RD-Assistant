@@ -936,6 +936,26 @@ async def test_newproject_reply_failure_does_not_report_the_project_as_uncreated
     assert "Failed to create project" not in texts[0]
 
 
+@pytest.mark.asyncio
+async def test_newproject_unexpected_response_shape_still_confirms_the_project() -> None:
+    """A response without the identifier must not deny a project that exists.
+
+    Reading the identifier used to sit inside the failure guard, so a backend
+    that answered with a different key reported "Failed to create project" for
+    a project the POST had already created.
+    """
+    update, context, _, mock_http = _make_update_and_context(args=["My", "Project"])
+    mock_http.post.return_value = make_http_response({"project_id": 42})
+
+    await newproject_command(update, context)
+
+    mock_http.post.assert_awaited_once()  # the project was created
+    text = update.message.reply_text.call_args[0][0]
+    assert "Failed to create project" not in text
+    assert "My Project" in text
+    assert "created" in text
+
+
 # ---------------------------------------------------------------------------
 # Tests: TG-001 — format_help completeness
 # ---------------------------------------------------------------------------

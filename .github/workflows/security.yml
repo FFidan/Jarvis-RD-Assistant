@@ -145,9 +145,17 @@ jobs:
           - slug: platform-api
             context: .
             file: services/platform_api/Dockerfile
-          - slug: paper-ingestion
+          - slug: paper-ingestion-cpu
             context: .
             file: services/paper_ingestion/Dockerfile
+            build_args: |
+              TORCH_VARIANT=cpu
+          - slug: paper-ingestion-cuda
+            context: .
+            file: services/paper_ingestion/Dockerfile
+            build_args: |
+              TORCH_VARIANT=cuda
+              INSTALL_OPTIONAL=true
           - slug: learning-engine
             context: .
             file: services/learning_engine/Dockerfile
@@ -168,10 +176,22 @@ jobs:
           SLUG: ${{ matrix.slug }}
           CONTEXT: ${{ matrix.context }}
           DOCKERFILE: ${{ matrix.file }}
+          BUILD_ARGS: ${{ matrix.build_args }}
         run: |
+          # An `if` rather than a `&&` list: the loop's status is its last
+          # command's, and every image but the two paper-ingestion variants has
+          # no build arguments at all, so a false test on the final line would
+          # end the step non-zero under the implicit `bash -e`.
+          args=()
+          while IFS= read -r arg; do
+            if [ -n "$arg" ]; then
+              args+=(--build-arg "$arg")
+            fi
+          done <<< "$BUILD_ARGS"
           docker build \
             -t "smoke-${SLUG}:test" \
             -f "$DOCKERFILE" \
+            "${args[@]}" \
             "$CONTEXT"
 
   # ---------------------------------------------------------------------------
