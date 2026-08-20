@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import (
+    LISTING_ROWS,
     escape,
     format_morning_briefing,
     format_paper_card,
@@ -21,6 +22,7 @@ from telegram_bot.formatters import (
     format_pulse_deck_status,
     format_review_stats,
     sanitize_user_input,
+    stage_header,
 )
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import (
@@ -67,29 +69,6 @@ def _feed_total(data: object) -> int | None:
         total: int = data["total"]
         return total
     return None
-
-
-def _stage_header(title: str, shown: int, total: int | None, described: str) -> str:
-    """Build the one-line header naming a paper stage, what it holds, and how much.
-
-    Parameters
-    ----------
-    title : str
-        Stage name as the user knows it, e.g. ``"📥 <b>Inbox</b>"``.
-    shown : int
-        Number of papers this message actually lists.
-    total : int | None
-        Papers in the whole stage, or ``None`` when the backend did not say.
-    described : str
-        What membership of the stage means, e.g. ``"papers waiting for triage"``.
-
-    Returns
-    -------
-    str
-        HTML-formatted single-line header.
-    """
-    counted = f"{shown} of {total}" if total is not None else str(shown)
-    return f"{title} — showing {counted} {described}"
 
 
 # One verb per action, spelled the same on every row that offers it. "Save"
@@ -156,11 +135,11 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         if query:
             data = await services_client.search_papers_feed(
-                http, config, jarvis_user_id, query, limit=10
+                http, config, jarvis_user_id, query, limit=LISTING_ROWS
             )
         else:
             data = await services_client.fetch_papers_feed(
-                http, config, jarvis_user_id, view="library", limit=10
+                http, config, jarvis_user_id, view="library", limit=LISTING_ROWS
             )
         papers = _feed_papers(data)
         total = _feed_total(data)
@@ -186,16 +165,16 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(message, parse_mode="HTML")
         return
 
-    listed = papers[:10]
+    listed = papers[:LISTING_ROWS]
     if query:
-        header = _stage_header(
+        header = stage_header(
             "🔎 <b>Library search</b>",
             len(listed),
             total,
             f'papers in your library matching "{escape(query)}"',
         )
     else:
-        header = _stage_header(
+        header = stage_header(
             "📚 <b>Library</b>",
             len(listed),
             total,
@@ -501,7 +480,7 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     assert jarvis_user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
         data = await services_client.fetch_papers_feed(
-            http, config, jarvis_user_id, view="inbox", limit=10
+            http, config, jarvis_user_id, view="inbox", limit=LISTING_ROWS
         )
         papers = _feed_papers(data)
         total = _feed_total(data)
@@ -517,9 +496,9 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("📭 Inbox is empty — nothing to triage.", parse_mode="HTML")
         return
 
-    listed = papers[:10]
+    listed = papers[:LISTING_ROWS]
     await update.message.reply_text(
-        _stage_header("📥 <b>Inbox</b>", len(listed), total, "papers waiting for triage"),
+        stage_header("📥 <b>Inbox</b>", len(listed), total, "papers waiting for triage"),
         parse_mode="HTML",
     )
 

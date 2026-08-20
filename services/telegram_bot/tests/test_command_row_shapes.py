@@ -67,7 +67,8 @@ async def test_projects_command_renders_explicit_project_row_fields() -> None:
 
     await projects_command(update, context)
 
-    update.message.reply_text.assert_awaited_once()
+    # The listing opens with its count header, then sends one message per row.
+    assert update.message.reply_text.await_count == 2
     text = update.message.reply_text.await_args.args[0]
     assert "Project &lt;Alpha&gt;" in text
     assert "Important &lt;work&gt;" in text

@@ -7,6 +7,7 @@ Each handler function is tested directly with mocked Update + Context objects.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +17,7 @@ from jarvis_common.testing import PTBContextOptions, make_bot_config, make_ptb_c
 from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
 from telegram_bot.focus_contract import FocusSession, FocusTransition
+from telegram_bot.formatters import LISTING_ROWS
 from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
     done_command,
@@ -707,12 +709,37 @@ async def test_projects_lists_every_non_archived_project_with_its_label():
     assert "/api/projects" in call.args[0]
     assert call.kwargs["params"] is None
     texts = [c[0][0] for c in update.message.reply_text.call_args_list]
-    assert len(texts) == 2
+    assert len(texts) == 3  # header, then one message per listed project
+    assert "showing 2 of 2" in texts[0]
     # The stored status never reaches the user; the shared label does.
-    assert "Project Alpha" in texts[0] and "In progress" in texts[0]
-    assert "Project Beta" in texts[1] and "Draft" in texts[1]
-    assert "paused" not in texts[1]
+    assert "Project Alpha" in texts[1] and "In progress" in texts[1]
+    assert "Project Beta" in texts[2] and "Draft" in texts[2]
+    assert "paused" not in texts[2]
     assert not any("Project Gamma" in text for text in texts)
+
+
+@pytest.mark.asyncio
+async def test_projects_caps_the_listing_and_says_how_many_there_are():
+    """A long project list stops at the cap and states the full count up front.
+
+    One message per project means an uncapped list floods the chat and can be
+    cut short by Telegram's throttling with nothing explaining the gap.
+    """
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.return_value = make_http_response(
+        [
+            {"id": n, "name": f"Project {n}", "status": "active", "description": None}
+            for n in range(1, 13)
+        ]
+    )
+
+    await projects_command(update, context)
+
+    texts = [c[0][0] for c in update.message.reply_text.call_args_list]
+    assert len(texts) == LISTING_ROWS + 1  # the header plus the capped listing
+    assert f"showing {LISTING_ROWS} of 12" in texts[0]
+    assert "Project 10" in texts[LISTING_ROWS]
+    assert not any("Project 11" in text or "Project 12" in text for text in texts)
 
 
 @pytest.mark.asyncio
@@ -872,6 +899,27 @@ async def test_newproject_success():
     text = update.message.reply_text.call_args[0][0]
     assert "My Project" in text
     assert "42" in text
+
+
+@pytest.mark.asyncio
+async def test_newproject_reply_failure_does_not_report_the_project_as_uncreated():
+    """A confirmation that cannot be sent must not deny a project that exists.
+
+    The POST has already created the project when the reply is attempted, so
+    "Failed to create project" would send the user back to /newproject and
+    leave them with two.
+    """
+    update, context, _, mock_http = _make_update_and_context(args=["My", "Project"])
+    mock_http.post.return_value = make_http_response({"id": 42})
+    update.message.reply_text.side_effect = RuntimeError("Flood control exceeded")
+
+    with contextlib.suppress(RuntimeError):
+        await newproject_command(update, context)
+
+    mock_http.post.assert_awaited_once()  # the project was created
+    texts = [c[0][0] for c in update.message.reply_text.call_args_list]
+    assert len(texts) == 1
+    assert "Failed to create project" not in texts[0]
 
 
 # ---------------------------------------------------------------------------

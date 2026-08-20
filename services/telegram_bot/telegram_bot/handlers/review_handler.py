@@ -351,4 +351,9 @@ def get_review_conversation_handler() -> ConversationHandler:
             ],
         },
         fallbacks=[CommandHandler(_CANCEL_COMMAND, cancel_review)],
+        # A session the user walked away from keeps its state indefinitely, and
+        # the entry points are only searched when the conversation has no state
+        # or re-entry is allowed. Without this, a later /review is claimed by
+        # the stale session and answered by nothing at all.
+        allow_reentry=True,
     )

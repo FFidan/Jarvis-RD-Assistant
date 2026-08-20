@@ -180,6 +180,34 @@ def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
     return truncated + closers + "\n\n<i>... (truncated)</i>"
 
 
+#: How many rows a listing command sends before it stops and says how many
+#: the stage actually holds. Shared so a listing cannot silently truncate.
+LISTING_ROWS = 10
+
+
+def stage_header(title: str, shown: int, total: int | None, described: str) -> str:
+    """Build the one-line header naming a listing, what it holds, and how much.
+
+    Parameters
+    ----------
+    title : str
+        Stage name as the user knows it, e.g. ``"📥 <b>Inbox</b>"``.
+    shown : int
+        Number of rows this message actually lists.
+    total : int | None
+        Rows in the whole stage, or ``None`` when the backend did not say.
+    described : str
+        What membership of the stage means, e.g. ``"papers waiting for triage"``.
+
+    Returns
+    -------
+    str
+        HTML-formatted single-line header.
+    """
+    counted = f"{shown} of {total}" if total is not None else str(shown)
+    return f"{title} — showing {counted} {described}"
+
+
 def _format_authors(authors: list[str], max_display: int = 3) -> str:
     """Format author list, showing first N + 'et al.' if needed."""
     if not authors:

@@ -10,6 +10,8 @@ H1 invariant: every test for the dispatcher callbacks asserts
 
 from __future__ import annotations
 
+import contextlib
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -425,6 +427,28 @@ async def test_paper_action_failure_trash():
     query.message.reply_text.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_paper_action_reply_failure_does_not_report_the_action_as_failed():
+    """A confirmation that cannot be sent must not undo what the user just did.
+
+    The paper has already been saved when the reply is attempted, so a failure
+    there is about the message, not the action: telling the user it failed
+    would be untrue, and the second answer breaks H1.
+    """
+    update, context, _, _ = _make_callback_update_and_context("paper:save:42")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+    query = update.callback_query
+    query.message.reply_text.side_effect = RuntimeError("Flood control exceeded")
+
+    with contextlib.suppress(RuntimeError):
+        await paper_action_callback(update, context)
+
+    mock_http.request.assert_awaited_once()  # the action did happen
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "💾 Saved"
+
+
 # ---------------------------------------------------------------------------
 # Tests: paper_action_callback — bad data path
 # ---------------------------------------------------------------------------
@@ -608,6 +632,23 @@ async def test_paper_feedback_failure():
     query = update.callback_query
     assert query.answer.call_count == 1  # H1
     assert query.answer.await_args[1].get("text") == "Feedback failed — try again later"
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_ack_failure_does_not_report_the_signal_as_lost():
+    """A failed acknowledgement must not claim the recorded signal was rejected."""
+    update, context, _, _ = _make_callback_update_and_context("paper:feedback_pos:42:pulse_thumbs")
+    mock_http = AsyncMock()
+    mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
+    context.application.bot_data["http_client"] = mock_http
+    query = update.callback_query
+    query.answer.side_effect = RuntimeError("Query is too old")
+
+    with contextlib.suppress(RuntimeError):
+        await paper_feedback_callback(update, context)
+
+    mock_http.post.assert_awaited_once()  # the signal was recorded
+    assert query.answer.call_count == 1  # H1
 
 
 # ---------------------------------------------------------------------------
@@ -1239,3 +1280,49 @@ async def test_focus_restart_starts_a_session_at_the_saved_duration():
     update.callback_query.answer.assert_awaited_once()
     assert start_focus.await_args.args[2:] == (1, 2700)
     assert "45" in update.callback_query.message.reply_text.call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# Tests: review conversation re-entry
+# ---------------------------------------------------------------------------
+
+
+def _make_review_command_update() -> Update:
+    """Build a real ``/review`` command update the conversation can route."""
+    chat = telegram.Chat(id=_TEST_CHAT_ID, type=telegram.Chat.PRIVATE)
+    user = telegram.User(id=4242, first_name="Reviewer", is_bot=False)
+    message = Message(
+        message_id=1,
+        date=datetime(2026, 1, 1, tzinfo=UTC),
+        chat=chat,
+        from_user=user,
+        text="/review",
+        entities=(
+            telegram.MessageEntity(
+                type=telegram.MessageEntity.BOT_COMMAND, offset=0, length=len("/review")
+            ),
+        ),
+    )
+    bot = MagicMock()
+    bot.username = "jarvis_test_bot"
+    message.set_bot(bot)
+    return Update(update_id=1, message=message)
+
+
+def test_review_starts_again_after_an_unfinished_session():
+    """A review the user walked away from must not swallow the next /review.
+
+    The abandoned session keeps its state indefinitely and no handler outside
+    the conversation claims a ``/review`` update, so without re-entry the
+    command silently does nothing until the user knows to send /cancel.
+    """
+    conversation = _review_handler_mod.get_review_conversation_handler()
+    update = _make_review_command_update()
+    key = (update.effective_chat.id, update.effective_user.id)
+    conversation._conversations[key] = _review_handler_mod.SHOWING_BACK  # noqa: SLF001
+
+    checked = conversation.check_update(update)
+
+    assert checked is not None, "/review was swallowed by the unfinished session"
+    _state, _key, handler, _payload = checked
+    assert handler in conversation.entry_points
