@@ -480,11 +480,11 @@ connects as it: the migration that needs it switches into it, and the restore
 login reaches it by membership. It has no password and no secret file, so there
 is no standing credential to protect.
 
-**At first start** `scripts/postgres-role-bootstrap.sh` creates every role from
-the `postgres_*_password.txt` files listed in the secret inventory above. It
-refuses to create a role whose password file is empty or missing rather than
-creating one without a password, so a failure here means a missing secret file,
-not a broken database.
+**At first start** `scripts/postgres-role-bootstrap.sh` creates the roles that
+log in from the `postgres_*_password.txt` files listed in the secret inventory
+above. It refuses to create a role whose password file is empty or missing
+rather than creating one without a password, so a failure here means a missing
+secret file, not a broken database.
 
 **When a permission error appears,** the role in the message is the one to look
 at: `permission denied for schema research` from the Learning service is a

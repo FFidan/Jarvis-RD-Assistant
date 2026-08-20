@@ -37,10 +37,10 @@ class _Pool:
         class _Ctx:
             async def __aenter__(self):  # noqa: ANN204
                 connection = AsyncMock()
-                connection.execute.side_effect = lambda sql, *a: calls.append(sql)
+                connection.execute.side_effect = lambda sql, *_args: calls.append(sql)
                 return connection
 
-            async def __aexit__(self, *exc: object) -> bool:
+            async def __aexit__(self, *_exc: object) -> bool:
                 return False
 
         return _Ctx()
@@ -51,7 +51,7 @@ async def test_sole_owned_papers_are_removed_before_the_erasure_capability(monke
     """The removal runs while the library rows it derives its set from still exist."""
     calls: list[str] = []
 
-    async def _record(conn: object, user_id: int) -> list[int]:
+    async def _record(_conn: object, _user_id: int) -> list[int]:
         calls.append("erase_orphaned_user_papers")
         return []
 
