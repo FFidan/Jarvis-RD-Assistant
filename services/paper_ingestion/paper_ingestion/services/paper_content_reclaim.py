@@ -231,6 +231,10 @@ _ORPHANED_PAPER_SQL = """
           SELECT 1 FROM user_library AS other
           WHERE other.paper_id = paper.id AND other.user_id <> $1
       )
+      AND NOT EXISTS (
+          SELECT 1 FROM pending_paper_deletions AS awaiting
+          WHERE awaiting.paper_id = paper.id AND awaiting.user_id <> $1
+      )
 """
 
 _DELETE_ORPHANED_PAPERS_SQL = """
@@ -240,6 +244,10 @@ _DELETE_ORPHANED_PAPERS_SQL = """
       AND NOT EXISTS (
           SELECT 1 FROM user_library AS other
           WHERE other.paper_id = paper.id AND other.user_id <> $1
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM pending_paper_deletions AS awaiting
+          WHERE awaiting.paper_id = paper.id AND awaiting.user_id <> $1
       )
     RETURNING paper.id
 """
@@ -272,10 +280,17 @@ async def erase_orphaned_user_papers(conn: ConnLike, user_id: int) -> list[int]:
 
     Notes
     -----
-    A paper survives when it is persisted public or when another user still
-    holds it in their library. That is the same protection the vector purge
-    applies, written the same way, so the two stores cannot disagree about what
-    an erasure leaves behind.
+    A paper survives when it is persisted public, when another user still holds
+    it in their library, or when another user's deletion of it is still waiting
+    for Learning to acknowledge. That last case matters because the pending row
+    is the only signal Learning ever gets: nothing in that schema references a
+    paper by foreign key, so cascading the paper away would cut the
+    reconciliation short instead of completing it.
+
+    This rule is narrower than the vector purge's. That phase considers every
+    paper, while this one only ever considers papers this account holds, so a
+    paper nobody holds keeps its row, its text and its stored file after its
+    vectors are gone. Reclaiming those is not this capability's job.
 
     Call this before ``research.erase_user_data``: the set is derived from this
     user's ``user_library`` rows, which that capability deletes.
@@ -284,19 +299,22 @@ async def erase_orphaned_user_papers(conn: ConnLike, user_id: int) -> list[int]:
     paper another user claims, or the deployment publishes, in between is no
     longer this account's alone, and it stays.
 
-    Files go before rows, and both happen inside one hold of the publication
-    lock. A failure between them leaves a row whose stored file is missing,
-    which the retried phase finishes; the reverse order would leave a file with
-    nothing left to find it by. Holding the lock across both leaves no
-    interleaving in which a publisher republishes the file after the unlink.
+    Rows go before files, and only the papers the delete actually removed have
+    their files reclaimed. Unlinking first would destroy the stored document of
+    a paper the re-check then keeps, leaving a surviving row that points at a
+    file that is gone and that nothing ever revisits, because the paper is no
+    longer a candidate. The publication lock spans both so no publisher can
+    write the file in between.
 
-    Reclamation failures are not absorbed here. An erasure that cannot remove a
-    stored file must not report success, so the phase retries instead.
+    Reclamation failures are not absorbed. An erasure that cannot remove a
+    stored file must not report success. A retry will not find the paper again,
+    so that file needs an operator, and failing loudly is what tells them.
     """
     candidates = [int(row["id"]) for row in await conn.fetch(_ORPHANED_PAPER_SQL, user_id)]
     if not candidates:
         return []
     async with pdf_publish_operation(Path(PDF_STORAGE_PATH)):
-        await _remove_stored_paper_files(candidates)
-        removed = await conn.fetch(_DELETE_ORPHANED_PAPERS_SQL, user_id, candidates)
-    return [int(row["id"]) for row in removed]
+        rows = await conn.fetch(_DELETE_ORPHANED_PAPERS_SQL, user_id, candidates)
+        removed = [int(row["id"]) for row in rows]
+        await _remove_stored_paper_files(removed)
+    return removed

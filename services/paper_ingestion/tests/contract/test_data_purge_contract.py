@@ -9,6 +9,7 @@ the filters the job builds, and the assertions read the resulting collection.
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -293,14 +294,89 @@ async def test_erasure_removes_sole_owned_private_papers_and_keeps_the_rest(
     )
 
 
-async def test_a_paper_claimed_or_published_mid_erasure_is_kept(
+async def test_a_paper_another_account_is_still_discarding_is_kept(
+    research_erasure_connections, tmp_path, monkeypatch
+) -> None:
+    """A cleanup another account started has to finish before the paper can go.
+
+    Removing the paper cascades the pending row away, and nothing in the
+    Learning schema references a paper by foreign key, so that row is the only
+    signal Learning ever gets that its projection should go too.
+    """
+    from paper_ingestion.services import paper_content_reclaim
+
+    bootstrap, runtime = research_erasure_connections
+    user_id = uuid.uuid4().int % 1_000_000_000 + 1
+    departing_id = user_id + 1
+    tag = uuid.uuid4().hex[:8]
+
+    for account in (user_id, departing_id):
+        await bootstrap.execute(
+            "INSERT INTO platform.users (id, email) VALUES ($1, $2)",
+            account,
+            f"discarding-{account}@example.invalid",
+        )
+    discarding = await _seed_paper(bootstrap, f"discarding-{tag}", "private")
+    await bootstrap.execute(
+        """INSERT INTO research.user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        user_id,
+        discarding,
+    )
+    event_id = uuid.uuid4()
+    await bootstrap.execute(
+        """INSERT INTO research.domain_events (id, event_type, user_id, paper_id)
+           VALUES ($1, 'paper.deleted', $2, $3)""",
+        event_id,
+        departing_id,
+        discarding,
+    )
+    await bootstrap.execute(
+        """INSERT INTO research.pending_paper_deletions (event_id, user_id, paper_id)
+           VALUES ($1, $2, $3)""",
+        event_id,
+        departing_id,
+        discarding,
+    )
+
+    storage = tmp_path / "pdfs"
+    snapshots = tmp_path / "snapshots"
+    storage.mkdir()
+    snapshots.mkdir()
+    (storage / f"{discarding}.pdf").write_bytes(b"%PDF-1.4 fixture")
+    monkeypatch.setattr(paper_content_reclaim, "PDF_STORAGE_PATH", str(storage))
+    monkeypatch.setattr(paper_content_reclaim, "SNAPSHOT_STORAGE_PATH", str(snapshots))
+
+    removed = await paper_content_reclaim.erase_orphaned_user_papers(runtime, user_id)
+
+    assert removed == []
+    assert (
+        await bootstrap.fetchval(
+            "SELECT COUNT(*) FROM research.pending_paper_deletions WHERE event_id = $1", event_id
+        )
+        == 1
+    ), "a cleanup another account had not finished was cut short"
+    assert (
+        await bootstrap.fetchval("SELECT COUNT(*) FROM research.papers WHERE id = $1", discarding)
+        == 1
+    )
+    assert (storage / f"{discarding}.pdf").exists()
+
+    await bootstrap.execute("DELETE FROM research.papers WHERE id = $1", discarding)
+    await bootstrap.execute(
+        "DELETE FROM platform.users WHERE id = ANY($1::bigint[])", [user_id, departing_id]
+    )
+
+
+async def test_a_paper_claimed_published_or_discarded_mid_erasure_is_kept(
     research_erasure_connections, tmp_path, monkeypatch
 ) -> None:
     """The removal re-checks the rule instead of trusting the set it selected.
 
     Candidates are read before the publication lock is taken. A paper another
-    researcher claims, or the deployment publishes, inside that window is no
-    longer the erased account's alone, and the delete has to see that.
+    researcher claims, the deployment publishes, or another account starts
+    discarding inside that window is no longer the erased account's alone, and
+    the delete has to see that.
     """
     from paper_ingestion.services import paper_content_reclaim
 
@@ -317,7 +393,9 @@ async def test_a_paper_claimed_or_published_mid_erasure_is_kept(
         )
     claimed = await _seed_paper(bootstrap, f"claimed-{tag}", "private")
     published = await _seed_paper(bootstrap, f"published-{tag}", "private")
-    for paper_id in (claimed, published):
+    discarded = await _seed_paper(bootstrap, f"discarded-{tag}", "private")
+    discard_event = uuid.uuid4()
+    for paper_id in (claimed, published, discarded):
         await bootstrap.execute(
             """INSERT INTO research.user_library (user_id, paper_id, added_via)
                VALUES ($1, $2, 'manual_save')""",
@@ -329,28 +407,47 @@ async def test_a_paper_claimed_or_published_mid_erasure_is_kept(
     snapshots = tmp_path / "snapshots"
     storage.mkdir()
     snapshots.mkdir()
+    for paper_id in (claimed, published, discarded):
+        (storage / f"{paper_id}.pdf").write_bytes(b"%PDF-1.4 fixture")
+        (snapshots / str(paper_id)).mkdir()
+        (snapshots / str(paper_id) / "1.png").write_bytes(b"page")
     monkeypatch.setattr(paper_content_reclaim, "PDF_STORAGE_PATH", str(storage))
     monkeypatch.setattr(paper_content_reclaim, "SNAPSHOT_STORAGE_PATH", str(snapshots))
 
-    remove_files = paper_content_reclaim._remove_stored_paper_files
+    take_lock = paper_content_reclaim.pdf_publish_operation
 
-    async def _change_the_world_then_remove_files(paper_ids) -> None:
-        await bootstrap.execute(
-            """INSERT INTO research.user_library (user_id, paper_id, added_via)
-               VALUES ($1, $2, 'manual_save')""",
-            survivor_id,
-            claimed,
-        )
-        await bootstrap.execute(
-            "UPDATE research.papers SET visibility_scope = 'public' WHERE id = $1",
-            published,
-        )
-        await remove_files(paper_ids)
+    @contextlib.asynccontextmanager
+    async def _claim_and_publish_inside_the_lock(path):
+        """Move both papers out of reach after the candidates were selected."""
+        async with take_lock(path):
+            await bootstrap.execute(
+                """INSERT INTO research.user_library (user_id, paper_id, added_via)
+                   VALUES ($1, $2, 'manual_save')""",
+                survivor_id,
+                claimed,
+            )
+            await bootstrap.execute(
+                "UPDATE research.papers SET visibility_scope = 'public' WHERE id = $1",
+                published,
+            )
+            await bootstrap.execute(
+                """INSERT INTO research.domain_events (id, event_type, user_id, paper_id)
+                   VALUES ($1, 'paper.deleted', $2, $3)""",
+                discard_event,
+                survivor_id,
+                discarded,
+            )
+            await bootstrap.execute(
+                """INSERT INTO research.pending_paper_deletions (event_id, user_id, paper_id)
+                   VALUES ($1, $2, $3)""",
+                discard_event,
+                survivor_id,
+                discarded,
+            )
+            yield
 
     monkeypatch.setattr(
-        paper_content_reclaim,
-        "_remove_stored_paper_files",
-        _change_the_world_then_remove_files,
+        paper_content_reclaim, "pdf_publish_operation", _claim_and_publish_inside_the_lock
     )
 
     removed = await paper_content_reclaim.erase_orphaned_user_papers(runtime, user_id)
@@ -363,9 +460,23 @@ async def test_a_paper_claimed_or_published_mid_erasure_is_kept(
         == 1
     ), "a paper the deployment published mid-erasure was deleted"
     assert removed == []
+    assert (
+        await bootstrap.fetchval(
+            "SELECT COUNT(*) FROM research.pending_paper_deletions WHERE event_id = $1",
+            discard_event,
+        )
+        == 1
+    ), "a cleanup another account started mid-erasure was cut short"
+    for kept in (claimed, published, discarded):
+        assert (storage / f"{kept}.pdf").exists(), (
+            "the stored document of a paper the re-check kept was destroyed"
+        )
+        assert (snapshots / str(kept)).exists(), (
+            "the page images of a paper the re-check kept were destroyed"
+        )
 
     await bootstrap.execute(
-        "DELETE FROM research.papers WHERE id = ANY($1::int[])", [claimed, published]
+        "DELETE FROM research.papers WHERE id = ANY($1::int[])", [claimed, published, discarded]
     )
     await bootstrap.execute(
         "DELETE FROM platform.users WHERE id = ANY($1::bigint[])", [user_id, survivor_id]
