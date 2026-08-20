@@ -446,7 +446,7 @@ def test_provider_registry_keys_are_system_scoped_secret_and_encrypted():
     settings page showed the custom endpoint as unset while the runtime still
     dialled it. Only the API key of a provider belongs in these two sets.
     """
-    from jarvis_common.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS
     from jarvis_common.llm_provider_registry import (
         PROVIDER_API_KEY_CONFIG_KEYS,
         PROVIDER_BASE_URL_CONFIG_KEYS,
@@ -455,23 +455,9 @@ def test_provider_registry_keys_are_system_scoped_secret_and_encrypted():
 
     assert PROVIDER_BASE_URL_CONFIG_KEYS, "a provider base-URL key must exist to be classified"
     assert PROVIDER_CONFIG_KEYS <= SYSTEM_KEYS
-    assert PROVIDER_API_KEY_CONFIG_KEYS <= _SECRET_KEYS
     assert PROVIDER_API_KEY_CONFIG_KEYS <= _ENCRYPTED_KEYS
-    assert not (PROVIDER_BASE_URL_CONFIG_KEYS & _SECRET_KEYS)
     assert not (PROVIDER_BASE_URL_CONFIG_KEYS & _ENCRYPTED_KEYS)
     assert all(_classify_config_key(key) == "system" for key in PROVIDER_CONFIG_KEYS)
-
-
-def test_secret_and_encrypted_config_keys_stay_identical():
-    """A key that is masked must also be encrypted at rest.
-
-    ``_resolve_config_value`` used to carry a second masking branch for keys in
-    ``_SECRET_KEYS`` alone. The branch was unreachable and was removed, so this
-    equality is what now keeps a "secret" key from being served in the clear.
-    """
-    from jarvis_common.config_metadata import _ENCRYPTED_KEYS, _SECRET_KEYS
-
-    assert _SECRET_KEYS == _ENCRYPTED_KEYS
 
 
 def test_provider_registry_keys_have_validators():

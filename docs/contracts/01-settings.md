@@ -248,7 +248,7 @@ Some keys trigger work beyond the row write:
 | Any `_ENCRYPTED_KEYS` member | `value` column NULL'd; ciphertext written to `encrypted_value` BYTEA via `encrypt_secret`, in `write_config` ([config_write.py:132](https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/services/paper_ingestion/paper_ingestion/services/config_write.py#L132)) |
 | `_SOURCE_JSONB_COLUMNS` `"config"` | `dynamic_update` JSON-encodes the value before write |
 
-GET responses for `_ENCRYPTED_KEYS` return `mask_secret(plaintext)`; GET for `_SECRET_KEYS \ _ENCRYPTED_KEYS` returns `"****"` if non-null. Plaintext **never** leaves the API.
+GET responses for `_ENCRYPTED_KEYS` return `mask_secret(plaintext)`. Plaintext **never** leaves the API.
 
 ### 5.1 Removing a stored provider credential
 
@@ -303,8 +303,8 @@ one. Both actions are labelled in the admin audit log view.
 The implementation MUST satisfy these. Testable.
 
 1. **Allow-list closure.** Every key in `_CONFIG_VALIDATORS` MUST also be in `_ALLOWED_CONFIG_KEYS`. (Reverse not required — a key may be in the allow-list without a custom validator.)
-2. **Encrypted closure.** Every key in `_ENCRYPTED_KEYS` MUST also be in `_SECRET_KEYS` (encryption implies secret handling on GET).
-3. **GET masking.** No GET endpoint may return plaintext for any key in `_SECRET_KEYS`. Verifier: `mask_secret` or `"****"` is the only path returning a non-None value for a secret key.
+2. **Masking follows encryption.** `_ENCRYPTED_KEYS` is the single set deciding both, so a key that is stored as ciphertext is masked on GET and one that is not is returned as stored.
+3. **GET masking.** No GET endpoint may return plaintext for any key in `_ENCRYPTED_KEYS`. Verifier: `mask_secret` is the only path returning a non-None value for such a key.
 4. **JSONB no double-encode.** Plain (non-encrypted) keys MUST be written via the `$2::jsonb` parametric cast WITHOUT `json.dumps()`. The asyncpg JSONB codec handles serialization. (See [ENGINEERING_STANDARDS.md "Database"](../ENGINEERING_STANDARDS.md#database).)
 5. **Live cron reschedule preconditions.** A successful `PUT pulse.cron` MUST result in `next_run_time ∈ [now, now + 366 days]` or the write is rolled back.
 6. **No raw env reads at request time** for keys that are user-controllable. Bootstrap-only env reads — `JARVIS_API_KEY`, `LITELLM_BASE_URL`, and legacy provider-key env vars used before a user stores encrypted Settings credentials — are exempt.
@@ -365,7 +365,7 @@ The implementation MUST satisfy these. Testable.
 
 - **[02-pulse.md §3.2](02-pulse.md#32-conditional-signals-live-conditional)** — the four conditional weights inside `pulse.weights` (`citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier`) — UI-exposed and validator-accepted; populated only when the user opts in by raising the weight AND the optional dependency is present.
 - **[03-llm.md](03-llm.md) §1** — `llm.{smart,fast,embed}_model` and the cloud-provider keys behave at the LiteLLM layer; this contract documents only the `user_config` storage plane.
-- **[04-observability.md](04-observability.md)** — privacy rules forbid logging raw `user_config.value` for any key in `_SECRET_KEYS` / `_ENCRYPTED_KEYS`.
+- **[04-observability.md](04-observability.md)** — privacy rules forbid logging raw `user_config.value` for any key in `_ENCRYPTED_KEYS`.
 - **Note:** `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
 
 ---
@@ -376,7 +376,7 @@ The implementation MUST satisfy these. Testable.
 |---|---|---|
 | `_ALLOWED_CONFIG_KEYS` frozenset | services/paper_ingestion/paper_ingestion/services/config_metadata.py:34-85 | Allow-list of writeable user_config keys (static keys; dynamic `llm.*` patterns accepted via `_classify_litellm_runtime_key`) |
 | `PERSONAL_KEYS` / `SYSTEM_KEYS` / `_classify_config_key` | services/paper_ingestion/paper_ingestion/services/config_metadata.py:149-224 | Per-key scope: personal (per-user row) vs system (admin-only, `user_id IS NULL`) |
-| `_SECRET_KEYS` / `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/services/config_metadata.py:227-247 | Keys masked on GET; subset gets ciphertext on PUT (incl. `smtp.pass`) |
+| `_ENCRYPTED_KEYS` | libs/jarvis_common/jarvis_common/config_metadata.py:285-303 | The keys stored as ciphertext on PUT and masked on GET (incl. `smtp.pass`) |
 | `_CONFIG_VALIDATORS` | services/paper_ingestion/paper_ingestion/services/config_validators.py:231-271 | Per-key validator dispatch; missing entry = no custom validation |
 | `_PULSE_WEIGHT_KEYS` / `_PULSE_REQUIRED_WEIGHT_KEYS` | services/paper_ingestion/paper_ingestion/services/config_validators.py:31-47 | The 10 allowed weight keys; 6 are required |
 | `_validate_pulse_weights` | services/paper_ingestion/paper_ingestion/services/config_validators.py:83 | Enforces shape + value range on `pulse.weights` |

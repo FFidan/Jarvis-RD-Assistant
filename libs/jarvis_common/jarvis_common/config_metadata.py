@@ -25,7 +25,6 @@ __all__ = [
     "PERSONAL_KEYS",
     "SYSTEM_KEYS",
     "_ZOTERO_LIBRARY_SCOPE_KEYS",
-    "_SECRET_KEYS",
     "_ENCRYPTED_KEYS",
     "_NUDGE_ALLOWED_COLUMNS",
     "_NUDGE_JSONB_COLUMNS",
@@ -282,17 +281,6 @@ def _classify_config_key(key: str) -> str:
 # Only the provider credential keys join these sets. A provider's base URL is an
 # endpoint, not a credential: masking it hid the custom endpoint an administrator
 # had configured behind a row that read as unset, while the runtime kept using it.
-_SECRET_KEYS: frozenset[str] = (
-    frozenset(
-        {
-            "zotero.api_key",
-            "smtp.pass",
-            "telegram.bot_token",
-        }
-    )
-    | PROVIDER_API_KEY_CONFIG_KEYS
-)
-
 _ENCRYPTED_KEYS: frozenset[str] = (
     frozenset(
         {

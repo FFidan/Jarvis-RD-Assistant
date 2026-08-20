@@ -899,7 +899,7 @@ async def test_configure_smtp_test_send_uses_body_password_when_provided(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# _classify_config_key and _SECRET_KEYS
+# _classify_config_key and secret masking
 # ---------------------------------------------------------------------------
 
 
@@ -915,16 +915,18 @@ def test_classify_config_key_smtp_from_name_is_system() -> None:
     assert _classify_config_key("smtp.from_name") == "system"
 
 
-def test_smtp_reply_to_not_in_secret_keys() -> None:
-    from jarvis_common.config_metadata import _SECRET_KEYS
+def test_smtp_reply_to_is_not_masked() -> None:
+    """It is an address an administrator has to read back, not a credential."""
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS
 
-    assert "smtp.reply_to" not in _SECRET_KEYS
+    assert "smtp.reply_to" not in _ENCRYPTED_KEYS
 
 
-def test_smtp_from_name_not_in_secret_keys() -> None:
-    from jarvis_common.config_metadata import _SECRET_KEYS
+def test_smtp_from_name_is_not_masked() -> None:
+    """It is an address an administrator has to read back, not a credential."""
+    from jarvis_common.config_metadata import _ENCRYPTED_KEYS
 
-    assert "smtp.from_name" not in _SECRET_KEYS
+    assert "smtp.from_name" not in _ENCRYPTED_KEYS
 
 
 # ---------------------------------------------------------------------------

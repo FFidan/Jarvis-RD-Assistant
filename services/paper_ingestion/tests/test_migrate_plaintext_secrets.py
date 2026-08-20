@@ -71,13 +71,6 @@ async def test_migrate_skips_null_or_empty_values(fernet_key):
 # ---------------------------------------------------------------------------
 
 
-def test_telegram_bot_token_in_secret_keys():
-    """telegram.bot_token must be in _SECRET_KEYS so it is masked by list_config."""
-    from jarvis_common.config_metadata import _SECRET_KEYS
-
-    assert "telegram.bot_token" in _SECRET_KEYS
-
-
 def test_telegram_bot_token_in_encrypted_keys():
     """telegram.bot_token must be in _ENCRYPTED_KEYS so migrate_plaintext_secrets re-encrypts it."""
     from jarvis_common.config_metadata import _ENCRYPTED_KEYS
