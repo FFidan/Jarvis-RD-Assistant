@@ -182,6 +182,7 @@ SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
         "research", "POST", r"/api/papers/[^/]+/feedback", "research:papers:write"
     ),
     _telegram_capability("research", "POST", r"/api/authors/check", "research:authors:write"),
+    _telegram_capability("research", "POST", r"/api/authors/alerts/ack", "research:authors:write"),
     _telegram_capability("research", "POST", r"/api/search", "research:search:write"),
     _telegram_capability("research", "GET", r"/api/pulse/today", "research:pulse:read"),
     _telegram_capability("research", "POST", r"/api/pulse/generate", "research:pulse:write"),

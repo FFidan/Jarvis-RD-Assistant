@@ -10,6 +10,7 @@ Rows covered:
   A22 DELETE /api/authors/{id}     — delete scoped to user; 404 for non-owner
   A23 POST /api/authors/auto-detect — detects from starred papers; count matches DB
   A24 POST /api/authors/check       — returns only current-user matches
+  POST /api/authors/alerts/ack      — records an alert only once it is delivered
 """
 
 from __future__ import annotations
@@ -498,6 +499,159 @@ async def test_t9_check_null_metadata_does_not_500(
     paper = next(p for m in body["matches"] for p in m["papers"] if p["id"] == paper_id)
     # metadata coerced to {} (the `or {}` guard), serializes cleanly.
     assert paper["metadata"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Delivery acknowledgement: an alert survives a failed delivery
+# ---------------------------------------------------------------------------
+
+
+async def test_undelivered_alert_is_offered_again_until_acknowledged(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A caller that acknowledges delivery keeps the alert until it confirms it.
+
+    This is the Telegram path: the bot asks for matches, sends them, and only
+    then acknowledges. A send that fails leaves the alert unacknowledged, so
+    the next check still offers it instead of consuming it.
+
+    Verified: authors.py check_tracked_authors (acknowledges_delivery) and
+    acknowledge_author_alerts.
+    """
+    author_id = await _track_author(contract_conn, contract_two_users.user_a_id, "Grace Hopper")
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="ack-retry",
+        authors=["Grace Hopper"],
+        metadata={},
+    )
+    relayed = {"acknowledges_delivery": True}
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        first = await c.post("/api/authors/check", json=relayed)
+    assert first.status_code == 200, first.text[:300]
+    match = next(m for m in first.json()["matches"] if m["tracked_author_id"] == author_id)
+    assert paper_id in [paper["id"] for paper in match["papers"]]
+
+    # Nothing was recorded, so nothing was consumed by the check itself.
+    assert (
+        await contract_conn.fetchval(
+            "SELECT COUNT(*) FROM author_alert_log "
+            "WHERE tracked_author_id = $1 AND paper_id = $2 AND user_id = $3",
+            author_id,
+            paper_id,
+            contract_two_users.user_a_id,
+        )
+        == 0
+    ), "an unacknowledged alert must not be recorded"
+
+    # Delivery failed, so the alert is still on offer.
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        retry = await c.post("/api/authors/check", json=relayed)
+    assert retry.status_code == 200, retry.text[:300]
+    retried = next(m for m in retry.json()["matches"] if m["tracked_author_id"] == author_id)
+    assert paper_id in [paper["id"] for paper in retried["papers"]], (
+        "an undelivered alert must be offered again"
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        ack = await c.post(
+            "/api/authors/alerts/ack",
+            json={"tracked_author_id": author_id, "paper_ids": [paper_id]},
+        )
+    assert ack.status_code == 200, ack.text[:300]
+    assert ack.json()["recorded"] == 1
+
+    # Once acknowledged, the alert is not offered a third time.
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        after_ack = await c.post("/api/authors/check", json=relayed)
+    assert after_ack.status_code == 200, after_ack.text[:300]
+    body = after_ack.json()
+    assert body["new_papers"] == 0, f"acknowledged alert re-offered: {body}"
+    assert body["matches"] == [], f"acknowledged alert re-offered: {body}"
+
+
+async def test_default_check_still_records_the_alert_for_the_web_client(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A caller that does not acknowledge delivery still consumes the alert.
+
+    The web app's "Check now" sends no body, so its second click must keep
+    reporting nothing new.
+
+    Verified: authors.py check_tracked_authors — record_author_alert is the
+    default path.
+    """
+    author_id = await _track_author(contract_conn, contract_two_users.user_a_id, "Barbara Liskov")
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="ack-default",
+        authors=["Barbara Liskov"],
+        metadata={},
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        first = await c.post("/api/authors/check")
+    assert first.status_code == 200, first.text[:300]
+    assert paper_id in {p["id"] for m in first.json()["matches"] for p in m["papers"]}
+
+    assert (
+        await contract_conn.fetchval(
+            "SELECT COUNT(*) FROM author_alert_log "
+            "WHERE tracked_author_id = $1 AND paper_id = $2 AND user_id = $3",
+            author_id,
+            paper_id,
+            contract_two_users.user_a_id,
+        )
+        == 1
+    ), "a check that does not acknowledge delivery must record the alert"
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        second = await c.post("/api/authors/check")
+    assert second.status_code == 200, second.text[:300]
+    assert second.json()["new_papers"] == 0
+
+
+async def test_ack_rejects_another_users_tracked_author(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Acknowledging is scoped to the caller's own tracked authors.
+
+    Verified: authors.py acknowledge_author_alerts — ownership guard.
+    """
+    author_id = await _track_author(
+        contract_conn, contract_two_users.user_b_id, "Karen Sparck Jones"
+    )
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="ack-tenancy",
+        authors=["Karen Sparck Jones"],
+        metadata={},
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/authors/alerts/ack",
+            json={"tracked_author_id": author_id, "paper_ids": [paper_id]},
+        )
+
+    assert resp.status_code == 404, resp.text[:300]
+    assert (
+        await contract_conn.fetchval(
+            "SELECT COUNT(*) FROM author_alert_log WHERE tracked_author_id = $1",
+            author_id,
+        )
+        == 0
+    ), "a rejected acknowledgement must not record anything"
 
 
 # ---------------------------------------------------------------------------

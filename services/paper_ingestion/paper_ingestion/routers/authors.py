@@ -1,7 +1,8 @@
 """Author tracking and alert endpoints.
 
 Provides CRUD for tracked authors, auto-detection from starred/rated papers,
-and a check endpoint that matches tracked authors against recent papers.
+a check endpoint that matches tracked authors against recent papers, and the
+acknowledgement a relaying client sends once it has delivered an alert.
 """
 
 import logging
@@ -13,7 +14,9 @@ from jarvis_common import author_matches, delete_or_404, dynamic_update, log_aud
 from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import record_author_alert
 from jarvis_common.paper_visibility import paper_visibility_sql
+from pydantic import BaseModel, Field
 
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
     AuthorAlertMatch,
@@ -29,6 +32,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/authors", tags=["authors"])
 
 _AUTHOR_ALLOWED_COLUMNS: set[str] = {"enabled", "s2_author_id"}
+
+
+class AuthorCheckRequest(BaseModel):
+    """Options for one tracked-author check.
+
+    ``acknowledges_delivery`` marks a client that relays each match onward — the
+    Telegram bot — and confirms it through ``POST /api/authors/alerts/ack``. Its
+    matches are returned without being recorded, so an alert whose delivery
+    fails is offered again by the next check. A client that presents the result
+    itself leaves the field unset and each match is recorded as this call is
+    answered.
+    """
+
+    acknowledges_delivery: bool = False
+
+
+class AuthorAlertAckRequest(BaseModel):
+    """One tracked author's alert that the caller has delivered."""
+
+    tracked_author_id: int
+    paper_ids: list[int] = Field(..., min_length=1, max_length=500)
+
+
+class AuthorAlertAckResponse(BaseModel):
+    """How many acknowledged papers were newly recorded as alerted."""
+
+    recorded: int
 
 
 # ---------------------------------------------------------------------------
@@ -227,13 +257,16 @@ async def auto_detect_authors(
 @limiter.limit("30/minute")
 async def check_tracked_authors(
     request: Request,
+    body: AuthorCheckRequest | None = None,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> AuthorCheckResponse:
     """Check tracked authors against recent papers (last 24 hours).
 
     Matches papers by S2 author ID (if available) or normalized name.
-    Logs matches in author_alert_log for deduplication.
+    Logs matches in author_alert_log for deduplication, unless the caller
+    acknowledges delivery itself (see :class:`AuthorCheckRequest`), in which
+    case the log is only read here and written by the acknowledgement.
 
     The recent-papers scan includes persisted-public papers plus private papers
     in the caller's library. This keeps public discovery useful without leaking
@@ -266,6 +299,12 @@ async def check_tracked_authors(
 
         total_new = 0
         matches: list[AuthorAlertMatch] = []
+        defers_record = body is not None and body.acknowledges_delivery
+        already_alerted = (
+            await _alerted_pairs(conn, user_id, [paper["id"] for paper in recent_papers])
+            if defers_record
+            else set()
+        )
 
         async with conn.transaction():
             for author_row in authors:
@@ -300,13 +339,19 @@ async def check_tracked_authors(
                                 break
 
                     if matched:
-                        # Deduplicate via author_alert_log (per-user since migration 0091)
-                        was_new = await record_author_alert(
-                            conn,
-                            tracked_author_id=author_id,
-                            paper_id=paper_id,
-                            user_id=user_id,
-                        )
+                        # Deduplicate via author_alert_log (per-user since migration 0091).
+                        # A caller that acknowledges delivery records the alert
+                        # once its send succeeds, so a lost message is offered
+                        # again while its paper is still inside the scan window.
+                        if defers_record:
+                            was_new = (author_id, paper_id) not in already_alerted
+                        else:
+                            was_new = await record_author_alert(
+                                conn,
+                                tracked_author_id=author_id,
+                                paper_id=paper_id,
+                                user_id=user_id,
+                            )
                         if was_new:
                             total_new += 1
                             # Carry the format_paper_card keys (NULL-tolerant).
@@ -325,6 +370,7 @@ async def check_tracked_authors(
                 if new_papers_for_author:
                     matches.append(
                         AuthorAlertMatch(
+                            tracked_author_id=author_id,
                             author_name=tracked_name,
                             papers=new_papers_for_author,
                         )
@@ -344,3 +390,64 @@ async def check_tracked_authors(
         authors_checked=len(authors),
         matches=matches,
     )
+
+
+@router.post("/alerts/ack", response_model=AuthorAlertAckResponse)
+@limiter.limit("30/minute")
+async def acknowledge_author_alerts(
+    request: Request,
+    body: AuthorAlertAckRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
+) -> AuthorAlertAckResponse:
+    """Record author alerts the caller has delivered.
+
+    ``POST /api/authors/check`` leaves the matches unrecorded for a caller that
+    acknowledges delivery, so this endpoint is what stops a delivered alert from
+    being offered again. An alert that is never acknowledged stays on offer
+    until its paper falls outside the check's scan window.
+    """
+    async with db_pool.acquire() as conn:
+        owns_author = await conn.fetchval(
+            "SELECT 1 FROM tracked_authors WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            body.tracked_author_id,
+            user_id,
+        )
+        if not owns_author:
+            raise HTTPException(404, f"Tracked author {body.tracked_author_id} not found")
+
+        paper_ids = sorted(set(body.paper_ids))
+        known_papers = await conn.fetchval(
+            "SELECT COUNT(*) FROM papers WHERE id = ANY($1::int[])",
+            paper_ids,
+        )
+        if known_papers != len(paper_ids):
+            raise HTTPException(404, "Acknowledged alert names a paper that does not exist")
+
+        recorded = 0
+        async with conn.transaction():
+            for paper_id in paper_ids:
+                recorded += await record_author_alert(
+                    conn,
+                    tracked_author_id=body.tracked_author_id,
+                    paper_id=paper_id,
+                    user_id=user_id,
+                )
+    return AuthorAlertAckResponse(recorded=recorded)
+
+
+async def _alerted_pairs(
+    conn: ConnLike,
+    user_id: int,
+    paper_ids: list[int],
+) -> set[tuple[int, int]]:
+    """Return the (tracked author, paper) pairs already alerted for one user."""
+    if not paper_ids:
+        return set()
+    rows = await conn.fetch(
+        "SELECT tracked_author_id, paper_id FROM author_alert_log"
+        " WHERE user_id IS NOT DISTINCT FROM $1 AND paper_id = ANY($2::int[])",
+        user_id,
+        paper_ids,
+    )
+    return {(row["tracked_author_id"], row["paper_id"]) for row in rows}

@@ -30,6 +30,11 @@ async def run_author_alerts(
     backend error does not abort
     the whole run.
 
+    An alert counts as delivered only once Telegram has accepted it: the
+    acknowledgement that follows a successful send is what records it, so an
+    alert lost to a send failure is offered again by the next check rather than
+    being silently consumed.
+
     Parameters
     ----------
     http_client : httpx.AsyncClient
@@ -83,6 +88,23 @@ async def run_author_alerts(
             except Exception:
                 logger.exception(
                     "Failed to send author alert for %s to chat_id=%d",
+                    author_name,
+                    pairing.chat_id,
+                )
+                continue
+
+            try:
+                await services_client.acknowledge_author_alerts(
+                    http_client,
+                    config,
+                    pairing.user_id,
+                    tracked_author_id=match["tracked_author_id"],
+                    paper_ids=[paper["id"] for paper in papers],
+                )
+            except Exception:
+                logger.exception(
+                    "Delivered the author alert for %s to chat_id=%d but could not record it; "
+                    "it will be offered again",
                     author_name,
                     pairing.chat_id,
                 )
