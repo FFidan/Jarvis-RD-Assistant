@@ -206,7 +206,7 @@ of those two files by hand.
 ## Database privilege boundary
 
 The v1.2.6 database contract is tracked in
-[`db/ownership-manifest.json`](../db/ownership-manifest.json). Platform,
+`db/ownership-manifest.json`. Platform,
 Research, and Learning each have a NOLOGIN owner role and a distinct runtime
 role. Operations has a NOLOGIN owner role; product runtimes reach only approved
 job capabilities rather than receiving a general Operations writer role.

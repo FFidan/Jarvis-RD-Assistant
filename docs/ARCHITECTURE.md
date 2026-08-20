@@ -209,7 +209,7 @@ Docker Postgres when schema duplication risk is in scope.
 
 ### Database ownership contract
 
-[`db/ownership-manifest.json`](../db/ownership-manifest.json) is the executable
+`db/ownership-manifest.json` is the executable
 v1.2.6 ownership contract. It assigns every current table, sequence, function,
 type, trigger, rule, and background-job kind to exactly one of four domains:
 

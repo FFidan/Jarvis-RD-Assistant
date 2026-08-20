@@ -432,7 +432,7 @@ disagree, so a new secret cannot ship undocumented.
 
 The Langfuse entries are only used when the `observability` profile is active,
 which it is not by default. File permissions, rotation behavior and the
-`_FILE` fallback rules are in [`secrets/README.md`](../secrets/README.md).
+`_FILE` fallback rules are in `secrets/README.md`.
 
 To rotate the JARVIS API key without exposing it in shell history, generate a
 replacement file and then restart every running consumer:
