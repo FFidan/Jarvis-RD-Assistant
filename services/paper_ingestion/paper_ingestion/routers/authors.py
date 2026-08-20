@@ -319,26 +319,12 @@ async def check_tracked_authors(
                     paper_authors = paper["authors"] or []
                     paper_metadata = paper["metadata"] or {}
 
-                    matched = False
-
-                    # Precise match: S2 author ID
-                    if s2_id:
-                        s2_author_ids = [
-                            str(entry["authorId"])
-                            for entry in paper_metadata.get("s2_author_ids", [])
-                            if isinstance(entry, dict) and entry.get("authorId")
-                        ]
-                        if s2_id in s2_author_ids:
-                            matched = True
-
-                    # Fallback: name matching
-                    if not matched:
-                        for candidate in paper_authors:
-                            if author_matches(tracked_name, candidate):
-                                matched = True
-                                break
-
-                    if matched:
+                    if _paper_matches_author(
+                        paper_authors,
+                        paper_metadata,
+                        tracked_name=tracked_name,
+                        s2_id=s2_id,
+                    ):
                         # Deduplicate via author_alert_log (per-user since migration 0091).
                         # A caller that acknowledges delivery records the alert
                         # once its send succeeds, so a lost message is offered
@@ -451,3 +437,27 @@ async def _alerted_pairs(
         paper_ids,
     )
     return {(row["tracked_author_id"], row["paper_id"]) for row in rows}
+
+
+def _paper_matches_author(
+    paper_authors: list,
+    paper_metadata: dict,
+    *,
+    tracked_name: str,
+    s2_id: str | None,
+) -> bool:
+    """Return whether one paper is by a tracked author.
+
+    A Semantic Scholar author identifier is authoritative when the tracked
+    author carries one and the paper records them. Name comparison is the
+    fallback, because most sources publish no identifier at all.
+    """
+    if s2_id:
+        s2_author_ids = [
+            str(entry["authorId"])
+            for entry in paper_metadata.get("s2_author_ids", [])
+            if isinstance(entry, dict) and entry.get("authorId")
+        ]
+        if s2_id in s2_author_ids:
+            return True
+    return any(author_matches(tracked_name, candidate) for candidate in paper_authors)
