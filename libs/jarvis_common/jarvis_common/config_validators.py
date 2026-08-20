@@ -25,6 +25,8 @@ __all__ = [
     "_validate_bool",
     "_validate_optional_int",
     "_validate_l2_lambda",
+    "_validate_liked_weight",
+    "_validate_project_weight",
     "_validate_lookback_days",
     "_validate_startup_grace_seconds",
     "_validate_nonempty_str",
@@ -191,7 +193,14 @@ def _validate_numeric_range(
     else:
         if isinstance(v, bool) or not isinstance(v, int | float):
             raise ValueError(f"{name} must be a number")
-    fv = float(v)
+    try:
+        fv = float(v)
+    except OverflowError as exc:
+        # An integer too large to represent as a float clears the isinstance
+        # guard above and then fails the conversion. The config write path maps
+        # only ValueError to a 400, so letting this escape would answer a
+        # malformed request body with a 500.
+        raise ValueError(f"{name} must be between {lo} and {hi}") from exc
     if exclusive_bounds:
         if not (lo < fv < hi):
             raise ValueError(f"{name} must be between {lo} and {hi} (exclusive)")
@@ -207,6 +216,21 @@ def _validate_l2_lambda(v: Any) -> None:
     Values >2 make the penalty dominate scoring, which is considered unsafe.
     """
     _validate_numeric_range(v, lo=0.0, hi=2.0, name="pulse.l2_lambda")
+
+
+def _validate_liked_weight(v: Any) -> None:
+    """Validate recommendation.liked_weight — blend weight in [0, 1].
+
+    The weight multiplies a normalized similarity score, and the Settings slider
+    emits 0 to 1, so a value outside that skews discovery ranking rather than
+    failing anywhere a reader would notice.
+    """
+    _validate_numeric_range(v, lo=0.0, hi=1.0, name="recommendation.liked_weight")
+
+
+def _validate_project_weight(v: Any) -> None:
+    """Validate recommendation.project_weight — blend weight in [0, 1]."""
+    _validate_numeric_range(v, lo=0.0, hi=1.0, name="recommendation.project_weight")
 
 
 def _validate_lookback_days(v: Any) -> None:
@@ -432,6 +456,8 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.enabled": _validate_bool,
     "pulse.classifier_opt_in": _validate_bool,
     "recommendation.enabled": _validate_bool,
+    "recommendation.liked_weight": _validate_liked_weight,
+    "recommendation.project_weight": _validate_project_weight,
     "setup.completed": _validate_bool,
     "onboarding.dismissed": _validate_bool,
     "user.timezone": _validate_timezone,

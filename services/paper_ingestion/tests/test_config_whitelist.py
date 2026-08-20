@@ -65,10 +65,60 @@ _MALFORMED_UI_PREF_VALUES = {
 }
 
 
+# The only writable key with no entry in _CONFIG_VALIDATORS. Its bool guard lives
+# in config_write.py instead, because the read side of the toggle belongs to
+# jarvis_common.auth rather than the shared validator registry.
+_VALIDATOR_EXEMPT_KEYS = frozenset({"auth.api_key_login_enabled"})
+
+
 def test_frontend_metadata_keys_all_allowed():
     """Every key the frontend CONFIG_METADATA renders must be in the backend whitelist."""
     missing = _FRONTEND_KEYS - _ALLOWED_CONFIG_KEYS
     assert not missing, f"Frontend keys not in backend whitelist: {missing}"
+
+
+def test_every_writable_config_key_is_validated_or_deliberately_exempt():
+    """A writable key with no validator stores whatever the request body carried.
+
+    The write path looks the key up in ``_CONFIG_VALIDATORS`` and simply skips
+    validation when it is absent, so an unlisted key is persisted unchecked and
+    the defect only surfaces later, in whatever reads it.
+    """
+    from jarvis_common.llm_provider_registry import PROVIDER_CONFIG_KEYS
+
+    writable = set(_ALLOWED_CONFIG_KEYS) | set(PROVIDER_CONFIG_KEYS)
+    assert _VALIDATOR_EXEMPT_KEYS <= writable, (
+        f"exemption names a key nothing admits: {sorted(_VALIDATOR_EXEMPT_KEYS - writable)}"
+    )
+    assert _VALIDATOR_EXEMPT_KEYS.isdisjoint(_CONFIG_VALIDATORS), (
+        "an exempt key gained a validator; drop it from the exemption set so the "
+        f"check keeps covering it: {sorted(_VALIDATOR_EXEMPT_KEYS & set(_CONFIG_VALIDATORS))}"
+    )
+    unvalidated = writable - set(_CONFIG_VALIDATORS) - _VALIDATOR_EXEMPT_KEYS
+    assert not unvalidated, f"writable keys with no validator: {sorted(unvalidated)}"
+
+
+@pytest.mark.parametrize("key", ["recommendation.liked_weight", "recommendation.project_weight"])
+def test_recommendation_weights_accept_the_slider_range_and_reject_the_rest(key: str):
+    """The Settings sliders emit 0 to 1; anything else silently skews ranking."""
+    validator = _CONFIG_VALIDATORS[key]
+    validator(0.0)
+    validator(0.65)
+    validator(1)
+    for rejected in (-0.1, 1.5, "0.5", True, None):
+        with pytest.raises(ValueError):
+            validator(rejected)
+
+
+def test_numeric_range_rejects_an_unrepresentable_integer_as_a_value_error():
+    """The write path maps only ValueError to a 400, so overflow must not escape.
+
+    A JSON integer larger than a float clears the ``isinstance`` guard and then
+    raises ``OverflowError`` out of the conversion, which the write path does
+    not catch — a malformed request body answered with a 500.
+    """
+    with pytest.raises(ValueError):
+        _CONFIG_VALIDATORS["pulse.l2_lambda"](10**400)
 
 
 def test_removed_notification_keys_rejected():
@@ -104,6 +154,55 @@ def test_ui_preference_validators_reject_malformed_values(key: str, value: objec
     """Malformed interface preferences cannot reach persistence."""
     with pytest.raises(ValueError):
         _CONFIG_VALIDATORS[key](value)
+
+
+def test_focus_timer_contract_matches_the_web_app_definition():
+    """The browser and the validator must agree on the accepted timer ranges.
+
+    The web app writes these preferences and discards a stored one that falls
+    outside its own bounds, while the validator rejects a write outside these.
+    Two independent copies drift into a timer the user can set but not save, or
+    one that is saved and then silently ignored on the next load.
+    """
+    import re
+    from pathlib import Path
+
+    from jarvis_common.config_validators import TIMER_DEFAULTS, TIMER_RANGES
+
+    repo_root = Path(__file__).resolve().parents[3]
+    store = (repo_root / "frontend/src/stores/pomodoro-store.ts").read_text(encoding="utf-8")
+
+    ranges_block = re.search(r"export const TIMER_RANGES\b[^{]*\{(.*?)\}", store, re.S)
+    assert ranges_block is not None, "pomodoro-store.ts does not export TIMER_RANGES"
+    declared_ranges = {
+        field: (int(low), int(high))
+        for field, low, high in re.findall(
+            r"(\w+):\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]", ranges_block.group(1)
+        )
+    }
+    assert declared_ranges == TIMER_RANGES
+
+    defaults_block = re.search(r"export const TIMER_DEFAULTS\b[^{]*\{(.*?)\}", store, re.S)
+    assert defaults_block is not None, "pomodoro-store.ts does not export TIMER_DEFAULTS"
+    declared_defaults = {
+        field: int(value) for field, value in re.findall(r"(\w+):\s*(\d+)", defaults_block.group(1))
+    }
+    assert declared_defaults == TIMER_DEFAULTS
+
+    # Both readers must consume the shared constant rather than restate it.
+    section = (repo_root / "frontend/src/components/settings/TimerSection.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "TIMER_RANGES" in section
+    assert not re.search(r"\b(?:min|max)=\{\s*\d", section), (
+        "TimerSection.tsx still hard-codes a slider bound"
+    )
+
+    sync = (repo_root / "frontend/src/hooks/usePreferenceSync.ts").read_text(encoding="utf-8")
+    assert "TIMER_RANGES" in sync
+    assert not re.search(r"isIntegerBetween\([^)]*,\s*\d+\s*,\s*\d+\s*\)", sync), (
+        "usePreferenceSync.ts still hard-codes a stored-preference bound"
+    )
 
 
 def test_onboarding_dismissal_is_allowed_and_personal():

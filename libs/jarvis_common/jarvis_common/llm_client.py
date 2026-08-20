@@ -570,10 +570,37 @@ async def request_chat_completion_content(
     return visible
 
 
+def _embedding_matrix_shape(value: object) -> str | None:
+    """Return a ``count x dimension`` summary for a rectangular numeric matrix.
+
+    Returns ``None`` for every other shape, so the chat-message and prompt forms
+    — which carry meaning and are wanted verbatim — fall through to
+    serialization. The scan stops at the first non-numeric entry, so those forms
+    cost one comparison rather than a walk.
+    """
+    if not isinstance(value, list) or not value:
+        return None
+    dimensions: set[int] = set()
+    for row in value:
+        if not isinstance(row, list) or not row:
+            return None
+        if any(isinstance(item, bool) or not isinstance(item, int | float) for item in row):
+            return None
+        dimensions.add(len(row))
+    if len(dimensions) != 1:
+        return None
+    return f"<embedding matrix {len(value)}x{dimensions.pop()}>"
+
+
 def _bounded_observation_value(value: object) -> str:
     """Serialize one observation value without retaining an unbounded graph."""
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="json")
+    # An embedding batch would otherwise be serialized in full only to keep a
+    # 20,000-character prefix of coordinates, which reads as noise.
+    shape = _embedding_matrix_shape(value)
+    if shape is not None:
+        return shape
     try:
         serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError):

@@ -155,14 +155,23 @@ async def link_paper(
         # a default/other queue would never be consumed and the push would drop.
         from jarvis_common.jobs import queue_for_kind
         from jarvis_common.task_registry import app as procrastinate_app
+        from jarvis_common.telemetry import capture_task_context
 
         try:
+            # Deferring by name bypasses the registry facade that normally
+            # attaches propagation, so the push would start a trace of its own
+            # and could not be joined to the request that linked the paper. The
+            # registry wrapper on the worker side strips the entry again.
             await procrastinate_app.configure_task(
                 name="zotero.push", queue=queue_for_kind("zotero.push")
             ).defer_async(
-                job_id=str(uuid.uuid4()),
-                user_id=user_id,
-                paper_id=paper_id,
+                **capture_task_context(
+                    {
+                        "job_id": str(uuid.uuid4()),
+                        "user_id": user_id,
+                        "paper_id": paper_id,
+                    }
+                )
             )
         except Exception:
             # Enqueue I/O is the only legitimately fallible step here; the link

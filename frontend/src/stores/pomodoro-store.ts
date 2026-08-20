@@ -75,6 +75,29 @@ interface PomodoroState {
   _reset: () => void;
 }
 
+/**
+ * Accepted range for each timer preference, as `[minimum, maximum]`.
+ *
+ * The one browser-side definition of the focus-timer contract: the settings
+ * sliders offer these bounds and the account sync accepts a stored preference
+ * only inside them. It mirrors `TIMER_RANGES` in the backend validator, which a
+ * test compares against this file — the account rejects a write outside it.
+ */
+export const TIMER_RANGES = {
+  workMinutes: [15, 60],
+  shortBreakMinutes: [3, 15],
+  longBreakMinutes: [10, 30],
+  targetCycles: [2, 8],
+} as const satisfies Record<string, readonly [number, number]>;
+
+/** Applied until the account has a saved preference; mirrors `TIMER_DEFAULTS`. */
+export const TIMER_DEFAULTS = {
+  workMinutes: 25,
+  shortBreakMinutes: 5,
+  longBreakMinutes: 15,
+  targetCycles: 4,
+} as const satisfies Record<keyof typeof TIMER_RANGES, number>;
+
 export const usePomodoroStore = create<PomodoroState>()(
   persist(
     (set, get) => ({
@@ -97,10 +120,7 @@ export const usePomodoroStore = create<PomodoroState>()(
       completedSession: null,
 
       // Settings defaults
-      targetCycles: 4,
-      workMinutes: 25,
-      shortBreakMinutes: 5,
-      longBreakMinutes: 15,
+      ...TIMER_DEFAULTS,
 
       startWork(item?: AttachedItem) {
         const state = get();

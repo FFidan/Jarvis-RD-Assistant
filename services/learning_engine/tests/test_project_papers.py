@@ -160,6 +160,10 @@ async def test_link_paper_enqueues_zotero_push_on_paper_ingestion_queue(
     assert kwargs["user_id"] == user_id
     assert kwargs["paper_id"] == paper_id
     assert isinstance(kwargs["job_id"], str) and kwargs["job_id"]
+    # Deferring by name bypasses the registry facade that normally attaches the
+    # propagation entry, so without it the push starts a trace of its own and
+    # cannot be joined to the request that linked the paper.
+    assert kwargs["_jarvis_telemetry"]["correlation_id"] is not None
 
 
 async def test_link_paper_enqueue_failure_is_observable_and_returns_201(

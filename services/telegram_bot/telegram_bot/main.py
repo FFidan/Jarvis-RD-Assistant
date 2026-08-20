@@ -123,11 +123,15 @@ async def post_init(application: Application) -> None:
     """
     ensure_outbound_egress_allowed("Telegram bot startup")
     settings = get_jarvis_common_settings()
+    otlp_endpoint = settings.otel_exporter_otlp_traces_endpoint
+    # Switched by the collector endpoint alone, on the same terms as every
+    # service: observability_enabled is the Langfuse master gate, and reusing it
+    # here would drop the bot's spans from a trace the other services complete.
     configure_telemetry(
         service="telegram_bot",
-        enabled=settings.observability_enabled,
-        otlp_endpoint=getattr(settings, "otel_exporter_otlp_traces_endpoint", None),
-        timeout_ms=getattr(settings, "otel_export_timeout_ms", 5_000),
+        enabled=otlp_endpoint is not None,
+        otlp_endpoint=otlp_endpoint,
+        timeout_ms=settings.otel_export_timeout_ms,
     )
     config: BotConfig = application.bot_data["config"]
     platform_client = pinned_async_client(

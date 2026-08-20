@@ -222,7 +222,11 @@ class TaskRegistry:
                 reason = maintenance_skip_reason(f"task {_task_kind}")
                 if reason == "quarantine":
                     if context.job.attempts >= _QUARANTINE_MAX_ATTEMPTS:
-                        raise JobError(_QUARANTINE_GAVE_UP_MESSAGE)
+                        gave_up = JobError(_QUARANTINE_GAVE_UP_MESSAGE)
+                        await _record_terminal_error(
+                            context, self.require_dependencies().pool, gave_up
+                        )
+                        raise gave_up
                     raise OutboundQuarantineBlockedError(
                         "background task is blocked by temporary restore state"
                     )
@@ -313,6 +317,24 @@ def _terminal_error_payload(exc: BaseException) -> dict[str, Any]:
             payload["action_link"] = exc.action_link
         return payload
     return {"message": "Job failed", "code": "JOB_FAILED"}
+
+
+async def _record_terminal_error(
+    context: procrastinate.JobContext,
+    pool: asyncpg.Pool,
+    error: BaseException,
+) -> None:
+    """Persist a terminal outcome for a failure raised outside the handler path.
+
+    ``_run_handler_with_context`` is the only other writer of terminal outcomes,
+    so a job that never reaches the handler fails with an empty error payload
+    and its message never reaches the user. Routing such a failure through
+    :func:`_run_legacy_handler` instead would emit a spurious ``started`` event
+    and consume the queued trace carrier, corrupting the trace of the attempt
+    that actually ran.
+    """
+    ctx = make_ctx_shim(context, pool=pool)
+    await ctx.record_terminal_outcome(error=_terminal_error_payload(error), is_error=True)
 
 
 async def _run_legacy_handler(

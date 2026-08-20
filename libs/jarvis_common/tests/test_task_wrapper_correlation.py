@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from jarvis_common.logging_config import correlation_id_var
-from jarvis_common.telemetry import configure_telemetry
+from jarvis_common.telemetry import capture_task_context, configure_telemetry
 from opentelemetry import trace
 
 # ---------------------------------------------------------------------------
@@ -221,3 +221,22 @@ async def test_enqueue_proxy_preserves_raw_task_registration_and_adds_context() 
     payload = raw_task.defer_async.await_args.kwargs
     assert payload["job_id"] == "job"
     assert payload["_jarvis_telemetry"]["traceparent"].startswith("00-")
+
+
+def test_only_registry_wrapped_tasks_can_carry_the_reserved_telemetry_entry() -> None:
+    """A task with a fixed signature cannot absorb the reserved payload entry.
+
+    The registry's generated wrapper accepts ``**payload`` and strips the entry
+    before the handler runs, which is why deferrals aimed at a registered kind
+    may carry it. Procrastinate's own maintenance task declares keyword-only
+    parameters and no catch-all, so attaching the entry to that deferral would
+    fail the job at execution rather than trace it.
+    """
+    import inspect
+
+    from procrastinate.builtin_tasks import remove_old_jobs
+
+    payload = capture_task_context({"max_hours": 1})
+
+    with pytest.raises(TypeError, match="_jarvis_telemetry"):
+        inspect.signature(remove_old_jobs.func).bind(None, **payload)

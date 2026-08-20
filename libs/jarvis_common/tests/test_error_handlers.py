@@ -160,3 +160,40 @@ async def test_generic_error_response_keeps_trace_evidence_and_records_one_red_o
     assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
     assert response.headers["x-trace-id"] == response.json()["trace_id"]
     record_request.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_generic_error_response_keeps_the_request_id_of_the_failed_request() -> None:
+    """An unhandled 500 reports the same request id the client sent.
+
+    ``RequestIDMiddleware`` is pure ASGI and resets its context variable while
+    unwinding, which happens before the outermost error handler builds this
+    response. Reading that variable alone therefore reports no id at all, and
+    the operator cannot join the 500 body to the request in the logs.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from jarvis_common.correlation_middleware import CorrelationIdMiddleware
+    from jarvis_common.request_id import RequestIDMiddleware
+
+    configure_telemetry(service="test", enabled=False, otlp_endpoint=None, timeout_ms=1)
+    app = FastAPI()
+    # Same order as configure_middleware_and_errors: request id innermost.
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(CorrelationIdMiddleware)
+    app.add_exception_handler(Exception, error_handlers.generic_exception_handler)
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise RuntimeError("failure")
+
+    with (
+        patch.object(error_handlers, "record_request"),
+        patch.object(error_handlers, "log_event", new_callable=AsyncMock),
+    ):
+        response = TestClient(app, raise_server_exceptions=False).get(
+            "/boom", headers={"X-Request-ID": "client-supplied-id"}
+        )
+
+    assert response.status_code == 500
+    assert response.json()["request_id"] == "client-supplied-id"

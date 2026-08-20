@@ -415,18 +415,20 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
         # risk and no need for a manual compensating-teardown path.
         async with AsyncExitStack() as stack:
             settings = get_jarvis_common_settings()
+            otlp_endpoint = settings.otel_exporter_otlp_traces_endpoint
+            # Generic trace export is switched by the collector endpoint alone.
+            # observability_enabled is the Langfuse master gate, and reusing it
+            # here would make a second, unrelated backend a prerequisite for
+            # sending spans to a collector.
             configure_telemetry(
                 service=config.service_name,
-                enabled=settings.observability_enabled,
-                otlp_endpoint=getattr(settings, "otel_exporter_otlp_traces_endpoint", None),
-                timeout_ms=getattr(settings, "otel_export_timeout_ms", 5_000),
+                enabled=otlp_endpoint is not None,
+                otlp_endpoint=otlp_endpoint,
+                timeout_ms=settings.otel_export_timeout_ms,
             )
             # The SDK owns final provider shutdown at process exit. Each app
             # lifecycle only gets a bounded flush, including failed startup.
-            stack.callback(
-                flush_telemetry,
-                timeout_ms=getattr(settings, "otel_export_timeout_ms", 5_000),
-            )
+            stack.callback(flush_telemetry, timeout_ms=settings.otel_export_timeout_ms)
             database_url = build_database_url(
                 user=settings.postgres_user,
                 password_file=settings.postgres_password_file,

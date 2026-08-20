@@ -10,6 +10,8 @@ DRY-C2 coverage:
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -68,6 +70,42 @@ def test_correlation_middleware_replaces_malformed_header():
     # Middleware generated a fresh UUID instead of echoing the malformed value
     assert corr_id != "not-a-uuid"
     uuid.UUID(corr_id)  # must be valid
+
+
+async def test_correlation_middleware_handles_a_response_start_without_headers():
+    """``headers`` is optional on ``http.response.start`` and may be absent.
+
+    Reading it as a required field turns a legitimate inner response into an
+    unhandled ``KeyError``, which the client sees as a 500 on a request that
+    succeeded.
+    """
+    sent: list[dict[str, Any]] = []
+
+    async def headerless_app(_scope, _receive, send) -> None:
+        await send({"type": "http.response.start", "status": 200})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def capture(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/ping",
+        "headers": [],
+        "app": SimpleNamespace(state=SimpleNamespace(service_name="test")),
+    }
+
+    await CorrelationIdMiddleware(headerless_app)(scope, receive, capture)
+
+    start = sent[0]
+    assert start["type"] == "http.response.start"
+    emitted = dict(start["headers"])
+    assert b"x-correlation-id" in emitted
+    uuid.UUID(emitted[b"x-correlation-id"].decode())
 
 
 # ---------------------------------------------------------------------------

@@ -99,3 +99,15 @@ async def test_db_error_falls_back_and_cache_stays_empty():
         db_helpers._effective_num_ctx_cache.get_cached("fast", __import__("time").monotonic())
         is None
     )
+
+
+def test_no_uncalled_writer_claims_to_keep_the_delivered_context_row_current():
+    """``config_store`` must not keep a writer for this row that nothing calls.
+
+    The row read above is the second step of the resolution order. A helper that
+    documents itself as writing that row "on every delivery", while no code path
+    reaches it, is a false account of where the value comes from.
+    """
+    from jarvis_common import config_store
+
+    assert not hasattr(config_store, "_upsert_system_num_ctx")

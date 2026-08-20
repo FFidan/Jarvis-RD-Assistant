@@ -10,7 +10,7 @@ import {
   type AppearancePrefs,
 } from '@/lib/theme';
 import { useNavPrefsStore, type NavMode } from '@/stores/nav-prefs-store';
-import { usePomodoroStore } from '@/stores/pomodoro-store';
+import { TIMER_RANGES, usePomodoroStore } from '@/stores/pomodoro-store';
 import { registerSessionReset } from '@/stores/session-reset';
 import { useThemeStore, type Theme } from '@/stores/theme-store';
 
@@ -64,17 +64,22 @@ function isAppearance(value: unknown): value is ServerAppearance {
   );
 }
 
-function isIntegerBetween(value: unknown, minimum: number, maximum: number): value is number {
+function isIntegerInRange(value: unknown, [minimum, maximum]: readonly [number, number]): value is number {
   return Number.isInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
 }
 
+/**
+ * Narrower than the sliders would ever produce discards a saved preference, so
+ * both read the same ranges. Widening happens here before the account validator
+ * is widened, never the other way round.
+ */
 function isTimerPreferences(value: unknown): value is TimerPreferences {
   return (
     isRecord(value)
-    && isIntegerBetween(value.workMinutes, 15, 60)
-    && isIntegerBetween(value.shortBreakMinutes, 3, 15)
-    && isIntegerBetween(value.longBreakMinutes, 10, 30)
-    && isIntegerBetween(value.targetCycles, 2, 8)
+    && isIntegerInRange(value.workMinutes, TIMER_RANGES.workMinutes)
+    && isIntegerInRange(value.shortBreakMinutes, TIMER_RANGES.shortBreakMinutes)
+    && isIntegerInRange(value.longBreakMinutes, TIMER_RANGES.longBreakMinutes)
+    && isIntegerInRange(value.targetCycles, TIMER_RANGES.targetCycles)
   );
 }
 
