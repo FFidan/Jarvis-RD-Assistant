@@ -15,7 +15,6 @@
 import { test, expect } from '@playwright/test';
 import {
   installMockedApiDefaults,
-  RETURNING_USER_PREFERENCES,
   seedFirstRunShell,
   seedReturningUserShell,
 } from './helpers/setup';
@@ -137,6 +136,10 @@ async function mockFirstUseEndpoints(page: Page) {
   await installMockedApiDefaults(page);
   // This describe block is about first use itself, so undo the returning-user
   // shell the defaults seed: no stored nav preference, no dismissed tour.
+  // The account preferences stay on the helper's `/api/config` route, which
+  // honours that removal — the shell now takes its nav density from the
+  // account, so a returning-user override here would put the sidebar in the
+  // grouped view and hide everything simple mode offers a new researcher.
   await seedFirstRunShell(page);
   await page.route('**/api/executive/focus/active', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: 'null' }),
@@ -187,13 +190,6 @@ async function mockFirstUseEndpoints(page: Page) {
         chunked_papers: 0,
         onboarding_stage: 'needs_topics',
       }),
-    }),
-  );
-  await page.route('**/api/config', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(RETURNING_USER_PREFERENCES),
     }),
   );
   await page.route('**/api/config/onboarding.dismissed', (route) =>

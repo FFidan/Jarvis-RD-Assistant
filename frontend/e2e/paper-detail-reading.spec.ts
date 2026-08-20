@@ -76,7 +76,11 @@ const mockPaperDetail = {
     ],
     cross_references: [
       {
+        // The payload names the related paper itself — the client stopped
+        // fetching each cross-referenced paper to resolve its title.
         related_paper_id: 99,
+        related_title: 'RELATED_TITLE: Neural Machine Translation',
+        related_year: 2016,
         relationship: 'extends',
         explanation: 'CROSSREF_TEXT: Builds on sequence-to-sequence learning with attention.',
         related_quote: null,
@@ -163,24 +167,6 @@ test.beforeEach(async ({ page }) => {
     } else {
       await route.continue();
     }
-  });
-
-  // The cross-referenced paper, so its link can name its target
-  await page.route('**/api/papers/99', async (route) => {
-    if (route.request().method() !== 'GET') {
-      await route.continue();
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        paper: { ...mockPaperDetail.paper, id: 99, title: 'RELATED_TITLE: Neural Machine Translation' },
-        summary: null,
-        chunks: [],
-        user_state: null,
-      }),
-    });
   });
 
   // Citation graph — Related work reads References / Cited by from it
@@ -426,14 +412,17 @@ test.describe('Paper Detail reading layout — desktop', () => {
     // A paper known only from a bibliography says so.
     await expect(citedBy.getByText('not in your library')).toBeVisible();
 
-    // The semantic-similarity list stays separate, and its link names its target.
+    // The semantic-similarity list stays separate, and its link names its
+    // target from the title and year the cross-reference payload carries.
     await expect(page.getByText('Similar in your library')).toBeVisible();
     await expect(
       page.getByText(/CROSSREF_TEXT: Builds on sequence-to-sequence/),
     ).toBeVisible();
-    await expect(
-      page.getByRole('link', { name: 'RELATED_TITLE: Neural Machine Translation' }),
-    ).toBeVisible({ timeout: 8000 });
+    const similar = page.getByRole('link', {
+      name: 'RELATED_TITLE: Neural Machine Translation (2016)',
+    });
+    await expect(similar).toBeVisible({ timeout: 8000 });
+    await expect(similar).toHaveAttribute('href', '/paper/99');
   });
 
   test('evidence anchor: the page chip jumps to the reader and asks for that page and quote', async ({ page }) => {
@@ -476,8 +465,12 @@ test.describe('Paper Detail reading layout — desktop', () => {
     await toggle.click();
 
     // ChunksTab renders but each ChunkItem is individually collapsed.
-    // Click the first chunk item header to expand its content.
-    await page.getByText(/Passage 0/).click();
+    // Click the first chunk item header to expand its content. Passages are
+    // numbered for the reader — one-based, out of the total, with their page.
+    await page
+      .locator('#section-chunks')
+      .getByRole('button', { name: 'Passage 1 of 2 (Page 1)' })
+      .click();
 
     // Now content is visible
     await expect(page.getByText(/CHUNK_0_CONTENT/)).toBeVisible({ timeout: 5000 });
