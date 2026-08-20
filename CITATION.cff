@@ -7,7 +7,7 @@ authors:
     given-names: Ferhat
     email: "jarvis-rd@limitcycle.dev"
 version: 1.2.6
-date-released: 2026-08-16
+date-released: 2026-08-21
 repository-code: "https://github.com/limitcycle-oss/jarvis-rd-assistant"
 url: "https://limitcycle-oss.github.io/jarvis-rd-assistant/"
 license: Apache-2.0
