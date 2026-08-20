@@ -345,9 +345,11 @@ def _spin_pg_container(
 ) -> Iterator[str]:
     """Spin up a disposable postgres:16.8 container; yield its DSN; tear down on exit.
 
-    FALLBACK-ONLY: used when ``JARVIS_TEST_PG_ADMIN_DSN`` is unset (local dev with
-    no managed Postgres). CI and opt-in local runs take the managed-server path in
-    ``_managed_or_spin`` and issue zero docker commands.
+    Reached two ways: as the fallback when ``JARVIS_TEST_PG_ADMIN_DSN`` is unset
+    (local dev with no managed Postgres), and deliberately by
+    ``make_dedicated_cluster_pg_dsn`` for the one consumer that needs a cluster
+    nothing else touches. Every other consumer takes the managed-server path in
+    ``_managed_or_spin`` and issues zero docker commands.
 
     Docker invariant: ``--rm`` means the container self-removes when stopped,
     but we still call ``docker rm -f`` in the finally block to ensure cleanup
@@ -661,6 +663,32 @@ def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
         )
 
     return live_pg_dsn
+
+
+def make_dedicated_cluster_pg_dsn(container_prefix: str):  # -> pytest fixture
+    """Return a fixture yielding a DSN on a cluster no other test shares.
+
+    ``live_pg_dsn`` isolates a *database*. On the managed path every test reaches
+    the same server, so roles and their memberships stay visible to every later
+    test. A consumer that asserts on ``pg_roles`` or ``pg_auth_members`` is
+    reading cluster-wide catalogues and needs a cluster of its own, which only a
+    private container gives it. Taking the same path locally and in CI is the
+    point: a managed-only divergence here is invisible until CI runs.
+    """
+
+    @pytest.fixture()
+    def dedicated_cluster_pg_dsn() -> Iterator[str]:
+        if os.environ.get("JARVIS_RUN_LIVE_PG") != "1":
+            pytest.skip("set JARVIS_RUN_LIVE_PG=1 to run Docker-backed live PostgreSQL tests")
+        if shutil.which("docker") is None:
+            pytest.fail("Docker CLI is required for the dedicated-cluster live PostgreSQL tests")
+        yield from _spin_pg_container(
+            container_prefix,
+            container_suffix="-cluster",
+            password_prefix="jarvis-cluster",
+        )
+
+    return dedicated_cluster_pg_dsn
 
 
 def make_live_pg_session_dsn(container_prefix: str):  # -> pytest fixture (session scope)

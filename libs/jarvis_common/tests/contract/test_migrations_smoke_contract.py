@@ -82,7 +82,9 @@ async def test_a269_run_migrations_no_exception_on_already_applied_schema(_contr
     await run_migrations(_contract_pool, migrations_dir=migrations_dir)
 
 
-async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: str) -> None:
+async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
+    dedicated_cluster_pg_dsn: str,
+) -> None:
     """0114 moves a version-113 database through the temporary legacy authority.
 
     Verified: db/migrations/0114_owned_schemas_and_roles.sql — temporary
@@ -93,7 +95,7 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
     legacy_init, marker, _ = init_sql.partition("-- FRESH-INSTALL OWNERSHIP BOUNDARY")
     assert marker, "fresh ownership boundary marker is missing from db/init.sql"
 
-    bootstrap = await asyncpg.connect(live_pg_dsn)
+    bootstrap = await asyncpg.connect(dedicated_cluster_pg_dsn)
     try:
         await bootstrap.execute(legacy_init)
         await bootstrap.execute("DELETE FROM schema_migrations WHERE version >= 102")
@@ -103,6 +105,11 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
                 continue
             await bootstrap.execute(migration.read_text(encoding="utf-8"))
             await bootstrap.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
+        await bootstrap.execute(
+            "DO $$ BEGIN "
+            "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jarvis') THEN "
+            "CREATE ROLE jarvis LOGIN SUPERUSER CREATEDB CREATEROLE; END IF; END $$;"
+        )
         await bootstrap.execute(
             "CREATE ROLE jarvis_bootstrap LOGIN PASSWORD 'bootstrap-contract-password' "
             "SUPERUSER CREATEROLE NOINHERIT NOBYPASSRLS; "
@@ -135,7 +142,7 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
         )
         await bootstrap.close()
         bootstrap = await asyncpg.connect(
-            live_pg_dsn,
+            dedicated_cluster_pg_dsn,
             user="jarvis_bootstrap",
             password="bootstrap-contract-password",
         )
@@ -160,7 +167,7 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(live_pg_dsn: 
         )
 
         migrator_pool = await asyncpg.create_pool(
-            live_pg_dsn,
+            dedicated_cluster_pg_dsn,
             user="jarvis_migrator",
             password="migration-contract-password",
             min_size=1,

@@ -21,6 +21,8 @@ make_pool_and_conn      canonical mock (pool, conn) factory with optional kwargs
 _make_pool_and_conn     module-level alias preserved for existing importers
 make_request            minimal request mock for handler tests
 make_live_pg_dsn        factory that returns a ``live_pg_dsn`` pytest fixture
+make_dedicated_cluster_pg_dsn
+                        same, on a cluster no other test shares
 make_contract_pg_dsn    factory that returns a session-scoped ``contract_pg_dsn`` fixture
 SharedAcquireCM         async CM yielding a shared asyncpg connection under a reentrant lock
 SharedConnPool          asyncpg.Pool-shaped object backed by a single shared connection
@@ -47,6 +49,7 @@ __all__ = [
     "make_request",
     "shelve_paper",
     "seed_user_row",
+    "make_dedicated_cluster_pg_dsn",
     "make_live_pg_dsn",
     "make_live_pg_session_dsn",
     "make_contract_pg_dsn",
@@ -103,6 +106,7 @@ from jarvis_common.testing_db import (  # noqa: F401
     _make_pool_and_conn,
     make_conn,
     make_contract_pg_dsn,
+    make_dedicated_cluster_pg_dsn,
     make_live_pg_dsn,
     make_live_pg_session_dsn,
     make_paper_record,
