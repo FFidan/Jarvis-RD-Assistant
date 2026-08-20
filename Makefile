@@ -212,17 +212,20 @@ rebuild-dashboard:
 	$(COMPOSE) build --build-arg CACHE_BUST=$(shell date +%s) dashboard
 	$(COMPOSE) up -d dashboard
 
+## The compose service is `platform_api`; `erasure-executor` runs the same image
+## without a build context, so naming it here would recreate a container that
+## nothing rebuilt.
 rebuild-backend:
-	$(COMPOSE) build paper_ingestion learning_engine
-	$(COMPOSE) up -d paper_ingestion learning_engine
+	$(COMPOSE) build platform_api paper_ingestion learning_engine
+	$(COMPOSE) up -d platform_api paper_ingestion learning_engine
 
 rebuild-telegram:
 	$(COMPOSE) build telegram_bot
 	$(COMPOSE) up -d telegram_bot
 
-rebuild-local:
-	$(COMPOSE) build paper_ingestion learning_engine dashboard
-	$(COMPOSE) up -d paper_ingestion learning_engine dashboard
+## Backend plus the dashboard. Composed from the two targets rather than a third
+## literal service list, which is how it came to omit a backend service.
+rebuild-local: rebuild-backend rebuild-dashboard
 
 up-build: gen-langfuse-keys init-secrets
 	$(COMPOSE) up -d --build
