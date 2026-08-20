@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint security-scan check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
+.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check test-shell-contracts shell-lint security-scan check docs-build ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -133,7 +133,7 @@ shell-lint:
 security-scan:
 	python3 scripts/security-scan.py
 
-## Run all local quality checks (mirrors CI lint-test + frontend and adds the
+## Run all local quality checks (mirrors CI lint-test, docs and frontend, and adds the
 ## optional Docker-backed swap/recovery matrix when Docker is available).
 ##
 ## Ordered fast → slow:
@@ -148,7 +148,8 @@ security-scan:
 ##   9. Optional Docker-backed swap/recovery matrix
 ##  10. Shell lint (shellcheck)
 ##  11. Fast pytest suite (excludes live_pg / integration / slow)
-##  12. Frontend lint + typecheck + tests + build
+##  12. Documentation build (strict — the hosted docs job rejects any warning)
+##  13. Frontend lint + typecheck + tests + build
 ##
 ## Live-Postgres checks run separately in CI and are opt-in locally:
 ##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m "contract and not live_qdrant" -v
@@ -169,7 +170,15 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	bash scripts/tests/test_restore_swap_recovery.sh
 	$(MAKE) shell-lint
 	uv run pytest
+	$(MAKE) docs-build
 	$(MAKE) frontend-check
+
+## Build the documentation the way the hosted docs job does: strict, so a link
+## that cannot be resolved fails here instead of after a push. The docs
+## dependencies are pinned in requirements-docs.txt and stay out of the project
+## environment, so this needs no local install.
+docs-build:
+	uv run --with-requirements requirements-docs.txt mkdocs build --strict
 
 ## Bring up Langfuse + JARVIS services with observability tracing enabled.
 ## Keys are loaded from .env (written by gen-langfuse-keys.sh) so they never
