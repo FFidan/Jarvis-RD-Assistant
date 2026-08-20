@@ -1,4 +1,4 @@
-"""Pure behavioral tests for signed internal identity assertions."""
+"""Behavioral tests for signed internal identity assertions and their boot gate."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from jarvis_common.auth import validate_production_config
 from jarvis_common.identity_assertions import (
     AssertionReplayCache,
     IdentityAssertionError,
@@ -17,6 +18,19 @@ from jarvis_common.identity_assertions import (
 )
 
 NOW = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+
+#: Smallest environment that satisfies every other production gate, so the
+#: identity gate is the only reason this configuration can be refused.
+_PRODUCTION_ENVIRONMENT = {
+    "ENVIRONMENT": "production",
+    "DEV_MODE": "false",
+    "JARVIS_API_KEY": "x" * 32,
+    "JARVIS_MODEL_HMAC_KEY": "y" * 32,
+    "JARVIS_CONFIG_KEY": "z" * 44,
+    "LITELLM_MASTER_KEY": "sk-" + "p" * 40,
+    "POSTGRES_PASSWORD": "q" * 24,
+    "APP_BASE_URL": "https://jarvis.example.com",
+}
 
 
 def _signer(
@@ -358,6 +372,35 @@ def test_replay_cache_evicts_expired_entries_without_losing_live_entries() -> No
 
     with pytest.raises(IdentityAssertionError, match="replayed"):
         cache.consume("live", expires_at=20, now=11)
+
+
+def test_replay_cache_at_capacity_drops_its_oldest_live_entry_and_keeps_serving() -> None:
+    """A registry full of live identifiers must not turn every caller away."""
+    cache = AssertionReplayCache(maximum_entries=2)
+    cache.consume("oldest", expires_at=60, now=1)
+    cache.consume("newer", expires_at=60, now=1)
+
+    cache.consume("newest", expires_at=60, now=1)
+
+    for retained in ("newer", "newest"):
+        with pytest.raises(IdentityAssertionError, match="replayed"):
+            cache.consume(retained, expires_at=60, now=1)
+    cache.consume("oldest", expires_at=60, now=1)
+
+
+def test_production_configuration_refuses_a_disabled_identity_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A production process must not serve with Platform-signed identity off."""
+    for name, value in _PRODUCTION_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", "false")
+
+    with pytest.raises(RuntimeError, match="JARVIS_IDENTITY_ASSERTIONS_REQUIRED"):
+        validate_production_config()
+
+    monkeypatch.setenv("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", "true")
+    validate_production_config()
 
 
 def test_verifier_rejects_oversized_compact_input_before_parsing() -> None:

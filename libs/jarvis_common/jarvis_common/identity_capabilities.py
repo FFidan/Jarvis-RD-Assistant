@@ -14,7 +14,20 @@ IDENTITY_CAPABILITY_VERSION: Final = 1
 _AUDIENCES: Final = frozenset({"learning", "research"})
 _PRINCIPALS: Final = frozenset({"learning", "research", "telegram"})
 _READ_METHODS: Final = frozenset({"GET", "HEAD"})
-_UNAUTHENTICATED_PATHS: Final = frozenset({"/health", "/health/live"})
+# The complete set of backend routes served without a Platform-signed identity.
+# Every other route outside ``/api`` must be named by a capability below, so a
+# route added without one is refused rather than silently left unprotected.
+_UNPROTECTED_PATHS: Final = frozenset(
+    {
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/health",
+        "/health/internal",
+        "/health/live",
+        "/openapi.json",
+        "/redoc",
+    }
+)
 _PATH_SEGMENT_PATTERN: Final = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _PLATFORM_CONFIG_WRITE_PATTERN: Final = re.compile(r"/internal/platform/config/[^/]+")
 _PLATFORM_PROVIDER_CACHE_PATTERN: Final = re.compile(
@@ -38,6 +51,11 @@ class ServiceCapability:
         Anchored regular expression matched against the request path.
     scope : str
         Minimum capability embedded in the signed assertion.
+    may_name_subject : bool, default=False
+        Whether the caller may name the acting user. Only background and
+        cross-service commands qualify, because their subject is a stored owner
+        Platform cannot re-derive from the caller. Every other capability acts
+        for a subject Platform establishes itself, such as a Telegram pairing.
     """
 
     principal: ServicePrincipal
@@ -45,6 +63,7 @@ class ServiceCapability:
     method: str
     path_pattern: str
     scope: str
+    may_name_subject: bool = False
 
     def matches(self, method: str, path: str) -> bool:
         """Return whether this capability authorizes an exact request binding.
@@ -78,13 +97,28 @@ def _telegram_capability(
 # URL: the route must be reviewed and added here with a negative contract test.
 SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
     ServiceCapability(
-        "learning", "research", "POST", r"/internal/domains/library", "research:library:write"
+        "learning",
+        "research",
+        "POST",
+        r"/internal/domains/library",
+        "research:library:write",
+        may_name_subject=True,
     ),
     ServiceCapability(
-        "research", "learning", "POST", r"/internal/domains/paper-read", "learning:domain:write"
+        "research",
+        "learning",
+        "POST",
+        r"/internal/domains/paper-read",
+        "learning:domain:write",
+        may_name_subject=True,
     ),
     ServiceCapability(
-        "research", "learning", "POST", r"/internal/domains/paper-deleted", "learning:domain:write"
+        "research",
+        "learning",
+        "POST",
+        r"/internal/domains/paper-deleted",
+        "learning:domain:write",
+        may_name_subject=True,
     ),
     ServiceCapability(
         "research",
@@ -92,9 +126,15 @@ SERVICE_CAPABILITY_MANIFEST: Final[tuple[ServiceCapability, ...]] = (
         "PUT",
         r"/internal/domains/projects/[^/]+/zotero-collection",
         "learning:domain:write",
+        may_name_subject=True,
     ),
     ServiceCapability(
-        "research", "learning", "PUT", r"/internal/domains/journal", "learning:domain:write"
+        "research",
+        "learning",
+        "PUT",
+        r"/internal/domains/journal",
+        "learning:domain:write",
+        may_name_subject=True,
     ),
     _telegram_capability("learning", "GET", r"/api/projects", "learning:projects:read"),
     _telegram_capability("learning", "POST", r"/api/projects", "learning:projects:write"),
@@ -203,16 +243,17 @@ def required_identity_scopes(
     Returns
     -------
     tuple[str, ...] or None
-        One required capability, or ``None`` for a route outside the signed
-        identity boundary.
+        One required capability, or ``None`` for preflight and the named
+        unprotected routes.
 
     Raises
     ------
     ValueError
-        If the audience, method, or path is malformed.
+        If the audience, method, or path is malformed, or if the path is
+        neither unprotected nor covered by a capability.
     """
     _validate_binding(audience, method, path)
-    if method == "OPTIONS" or path in _UNAUTHENTICATED_PATHS:
+    if method == "OPTIONS" or path in _UNPROTECTED_PATHS:
         return None
 
     # Platform is the sole assertion signer. This exact non-public seam lets it
@@ -234,7 +275,7 @@ def required_identity_scopes(
         return (service_scopes.pop(),)
 
     if path != "/api" and not path.startswith("/api/"):
-        return None
+        raise ValueError("request path is outside the identity capability boundary")
     segment = path.removeprefix("/api/").split("/", maxsplit=1)[0] or "api"
     if _PATH_SEGMENT_PATTERN.fullmatch(segment) is None:
         raise ValueError("request path has an invalid capability segment")
@@ -272,21 +313,79 @@ def service_principal_scopes(
     ValueError
         If the principal or request binding is malformed.
     """
+    return _single_scope(_matching_capabilities(principal, audience, method, path))
+
+
+def named_subject_scopes(
+    principal: ServicePrincipal,
+    audience: IdentityAudience,
+    method: str,
+    path: str,
+) -> tuple[str, ...] | None:
+    """Return the capability for a command that may name its own subject.
+
+    Platform signs for whichever user the caller names here, so the capability
+    must declare that its subject is a stored owner Platform cannot re-derive.
+    Callers acting for a subject Platform establishes itself -- a paired
+    Telegram chat, a browser session -- are denied and must use the boundary
+    that resolves that subject.
+
+    Parameters
+    ----------
+    principal : {"learning", "research", "telegram"}
+        Calling service identity.
+    audience : {"learning", "research"}
+        Exact destination service.
+    method : str
+        Uppercase HTTP method.
+    path : str
+        Absolute request path without query or fragment text.
+
+    Returns
+    -------
+    tuple[str, ...] or None
+        The one minimum scope, or ``None`` when this caller may not name a
+        subject for this route.
+
+    Raises
+    ------
+    ValueError
+        If the principal or request binding is malformed.
+    """
+    return _single_scope(
+        tuple(
+            capability
+            for capability in _matching_capabilities(principal, audience, method, path)
+            if capability.may_name_subject
+        )
+    )
+
+
+def _matching_capabilities(
+    principal: ServicePrincipal,
+    audience: IdentityAudience,
+    method: str,
+    path: str,
+) -> tuple[ServiceCapability, ...]:
     if principal not in _PRINCIPALS:
         raise ValueError("service principal is unsupported")
     _validate_binding(audience, method, path)
-    matches = tuple(
-        capability.scope
+    return tuple(
+        capability
         for capability in SERVICE_CAPABILITY_MANIFEST
         if capability.principal == principal
         and capability.audience == audience
         and capability.matches(method, path)
     )
+
+
+def _single_scope(matches: tuple[ServiceCapability, ...]) -> tuple[str, ...] | None:
     if not matches:
         return None
-    if len(set(matches)) != 1:
+    scopes = {capability.scope for capability in matches}
+    if len(scopes) != 1:
         raise RuntimeError("service capability manifest assigns conflicting scopes")
-    return (matches[0],)
+    return (scopes.pop(),)
 
 
 def _validate_binding(audience: str, method: str, path: str) -> None:
@@ -304,6 +403,7 @@ __all__ = [
     "IdentityAudience",
     "ServiceCapability",
     "ServicePrincipal",
+    "named_subject_scopes",
     "required_identity_scopes",
     "service_principal_scopes",
 ]
