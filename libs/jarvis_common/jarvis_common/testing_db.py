@@ -57,6 +57,49 @@ import asyncpg
 import pytest
 
 # ---------------------------------------------------------------------------
+# Cross-domain search path
+# ---------------------------------------------------------------------------
+
+#: Every product schema, plus public, in the order a cross-domain test reads
+#: them. Service roles get a narrower path in production; a test pool reaches
+#: across boundaries to set up and assert, so it needs all four.
+TEST_SEARCH_PATH = "platform, research, learning, ops, public, pg_catalog"
+
+#: The schemas that hold tables, for a test that resets state between cases.
+#: ``public`` is listed because a stray table there is still contamination.
+TEST_TABLE_SCHEMAS = ["platform", "research", "learning", "ops", "public"]
+
+
+async def open_cross_domain_path(conn: asyncpg.Connection) -> None:
+    """Restore the cross-domain path whenever a pool lends a connection.
+
+    ``search_path`` is per-session, so a pooled connection that was reset, or
+    was opened before the path was set, comes back with the server default.
+    Passing this as ``setup=`` re-applies it on every acquire; an unqualified
+    statement fails with ``relation ... does not exist`` without it.
+    """
+    await conn.execute(f"SET search_path TO {TEST_SEARCH_PATH}")
+
+
+async def reset_product_tables(conn: asyncpg.Connection) -> None:
+    """Empty every product table so a case starts from a known state.
+
+    The schema list is read from the catalogue rather than hard-coded, so a new
+    table is covered the day it lands. Scanning ``public`` alone stopped
+    resetting anything once the tables moved into the per-service schemas, which
+    is silent: the suite still passes, on rows a previous case left behind.
+    """
+    rows = await conn.fetch(
+        "SELECT schemaname, tablename FROM pg_tables WHERE schemaname = ANY($1::text[])",
+        TEST_TABLE_SCHEMAS,
+    )
+    if not rows:
+        raise AssertionError(f"no tables found in {TEST_TABLE_SCHEMAS}; the reset would be a no-op")
+    names = ", ".join(f'"{row["schemaname"]}"."{row["tablename"]}"' for row in rows)
+    await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+
+
+# ---------------------------------------------------------------------------
 # Sentinel used to distinguish "not passed" from "explicitly None"
 # ---------------------------------------------------------------------------
 
@@ -772,12 +815,6 @@ def _make_contract_pool_fixture():
         db_dir = Path(__file__).resolve().parents[3] / "db"
         init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
         migrations_dir = db_dir / "migrations"
-        contract_search_path = "platform, research, learning, ops, public, pg_catalog"
-
-        async def setup_contract_connection(conn: asyncpg.Connection) -> None:
-            """Restore the cross-domain path whenever the pool lends a connection."""
-            await conn.execute(f"SET search_path TO {contract_search_path}")
-
         pool = None
         for attempt in range(10):
             try:
@@ -786,7 +823,7 @@ def _make_contract_pool_fixture():
                     min_size=1,
                     max_size=5,
                     init=init_pg_connection,
-                    setup=setup_contract_connection,
+                    setup=open_cross_domain_path,
                 )
                 break
             except (OSError, asyncpg.PostgresError):

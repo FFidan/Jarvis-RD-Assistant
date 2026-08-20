@@ -26,6 +26,8 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from jarvis_common.testing import reset_product_tables
+from jarvis_common.testing_auth import SignedIdentityMiddleware
 
 # The real apps. SessionMiddleware + strict resolvers are wired in main.
 # learning_engine is only importable when both service roots are on
@@ -259,6 +261,14 @@ async def test_user_b_cannot_reach_user_a_resource(
     # Both apps read the live pool from app.state; the SessionMiddleware also
     # needs it to resolve the jarvis_session cookie.
     app.state.db_pool = two_users.pool
+    # Each service verifies a signed identity rather than trusting the caller,
+    # so the gateway's half of that exchange has to be present or every
+    # protected route answers 503 and proves nothing about isolation.
+    signed = SignedIdentityMiddleware(
+        app,
+        audience="research" if service == _PI else "learning",
+        session_pool=two_users.pool,
+    )
 
     path = _resolve(template, two_users)
     body = _BODIES.get(template)
@@ -266,7 +276,7 @@ async def test_user_b_cannot_reach_user_a_resource(
         body = {"paper_id": two_users.paper_id_a}
 
     async with _make_contract_client(
-        app,
+        signed,
         two_users.cookie_b,
         api_key=_TEST_API_KEY,
     ) as client:
@@ -1086,3 +1096,22 @@ async def test_weekly_summary_recent_engagement_scoped_to_engaging_user(
         None,
     )
     assert leaked is None, f"CROSS-USER: B's recently-engaged old paper visible to A: {leaked}"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_the_reset_between_cases_empties_the_relocated_tables(two_users, _xuser_pool):
+    """The per-case reset must still reach the tables after they left ``public``.
+
+    Every other case in this suite passes if the reset silently stops matching
+    anything — it would simply be reading rows a previous case left behind. This
+    one fails instead, so the isolation the suite claims stays observable.
+    """
+    async with _xuser_pool.acquire() as conn:
+        seeded = await conn.fetchval("SELECT count(*) FROM platform.users")
+        assert seeded > 0, "the seed created no users in the platform schema"
+
+        await reset_product_tables(conn)
+
+        remaining = await conn.fetchval("SELECT count(*) FROM platform.users")
+
+    assert remaining == 0, "the per-case reset left rows behind, so cases are not isolated"

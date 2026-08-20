@@ -29,6 +29,8 @@ from jarvis_common.testing import (  # noqa: F401
     SharedConnPool,
     _make_pool_and_conn,
     make_pool_and_conn,
+    open_cross_domain_path,
+    reset_product_tables,
 )
 
 # Seed helpers used by the two_users fixture (now canonical in jarvis_common.testing).
@@ -362,7 +364,11 @@ async def test_db_pool(live_pg_dsn):
     for attempt in range(10):
         try:
             pool = await asyncpg.create_pool(
-                live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+                live_pg_dsn,
+                min_size=1,
+                max_size=5,
+                init=init_pg_connection,
+                setup=open_cross_domain_path,
             )
             break
         except (OSError, asyncpg.PostgresError):
@@ -416,7 +422,11 @@ async def _xuser_pool(xuser_pg_dsn):
     for attempt in range(10):
         try:
             pool = await asyncpg.create_pool(
-                xuser_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+                xuser_pg_dsn,
+                min_size=1,
+                max_size=5,
+                init=init_pg_connection,
+                setup=open_cross_domain_path,
             )
             break
         except (OSError, asyncpg.PostgresError):
@@ -437,7 +447,7 @@ async def _xuser_pool(xuser_pg_dsn):
 async def two_users(_xuser_pool):
     """Two real users, each with a valid session cookie and owned rows.
 
-    Resets the shared session DB to a pristine state (TRUNCATE every public
+    Resets the shared session DB to a pristine state (TRUNCATE every product
     table, RESTART IDENTITY CASCADE) then runs the canonical seed — all
     COMMITTED so the real SessionMiddleware can resolve the jarvis_session cookie
     under READ COMMITTED. Truncate-of-all wipes any app writes from the prior
@@ -447,10 +457,7 @@ async def two_users(_xuser_pool):
     and must NOT be closed here.
     """
     async with _xuser_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-        names = ", ".join(f'"{r["tablename"]}"' for r in rows)
-        if names:
-            await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+        await reset_product_tables(conn)
 
         user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.com")
         user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.com")
@@ -484,7 +491,11 @@ async def _baseline_pool(baseline_pg_dsn):
     from tests.migration_helpers import apply_fresh_init
 
     pool = await asyncpg.create_pool(
-        baseline_pg_dsn, min_size=1, max_size=2, init=init_pg_connection
+        baseline_pg_dsn,
+        min_size=1,
+        max_size=2,
+        init=init_pg_connection,
+        setup=open_cross_domain_path,
     )
     try:
         await apply_fresh_init(pool)  # schema once; per-test reset is TRUNCATE
@@ -495,10 +506,7 @@ async def _baseline_pool(baseline_pg_dsn):
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def baseline_conn(_baseline_pool):
-    """Pristine connection per test: TRUNCATE all public tables, then yield."""
+    """Pristine connection per test: empty every product table, then yield."""
     async with _baseline_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
-        names = ", ".join(f'"{r["tablename"]}"' for r in rows)
-        if names:
-            await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+        await reset_product_tables(conn)
         yield conn
