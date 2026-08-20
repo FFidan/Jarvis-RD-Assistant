@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-08-19_
+_Last updated: 2026-08-20_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -10,6 +10,75 @@ Related docs:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — runtime boundaries affected by residual risks.
 - [SECURITY.md](SECURITY.md) — threat model and hardening checklist.
+
+---
+
+## v1.2.6 accepted boundaries
+
+### Erasure reclaims only papers the erased account held
+
+Erasing an account removes the papers only that account held, together with
+their extracted text and their stored documents. The set is derived from that
+account's library, so a paper **no** account holds is never considered. That
+state is reached routinely: when the last researcher holding a paper deletes it,
+the membership goes and the record stays. The vector purge is not scoped the
+same way, so such a paper loses its search vectors while keeping its record, its
+text and its document.
+
+**Why accepted:** reclaiming papers nobody holds is a storage-lifecycle job, not
+part of fulfilling one account's erasure, and widening an erasure path to sweep
+records outside the account being erased is the more dangerous change. Nothing
+about the erased account survives in those papers.
+
+**Reopen criteria:** a paper with no library membership is found to retain
+content attributable to a specific researcher, or a storage-reclamation pass is
+added, at which point this becomes its responsibility rather than erasure's.
+
+---
+
+### Erasure's protection rests on library membership
+
+A paper is kept when the deployment publishes it, when another researcher holds
+it, or when another account's deletion of it has not yet been confirmed. Removing
+the record cascades to every table keyed to that paper, including tables that
+carry a user identifier. Those tables are only reachable by an account that can
+see the paper, and sight requires public scope or a library entry — both of which
+keep the paper — so no surviving account's rows are removed.
+
+**Why accepted:** the invariant holds for every writer in the tree today, and it
+is asserted where it is decided rather than in each dependent table.
+
+**Reopen criteria:** any writer inserts a row keyed to a private paper for an
+account that has no library entry for it — `project_papers`, `paper_entities`
+and `paper_notes` are the surfaces to check first — or a paper can move from
+public to private while other accounts hold rows against it.
+
+---
+
+### An upgraded installation keeps a stale rollback secret file
+
+The rollback authority no longer has a password, and the deployment no longer
+declares or mounts its secret. On an installation upgraded from an earlier
+release the generated file stays on disk. It is not read, not mounted and not
+refreshed, and the role it belonged to cannot be connected to.
+
+**Why accepted:** deleting operator-held secret material during an upgrade is
+not something the upgrade should do silently.
+
+**Reopen criteria:** the file is found to be read by anything, or a supported
+step exists for retiring secret material an upgrade has made obsolete.
+
+---
+
+### Downgrading a fresh v1.2.6 installation to v1.2.5 needs the secret restored
+
+An installation first created on v1.2.6 has no rollback password file, because
+nothing generates one. v1.2.5 declares that secret, so starting v1.2.5 against
+such an installation fails until the file is recreated. Installations upgraded
+from an earlier release are unaffected: they still have theirs.
+
+**Reopen criteria:** a supported downgrade path is published, or the secret is
+reintroduced.
 
 ---
 
@@ -72,8 +141,11 @@ predating v1.2.6. Signed manifests still do not authenticate an unsigned
 pre-upgrade set, and no construction protects against an attacker who can
 replace both the archives and the backup key.
 
-**Reopen criteria:** `-macopt hexkey:` appears anywhere outside
-`legacy_manifest_signature`; a signing path calls `legacy_manifest_signature`;
+**Reopen criteria:** `-macopt hexkey:` appears anywhere in a product signing or
+verification path outside `legacy_manifest_signature` — the roundtrip harness
+uses it to write a pre-v1.2.6-shaped manifest with a throwaway key inside a
+disposable container, which is the shape being simulated and not an operator
+exposure; a signing path calls `legacy_manifest_signature`;
 verification reaches it for a manifest that carries a `run_id`; or the pinned
 openssl gains a way to key an HMAC from a file, at which point the fallback can
 be re-keyed and the argv exposure removed entirely.

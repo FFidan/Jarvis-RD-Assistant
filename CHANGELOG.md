@@ -10,7 +10,7 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
-## v1.2.6 (2026-08-19)
+## v1.2.6 (2026-08-20)
 
 This release gives every service sole ownership of its own data and makes each
 one prove who it is on every call between them. It also rebuilds the reading
@@ -23,6 +23,14 @@ say what it is really counting.
   passkeys, accounts, setup, auditing, configuration and Telegram pairing now
   belong to one service that owns them. Requests reach it through the same
   address as before; nothing changes for a reader.
+- **Account erasure a researcher can rely on.** An account can be erased, and
+  the deletion is carried out across every part of the deployment that holds
+  anything about it: records, extracted text, search vectors and the documents
+  stored on disk. A thirty-day window applies before it becomes irreversible,
+  each part of the deployment confirms its own work, and the erasure is only
+  recorded as finished once nothing is left behind. Papers only that account
+  held go with it; papers another researcher holds, and papers the deployment
+  publishes, stay.
 - **Signed identity between services.** The gateway asks the identity service to
   authorize each request and passes on a signature bound to that exact method,
   path and request. A service will not act on an identity it cannot verify, and
@@ -85,6 +93,10 @@ say what it is really counting.
 - **The Telegram client no longer holds a database credential.** It reaches the
   deployment only through service interfaces, and is given exactly the two
   secrets it needs.
+- **One database authority has no login at all.** The role an upgrade rollback
+  uses is reached only from inside the database, so it no longer has a password
+  or a secret file of its own. An existing installation drops the credential on
+  its next start, and the deployment carries one secret fewer.
 - **Quick Rating is gone.** Rating and flagging a paper from the reading surface
   were removed; notes live with the paper and remain editable.
 - **Project status reads the same everywhere.** The words the Telegram client
