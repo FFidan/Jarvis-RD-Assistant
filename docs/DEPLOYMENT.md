@@ -402,7 +402,6 @@ disagree, so a new secret cannot ship undocumented.
 | `postgres_learning_runtime_password` | Database login for `learning_engine` |
 | `postgres_migrator_password` | Database login for the migration job that runs before the services start |
 | `postgres_cluster_bootstrap_password` | PostgreSQL superuser password, used to create the roles and schemas and then to finalize migration authority |
-| `postgres_legacy_rollback_password` | Database login used to adopt objects left behind by a pre-split installation |
 | `postgres_backup_reader_password` | Read-only database login for the scheduled backup sidecar |
 | `postgres_restore_operator_password` | Database login for the restore sidecar, which needs to drop and recreate databases |
 | `postgres_erasure_executor_password` | Database login for the account-erasure worker |
@@ -471,10 +470,15 @@ boundary.
 **The remaining logins are task-scoped** and idle the rest of the time:
 `jarvis_migrator` applies schema changes, `jarvis_backup_reader` reads for
 backups, `jarvis_restore_operator` writes during a restore,
-`jarvis_erasure_executor` completes account erasure, `jarvis_legacy_rollback`
-exists only to undo an upgrade, and the two `jarvis_litellm_*` roles serve the
-model proxy. `jarvis_cluster_bootstrap` creates all of them at first start and
-is not used afterwards.
+`jarvis_erasure_executor` completes account erasure, and the two
+`jarvis_litellm_*` roles serve the model proxy. `jarvis_cluster_bootstrap`
+creates all of them at first start and is not used afterwards.
+
+**One authority has no login at all.** `jarvis_legacy_rollback` owns the
+database and holds the privileges an upgrade rollback needs, but nothing
+connects as it: the migration that needs it switches into it, and the restore
+login reaches it by membership. It has no password and no secret file, so there
+is no standing credential to protect.
 
 **At first start** `scripts/postgres-role-bootstrap.sh` creates every role from
 the `postgres_*_password.txt` files listed in the secret inventory above. It

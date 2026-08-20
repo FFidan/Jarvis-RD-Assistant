@@ -72,6 +72,19 @@ provision_login() {
     | connect_as "$bootstrap_role" "$bootstrap_password_file"
 }
 
+# The rollback authority is reached only by SET ROLE and by inheritance, never
+# by connecting, so it is provisioned the way the four schema owners are: no
+# LOGIN and no stored password. The ALTER runs on every start, which is what
+# demotes the role on an installation that provisioned it with a password.
+provision_nologin() {
+  nologin_role="$1"
+  if ! role_exists "$nologin_role"; then
+    connect_as "$bootstrap_role" "$bootstrap_password_file" -c "CREATE ROLE ${nologin_role}"
+  fi
+  connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
+    "ALTER ROLE ${nologin_role} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD NULL"
+}
+
 ensure_owner_roles() {
   for owner_role in $owner_roles; do
     if ! role_exists "$owner_role"; then
@@ -200,9 +213,15 @@ assert_recovery_roles() {
             WHERE member.rolname = 'jarvis_restore_operator'
               AND granted.rolname IN (
                 'pg_signal_backend', 'jarvis_legacy_rollback', 'jarvis_litellm_migrator'
-              )));")"
+              )))
+      +
+      (1 - (SELECT count(*) FROM pg_roles WHERE rolname = 'jarvis_legacy_rollback'))
+      +
+      (SELECT count(*) FROM pg_authid
+       WHERE rolname = 'jarvis_legacy_rollback'
+         AND (rolcanlogin OR rolpassword IS NOT NULL));")"
   if [ "$invalid_count" != "0" ]; then
-    echo "[cluster-bootstrap] backup or restore role authority is invalid." >&2
+    echo "[cluster-bootstrap] backup, restore, or rollback role authority is invalid." >&2
     exit 1
   fi
 }
@@ -423,7 +442,7 @@ provision_login jarvis_platform_runtime postgres_platform_runtime_password
 provision_login jarvis_research_runtime postgres_research_runtime_password
 provision_login jarvis_learning_runtime postgres_learning_runtime_password
 provision_login jarvis_migrator postgres_migrator_password
-provision_login jarvis_legacy_rollback postgres_legacy_rollback_password
+provision_nologin jarvis_legacy_rollback
 provision_login jarvis_backup_reader postgres_backup_reader_password
 provision_login jarvis_restore_operator postgres_restore_operator_password
 provision_login jarvis_erasure_executor postgres_erasure_executor_password

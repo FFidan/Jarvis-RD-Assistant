@@ -43,7 +43,6 @@ DATABASE_PASSWORD_FILES = {
     "postgres_learning_runtime_password.txt",
     "postgres_migrator_password.txt",
     "postgres_cluster_bootstrap_password.txt",
-    "postgres_legacy_rollback_password.txt",
     "postgres_backup_reader_password.txt",
     "postgres_restore_operator_password.txt",
     "postgres_erasure_executor_password.txt",
@@ -139,9 +138,7 @@ def test_legacy_postgres_env_password_moves_to_isolated_upgrade_file(tmp_path: P
         "existing-v125-password"
     )
     assert "POSTGRES_PASSWORD=" not in (tmp_path / ".env").read_text()
-    assert (tmp_path / "secrets" / "postgres_legacy_rollback_password.txt").read_text() != (
-        "existing-v125-password"
-    )
+    assert not (tmp_path / "secrets" / "postgres_legacy_rollback_password.txt").exists()
 
 
 def test_is_idempotent_and_preserves_existing_values(tmp_path: Path) -> None:

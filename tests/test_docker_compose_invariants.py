@@ -839,7 +839,6 @@ SECRET_PROVISIONING = {
     "postgres_learning_runtime_password": "update",
     "postgres_migrator_password": "update",
     "postgres_cluster_bootstrap_password": "update",
-    "postgres_legacy_rollback_password": "update",
     "postgres_backup_reader_password": "update",
     "postgres_restore_operator_password": "update",
     "postgres_erasure_executor_password": "update",
@@ -941,7 +940,6 @@ def test_database_credentials_are_runtime_scoped_and_migrations_gate_startup(com
         "postgres_learning_runtime_password",
         "postgres_migrator_password",
         "postgres_cluster_bootstrap_password",
-        "postgres_legacy_rollback_password",
         "postgres_backup_reader_password",
         "postgres_restore_operator_password",
         "postgres_erasure_executor_password",
@@ -1035,7 +1033,13 @@ def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
     assert "GRANT pg_signal_backend TO jarvis_restore_operator" in source
     assert "assert_recovery_roles" in source
     assert source.count("assert_recovery_roles") == 4
-    assert "backup or restore role authority is invalid" in source
+    assert "backup, restore, or rollback role authority is invalid" in source
+    assert "provision_login jarvis_legacy_rollback" not in source
+    assert "provision_nologin jarvis_legacy_rollback" in source
+    assert (
+        "ALTER ROLE ${nologin_role} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+        "NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD NULL" in source
+    )
 
 
 PROVISIONING_SCRIPTS = {

@@ -191,7 +191,7 @@ SOURCE_LITELLM_MASTER="sk-$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
 TARGET_LITELLM_MASTER="sk-$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 SOURCE_LITELLM_SALT='source-litellm-salt-0123456789abcdef'
 TARGET_LITELLM_SALT='target-litellm-salt-0123456789abcdef'
-ROLE_SECRET_FILES='postgres_platform_runtime_password.txt postgres_research_runtime_password.txt postgres_learning_runtime_password.txt postgres_migrator_password.txt postgres_cluster_bootstrap_password.txt postgres_legacy_rollback_password.txt postgres_backup_reader_password.txt postgres_restore_operator_password.txt postgres_erasure_executor_password.txt litellm_runtime_password.txt litellm_migrator_password.txt'
+ROLE_SECRET_FILES='postgres_platform_runtime_password.txt postgres_research_runtime_password.txt postgres_learning_runtime_password.txt postgres_migrator_password.txt postgres_cluster_bootstrap_password.txt postgres_backup_reader_password.txt postgres_restore_operator_password.txt postgres_erasure_executor_password.txt litellm_runtime_password.txt litellm_migrator_password.txt'
 SOURCE_BOOTSTRAP_PASSWORD='source-postgres_cluster_bootstrap_password.txt'
 TARGET_BOOTSTRAP_PASSWORD='target-postgres_cluster_bootstrap_password.txt'
 
@@ -498,7 +498,6 @@ services:
       - postgres_learning_runtime_password
       - postgres_migrator_password
       - postgres_cluster_bootstrap_password
-      - postgres_legacy_rollback_password
       - postgres_backup_reader_password
       - postgres_restore_operator_password
       - postgres_erasure_executor_password
@@ -562,8 +561,6 @@ secrets:
     file: ./secrets/postgres_migrator_password.txt
   postgres_cluster_bootstrap_password:
     file: ./secrets/postgres_cluster_bootstrap_password.txt
-  postgres_legacy_rollback_password:
-    file: ./secrets/postgres_legacy_rollback_password.txt
   postgres_backup_reader_password:
     file: ./secrets/postgres_backup_reader_password.txt
   postgres_restore_operator_password:
