@@ -1387,9 +1387,12 @@ run_sbf() {
   printf '{"timestamp":"%s","run_id":"%s","app_version":"1.2.0","schema_version":200,"created_at":"2026-07-15T12:00:00+00:00","archives":%s}' \
     "$ts" "$2" "$entries" > "$manifest"
   if [ "$4" != "unsigned" ]; then
-    derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$key" | cut -d' ' -f1)"
-    openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$manifest" \
-      | cut -d' ' -f1 > "${manifest}.hmac"
+    # The current construction, matching sign_manifest in backup.sh: the label
+    # keys the HMAC and the key file is fed in as a message prefix. This fixture
+    # carries a run_id, so it is a current manifest and the earlier construction
+    # is not accepted for it.
+    { cat -- "$key"; printf '\n%s\n' 'jarvis-manifest-v1'; cat -- "$manifest"; } \
+      | openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r | cut -d' ' -f1 > "${manifest}.hmac"
   fi
   [ "$4" = "swapped" ] && printf 'SWAPPED' > "${d}/jarvis_${ts}.sql.gz.enc"
   printf '{"attempted_at":"2026-07-15T12:00:00+00:00","timestamp":"%s","run_id":"%s","succeeded":true}' \

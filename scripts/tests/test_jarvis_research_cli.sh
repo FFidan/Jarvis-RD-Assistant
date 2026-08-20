@@ -1146,9 +1146,18 @@ seed_fresh_backup() {
     printf '%064d\n' 0 > "$dir/manifest_${ts}.json.hmac"
     return 0
   fi
-  derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$REPO/secrets/backup_encrypt_key.txt" | cut -d' ' -f1)"
-  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$dir/manifest_${ts}.json" \
-    | cut -d' ' -f1 > "$dir/manifest_${ts}.json.hmac"
+  # Sign the way the shape being simulated actually signs. Only the pre-1.2.6
+  # manifest, which carries no run_id, is still verified against the derived key.
+  if [ "$mode" = "legacy" ]; then
+    derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$REPO/secrets/backup_encrypt_key.txt" | cut -d' ' -f1)"
+    openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$dir/manifest_${ts}.json" \
+      | cut -d' ' -f1 > "$dir/manifest_${ts}.json.hmac"
+  else
+    { cat -- "$REPO/secrets/backup_encrypt_key.txt"; printf '\n%s\n' 'jarvis-manifest-v1'; \
+      cat -- "$dir/manifest_${ts}.json"; } \
+      | openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r | cut -d' ' -f1 \
+      > "$dir/manifest_${ts}.json.hmac"
+  fi
 }
 
 respond_to_backup() {

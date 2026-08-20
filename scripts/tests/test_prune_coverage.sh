@@ -270,13 +270,22 @@ for scenario in "version" "confirm"; do
 done
 
 # === backup-lifecycle.sh — authenticated PDF role parity =====================
+# Sign the way the shape being simulated actually signs. A current manifest gets
+# the label-keyed construction backup.sh writes today; only the pre-1.2.6 shape
+# gets the derived-key one, which is the only shape verification still accepts it
+# for.
 sign_set_manifest() {
-  local dir="$1" ts="$2" key manifest derived
+  local dir="$1" ts="$2" shape="${3:-current}" key manifest derived
   key="${dir}/backup.key"
   manifest="${dir}/manifest_${ts}.json"
-  derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$key" | cut -d' ' -f1)"
-  openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$manifest" \
-    | cut -d' ' -f1 > "${manifest}.hmac"
+  if [ "$shape" = current ]; then
+    { cat -- "$key"; printf '\n%s\n' 'jarvis-manifest-v1'; cat -- "$manifest"; } \
+      | openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r | cut -d' ' -f1 > "${manifest}.hmac"
+  else
+    derived="$(openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r < "$key" | cut -d' ' -f1)"
+    openssl dgst -sha256 -mac HMAC -macopt "hexkey:${derived}" -r < "$manifest" \
+      | cut -d' ' -f1 > "${manifest}.hmac"
+  fi
 }
 
 write_signed_set() {
@@ -315,7 +324,7 @@ write_signed_set() {
     printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":100,"created_at":"2026-07-20T08:00:00+00:00","archives":[%s]}' \
       "$ts" "$entries" > "$manifest"
   fi
-  sign_set_manifest "$dir" "$ts"
+  sign_set_manifest "$dir" "$ts" "$shape"
 }
 
 verify_set() {
