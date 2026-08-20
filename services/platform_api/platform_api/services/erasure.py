@@ -16,6 +16,7 @@ from jarvis_common.identity_assertions import IdentityAssertionSigner
 
 from platform_api.config import PlatformSettings, get_platform_settings
 from platform_api.repos import erasure
+from platform_api.repos.erasure import ErasureState
 
 _COORDINATOR_INTERVAL_SECONDS = 30.0
 logger = logging.getLogger(__name__)
@@ -90,108 +91,110 @@ def _require_grace_elapsed(record: erasure.ErasureRequest) -> None:
         raise ErasureNotEligibleError("account erasure is still inside the restore grace")
 
 
-async def _advance_qdrant(
-    context: _ErasureContext,
-    phase: erasure.ErasureState,
-    acknowledged: set[str],
-) -> erasure.ErasureState:
-    """Complete and persist the zero-residual vector deletion phase."""
-    if "qdrant" not in acknowledged:
-        if phase is not erasure.ErasureState.QDRANT_PENDING:
-            raise ValueError("Qdrant acknowledgement is missing after its durable phase")
-        path = f"/internal/domains/erasure/{context.request_id}/qdrant"
-        payload = await _owner_command(
-            context.app.state.http_client,
-            context.signer,
-            target=_OwnerTarget(
-                audience="research",
-                scope="research:erasure:write",
-                origin=context.config.research_api_url,
-                path=path,
-                user_id=context.record.user_id,
-            ),
-        )
+@dataclass(frozen=True, slots=True)
+class _ErasurePhase:
+    """One durable owner-command phase of the erasure sequence.
+
+    ``audience`` names the owning service, which also fixes the scope and the
+    origin; ``path_suffix`` extends the shared erasure command path.
+    """
+
+    domain: str
+    state: ErasureState
+    next_state: ErasureState
+    audience: str
+    path_suffix: str
+
+
+# Durable phase order: each phase advances into the next, and
+# platform.transition_erasure_v1 refuses every other step.
+_PHASES: tuple[_ErasurePhase, ...] = (
+    _ErasurePhase(
+        "qdrant",
+        ErasureState.QDRANT_PENDING,
+        ErasureState.RESEARCH_PENDING,
+        "research",
+        "/qdrant",
+    ),
+    _ErasurePhase(
+        "research",
+        ErasureState.RESEARCH_PENDING,
+        ErasureState.LEARNING_PENDING,
+        "research",
+        "/research",
+    ),
+    _ErasurePhase(
+        "learning",
+        ErasureState.LEARNING_PENDING,
+        ErasureState.READY,
+        "learning",
+        "",
+    ),
+)
+
+
+def _phase_receipt(phase: _ErasurePhase, payload: dict[str, object]) -> dict[str, object]:
+    """Validate one owner acknowledgement and return its durable receipt.
+
+    Qdrant reports a scan, so its receipt is durable only when it proves zero
+    residual points; the relational owners report a plain completion.
+    """
+    if phase.domain == "qdrant":
         receipt = payload.get("receipt")
         if not isinstance(receipt, dict) or receipt.get("residual_points") != 0:
-            raise ValueError("Qdrant acknowledgement is incomplete")
-        await erasure.acknowledge(context.pool, context.request_id, "qdrant", receipt)
-    if phase is erasure.ErasureState.QDRANT_PENDING:
-        return await erasure.transition(
-            context.pool,
-            context.request_id,
-            erasure.ErasureState.RESEARCH_PENDING,
-        )
-    return phase
+            raise ValueError(f"{phase.domain.capitalize()} acknowledgement is incomplete")
+        return receipt
+    if payload.get("acknowledged") is not True:
+        raise ValueError(f"{phase.domain.capitalize()} acknowledgement is incomplete")
+    return {"acknowledged": True}
 
 
-async def _advance_research(
+async def _advance_phases(
     context: _ErasureContext,
-    phase: erasure.ErasureState,
+    phase: ErasureState,
     acknowledged: set[str],
-) -> erasure.ErasureState:
-    """Complete and persist the Research-owned relational deletion phase."""
-    if "research" not in acknowledged:
-        if phase is not erasure.ErasureState.RESEARCH_PENDING:
-            raise ValueError("Research acknowledgement is missing after its durable phase")
-        path = f"/internal/domains/erasure/{context.request_id}/research"
-        payload = await _owner_command(
-            context.app.state.http_client,
-            context.signer,
-            target=_OwnerTarget(
-                audience="research",
-                scope="research:erasure:write",
-                origin=context.config.research_api_url,
-                path=path,
-                user_id=context.record.user_id,
-            ),
-        )
-        if payload.get("acknowledged") is not True:
-            raise ValueError("Research acknowledgement is incomplete")
-        await erasure.acknowledge(
-            context.pool,
-            context.request_id,
-            "research",
-            {"acknowledged": True},
-        )
-    if phase is erasure.ErasureState.RESEARCH_PENDING:
-        return await erasure.transition(
-            context.pool,
-            context.request_id,
-            erasure.ErasureState.LEARNING_PENDING,
-        )
+) -> ErasureState:
+    """Run each owner phase this request has not already acknowledged.
+
+    A phase whose receipt is already durable is skipped rather than repeated,
+    so an outage resumes exactly the incomplete work, and a failure records the
+    bounded retry against the phase actually reached.
+    """
+    for step in _PHASES:
+        try:
+            if step.domain not in acknowledged:
+                if phase is not step.state:
+                    raise ValueError(
+                        f"{step.domain.capitalize()} acknowledgement is missing "
+                        "after its durable phase"
+                    )
+                origin = (
+                    context.config.research_api_url
+                    if step.audience == "research"
+                    else context.config.learning_api_url
+                )
+                payload = await _owner_command(
+                    context.app.state.http_client,
+                    context.signer,
+                    target=_OwnerTarget(
+                        audience=step.audience,
+                        scope=f"{step.audience}:erasure:write",
+                        origin=origin,
+                        path=f"/internal/domains/erasure/{context.request_id}{step.path_suffix}",
+                        user_id=context.record.user_id,
+                    ),
+                )
+                await erasure.acknowledge(
+                    context.pool,
+                    context.request_id,
+                    step.domain,
+                    _phase_receipt(step, payload),
+                )
+            if phase is step.state:
+                phase = await erasure.transition(context.pool, context.request_id, step.next_state)
+        except (httpx.HTTPError, RuntimeError, ValueError):
+            return await erasure.record_retry(context.pool, context.request_id, phase)
     return phase
-
-
-async def _advance_learning(
-    context: _ErasureContext,
-    phase: erasure.ErasureState,
-    acknowledged: set[str],
-) -> erasure.ErasureState:
-    """Complete the Learning-owned deletion phase and mark the request ready."""
-    if "learning" not in acknowledged:
-        if phase is not erasure.ErasureState.LEARNING_PENDING:
-            raise ValueError("Learning acknowledgement is missing after its durable phase")
-        path = f"/internal/domains/erasure/{context.request_id}"
-        payload = await _owner_command(
-            context.app.state.http_client,
-            context.signer,
-            target=_OwnerTarget(
-                audience="learning",
-                scope="learning:erasure:write",
-                origin=context.config.learning_api_url,
-                path=path,
-                user_id=context.record.user_id,
-            ),
-        )
-        if payload.get("acknowledged") is not True:
-            raise ValueError("Learning acknowledgement is incomplete")
-        await erasure.acknowledge(
-            context.pool,
-            context.request_id,
-            "learning",
-            {"acknowledged": True},
-        )
-    return await erasure.transition(context.pool, context.request_id, erasure.ErasureState.READY)
 
 
 async def process_request(
@@ -248,12 +251,7 @@ async def process_request(
         phase = await erasure.transition(pool, request_id, phase)
 
     context = _ErasureContext(app, pool, signer, config, request_id, record)
-    try:
-        phase = await _advance_qdrant(context, phase, acknowledged)
-        phase = await _advance_research(context, phase, acknowledged)
-        return await _advance_learning(context, phase, acknowledged)
-    except (httpx.HTTPError, RuntimeError, ValueError):
-        return await erasure.record_retry(pool, request_id, phase)
+    return await _advance_phases(context, phase, acknowledged)
 
 
 async def process_due_requests(app: FastAPI, *, limit: int = 20) -> int:

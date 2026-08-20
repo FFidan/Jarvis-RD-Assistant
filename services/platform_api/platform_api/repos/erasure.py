@@ -27,51 +27,6 @@ class ErasureState(StrEnum):
     ATTENTION_REQUIRED = "attention_required"
 
 
-_RESUMABLE_STATES = frozenset(
-    {
-        ErasureState.QDRANT_PENDING,
-        ErasureState.RESEARCH_PENDING,
-        ErasureState.LEARNING_PENDING,
-        ErasureState.EXECUTING,
-    }
-)
-_TRANSITIONS: dict[ErasureState, frozenset[ErasureState]] = {
-    ErasureState.REQUESTED: frozenset({ErasureState.QDRANT_PENDING}),
-    ErasureState.QDRANT_PENDING: frozenset(
-        {
-            ErasureState.RESEARCH_PENDING,
-            ErasureState.RETRY_WAIT,
-            ErasureState.ATTENTION_REQUIRED,
-        }
-    ),
-    ErasureState.RESEARCH_PENDING: frozenset(
-        {
-            ErasureState.LEARNING_PENDING,
-            ErasureState.RETRY_WAIT,
-            ErasureState.ATTENTION_REQUIRED,
-        }
-    ),
-    ErasureState.LEARNING_PENDING: frozenset(
-        {
-            ErasureState.READY,
-            ErasureState.RETRY_WAIT,
-            ErasureState.ATTENTION_REQUIRED,
-        }
-    ),
-    ErasureState.READY: frozenset({ErasureState.EXECUTING}),
-    ErasureState.EXECUTING: frozenset(
-        {
-            ErasureState.COMPLETE,
-            ErasureState.RETRY_WAIT,
-            ErasureState.ATTENTION_REQUIRED,
-        }
-    ),
-    ErasureState.RETRY_WAIT: _RESUMABLE_STATES | {ErasureState.ATTENTION_REQUIRED},
-    ErasureState.ATTENTION_REQUIRED: _RESUMABLE_STATES,
-    ErasureState.COMPLETE: frozenset(),
-}
-
-
 @dataclass(frozen=True, slots=True)
 class ErasureRequest:
     """One durable Platform erasure request."""
@@ -187,7 +142,12 @@ async def transition(
     request_id: uuid.UUID,
     target: ErasureState,
 ) -> ErasureState:
-    """Apply one exact transition from the manifest-defined state graph.
+    """Apply one exact transition, which the capability validates.
+
+    The state graph itself lives in ``platform.transition_erasure_v1``, so a
+    skipped or reversed phase is refused by the database rather than by this
+    caller. What is decided here is narrower: a waiting request resumes only
+    the phase it recorded, which the graph alone cannot express.
 
     Parameters
     ----------
@@ -221,8 +181,6 @@ async def transition(
     current = ErasureState(str(row["state"]))
     if current is target:
         return current
-    if target not in _TRANSITIONS[current]:
-        raise ValueError(f"invalid erasure transition {current.value} -> {target.value}")
     if current in {ErasureState.RETRY_WAIT, ErasureState.ATTENTION_REQUIRED}:
         resume_state = ErasureState(str(row["resume_state"]))
         if target is not resume_state and target is not ErasureState.ATTENTION_REQUIRED:
@@ -230,12 +188,17 @@ async def transition(
                 f"invalid erasure resume {current.value} -> {target.value}; "
                 f"expected {resume_state.value}"
             )
-    persisted = await pool.fetchval(
-        "SELECT platform.transition_erasure_v1($1, $2, $3)",
-        request_id,
-        target.value,
-        current.value,
-    )
+    try:
+        persisted = await pool.fetchval(
+            "SELECT platform.transition_erasure_v1($1, $2, $3)",
+            request_id,
+            target.value,
+            current.value,
+        )
+    except asyncpg.RaiseError as exc:
+        if "state graph" not in str(exc):
+            raise
+        raise ValueError(f"invalid erasure transition {current.value} -> {target.value}") from exc
     if persisted is None:
         raise RuntimeError("erasure request changed during transition")
     return ErasureState(str(persisted))
@@ -255,8 +218,6 @@ async def record_retry(
     resume_state: ErasureState,
 ) -> ErasureState:
     """Persist bounded retry state and return the resulting state."""
-    if resume_state not in _RESUMABLE_STATES:
-        raise ValueError(f"{resume_state.value} is not a resumable erasure phase")
     state = await pool.fetchval(
         "SELECT platform.record_erasure_retry_v1($1, $2)",
         request_id,
@@ -264,6 +225,59 @@ async def record_retry(
     )
     if state is None:
         raise RuntimeError("erasure retry phase changed or exhausted")
+    return ErasureState(str(state))
+
+
+async def list_requests(pool: asyncpg.Pool, *, limit: int = 50) -> list[asyncpg.Record]:
+    """Return the most recent erasure requests for operator review."""
+    return await pool.fetch(
+        """SELECT request_id, user_id, state, attempts, resume_state,
+                  last_error, next_attempt_at, requested_at
+           FROM erasure_requests
+           ORDER BY requested_at DESC
+           LIMIT $1""",
+        limit,
+    )
+
+
+async def resume(pool: asyncpg.Pool, request_id: uuid.UUID) -> ErasureState:
+    """Return one stranded request to its recorded phase with a fresh budget.
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool
+        Platform runtime pool.
+    request_id : uuid.UUID
+        Durable erasure request identifier.
+
+    Returns
+    -------
+    ErasureState
+        The phase the request resumed into.
+
+    Raises
+    ------
+    LookupError
+        If the request does not exist.
+    ValueError
+        If the request is not stranded, or a newer request supersedes it.
+    RuntimeError
+        If the capability refused, or the request changed concurrently.
+    """
+    try:
+        state = await pool.fetchval("SELECT platform.resume_erasure_v1($1)", request_id)
+    except asyncpg.RaiseError as exc:
+        message = str(exc)
+        if "does not exist" in message:
+            raise LookupError(f"erasure request {request_id} does not exist") from exc
+        if "is not allowed" in message:
+            # A denied role, say: record what the capability said before
+            # narrowing it, or the operator sees only the fallback wording.
+            logger.warning("erasure resume was refused: %s", message)
+            raise RuntimeError("erasure resume was refused") from exc
+        raise ValueError(message) from exc
+    if state is None:
+        raise RuntimeError("erasure request changed during resume")
     return ErasureState(str(state))
 
 
@@ -276,6 +290,8 @@ __all__ = [
     "acknowledged_domains",
     "due_request_ids",
     "get_request",
+    "list_requests",
     "record_retry",
+    "resume",
     "transition",
 ]

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import asyncpg
 from jarvis_common.app_factory import build_database_url
 from jarvis_common.config import get_jarvis_common_settings
 
 _EXECUTOR_INTERVAL_SECONDS = 30.0
+logger = logging.getLogger(__name__)
 
 
 async def finalize_due_requests(pool: asyncpg.Pool, *, limit: int = 20) -> int:
@@ -25,6 +27,12 @@ async def finalize_due_requests(pool: asyncpg.Pool, *, limit: int = 20) -> int:
     -------
     int
         Number of requests whose idempotent finalization completed.
+
+    Notes
+    -----
+    The due list is ordered, so a request the finalizer refuses is selected
+    first on every pass. Isolating each one keeps a single unfinishable request
+    from starving the rest and from restarting this process forever.
     """
     async with pool.acquire() as conn:
         request_ids = await conn.fetch(
@@ -33,10 +41,16 @@ async def finalize_due_requests(pool: asyncpg.Pool, *, limit: int = 20) -> int:
         )
     finalized = 0
     for row in request_ids:
-        async with pool.acquire() as conn:
-            completed = await conn.fetchval(
-                "SELECT platform.finalize_erasure($1)", row["request_id"]
+        request_id = row["request_id"]
+        try:
+            async with pool.acquire() as conn:
+                completed = await conn.fetchval("SELECT platform.finalize_erasure($1)", request_id)
+        except asyncpg.PostgresError:
+            logger.exception(
+                "Account erasure finalization failed",
+                extra={"request_id": str(request_id)},
             )
+            continue
         finalized += int(completed is True)
     return finalized
 
@@ -52,7 +66,10 @@ async def _run() -> None:
     )
     try:
         while True:
-            await finalize_due_requests(pool)
+            try:
+                await finalize_due_requests(pool)
+            except Exception:  # noqa: BLE001
+                logger.exception("Account erasure finalization pass failed")
             await asyncio.sleep(_EXECUTOR_INTERVAL_SECONDS)
     finally:
         await pool.close()

@@ -673,17 +673,6 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext('admin_role_mutation'))")
-            erasure_state = await conn.fetchval(
-                """SELECT state FROM erasure_requests
-                   WHERE user_id = $1 AND state NOT IN ('complete', 'attention_required')
-                   ORDER BY requested_at DESC LIMIT 1""",
-                user_id,
-            )
-            if erasure_state not in {None, "requested"}:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Account erasure has already started and cannot be restored",
-                )
             target = await conn.fetchrow(
                 """
                 SELECT id, email, role, created_at, last_login_at, deleted_at

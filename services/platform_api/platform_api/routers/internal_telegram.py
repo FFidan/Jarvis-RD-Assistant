@@ -174,8 +174,15 @@ async def authorize_downstream_request(
     if scopes is None:
         raise HTTPException(status_code=403, detail="Telegram capability is not allowed")
 
+    # A pairing outlives a soft delete so a restore keeps it, which means the
+    # account state -- not the pairing row -- decides whether Telegram may act
+    # for this user.
     paired = await db_pool.fetchval(
-        "SELECT EXISTS(SELECT 1 FROM telegram_user_pairings WHERE user_id = $1)",
+        """SELECT EXISTS(
+               SELECT 1 FROM telegram_user_pairings AS pairing
+               JOIN users ON users.id = pairing.user_id
+               WHERE pairing.user_id = $1 AND users.deleted_at IS NULL
+           )""",
         body.user_id,
     )
     if paired is not True:
@@ -326,9 +333,12 @@ async def list_pairings(
     """
     _require_telegram(principal)
     rows = await db_pool.fetch(
-        """SELECT user_id, chat_id, telegram_username, paired_at
-           FROM telegram_user_pairings
-           ORDER BY user_id"""
+        """SELECT pairing.user_id, pairing.chat_id,
+                  pairing.telegram_username, pairing.paired_at
+           FROM telegram_user_pairings AS pairing
+           JOIN users ON users.id = pairing.user_id
+           WHERE users.deleted_at IS NULL
+           ORDER BY pairing.user_id"""
     )
     return [PairingRecord.model_validate(dict(row)) for row in rows]
 
@@ -362,9 +372,11 @@ async def resolve_pairing(
     """
     _require_telegram(principal)
     row = await db_pool.fetchrow(
-        """SELECT user_id, chat_id, telegram_username, paired_at
-           FROM telegram_user_pairings
-           WHERE chat_id = $1""",
+        """SELECT pairing.user_id, pairing.chat_id,
+                  pairing.telegram_username, pairing.paired_at
+           FROM telegram_user_pairings AS pairing
+           JOIN users ON users.id = pairing.user_id
+           WHERE pairing.chat_id = $1 AND users.deleted_at IS NULL""",
         chat_id,
     )
     if row is None:
@@ -476,7 +488,10 @@ async def get_telegram_runtime(
     owner_user_id: int | None = None
     if owner_chat_id is not None:
         resolved_user = await db_pool.fetchval(
-            "SELECT user_id FROM telegram_user_pairings WHERE chat_id = $1",
+            """SELECT pairing.user_id
+               FROM telegram_user_pairings AS pairing
+               JOIN users ON users.id = pairing.user_id
+               WHERE pairing.chat_id = $1 AND users.deleted_at IS NULL""",
             owner_chat_id,
         )
         if resolved_user is not None:

@@ -98,14 +98,26 @@ async def _seed_request_through_capabilities(
 
 
 async def test_transition_rejects_a_skipped_phase(platform_runtime_conn) -> None:
-    """The persisted graph cannot jump from requested directly to ready."""
+    """The persisted graph cannot jump from requested directly to ready.
+
+    The capability decides this, so the refusal arrives as a database error and
+    ends the caller's transaction. The legal step is exercised separately for
+    that reason.
+    """
     request_id = await _seed_request_through_capabilities(platform_runtime_conn, deleted_days=31)
     pool = SharedConnPool(platform_runtime_conn)
 
     with pytest.raises(ValueError, match="requested.*ready"):
         await erasure.transition(pool, request_id, erasure.ErasureState.READY)
 
+
+async def test_transition_accepts_the_next_durable_phase(platform_runtime_conn) -> None:
+    """The first destructive phase is the one step reachable from requested."""
+    request_id = await _seed_request_through_capabilities(platform_runtime_conn, deleted_days=31)
+    pool = SharedConnPool(platform_runtime_conn)
+
     state = await erasure.transition(pool, request_id, erasure.ErasureState.QDRANT_PENDING)
+
     assert state is erasure.ErasureState.QDRANT_PENDING
 
 
@@ -147,8 +159,14 @@ async def test_retry_persists_and_resumes_the_exact_phase(
 async def test_duplicate_acknowledgements_replace_one_durable_receipt(
     platform_runtime_conn,
 ) -> None:
-    """Duplicate delivery updates one domain vote instead of adding another."""
-    request_id = await _seed_request_through_capabilities(platform_runtime_conn, deleted_days=31)
+    """Duplicate delivery updates one domain vote instead of adding another.
+
+    The request is seeded through to the Learning phase because a receipt is
+    only accepted for a phase the request has actually reached.
+    """
+    request_id = await _seed_request_through_capabilities(
+        platform_runtime_conn, deleted_days=31, state="learning_pending"
+    )
     pool = SharedConnPool(platform_runtime_conn)
 
     await erasure.acknowledge(pool, request_id, "learning", {"attempt": 1})

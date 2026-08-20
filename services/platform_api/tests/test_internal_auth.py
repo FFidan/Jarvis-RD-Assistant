@@ -13,7 +13,7 @@ import asyncpg
 import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
 from jarvis_common.identity_assertions import (
@@ -27,7 +27,7 @@ from jarvis_common.identity_capabilities import (
     service_principal_scopes,
 )
 from jarvis_common.identity_middleware import IdentityAssertionMiddleware
-from jarvis_common.testing import make_pool_and_conn
+from jarvis_common.testing import SharedConnPool, make_pool_and_conn
 from learning_engine.deps import get_db_pool as get_learning_db_pool
 from learning_engine.routers import internal_domains as learning_internal_domains
 from paper_ingestion.deps import get_db_pool as get_research_db_pool
@@ -1446,3 +1446,65 @@ def test_public_platform_routes_exist_only_on_platform() -> None:
     assert set(research_paths["/internal/platform/providers/{provider}/cache/invalidate"]) == {
         "post"
     }
+
+
+@pytest.mark.contract
+@pytest.mark.real_auth
+@pytest.mark.asyncio(loop_scope="session")
+async def test_telegram_reads_exclude_a_soft_deleted_paired_user(contract_conn: Any) -> None:
+    """Deleting an account closes every Telegram path its chat still feeds.
+
+    The pairing row deliberately outlives a soft delete so a restore keeps it,
+    which means each reader has to consult the account state. One that does not
+    keeps minting assertions for the deleted user and keeps the orchestration
+    push paths delivering to their chat.
+    """
+    pool = cast(asyncpg.Pool, SharedConnPool(contract_conn))
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="current",
+        signing_key=Ed25519PrivateKey.generate(),
+    )
+    user_id = await contract_conn.fetchval(
+        """INSERT INTO platform.users (email, role, deleted_at)
+           VALUES ($1, 'user', NOW()) RETURNING id""",
+        f"paired-deleted-{uuid.uuid4().hex}@example.com",
+    )
+    chat_id = 900_000_000 + int(user_id)
+    await contract_conn.execute(
+        """INSERT INTO platform.telegram_user_pairings (user_id, chat_id, telegram_username)
+           VALUES ($1, $2, 'deleted-account')""",
+        user_id,
+        chat_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO platform.user_config (user_id, key, value)
+           VALUES (NULL, 'telegram.owner_chat_id', to_jsonb($1::bigint))
+           ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value""",
+        chat_id,
+    )
+
+    with pytest.raises(HTTPException) as authorization:
+        await internal_telegram.authorize_downstream_request(
+            internal_telegram.TelegramAuthorizationRequest(
+                audience="research",
+                method="GET",
+                path="/api/papers/42",
+                request_id="telegram-deleted-account",
+                user_id=user_id,
+            ),
+            "telegram",
+            pool,
+            signer,
+        )
+    assert authorization.value.status_code == 404
+
+    with pytest.raises(HTTPException) as resolution:
+        await internal_telegram.resolve_pairing(chat_id, "telegram", pool)
+    assert resolution.value.status_code == 404
+
+    listed = await internal_telegram.list_pairings("telegram", pool)
+    assert user_id not in [record.user_id for record in listed]
+
+    runtime = await internal_telegram.get_telegram_runtime("telegram", pool)
+    assert runtime.owner_user_id is None
