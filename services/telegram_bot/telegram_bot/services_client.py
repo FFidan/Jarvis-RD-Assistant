@@ -55,6 +55,7 @@ __all__ = [
     "fetch_new_paper_count",
     "fetch_inbox_count",
     "check_authors",
+    "acknowledge_author_alerts",
     "search_papers",
     "fetch_papers_feed",
     "search_papers_feed",
@@ -658,6 +659,11 @@ async def check_authors(
 ) -> dict[str, Any]:
     """POST {paper_ingestion}/api/authors/check.
 
+    The bot relays every match to Telegram, so it asks for the matches without
+    them being recorded and confirms each one through
+    ``acknowledge_author_alerts``. An alert whose send fails is then still on
+    offer at the next check instead of being lost.
+
     Returns
     -------
     dict
@@ -666,10 +672,31 @@ async def check_authors(
     resp = await http.post(
         f"{config.paper_ingestion_url}/api/authors/check",
         headers=_owner_headers(config, user_id),
+        json={"acknowledges_delivery": True},
     )
     resp.raise_for_status()
     result: dict[str, Any] = resp.json()
     return result
+
+
+async def acknowledge_author_alerts(
+    http: httpx.AsyncClient,
+    config: BotConfig,
+    user_id: int,
+    *,
+    tracked_author_id: int,
+    paper_ids: list[int],
+) -> None:
+    """POST {paper_ingestion}/api/authors/alerts/ack.
+
+    Records one delivered author alert so the next check no longer offers it.
+    """
+    resp = await http.post(
+        f"{config.paper_ingestion_url}/api/authors/alerts/ack",
+        headers=_owner_headers(config, user_id),
+        json={"tracked_author_id": tracked_author_id, "paper_ids": paper_ids},
+    )
+    resp.raise_for_status()
 
 
 #: Sources an external discovery search fans out to.  The endpoint's request

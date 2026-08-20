@@ -64,6 +64,7 @@ _LE_TARGETS = [
 _PI_TARGETS = [
     ("GET", "/api/papers/feed"),
     ("POST", "/api/authors/check"),
+    ("POST", "/api/authors/alerts/ack"),
     ("GET", "/api/papers/{paper_id}"),
     ("PUT", "/api/papers/{paper_id}/save"),
     ("PUT", "/api/papers/{paper_id}/skip"),

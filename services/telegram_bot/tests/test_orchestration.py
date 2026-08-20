@@ -1,10 +1,13 @@
 """Orchestration workflow tests.
 
 Covers:
-- author_alerts: alerts when new papers by tracked authors are found
 - daily_briefing: morning briefing message sent to owner
 - deadline_warning: milestone deadline warnings within next 3 days
 - review_reminder: spaced repetition due-cards reminder
+
+author_alerts is covered by ``test_author_alerts.py``, and the sends-nothing-
+without-a-pairing case for every orchestration by
+``test_orchestration_no_pairings.py``.
 """
 
 from __future__ import annotations
@@ -18,89 +21,10 @@ from jarvis_common.testing import make_bot_config
 from jarvis_common.testing_telegram import make_http_response
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
-from telegram_bot.orchestration import author_alerts as author_alerts_mod
 from telegram_bot.orchestration import daily_briefing as daily_briefing_mod
 from telegram_bot.orchestration import deadline_warning as deadline_warning_mod
 from telegram_bot.orchestration import review_reminder as review_reminder_mod
 from telegram_bot.platform_client import UserPairing
-
-# ---------------------------------------------------------------------------
-# test_author_alerts
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_author_alerts_sends_message_when_new_paper_found():
-    """run_author_alerts sends an HTML alert when a tracked author has a new paper.
-
-    The bot now delegates matching + dedup to the Paper Ingestion service via
-    ``services_client.check_authors`` (POST /api/authors/check) and renders one
-    message per ``match`` in the response, so the test mocks at the http_client
-    boundary.
-    """
-    bot = AsyncMock()
-    config = make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret"))
-    pool = AsyncMock()
-
-    tracked_name = "Alice Smith"
-    check_resp = make_http_response(
-        {
-            "matches": [
-                {
-                    "author_name": tracked_name,
-                    "papers": [
-                        {
-                            "id": 42,
-                            "title": "Paper by Alice",
-                            "url": "https://example.com/paper",
-                        }
-                    ],
-                }
-            ],
-            "new_papers": 1,
-            "authors_checked": 1,
-        }
-    )
-    http_client = AsyncMock(spec=httpx.AsyncClient)
-    http_client.post.return_value = check_resp
-
-    with patch(
-        "telegram_bot.orchestration.author_alerts.list_user_pairings",
-        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
-    ):
-        await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
-
-    # One POST per pairing to the authors/check endpoint with canonical headers.
-    http_client.post.assert_awaited_once()
-    post_args, post_kwargs = http_client.post.await_args
-    assert post_args[0].endswith("/api/authors/check")
-    assert post_kwargs["headers"]["X-Jarvis-Paired-User-Id"] == "1"
-    assert "X-API-Key" not in post_kwargs["headers"]
-
-    bot.send_message.assert_awaited_once()
-    _, kwargs = bot.send_message.await_args
-    assert kwargs["chat_id"] == 9999
-    assert kwargs["parse_mode"] == "HTML"
-    assert tracked_name in kwargs["text"]
-
-
-@pytest.mark.asyncio
-async def test_author_alerts_skips_when_no_owner():
-    """run_author_alerts returns early and sends nothing when no pairings exist."""
-    bot = AsyncMock()
-    http_client = AsyncMock(spec=httpx.AsyncClient)
-    pool = AsyncMock()
-
-    with patch.object(author_alerts_mod, "list_user_pairings", AsyncMock(return_value=[])):
-        await author_alerts_mod.run_author_alerts(
-            http_client,
-            pool,
-            bot,
-            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
-        )
-
-    bot.send_message.assert_not_awaited()
-
 
 # ---------------------------------------------------------------------------
 # test_daily_briefing
@@ -233,24 +157,6 @@ async def test_daily_briefing_passes_owner_headers_on_every_call():
         headers = call.kwargs["headers"]
         assert "X-API-Key" not in headers
         assert headers["X-Jarvis-Paired-User-Id"] == "42"
-
-
-@pytest.mark.asyncio
-async def test_daily_briefing_skips_when_no_owner():
-    """run_daily_briefing returns early and sends nothing when no pairings exist."""
-    bot = AsyncMock()
-    http_client = AsyncMock(spec=httpx.AsyncClient)
-    pool = AsyncMock()
-
-    with patch.object(daily_briefing_mod, "list_user_pairings", AsyncMock(return_value=[])):
-        await daily_briefing_mod.run_daily_briefing(
-            http_client,
-            pool,
-            bot,
-            make_bot_config(BotConfig, jarvis_api_key=SecretStr("secret")),
-        )
-
-    bot.send_message.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
