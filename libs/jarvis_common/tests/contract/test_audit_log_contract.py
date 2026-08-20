@@ -19,6 +19,7 @@ Supersedes: mock-unit tests asserting conn.execute called with correct SQL
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -293,6 +294,10 @@ async def test_log_audit_keeps_an_attributable_source_for_auth_failures(audit_ru
     assert first == repeat, "repeated attempts from one address must be correlatable"
     assert first != other, "distinct addresses must not collapse onto one value"
     assert first < 2**53, "the audit view transports metadata numbers as doubles"
+    assert first != int(hashlib.sha256(b"198.51.100.7").hexdigest()[:12], 16), (
+        "the address digest is the unkeyed hash of the address — every IPv4 address is one "
+        "of about four billion, so the immutable row would carry a recoverable address"
+    )
 
 
 async def test_log_audit_strict_uses_the_supplied_connection(audit_runtime_conn):

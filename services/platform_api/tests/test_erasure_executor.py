@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -314,6 +315,75 @@ async def test_one_unfinishable_request_does_not_block_the_next(
         )
     )
     assert states == {unfinishable_id: "ready", healthy_id: "complete"}
+
+
+async def test_a_revoked_finalize_privilege_is_visible_and_does_not_crash_the_loop(
+    contract_pg_dsn: str,
+    erasure_connections,
+    caplog,
+) -> None:
+    """Losing the capability must report, not fail silently and not restart forever.
+
+    The per-request isolation that keeps one unfinishable request from starving
+    the rest also swallows a privilege loss, which is systemic rather than
+    per-request. Every other privilege assertion in this file is made on a
+    direct connection, so without this one nothing exercises that path through
+    the executor itself and the pass would report a clean zero forever.
+    """
+    bootstrap, _ = erasure_connections
+    request_id = uuid.uuid4()
+    user_id = await bootstrap.fetchval(
+        """INSERT INTO platform.users (email, role, deleted_at)
+           VALUES ($1, 'user', NOW() - INTERVAL '31 days') RETURNING id""",
+        f"revoked-{uuid.uuid4().hex}@example.com",
+    )
+    await bootstrap.execute(
+        """INSERT INTO platform.erasure_requests
+           (request_id, user_id, state, resume_state, eligible_at)
+           VALUES ($1, $2, 'ready', 'learning_pending', NOW() - INTERVAL '2 days')""",
+        request_id,
+        user_id,
+    )
+
+    await bootstrap.execute(
+        "REVOKE EXECUTE ON FUNCTION platform.finalize_erasure(uuid) FROM jarvis_erasure_executor"
+    )
+    pool = await asyncpg.create_pool(
+        contract_pg_dsn,
+        user="jarvis_erasure_executor",
+        password="erasure-executor-contract-password",
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        from platform_api.erasure_executor import finalize_due_requests
+
+        with caplog.at_level(logging.ERROR):
+            finalized = await finalize_due_requests(pool, limit=20)
+    finally:
+        await pool.close()
+        await bootstrap.execute(
+            "GRANT EXECUTE ON FUNCTION platform.finalize_erasure(uuid) TO jarvis_erasure_executor"
+        )
+
+    assert finalized == 0, "a request cannot be reported finalized without the capability"
+    reported = [
+        record
+        for record in caplog.records
+        if "Account erasure finalization failed" in record.message
+        and record.exc_info is not None
+        and isinstance(record.exc_info[1], asyncpg.InsufficientPrivilegeError)
+    ]
+    assert reported, (
+        "the lost capability itself must reach the log — a bare 'finalization failed' is "
+        "what an ordinary unfinishable request produces, so it cannot distinguish the two"
+    )
+    assert (
+        await bootstrap.fetchval(
+            "SELECT state FROM platform.erasure_requests WHERE request_id = $1", request_id
+        )
+        == "ready"
+    ), "the request must remain due so it finalizes once the capability returns"
 
 
 async def test_transition_capability_enforces_the_declared_state_graph(

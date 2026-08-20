@@ -570,6 +570,20 @@ async def test_briefing_returns_text():
 
 
 @pytest.mark.asyncio
+async def test_briefing_failure_answers_instead_of_going_silent():
+    """A failed gather must reach the user, who was told the briefing was coming."""
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.side_effect = Exception("Connection failed")
+    scheduled = _capture_scheduled(context)
+
+    await briefing_command(update, context)
+    await scheduled[0]
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "Could not put your briefing together" in text
+
+
+@pytest.mark.asyncio
 async def test_briefing_partial_degradation_on_milestones_failure():
     """R7: a failed individual gather leaves that section empty, not the whole briefing."""
     update, context, _, mock_http = _make_update_and_context()

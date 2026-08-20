@@ -1,12 +1,16 @@
 """Audit log helper: append security and destructive-mutation events."""
 
 import hashlib
+import hmac
 import json
 import logging
 import re
+import secrets
 from typing import Any
 
 import asyncpg
+
+from jarvis_common.settings import get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +33,13 @@ _SOURCE_ADDRESS_KEYS = ("ip", "client_ip", "raw_client_ip")
 # small enough to survive JSON transport to the audit view, which reads numbers
 # as doubles and would silently round anything above 2**53.
 _ADDRESS_DIGEST_HEX_CHARS = 12
+#: Domain separation, so this digest cannot be compared against any other
+#: value derived from the same install secret.
+_ADDRESS_DIGEST_LABEL = b"jarvis-audit-address-v1"
+#: Used only when no install secret is configured, which production start-up
+#: refuses. Random per process: a run stays correlatable and no digest is
+#: reversible, at the cost of correlation across a restart.
+_EPHEMERAL_ADDRESS_KEY = secrets.token_bytes(32)
 
 
 def _cap_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -62,8 +73,20 @@ def _cap_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _address_digest(address: str) -> int:
-    """Return a stable pseudonym for a caller's network *address*."""
-    return int(hashlib.sha256(address.encode("utf-8")).hexdigest()[:_ADDRESS_DIGEST_HEX_CHARS], 16)
+    """Return a stable pseudonym for a caller's network *address*.
+
+    Keyed rather than hashed, because the space this pseudonymises is small
+    enough to enumerate: every IPv4 address is one of about four billion, so
+    an unkeyed digest of one can simply be looked up. A keyed digest cannot,
+    which is what lets an immutable row carry the value at all.
+    """
+    key = get_secrets_settings().jarvis_model_hmac_key
+    keyed = hmac.new(
+        key.get_secret_value().encode("utf-8") if key else _EPHEMERAL_ADDRESS_KEY,
+        _ADDRESS_DIGEST_LABEL + address.encode("utf-8"),
+        hashlib.sha256,
+    )
+    return int(keyed.hexdigest()[:_ADDRESS_DIGEST_HEX_CHARS], 16)
 
 
 def _immutable_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:

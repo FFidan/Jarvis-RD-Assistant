@@ -349,7 +349,13 @@ async def _send_briefing(
     Runs detached from ``/briefing``: the gather is five backend reads, and
     this application processes updates one at a time.
     """
-    sections = await gather_briefing_sections(http, config, user_id)
+    try:
+        sections = await gather_briefing_sections(http, config, user_id)
+    except Exception:
+        logger.exception("Briefing composition failed")
+        await reply("Could not put your briefing together. Please try again later.")
+        return
+
     text = format_morning_briefing(
         sections.new_papers_count,
         sections.inbox_total,
