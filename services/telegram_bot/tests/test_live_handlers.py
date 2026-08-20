@@ -73,18 +73,25 @@ from telegram_bot.handlers.commands.paper_commands import (
 from telegram_bot.handlers.commands.system_commands import pulse_now_command
 from telegram_bot.service_auth import TelegramBackendAuth
 
-pytestmark = [
-    pytest.mark.live_backend,
-    pytest.mark.usefixtures("_clear_rate_limit_state"),
-]
-
 # ---------------------------------------------------------------------------
 # Opt-in gate
 # ---------------------------------------------------------------------------
 
 #: Environment opt-in. Mirrors the ``JARVIS_RUN_LIVE_PG`` convention used by the
-#: Postgres-backed suites.
+#: Postgres-backed suites. It is a mark rather than an import-time
+#: ``pytest.skip`` because a skip taken while the module is being imported
+#: outranks marker deselection, so it would be counted by every selection that
+#: never asked for ``live_backend`` at all.
 _OPT_IN_ENV = "JARVIS_RUN_LIVE_BACKEND"
+
+pytestmark = [
+    pytest.mark.live_backend,
+    pytest.mark.usefixtures("_clear_rate_limit_state"),
+    pytest.mark.skipif(
+        os.environ.get(_OPT_IN_ENV) != "1",
+        reason=f"live-backend handler harness requires {_OPT_IN_ENV}=1",
+    ),
+]
 
 #: Chat id of the synthesized private chat. Never reaches the network: the
 #: Telegram Bot API boundary stays a test double, only the backend is live.
@@ -94,12 +101,6 @@ _LIVE_CHAT_ID = 424242
 #: starts a real Pulse run: minutes of LLM work against a rate limit of three
 #: per hour. Reading the deck changes nothing, so it stays separate.
 _GENERATE_OPT_IN_ENV = "JARVIS_RUN_LIVE_PULSE_GENERATE"
-
-if os.environ.get(_OPT_IN_ENV) != "1":
-    pytest.skip(
-        f"live-backend handler harness requires {_OPT_IN_ENV}=1",
-        allow_module_level=True,
-    )
 
 
 # ---------------------------------------------------------------------------
