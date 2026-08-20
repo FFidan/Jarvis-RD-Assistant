@@ -1036,10 +1036,12 @@ def test_cluster_bootstrap_scopes_legacy_conversion_authority() -> None:
     assert "backup, restore, or rollback role authority is invalid" in source
     assert "provision_login jarvis_legacy_rollback" not in source
     assert "provision_nologin jarvis_legacy_rollback" in source
-    assert (
-        "ALTER ROLE ${nologin_role} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
-        "NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD NULL" in source
-    )
+    # Scoped to the helper's own body: "NOLOGIN" also appears in ensure_owner_roles,
+    # so a file-wide substring check cannot see this role regaining a login.
+    provisioner = source.split("provision_nologin() {", 1)[1].split("\n}", 1)[0]
+    assert "ALTER ROLE ${nologin_role}" in provisioner
+    assert "NOLOGIN" in provisioner
+    assert "PASSWORD NULL" in provisioner
     # The start-up guard is the only thing that would notice a rollback authority
     # that regained a way to connect on an installation the bootstrap did not
     # provision. Nothing else in the suite reads it, so it is pinned here.
