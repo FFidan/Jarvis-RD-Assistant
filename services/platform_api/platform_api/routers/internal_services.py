@@ -10,7 +10,7 @@ from jarvis_common.identity_assertions import IdentityAssertionSigner
 from jarvis_common.identity_capabilities import (
     IdentityAudience,
     ServicePrincipal,
-    service_principal_scopes,
+    named_subject_scopes,
 )
 from pydantic import BaseModel, Field
 
@@ -68,9 +68,14 @@ async def authorize_service_command(
     db_pool: DatabasePool,
     signer: Signer,
 ) -> ServiceAuthorizationResponse:
-    """Authenticate a service and mint only its declared owner command."""
+    """Authenticate a service and mint only its declared owner command.
+
+    The body names the acting user, so only a capability declared as naming its
+    own subject can be minted here. A caller whose subject Platform resolves
+    itself is refused and must use the boundary that resolves it.
+    """
     try:
-        scopes = service_principal_scopes(principal, body.audience, body.method, body.path)
+        scopes = named_subject_scopes(principal, body.audience, body.method, body.path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Service command binding is invalid") from exc
     if scopes is None:

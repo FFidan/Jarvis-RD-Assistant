@@ -1,6 +1,7 @@
 """Root pytest conftest — applies to all test directories.
 
-Currently exports a single autouse fixture that clears the
+Freezes the Research and Learning identity-middleware decision (see below) and
+exports a single autouse fixture that clears the
 ``jarvis_common.settings.get_secrets_settings`` lru_cache before AND after
 every test. Tests that monkeypatch secret env vars (``LITELLM_MASTER_KEY``,
 ``JARVIS_API_KEY``, …) need a fresh ``SecretsSettings`` snapshot rather than
@@ -16,9 +17,19 @@ import os
 import pytest
 
 # Production requires a Platform-signed assertion on every protected Research
-# and Learning route. Most unit and contract tests exercise those applications
-# directly, without the nginx/Platform gateway, so they opt out explicitly.
-os.environ.setdefault("JARVIS_IDENTITY_ASSERTIONS_REQUIRED", "false")
+# and Learning route, and both applications decide while being imported whether
+# to install the middleware that enforces it. Most unit and contract tests drive
+# those applications directly, without the gateway that mints assertions, so the
+# decision is taken once here with the requirement disabled. The variable is then
+# removed: past that point it is no longer a middleware switch but an ordinary
+# configuration value, and production validation must read it at its deployed
+# default rather than at a test opt-out.
+os.environ["JARVIS_IDENTITY_ASSERTIONS_REQUIRED"] = "false"
+
+import learning_engine.main  # noqa: E402, F401
+import paper_ingestion.main  # noqa: E402, F401
+
+del os.environ["JARVIS_IDENTITY_ASSERTIONS_REQUIRED"]
 
 
 @pytest.fixture(autouse=True)

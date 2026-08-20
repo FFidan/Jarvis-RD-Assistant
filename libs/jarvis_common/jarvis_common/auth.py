@@ -15,7 +15,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
 from jarvis_common.audit import log_audit
-from jarvis_common.config import POSTGRES_PASSWORD_SECRET_PATH
+from jarvis_common.config import POSTGRES_PASSWORD_SECRET_PATH, get_jarvis_common_settings
 from jarvis_common.event_log import log_event
 from jarvis_common.paths import read_regular_json_file
 from jarvis_common.settings import get_core_settings
@@ -568,14 +568,22 @@ async def require_admin_or_api_key(request: Request) -> None:
     Raises
     ------
     HTTPException
-        If an authenticated browser session has a non-administrator role.
+        If an authenticated browser session has a non-administrator role, or if
+        the request reached this service on the operations key alone.
 
     Notes
     -----
     :func:`verify_api_key` validates API-key callers before this dependency.
     User-data routes use :func:`current_user_id_strict` instead.
 
+    The gateway signs an identity for the operations key without the account
+    checks that minting a browser session from that same key applies, so that
+    identity is deliberately not administrator authority. A caller presenting
+    the key directly, carrying no signed identity, is unaffected.
+
     """
+    if getattr(request.state, "identity_principal", None) == "api-key":
+        raise HTTPException(status_code=403, detail="Admin role required")
     role = getattr(request.state, "user_role", None)
     if role is not None and role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
@@ -681,6 +689,7 @@ def validate_production_config() -> None:
     * ``LITELLM_MASTER_KEY`` must be strong (rejects known placeholders).
     * The PostgreSQL password env value or configured role-scoped file must be strong.
     * ``APP_BASE_URL`` must be set (prevents magic-link host-header poisoning).
+    * ``JARVIS_IDENTITY_ASSERTIONS_REQUIRED`` must stay enabled in production.
 
     Raises
     ------
@@ -819,6 +828,16 @@ def validate_production_config() -> None:
         if not app_base_url:
             raise RuntimeError(
                 "APP_BASE_URL must be set in production (prevents magic-link host-header poisoning)"
+            )
+
+        # Signed-identity gate. Research and Learning read this setting while
+        # importing their application, so by the time this runs the middleware
+        # decision is already made: the gate refuses to serve a process
+        # configured without it rather than installing it late.
+        if not get_jarvis_common_settings().identity_assertions_required:
+            raise RuntimeError(
+                "JARVIS_IDENTITY_ASSERTIONS_REQUIRED must stay enabled in production — "
+                "protected Research and Learning routes would accept unsigned requests"
             )
 
 

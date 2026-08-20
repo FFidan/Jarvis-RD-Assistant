@@ -15,7 +15,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
+from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY, require_admin_or_api_key
 from jarvis_common.identity_assertions import (
     IdentityAssertionSigner,
     IdentityAssertionVerifier,
@@ -246,7 +246,7 @@ def test_session_subrequest_returns_route_bound_assertion() -> None:
     assert claims.session_id == "session-7"
 
 
-def test_api_key_subrequest_has_no_user_identity() -> None:
+def test_api_key_subrequest_carries_no_user_identity_and_no_admin_authority() -> None:
     client, verifier = _build_client(include_session=False, configured_api_key="operator-key")
     headers = {**_authorization_headers(), "X-API-Key": "operator-key"}
 
@@ -262,7 +262,69 @@ def test_api_key_subrequest_has_no_user_identity() -> None:
     )
     assert claims.principal == "api-key"
     assert claims.user_id is None
+    assert claims.user_role is None
     assert claims.session_id is None
+    assert _admin_gate_status(principal=claims.principal, user_role=claims.user_role) == 403
+
+
+def _admin_gate_status(*, principal: str, user_role: str | None) -> int:
+    """Return the status a backend admin route gives one signed identity.
+
+    Parameters
+    ----------
+    principal : str
+        Calling principal carried by the assertion.
+    user_role : str or None
+        Authenticated role carried by the assertion.
+
+    Returns
+    -------
+    int
+        Status code of a route guarded by ``require_admin_or_api_key`` behind
+        the production identity middleware.
+    """
+    private_key = Ed25519PrivateKey.generate()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="current",
+        signing_key=private_key,
+    )
+    app = FastAPI()
+    app.state.identity_verifier = IdentityAssertionVerifier(
+        issuer="jarvis-platform",
+        audience="research",
+        keys={"current": VerificationKey(private_key.public_key())},
+    )
+
+    @app.get("/api/system/hardware", dependencies=[Depends(require_admin_or_api_key)])
+    async def hardware() -> dict[str, bool]:
+        return {"reachable": True}
+
+    app.add_middleware(
+        IdentityAssertionMiddleware,
+        scope_resolver=lambda method, path: required_identity_scopes("research", method, path),
+    )
+    assertion = signer.issue(
+        audience="research",
+        subject="operator-api-key" if user_role is None else "user:7",
+        principal=principal,
+        user_id=None if user_role is None else 7,
+        user_role=user_role,
+        request_id="admin-gate",
+        request_method="GET",
+        request_path="/api/system/hardware",
+        scopes=("research:system:read",),
+    )
+    response = TestClient(app).get(
+        "/api/system/hardware",
+        headers={"X-Jarvis-Identity": assertion, "X-Request-Id": "admin-gate"},
+    )
+    return response.status_code
+
+
+def test_browser_admin_assertion_still_reaches_an_operations_route() -> None:
+    """The api-key rule must not close the route to a real administrator."""
+    assert _admin_gate_status(principal="browser", user_role="admin") == 200
 
 
 def test_application_auth_defers_only_to_gateway_route_authentication(
@@ -322,11 +384,21 @@ def test_subrequest_rejects_untrusted_peer_or_missing_identity(
     assert "X-Jarvis-Identity" not in response.headers
 
 
-def test_capability_classifier_exempts_only_non_api_and_preflight_routes() -> None:
+def test_capability_classifier_refuses_every_route_it_does_not_recognize() -> None:
+    """Only the named unprotected routes and preflight escape the boundary."""
     assert required_identity_scopes("research", "GET", "/api/papers") == ("research:papers:read",)
     assert required_identity_scopes("learning", "POST", "/api/cards") == ("learning:cards:write",)
     assert required_identity_scopes("research", "OPTIONS", "/api/papers") is None
-    assert required_identity_scopes("research", "GET", "/health") is None
+    for unprotected_path in (
+        "/health",
+        "/health/live",
+        "/health/internal",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/openapi.json",
+        "/redoc",
+    ):
+        assert required_identity_scopes("research", "GET", unprotected_path) is None
     assert required_identity_scopes("research", "PUT", "/internal/platform/config/pulse.cron") == (
         "research:config:write",
     )
@@ -335,6 +407,17 @@ def test_capability_classifier_exempts_only_non_api_and_preflight_routes() -> No
         "POST",
         "/internal/platform/providers/openrouter/cache/invalidate",
     ) == ("research:providers:write",)
+    assert required_identity_scopes("learning", "PUT", "/internal/domains/journal") == (
+        "learning:domain:write",
+    )
+    for refused_path in (
+        "/internal/domains/unlisted",
+        "/internal/telegram/pairings",
+        "/metrics",
+        "/health/internal/detail",
+    ):
+        with pytest.raises(ValueError, match="outside the identity capability boundary"):
+            required_identity_scopes("learning", "GET", refused_path)
 
 
 def test_service_principal_manifest_is_exact_and_deny_by_default() -> None:
@@ -375,6 +458,76 @@ def test_service_principal_manifest_is_exact_and_deny_by_default() -> None:
         )
         is None
     )
+
+
+def _build_service_authorization_client(
+    *,
+    principal: ServicePrincipal,
+    user_active: bool = True,
+) -> tuple[TestClient, IdentityAssertionVerifier]:
+    """Build the Platform signer boundary used by Research and Learning."""
+    private_key = Ed25519PrivateKey.generate()
+    signer = IdentityAssertionSigner(
+        issuer="jarvis-platform",
+        key_id="current",
+        signing_key=private_key,
+    )
+    verifier = IdentityAssertionVerifier(
+        issuer="jarvis-platform",
+        audience="learning",
+        keys={"current": VerificationKey(private_key.public_key())},
+    )
+    pool, _ = make_pool_and_conn(fetchval_return=user_active, direct_methods=True)
+    app = FastAPI()
+    app.include_router(internal_services.router)
+    app.dependency_overrides[authenticate_service_principal] = lambda: principal
+    app.dependency_overrides[get_identity_signer] = lambda: signer
+    app.dependency_overrides[get_db_pool] = lambda: cast(asyncpg.Pool, pool)
+    return TestClient(app), verifier
+
+
+def test_service_authorization_names_a_subject_only_for_declared_owner_commands() -> None:
+    """A named user is mintable only where the manifest says the caller may name one."""
+    client, verifier = _build_service_authorization_client(principal="research")
+
+    owner_command = client.post(
+        "/internal/services/authorize",
+        json={
+            "audience": "learning",
+            "method": "PUT",
+            "path": "/internal/domains/journal",
+            "request_id": "research-journal-7",
+            "user_id": 7,
+        },
+    )
+
+    assert owner_command.status_code == 200, owner_command.text
+    payload = owner_command.json()
+    assert payload["scopes"] == ["learning:domain:write"]
+    claims = verifier.verify(
+        payload["assertion"],
+        required_scopes=("learning:domain:write",),
+        request_id="research-journal-7",
+        request_method="PUT",
+        request_path="/internal/domains/journal",
+    )
+    assert claims.subject == "user:7"
+    assert claims.user_id == 7
+
+    paired_client, _ = _build_service_authorization_client(principal="telegram")
+    borrowed = paired_client.post(
+        "/internal/services/authorize",
+        json={
+            "audience": "learning",
+            "method": "GET",
+            "path": "/api/projects",
+            "request_id": "telegram-borrowed-user",
+            "user_id": 7,
+        },
+    )
+
+    assert borrowed.status_code == 403
+    assert borrowed.json() == {"detail": "Service command is not allowed"}
 
 
 def test_internal_telegram_authorization_binds_paired_user_and_destination() -> None:

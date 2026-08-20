@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import base64
 import binascii
-import heapq
 import json
 import uuid
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -174,11 +174,18 @@ class AssertionReplayCache:
         if maximum_entries <= 0:
             raise ValueError("maximum_entries must be positive")
         self._maximum_entries = maximum_entries
-        self._expires_at: dict[str, int] = {}
-        self._expiry_heap: list[tuple[int, str]] = []
+        # Insertion order is arrival order, which for a fixed 60-second lifetime
+        # is also expiry order. One ordered structure therefore serves both the
+        # expiry sweep and oldest-first eviction.
+        self._expires_at: OrderedDict[str, int] = OrderedDict()
 
     def consume(self, token_id: str, *, expires_at: int, now: int) -> None:
         """Record first use of an assertion identifier.
+
+        At capacity the oldest identifier is dropped rather than refusing the
+        caller, because a full registry is a load condition and not an
+        authentication failure. Dropping the oldest re-opens replay only for an
+        identifier already close to expiry, and never for the arriving one.
 
         Parameters
         ----------
@@ -192,19 +199,18 @@ class AssertionReplayCache:
         Raises
         ------
         IdentityAssertionError
-            If ``token_id`` was already consumed or the cache is full after
-            expired entries are removed.
+            If ``token_id`` was already consumed.
         """
-        while self._expiry_heap and self._expiry_heap[0][0] < now:
-            expiry, expired_token_id = heapq.heappop(self._expiry_heap)
-            if self._expires_at.get(expired_token_id) == expiry:
-                del self._expires_at[expired_token_id]
+        while self._expires_at:
+            oldest_token_id = next(iter(self._expires_at))
+            if self._expires_at[oldest_token_id] >= now:
+                break
+            del self._expires_at[oldest_token_id]
         if token_id in self._expires_at:
             raise IdentityAssertionError("identity assertion was replayed")
-        if len(self._expires_at) >= self._maximum_entries:
-            raise IdentityAssertionError("identity assertion replay cache is full")
+        while len(self._expires_at) >= self._maximum_entries:
+            self._expires_at.popitem(last=False)
         self._expires_at[token_id] = expires_at
-        heapq.heappush(self._expiry_heap, (expires_at, token_id))
 
 
 class IdentityAssertionSigner:
