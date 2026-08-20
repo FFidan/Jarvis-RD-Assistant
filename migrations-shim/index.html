@@ -708,7 +708,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -1617,6 +1617,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrations
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -1633,6 +1651,36 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a migration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -1722,6 +1770,25 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a migration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1749,7 +1816,7 @@
 <p>This directory is the ledger for incremental schema migrations applied on top of <code>db/init.sql</code>.</p>
 <p>The repository's squashed baseline schema version is <code>101</code>; it is fully captured
 in <code>db/init.sql</code>. A fresh database starts at that baseline and then applies the
-incremental files below. The current schema version is <code>113</code>, also recorded in
+incremental files below. The current schema version is <code>120</code>, also recorded in
 <code>db/SCHEMA_VERSION</code>.</p>
 <p>New migrations land here numbered sequentially (<code>0102_&lt;descriptive&gt;.sql</code> and up)
 and are applied via <code>run_migrations</code>
@@ -1823,12 +1890,71 @@ and are applied via <code>run_migrations</code>
 <td><code>0113_restore_zotero_project_collections.sql</code></td>
 <td>Restore the per-project Zotero collection cache used by project-linked citation exports.</td>
 </tr>
+<tr>
+<td><code>0114</code></td>
+<td><code>0114_owned_schemas_and_roles.sql</code></td>
+<td>Move declared objects into owned schemas and install the role, grant, search-path, and migration-integrity boundary.</td>
+</tr>
+<tr>
+<td><code>0115</code></td>
+<td><code>0115_cross_domain_boundaries.sql</code></td>
+<td>Add owner-local domain delivery, audit identity indirection, and durable erasure coordination.</td>
+</tr>
+<tr>
+<td><code>0116</code></td>
+<td><code>0116_unified_job_facade.sql</code></td>
+<td>Move the public jobs facade to Platform and enforce durable queue ownership.</td>
+</tr>
+<tr>
+<td><code>0117</code></td>
+<td><code>0117_owner_capabilities.sql</code></td>
+<td>Replace remaining foreign runtime writes with owner-local delivery and exact database capabilities.</td>
+</tr>
+<tr>
+<td><code>0118</code></td>
+<td><code>0118_enforce_runtime_privileges.sql</code></td>
+<td>Revoke transitional cross-domain grants and enforce capability-only runtime mutations.</td>
+</tr>
+<tr>
+<td><code>0119</code></td>
+<td><code>0119_erasure_executor_capability.sql</code></td>
+<td>Restrict due-erasure selection to the executor capability and align visibility checkpoint guards with the canonical key.</td>
+</tr>
+<tr>
+<td><code>0120</code></td>
+<td><code>0120_erasure_capability_boundary.sql</code></td>
+<td>Move erasure state changes and the account deletion clock behind owner-defined capabilities.</td>
+</tr>
 </tbody>
 </table>
 <p>The migration runner serializes application with PostgreSQL advisory lock 42,
 records each applied version in <code>schema_migrations</code>, and refuses files newer
 than the running code during restore. Operators should not execute individual
 SQL files by hand.</p>
+<p>Owner/ACL-free backups deliberately omit role-bound database authority. The
+on-demand recovery workflow reapplies the manifest-pinned <code>db/restore-authority.sql</code>
+only after forward migration reaches the packaged schema; it is not a migration
+and must not be invoked independently.</p>
+<h2 id="adding-a-migration">Adding a migration<a class="headerlink" href="#adding-a-migration" title="Permanent link">&para;</a></h2>
+<p>The schema version is recorded in several places on purpose: a running
+deployment, a fresh install, and a restore each reach it by a different route.
+All of them must move together, and each is guarded by a test that fails when
+one is forgotten.</p>
+<ol>
+<li><code>db/migrations/NNNN_&lt;descriptive&gt;.sql</code> — the forward step itself.</li>
+<li><code>db/SCHEMA_VERSION</code> — the packaged version.</li>
+<li>This file — the current-version sentence above and a row in the table.</li>
+<li><code>db/init.sql</code> — embody the step for fresh installs, add the version to the
+   <code>schema_migrations</code> seed list, and record the file's SHA-256.</li>
+<li><code>db/ownership-manifest.json</code> — the migration's hash, and the restore
+   authority's hash and schema version if that file changed.</li>
+<li><code>db/restore-authority.sql</code> — its packaged-schema pin, and any grant the step
+   introduced, so a restored deployment matches a fresh one.</li>
+<li><code>libs/jarvis_common/jarvis_common/migrations.py</code> — the in-code fallback used
+   where the version file is unavailable.</li>
+<li><code>scripts/restore.sh</code> — the last-resort ceiling used when neither the
+   migrations directory nor the version file can be read.</li>
+</ol>
 
 
 

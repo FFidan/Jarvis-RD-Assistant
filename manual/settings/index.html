@@ -713,7 +713,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -1175,10 +1175,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#llm-models" class="md-nav__link">
+  <a href="#ai-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        LLM Models
+        AI models
       
     </span>
   </a>
@@ -1280,10 +1280,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#observability" class="md-nav__link">
+  <a href="#monitoring-langfuse" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Observability
+        Monitoring (Langfuse)
       
     </span>
   </a>
@@ -1323,17 +1323,6 @@
     <span class="md-ellipsis">
       
         Telegram
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#bot-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Bot Token
       
     </span>
   </a>
@@ -1419,10 +1408,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#spaced-repetition" class="md-nav__link">
+  <a href="#learning-cards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Spaced Repetition
+        Learning Cards
       
     </span>
   </a>
@@ -2239,10 +2228,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#llm-models" class="md-nav__link">
+  <a href="#ai-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        LLM Models
+        AI models
       
     </span>
   </a>
@@ -2344,10 +2333,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#observability" class="md-nav__link">
+  <a href="#monitoring-langfuse" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Observability
+        Monitoring (Langfuse)
       
     </span>
   </a>
@@ -2387,17 +2376,6 @@
     <span class="md-ellipsis">
       
         Telegram
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#bot-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Bot Token
       
     </span>
   </a>
@@ -2483,10 +2461,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#spaced-repetition" class="md-nav__link">
+  <a href="#learning-cards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Spaced Repetition
+        Learning Cards
       
     </span>
   </a>
@@ -2529,7 +2507,7 @@
   
 
 
-<!-- verified-against-UI: 2026-07-20 | routes: /settings, /settings?section=&item= -->
+<!-- verified-against-UI: 2026-08-19 | routes: /settings, /settings?section=&item= -->
 
 <h1 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h1>
 <p>The <strong>Settings</strong> page at <code>/settings</code> is a two-pane interface: a <strong>SettingsRail</strong> on the left lists the sections and items, and the right panel shows the detail form for the currently selected item. The active section and item are reflected in the URL query parameters (<code>?section=&amp;item=</code>).</p>
@@ -2545,7 +2523,8 @@
 <h3 id="account-data-export">Account data export<a class="headerlink" href="#account-data-export" title="Permanent link">&para;</a></h3>
 <p>Download a ZIP of your own account data from the Account section. This is the GDPR/account export: it is scoped to the signed-in user and includes structured account records, not an instance-wide paper export or a PDF backup.</p>
 <h3 id="appearance">Appearance<a class="headerlink" href="#appearance" title="Permanent link">&para;</a></h3>
-<p>Toggle between <strong>light mode</strong>, <strong>dark mode</strong>, and <strong>system</strong> (follows your OS preference).</p>
+<p>Choose light, dark, or system (following your operating system), plus an <strong>accent color</strong> (Ink Blue, Forest, Burgundy, Slate, or Plum), a <strong>type pairing</strong> (Serif Calm, Sans Modern, Editorial, or Legacy), and an <strong>information density</strong> (Comfortable, Default, or Compact).</p>
+<p>All of these follow your account, not the browser. Sign in on another machine and the workspace looks the same; a colleague signing in on yours gets their own. The same is true of the <a href="#timer">timer</a> durations and of the simple-or-full sidebar choice described in <a href="../navigation/">Navigation</a>.</p>
 <h3 id="passkeys">Passkeys<a class="headerlink" href="#passkeys" title="Permanent link">&para;</a></h3>
 <p>Register <strong>passkeys</strong> (fingerprint, Face ID, or a hardware security key) for password-less sign-in, and view or revoke the passkeys registered to your account. Registration requires user verification and works only on the exact origin the instance is served from (HTTPS for any non-localhost address), so the controls appear only where passkeys can actually work. See <a href="../passkeys/">Passkeys</a> for the full guide, including magic-link recovery if you lose a device.</p>
 <hr />
@@ -2556,7 +2535,7 @@
 <hr />
 <h2 id="iii-models">§III — Models<a class="headerlink" href="#iii-models" title="Permanent link">&para;</a></h2>
 <p><strong>ADMIN only.</strong></p>
-<h3 id="llm-models">LLM Models<a class="headerlink" href="#llm-models" title="Permanent link">&para;</a></h3>
+<h3 id="ai-models">AI models<a class="headerlink" href="#ai-models" title="Permanent link">&para;</a></h3>
 <p>Choose the models JARVIS uses. Each control is labelled in plain language with its technical alias in parentheses, so you don't need to know the jargon:</p>
 <ul>
 <li><strong>Main model (smart)</strong> — writes your summaries, cards, and Ask answers.</li>
@@ -2623,13 +2602,20 @@ in <code>.env</code> or <code>docker inspect</code> output.</p>
 </ul>
 <p>Repeated negative feedback for a topic dampens its positive similarity contribution to future recommendations. It never increases a negative-similarity score.</p>
 <h3 id="timer">Timer<a class="headerlink" href="#timer" title="Permanent link">&para;</a></h3>
-<p>Configure the Pomodoro-style timer available in the TopBar: work interval,
-break interval, and long-break interval. Those preferences and break cycles are
-local to this browser. The active focus interval itself is stored per user, so
-starting it from the Web interface or Telegram shows the same remaining session
-in the other client. Pause, resume, stop, and completed-time accounting use that
-shared server state.</p>
-<h3 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h3>
+<p>Set the durations for the focus timer in the TopBar: work duration (15–60
+minutes), short break (3–15), long break (10–30), and how many work sessions
+run before a long break (2–8).</p>
+<p>These durations follow your account rather than the browser, so Telegram's
+<code>/focus</code> uses exactly the same numbers as the Web timer. Note that this settings
+page sits in the admin-only System section, but what it saves belongs to the
+signed-in account, not to the deployment. Changing a duration while a session is
+running applies from the next session, and the page says so.</p>
+<p>The running interval itself is shared server state: start it in the browser and
+Telegram reports the same remaining time, and pause, resume, stop, and the
+completed-minutes accounting all act on that one interval. Browser notification
+permission is the one thing that stays local to the device. See
+<a href="../telegram/#shared-focus-sessions">Telegram</a>.</p>
+<h3 id="monitoring-langfuse">Monitoring (Langfuse)<a class="headerlink" href="#monitoring-langfuse" title="Permanent link">&para;</a></h3>
 <p>Configure the Langfuse observability integration for tracing LLM calls. This setting is <strong>hardware- and opt-in gated</strong> — it requires a running Langfuse instance and is only active when explicitly enabled.</p>
 <h3 id="sign-in-method">Sign-in Method<a class="headerlink" href="#sign-in-method" title="Permanent link">&para;</a></h3>
 <p>Choose which login method the sign-in screen offers first. This setting does not change tenancy, library scoping, or whether admins can invite users. Admin invites are available in either mode.</p>
@@ -2641,14 +2627,17 @@ shared server state.</p>
 <hr />
 <h2 id="v-integrations">§V — Integrations<a class="headerlink" href="#v-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="telegram">Telegram<a class="headerlink" href="#telegram" title="Permanent link">&para;</a></h3>
-<p>Available to <strong>all users</strong>. Telegram pairing is personal: pair your own account
-with the configured bot to receive Pulse digests and interact with your library.
-See <a href="../telegram/">Telegram</a> for the full pairing flow.</p>
-<h3 id="bot-token">Bot Token<a class="headerlink" href="#bot-token" title="Permanent link">&para;</a></h3>
-<p><strong>ADMIN only.</strong> The bot token is deployment-wide and encrypted in the database;
-each user's pairing remains separate. The <code>telegram</code> Compose profile must be
-enabled for the bot service to run, and a saved replacement token takes effect
-after that service is restarted. See <a href="../telegram/">Telegram</a> for more context.</p>
+<p>One page covers the whole integration. <strong>Your Telegram</strong> is available to all
+users: Telegram pairing is personal, so you pair your own account with the
+instance's bot to receive Pulse digests and work with your library from your
+phone.</p>
+<p>Administrators see a second block below it, <strong>Instance bot (admin)</strong>, holding
+the BotFather token. The bot token is deployment-wide and encrypted in the
+database; each user's pairing stays separate from it. The <code>telegram</code> Compose
+profile must be enabled for the bot service to run, and a saved replacement
+token takes effect after that service is restarted.</p>
+<p>Older links to a separate Bot Token item land on this page. See
+<a href="../telegram/">Telegram</a> for the full pairing flow.</p>
 <h3 id="zotero">Zotero<a class="headerlink" href="#zotero" title="Permanent link">&para;</a></h3>
 <p>Available to <strong>all users</strong>. Zotero credentials are per-user and encrypted. Connect
 your own personal or group library to push papers and copy citation keys from
@@ -2695,7 +2684,7 @@ fifteen minutes is refused.</p>
 <p>Create and manage your research topics. Topics are used by the Pulse engine to select relevant papers for your daily deck. Each topic has a name and a description; more specific descriptions improve recommendation quality.</p>
 <h3 id="authors">Authors<a class="headerlink" href="#authors" title="Permanent link">&para;</a></h3>
 <p>Track specific authors. Papers by tracked authors are surfaced in your Pulse deck and feed.</p>
-<h3 id="spaced-repetition">Spaced Repetition<a class="headerlink" href="#spaced-repetition" title="Permanent link">&para;</a></h3>
+<h3 id="learning-cards">Learning Cards<a class="headerlink" href="#learning-cards" title="Permanent link">&para;</a></h3>
 <p>Configure FSRS parameters for the <a href="../learning-cards/">Learning Cards</a> system: desired retention rate and learning step intervals.</p>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
@@ -2704,7 +2693,7 @@ fifteen minutes is refused.</p>
 <li><a href="../telegram/">Telegram</a> — step-by-step pairing guide (Integrations → Telegram).</li>
 <li><a href="../admin/">Admin &amp; Multi-tenant</a> — admin-only pages for user management, audit log, and system health.</li>
 <li><a href="../extraction-table/">Extraction Table</a> — uses templates managed in §IV System → Extraction Templates.</li>
-<li><a href="../learning-cards/">Learning Cards</a> — uses FSRS parameters from §VI Research → Spaced Repetition.</li>
+<li><a href="../learning-cards/">Learning Cards</a> — uses the FSRS parameters set in §VI Research → Learning Cards.</li>
 </ul>
 
 

@@ -708,7 +708,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -1655,6 +1655,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Docker Secrets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database-roles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database roles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#secret-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secret inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-database-logins-are-separated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the database logins are separated
+      
+    </span>
+  </a>
+  
 </li>
         
           <li class="md-nav__item">
@@ -2569,6 +2608,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Docker Secrets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database-roles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database roles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#secret-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secret inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-database-logins-are-separated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the database logins are separated
+      
+    </span>
+  </a>
+  
 </li>
         
           <li class="md-nav__item">
@@ -2960,12 +3038,14 @@ the first-run wizard or Settings after the stack starts.</p>
 <p>After the vLLM container is healthy, expose it through the local LiteLLM route and choose the served model in <strong>Settings → Models → AI models</strong>. The advanced backend and hardware panel shows local runtime guidance, while the Main and Quick model cards remain the assignment surface.</p>
 <hr />
 <h2 id="observability-optional-off-by-default">Observability (optional, off by default)<a class="headerlink" href="#observability-optional-off-by-default" title="Permanent link">&para;</a></h2>
-<p>LLM-call tracing via Langfuse is opt-in. <code>OBSERVABILITY_ENABLED</code> defaults to <code>false</code> and the Langfuse SDK is never constructed — zero overhead.</p>
+<p>LLM-call tracing, optional OTLP export, and aggregate application logs are
+opt-in. <code>OBSERVABILITY_ENABLED</code> defaults to <code>false</code>; the SDK and log forwarder
+are never constructed in the default profile.</p>
 <p>To enable (provisions a loopback-only Langfuse instance, no signup needed):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Set LANGFUSE_INIT_USER_PASSWORD in .env first</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>make<span class="w"> </span>observability-up
 </code></pre></div>
-<p>Open <code>http://localhost:3002</code> and sign in with <code>LANGFUSE_INIT_USER_EMAIL</code> (default <code>operator@jarvis.local</code>). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts.</p>
+<p>Open <code>http://localhost:3002</code> and sign in with <code>LANGFUSE_INIT_USER_EMAIL</code> (default <code>operator@jarvis.local</code>). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts. The command also starts Vector and the core application services with a bounded UDP log forwarder to <code>vector:9000</code>; view the optional aggregate with <code>docker compose logs vector</code>. The forwarder exports only safe metadata, never log messages or user content. Vector does not mount the Docker socket or write infrastructure logs to JARVIS tables. Telegram remains separately profile-gated.</p>
 <p>Full contract and rotation procedure: <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a> §9.</p>
 <hr />
 <h2 id="remote-access-optional">Remote access (optional)<a class="headerlink" href="#remote-access-optional" title="Permanent link">&para;</a></h2>
@@ -3243,74 +3323,174 @@ prompt.</p>
 keeps them and prints the safe resume command.</p>
 <h3 id="docker-secrets">Docker Secrets<a class="headerlink" href="#docker-secrets" title="Permanent link">&para;</a></h3>
 <p>JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a <code>_FILE</code>-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in <code>secrets/</code> at the repo root (gitignored); <code>setup.sh</code> creates and populates them on first run. Each file is mode <code>644</code> inside a mode <code>700</code> <code>secrets/</code> directory: the owner-only directory keeps the files private on the host, while the world-readable file bit lets the non-root service containers read them through the compose bind mount.</p>
-<p><strong>Operator-provisioned secrets</strong> (create manually if not using <code>setup.sh</code>):</p>
+<p>Every credential below is created by <code>scripts/init-secrets.sh</code>, which <code>setup.sh</code>
+and <code>update.sh</code> both run before any container is started or replaced; the two
+Langfuse SDK keys are the exception and are written by
+<code>scripts/gen-langfuse-keys.sh</code>. Neither script ever overwrites a file that
+already exists, so re-running them is safe. Create a file by hand only if you
+are not using either script.</p>
 <p>The host SMTP fallback is <code>secrets/smtp_pass.txt</code>. It is separate from the
 deployment-wide encrypted SMTP row saved through Settings; the Settings value
 takes effect without a service restart, while changing the host fallback
 requires restarting its service consumers.</p>
+<h4 id="database-roles">Database roles<a class="headerlink" href="#database-roles" title="Permanent link">&para;</a></h4>
+<p>Each service connects to PostgreSQL as its own least-privilege role with its own
+password, and owns its own schema. There is no shared application superuser: the
+<code>jarvis</code> role that earlier releases used for everything is <code>NOLOGIN</code> after
+upgrade, migrations run as a dedicated migrator role, and backup, restore and
+erasure each have a role of their own. That is why the inventory below lists
+eleven separate database passwords rather than one — losing any single file
+affects only the service that uses it, and no single credential can read
+another service's schema.</p>
+<p><code>postgres_legacy_source_password</code> is the exception: its file is the
+<code>secrets/postgres_password.txt</code> from before the split. It is read during an
+upgrade so the pre-split database can be adopted, and is not a login credential
+for any running service.</p>
+<h4 id="secret-inventory">Secret inventory<a class="headerlink" href="#secret-inventory" title="Permanent link">&para;</a></h4>
+<p>This table lists every secret <code>docker-compose.yml</code> declares. A parity check in
+<code>tests/test_docker_compose_invariants.py</code> fails if compose and this table
+disagree, so a new secret cannot ship undocumented.</p>
 <table>
 <thead>
 <tr>
-<th>Secret name</th>
-<th><code>_FILE</code> env var</th>
+<th>Secret</th>
 <th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>postgres_password</code></td>
-<td><code>POSTGRES_PASSWORD_FILE</code></td>
-<td>PostgreSQL password for the <code>jarvis</code> user</td>
+<td><code>postgres_platform_runtime_password</code></td>
+<td>Database login for <code>platform_api</code> — sign-in, sessions, accounts, configuration</td>
 </tr>
 <tr>
-<td><code>litellm_master_key</code></td>
-<td><code>LITELLM_MASTER_KEY_FILE</code></td>
-<td>LiteLLM master key (gateway auth)</td>
+<td><code>postgres_research_runtime_password</code></td>
+<td>Database login for <code>paper_ingestion</code></td>
+</tr>
+<tr>
+<td><code>postgres_learning_runtime_password</code></td>
+<td>Database login for <code>learning_engine</code></td>
+</tr>
+<tr>
+<td><code>postgres_migrator_password</code></td>
+<td>Database login for the migration job that runs before the services start</td>
+</tr>
+<tr>
+<td><code>postgres_cluster_bootstrap_password</code></td>
+<td>PostgreSQL superuser password, used to create the roles and schemas and then to finalize migration authority</td>
+</tr>
+<tr>
+<td><code>postgres_backup_reader_password</code></td>
+<td>Read-only database login for the scheduled backup sidecar</td>
+</tr>
+<tr>
+<td><code>postgres_restore_operator_password</code></td>
+<td>Database login for the restore sidecar, which needs to drop and recreate databases</td>
+</tr>
+<tr>
+<td><code>postgres_erasure_executor_password</code></td>
+<td>Database login for the account-erasure worker</td>
+</tr>
+<tr>
+<td><code>litellm_runtime_password</code></td>
+<td>Database login for the LiteLLM gateway</td>
+</tr>
+<tr>
+<td><code>litellm_migrator_password</code></td>
+<td>Database login for the LiteLLM gateway's own migrations</td>
+</tr>
+<tr>
+<td><code>postgres_legacy_source_password</code></td>
+<td>The pre-split <code>secrets/postgres_password.txt</code>, read only while upgrading an older installation</td>
+</tr>
+<tr>
+<td><code>platform_identity_private_key</code></td>
+<td>Ed25519 private key with which <code>platform_api</code> signs the identity assertion for each authorized request. It is mounted into that service alone</td>
+</tr>
+<tr>
+<td><code>platform_identity_public_key</code></td>
+<td>The matching public key, mounted into <code>paper_ingestion</code> and <code>learning_engine</code> so they can verify an assertion instead of trusting a header</td>
+</tr>
+<tr>
+<td><code>telegram_service_token</code></td>
+<td>Credential the Telegram service presents to <code>platform_api</code> to prove which service it is</td>
+</tr>
+<tr>
+<td><code>research_service_token</code></td>
+<td>The same, for <code>paper_ingestion</code></td>
+</tr>
+<tr>
+<td><code>learning_service_token</code></td>
+<td>The same, for <code>learning_engine</code></td>
+</tr>
+<tr>
+<td><code>jarvis_setup_token</code></td>
+<td>One-time token that authorizes first-admin creation during the setup wizard</td>
 </tr>
 <tr>
 <td><code>jarvis_api_key</code></td>
-<td><code>JARVIS_API_KEY_FILE</code></td>
-<td>JARVIS REST API key (frontend + Telegram)</td>
+<td>REST API key for operations routes and external clients (minimum 32 characters)</td>
 </tr>
 <tr>
 <td><code>jarvis_model_hmac_key</code></td>
-<td><code>JARVIS_MODEL_HMAC_KEY_FILE</code></td>
-<td>HMAC-signs Pulse classifier pickle blobs (auto-generated; mandatory in production)</td>
+<td>HMAC key that signs the Pulse classifier blobs, so a tampered model file is refused</td>
 </tr>
 <tr>
 <td><code>jarvis_config_key</code></td>
-<td><code>JARVIS_CONFIG_KEY_FILE</code></td>
-<td>Fernet key for encrypted config values</td>
-</tr>
-<tr>
-<td><code>litellm_salt_key</code></td>
-<td><code>LITELLM_SALT_KEY</code></td>
-<td>Encrypts provider/model keys stored in LiteLLM's admin DB — <strong>never rotate</strong>: rotating orphans all stored model keys and requires re-entering them</td>
-</tr>
-<tr>
-<td><code>telegram_bot_token</code></td>
-<td><code>TELEGRAM_BOT_TOKEN_FILE</code></td>
-<td>Telegram bot token (<code>telegram</code> profile only)</td>
+<td>Fernet key that encrypts integration settings at rest in the database</td>
 </tr>
 <tr>
 <td><code>qdrant_api_key</code></td>
-<td><code>QDRANT_API_KEY_FILE</code></td>
-<td>Qdrant service API key</td>
+<td>API key for the vector database, presented by every service that reads or writes it</td>
 </tr>
 <tr>
-<td><code>infra_ingest_key</code></td>
-<td><code>INFRA_INGEST_KEY_FILE</code></td>
-<td>Shared key for the infrastructure ingestion endpoint</td>
+<td><code>litellm_master_key</code></td>
+<td>Admin credential for the LiteLLM gateway</td>
+</tr>
+<tr>
+<td><code>litellm_salt_key</code></td>
+<td>Encrypts provider and model keys stored in the LiteLLM admin database — <strong>never rotate</strong>: rotating orphans every stored model key and requires re-entering them</td>
+</tr>
+<tr>
+<td><code>telegram_bot_token</code></td>
+<td>Bot token from BotFather; created as an empty placeholder when Telegram is not configured</td>
+</tr>
+<tr>
+<td><code>smtp_pass</code></td>
+<td>Host SMTP fallback password; created as an empty placeholder when SMTP is not configured</td>
 </tr>
 <tr>
 <td><code>backup_encrypt_key</code></td>
-<td><code>BACKUP_ENCRYPT_KEYFILE</code></td>
 <td>Encrypts backup archives at rest — required in every environment; backups refuse to run without it, though sets written by older releases without a key stay restorable</td>
+</tr>
+<tr>
+<td><code>cloudflare_tunnel_token</code></td>
+<td>Tunnel credential; present only when setup was completed with the Cloudflare Tunnel access mode</td>
+</tr>
+<tr>
+<td><code>langfuse_pg_password</code></td>
+<td>Database password for the optional Langfuse observability service</td>
+</tr>
+<tr>
+<td><code>langfuse_nextauth_secret</code></td>
+<td>Session signing secret for the optional Langfuse web interface</td>
+</tr>
+<tr>
+<td><code>langfuse_salt</code></td>
+<td>Encryption salt for the optional Langfuse service</td>
+</tr>
+<tr>
+<td><code>langfuse_init_pk</code></td>
+<td>Langfuse SDK public key injected into the application services</td>
+</tr>
+<tr>
+<td><code>langfuse_init_sk</code></td>
+<td>Langfuse SDK secret key injected into the application services</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Observability profile secrets</strong> (auto-provisioned by <code>make observability-up</code>; only present when the <code>observability</code> profile is active):
-<code>langfuse_init_pk</code>, <code>langfuse_init_sk</code> — Langfuse SDK keys injected into app services. <code>langfuse_pg_password</code>, <code>langfuse_nextauth_secret</code>, <code>langfuse_salt</code> — internal Langfuse service credentials.</p>
+<p>The Langfuse entries are only used when the <code>observability</code> profile is active,
+which it is not by default. File permissions, rotation behavior and the
+<code>_FILE</code> fallback rules are in <code>secrets/README.md</code>.</p>
 <p>To rotate the JARVIS API key without exposing it in shell history, generate a
 replacement file and then restart every running consumer:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>install<span class="w"> </span>-m<span class="w"> </span><span class="m">644</span><span class="w"> </span>/dev/null<span class="w"> </span>secrets/jarvis_api_key.txt.next
@@ -3323,6 +3503,42 @@ replacement file and then restart every running consumer:</p>
 </code></pre></div>
 <p>The old API key stops working after those services restart. Update any external
 client that uses it before ending your current local session.</p>
+<h3 id="how-the-database-logins-are-separated">How the database logins are separated<a class="headerlink" href="#how-the-database-logins-are-separated" title="Permanent link">&para;</a></h3>
+<p>Each service holds its own PostgreSQL login instead of one shared superuser
+account, so a service can only reach the data it owns. This matters to an
+operator in three places: which password files exist, what to expect in the
+logs at first start, and what to check when a permission error appears.</p>
+<p><strong>Schemas and their owners.</strong> Four schemas — <code>platform</code>, <code>research</code>, <code>learning</code>
+and <code>ops</code> — are each owned by a role that no service logs in as
+(<code>jarvis_platform_owner</code> and its three counterparts). Services log in as a
+matching runtime role (<code>jarvis_platform_runtime</code>, <code>jarvis_research_runtime</code>,
+<code>jarvis_learning_runtime</code>), which can read and write the data but cannot alter
+the tables. Each runtime role's <code>search_path</code> names its own schema first, so an
+unqualified table name resolves there. What a service may reach is decided by
+the grants, not by that ordering — the <code>search_path</code> is a convenience, not the
+boundary.</p>
+<p><strong>The remaining logins are task-scoped</strong> and idle the rest of the time:
+<code>jarvis_migrator</code> applies schema changes, <code>jarvis_backup_reader</code> reads for
+backups, <code>jarvis_restore_operator</code> writes during a restore,
+<code>jarvis_erasure_executor</code> completes account erasure, and the two
+<code>jarvis_litellm_*</code> roles serve the model proxy. <code>jarvis_cluster_bootstrap</code>
+creates all of them at first start and is not used afterwards.</p>
+<p><strong>One authority has no login at all.</strong> <code>jarvis_legacy_rollback</code> owns the
+database and holds the privileges an upgrade rollback needs, but nothing
+connects as it: the migration that needs it switches into it, and the restore
+login reaches it by membership. It has no password and no secret file, so there
+is no standing credential to protect.</p>
+<p><strong>At first start</strong> <code>scripts/postgres-role-bootstrap.sh</code> creates the roles that
+log in from the <code>postgres_*_password.txt</code> files listed in the secret inventory
+above. It refuses to create a role whose password file is empty or missing
+rather than creating one without a password, so a failure here means a missing
+secret file, not a broken database.</p>
+<p><strong>When a permission error appears,</strong> the role in the message is the one to look
+at: <code>permission denied for schema research</code> from the Learning service is a
+service reaching for data it does not own, which is the boundary working. A
+genuine misconfiguration usually shows up as a login failure instead. Note that
+the pre-1.2.6 shared <code>jarvis</code> login is now <code>NOLOGIN</code> and is no longer used by
+any service.</p>
 <h3 id="web-ui-configuration">Web UI configuration<a class="headerlink" href="#web-ui-configuration" title="Permanent link">&para;</a></h3>
 <p>All ongoing configuration goes through the web wizard and Settings — no <code>.env</code> editing needed beyond what <code>setup.sh</code> writes:</p>
 <table>
@@ -3346,7 +3562,7 @@ client that uses it before ending your current local session.</p>
 </tr>
 <tr>
 <td>Telegram bot token</td>
-<td>Settings → Integrations → Bot Token</td>
+<td>Settings → Integrations → Telegram (admin block)</td>
 <td>Yes — <code>docker compose restart telegram_bot</code></td>
 </tr>
 <tr>
@@ -3395,7 +3611,7 @@ path:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w"> </span>cloudflared<span class="w">               </span><span class="c1"># should show Up</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>dashboard<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>curl<span class="w"> </span>-fsS<span class="w"> </span>http://cloudflared:2000/ready<span class="w">    </span><span class="c1"># proves an active edge connection</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">20</span><span class="w"> </span>cloudflared<span class="w">   </span><span class="c1"># look for &quot;Connection established&quot;</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">20</span><span class="w"> </span>cloudflared<span class="w">   </span><span class="c1"># look for "Connection established"</span>
 </code></pre></div>
 <p>Tunnel routing is configured in the Cloudflare Zero Trust dashboard: set the
 public hostname to route to <code>http://dashboard:3002</code>. Tunnel setup enables client
@@ -3544,9 +3760,9 @@ automatically.</p>
 <a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1"># Local mkcert HTTPS (loopback only; installs reviewed prerequisites if needed):</span>
 <a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--install-prereqs<span class="w"> </span>--profile<span class="o">=</span>local-https
 <a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>
-<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1"># Production with Let&#39;s Encrypt:</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1"># Production with Let's Encrypt:</span>
 <a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="nb">umask</span><span class="w"> </span><span class="m">077</span>
-<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>./smtp-password.txt
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">"</span><span class="w"> </span>&gt;<span class="w"> </span>./smtp-password.txt
 <a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="w">  </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span><span class="se">\</span>
@@ -3582,20 +3798,13 @@ rules; direct v1.1.3-to-current update is not promised.</p>
 exclusively via the <code>/pair</code> code flow. To pair: open the dashboard → Settings
 → Integrations → Telegram, generate a one-time code, and send <code>/pair &lt;code&gt;</code>
 to the bot. The retired <code>/start PAIR_&lt;code&gt;</code> pairing path no longer works.</p>
-<p><strong>Telegram owner-override network.</strong> The bot calls service endpoints with
-<code>X-Owner-User-Id</code> to make per-user requests, trusted only from
-<code>OWNER_OVERRIDE_ALLOWED_CIDRS</code>. The bundled compose stack sets this
-automatically to the bot's own pinned address as a <code>/32</code> (it tracks
-<code>JARVIS_TELEGRAM_BOT_IP</code>, which setup derives from <code>JARVIS_NET_SUBNET</code>;
-default <code>10.137.241.250</code>), so no change is needed for the default stack and no
-other container on the bridge can send the header. <strong>If you override
-<code>JARVIS_NET_SUBNET</code>, the bot's pin and the allowlist both follow it</strong> — only
-set <code>OWNER_OVERRIDE_ALLOWED_CIDRS</code> explicitly if the bot reaches the services
-from some other network. (The bare code default <code>127.0.0.0/8</code> is loopback-only;
-the compose stack adds the bot's address to it.)</p>
+<p><strong>Telegram identity boundary.</strong> Telegram is a database-free REST client. It
+does not hold PostgreSQL or configuration-encryption credentials and does not
+forward a generic impersonation header. Platform supplies only the route-bound
+assertion or service capability required by the called API.</p>
 <p><strong>Ownership backfill.</strong> The NULL-owner backfill for pre-existing product rows
 is part of the schema-101 baseline in <code>db/init.sql</code>, not a startup migration.
-The only startup ownership migration is 0105, described next.</p>
+The one-shot migrator applies ownership migration 0105, described next.</p>
 <p><strong>Instance-owner migration (0105).</strong> An upgraded instance with exactly one live
 administrator assigns that account as the owner automatically. An instance with
 two or more live administrators remains deliberately unresolved. After startup,
@@ -3632,11 +3841,15 @@ headless recovery, and failure handling.</p>
 <tbody>
 <tr>
 <td><code>paper_ingestion</code></td>
-<td>Reads backup archives, writes the small request/status trigger volume, and exposes the authenticated admin API. It has no restore inbox, host-secret write mount, or Docker socket.</td>
+<td>Reads backup archives, queues a browser-confirmed restore intent, and exposes the authenticated admin API. It has no restore inbox, host-secret write mount, or Docker socket.</td>
 </tr>
 <tr>
 <td><code>postgres-backup</code></td>
-<td>The backup sidecar owns database reloads, PDF swaps, Qdrant snapshot staging, and the narrow writable host-secret mount used for the three restored data keys.</td>
+<td>Scheduled read-only backup, inventory, and retention work. It has no restore credential or restore authority.</td>
+</tr>
+<tr>
+<td><code>postgres-restore</code></td>
+<td>A host-started transient no-listener job. It reconstructs roles, owners, grants, defaults, and search paths, migrates, then permits writers to resume.</td>
 </tr>
 <tr>
 <td><code>restore-uploader</code></td>
@@ -3645,8 +3858,7 @@ headless recovery, and failure handling.</p>
 </tbody>
 </table>
 <p>Learning Engine and Telegram receive the maintenance trigger read-only. None of
-the three restore roles above mounts the Docker socket; the optional Vector log
-collector's separate read-only Docker socket is unrelated to restore authority.</p>
+the restore roles or optional Vector log collector mounts the Docker socket.</p>
 <p>Do not restore with raw database drops, archive extraction, or volume deletion.
 Those paths bypass the signed manifest, safety backup, staged swap, and secret
 reconciliation. Use the linked runbook even when the web app cannot start.</p>
@@ -3742,9 +3954,9 @@ reconciliation. Use the linked runbook even when the web app cannot start.</p>
 <td>Benchmark before migrating and use the exact recovery guidance in <a href="../manual/changing-embedding-model/">Changing the embedding model</a>. The local backend requires sentence-transformers.</td>
 </tr>
 <tr>
-<td><code>password authentication failed for user "jarvis"</code> after changing <code>POSTGRES_PASSWORD</code></td>
-<td>An existing database still uses the original password</td>
-<td>Do not delete the database volume. Restore the matching secret from your backup or revert the accidental change, then run <code>jarvis-research doctor</code>. Use the guided restore if the original secret is unavailable.</td>
+<td><code>password authentication failed</code> for a <code>jarvis_*</code> database role on startup</td>
+<td>The file under <code>secrets/</code> no longer matches the password the database holds for that role</td>
+<td>Do not delete the database volume. Each service has its own role and its own password file, so the failing role names the file to fix: restore that one file from your backup or revert the accidental change, then run <code>jarvis-research doctor</code>. Use the guided restore if the original secret is unavailable. The shared <code>jarvis</code> login of earlier releases is <code>NOLOGIN</code> after upgrade and is no longer used by any service.</td>
 </tr>
 <tr>
 <td><code>docker compose build</code>/<code>up</code> fails with "no space left on device" during install</td>

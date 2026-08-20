@@ -708,7 +708,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -2243,12 +2243,12 @@ deliberately thin; the contract carries the load-bearing rules.</p>
 <p>Every <code>call_llm_structured(...)</code> callsite under <code>services/</code> or <code>libs/</code> (excluding tests) must satisfy one of two shapes. The convention is enforced by <code>scripts/check-llm-prompt-shape.py</code>, which runs as a pre-commit hook (see <code>.pre-commit-config.yaml</code>).</p>
 <h3 id="shape-a-split-role-default">Shape A — split-role (default)<a class="headerlink" href="#shape-a-split-role-default" title="Permanent link">&para;</a></h3>
 <p>The instruction head lives in a system-role message; <code>prompt=</code> carries only data (typically wrapped via <code>wrap_delimited(...)</code> for untrusted text):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">safe_question</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">wrap_delimited</span><span class="p">(</span><span class="s2">&quot;user_question&quot;</span><span class="p">,</span> <span class="n">question</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">safe_question</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">wrap_delimited</span><span class="p">(</span><span class="s2">"user_question"</span><span class="p">,</span> <span class="n">question</span><span class="p">)</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">return</span> <span class="k">await</span> <span class="n">call_llm_structured</span><span class="p">(</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">openai_client</span><span class="p">,</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">response_model</span><span class="o">=</span><span class="n">RootModel</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]],</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">prompt</span><span class="o">=</span><span class="n">safe_question</span><span class="p">,</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">options</span><span class="o">=</span><span class="n">ChatCompletionOptions</span><span class="p">(</span><span class="n">model</span><span class="o">=</span><span class="s2">&quot;fast&quot;</span><span class="p">,</span> <span class="n">system</span><span class="o">=</span><span class="n">SYSTEM</span><span class="p">),</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">options</span><span class="o">=</span><span class="n">ChatCompletionOptions</span><span class="p">(</span><span class="n">model</span><span class="o">=</span><span class="s2">"fast"</span><span class="p">,</span> <span class="n">system</span><span class="o">=</span><span class="n">SYSTEM</span><span class="p">),</span>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span>
 </code></pre></div>
 <p>Alternatively, pass an explicit <code>messages=</code> list with a system entry when the user message is composed of multiple parts.</p>

@@ -749,27 +749,27 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sidebar-navigation-groups" class="md-nav__link">
+  <a href="#two-rails-simple-and-full" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sidebar navigation groups
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Sidebar navigation groups">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#density-modes-simple-and-full" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Density modes — simple and full
+        Two rails: simple and full
       
     </span>
   </a>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#sidebar-groups-in-full-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sidebar groups in full mode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sidebar groups in full mode">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#sidebar-footer" class="md-nav__link">
@@ -795,6 +795,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="TopBar controls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-three-ways-to-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three ways to search
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -832,7 +849,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -1849,27 +1866,27 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sidebar-navigation-groups" class="md-nav__link">
+  <a href="#two-rails-simple-and-full" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Sidebar navigation groups
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Sidebar navigation groups">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#density-modes-simple-and-full" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Density modes — simple and full
+        Two rails: simple and full
       
     </span>
   </a>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#sidebar-groups-in-full-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sidebar groups in full mode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sidebar groups in full mode">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#sidebar-footer" class="md-nav__link">
@@ -1895,6 +1912,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="TopBar controls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-three-ways-to-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three ways to search
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1929,7 +1963,7 @@
   
 
 
-<!-- verified-against-UI: 2026-06-27 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /consensus, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
+<!-- verified-against-UI: 2026-08-19 | routes: /, /my-day, /pulse, /feed?surface=library, /feed?surface=search, /projects, /ask, /extractions, /knowledge, /citations, /consensus, /cards, /analytics, /admin/users, /admin/system-health, /admin/audit-log, /admin/backups, /logs, /settings -->
 
 <h1 id="navigation">Navigation<a class="headerlink" href="#navigation" title="Permanent link">&para;</a></h1>
 <p>JARVIS RD Assistant uses a consistent application shell across all pages.</p>
@@ -1939,14 +1973,54 @@
 <h2 id="appshell-layout">AppShell layout<a class="headerlink" href="#appshell-layout" title="Permanent link">&para;</a></h2>
 <p>The application is divided into three regions:</p>
 <ul>
-<li><strong>Sidebar</strong> (left) — primary navigation, grouped by function.</li>
-<li><strong>TopBar</strong> (top) — global controls: quick search, jobs indicator, Pomodoro timer, and theme toggle.</li>
+<li><strong>Sidebar</strong> (left) — primary navigation.</li>
+<li><strong>TopBar</strong> (top) — global controls: quick search, jobs indicator, focus timer, and theme toggle.</li>
 <li><strong>Main content area</strong> — the active page.</li>
 </ul>
-<p>On narrow viewports (below the <code>md</code> breakpoint) the sidebar is hidden and replaced by a <strong>hamburger menu button</strong> (☰) on the left of the TopBar; tapping it slides the full sidebar in from the left as a drawer (a Sheet overlay). Tapping outside the drawer or selecting a destination closes it.</p>
+<p>On narrow viewports (below the <code>md</code> breakpoint) the sidebar is hidden and replaced by a <strong>hamburger menu button</strong> on the left of the TopBar; tapping it slides the full sidebar in from the left as a drawer. Tapping outside the drawer or selecting a destination closes it.</p>
 <hr />
-<h2 id="sidebar-navigation-groups">Sidebar navigation groups<a class="headerlink" href="#sidebar-navigation-groups" title="Permanent link">&para;</a></h2>
-<p>The sidebar is divided into five labelled groups identified by Roman numerals. Each group has a short sub-label describing its purpose. The <strong>Ⅴ Admin</strong> group is only rendered for users with the <strong>admin</strong> role; it is hidden entirely from regular users.</p>
+<h2 id="two-rails-simple-and-full">Two rails: simple and full<a class="headerlink" href="#two-rails-simple-and-full" title="Permanent link">&para;</a></h2>
+<p>The sidebar has two densities, and the choice follows your account rather than the browser you happen to be using.</p>
+<p><strong>Simple</strong> is what you start on. It is a short rail of the six places the daily research loop actually visits:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Route</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../home-my-day/">My Day</a></td>
+<td><code>/my-day</code></td>
+</tr>
+<tr>
+<td><a href="../research-feed/">Papers</a></td>
+<td><code>/feed?surface=library</code></td>
+</tr>
+<tr>
+<td><a href="../research-feed/">Discover</a></td>
+<td><code>/feed?surface=search</code></td>
+</tr>
+<tr>
+<td><a href="../projects/">Projects</a></td>
+<td><code>/projects</code></td>
+</tr>
+<tr>
+<td><a href="../learning-cards/">Learning Cards</a></td>
+<td><code>/cards</code></td>
+</tr>
+<tr>
+<td><a href="../ask/">Ask</a></td>
+<td><code>/ask</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Full</strong> is the grouped layout below. Switch with the <strong>Show all features</strong> / <strong>Simple view</strong> button in the sidebar footer. Nothing is hidden by the simple rail in the sense of being unreachable — every page still has a URL, and links from other pages still work.</p>
+<p>Once you have saved or analyzed your first paper, a one-time tip appears above the toggle naming exactly what the full rail adds. Dismissing it or using the toggle retires it.</p>
+<hr />
+<h2 id="sidebar-groups-in-full-mode">Sidebar groups in full mode<a class="headerlink" href="#sidebar-groups-in-full-mode" title="Permanent link">&para;</a></h2>
+<p>Groups are labelled with a Roman numeral and a one-line description of what they are for. The <strong>Ⅳ Admin</strong> group renders only for accounts with the admin role; regular users do not see it at all.</p>
 <table>
 <thead>
 <tr>
@@ -1957,41 +2031,33 @@
 <tbody>
 <tr>
 <td><strong>Ⅰ Today</strong> — <em>What needs your attention right now.</em></td>
-<td><a href="../home-my-day/">Home</a> (<code>/</code>) · <a href="../home-my-day/">My Day</a> (<code>/my-day</code>) · <a href="../pulse/">Pulse Deck</a> (<code>/pulse</code>) · <a href="../research-feed/">Library</a> (<code>/feed</code>) · <a href="../research-feed/">Discover</a> (<code>/feed?surface=search</code>)</td>
+<td><a href="../home-my-day/">My Day</a> (<code>/my-day</code>) · <a href="../home-my-day/">Home</a> (<code>/</code>) · <a href="../pulse/">Pulse Deck</a> (<code>/pulse</code>) · <a href="../research-feed/">Papers</a> (<code>/feed?surface=library</code>) · <a href="../research-feed/">Discover</a> (<code>/feed?surface=search</code>)</td>
 </tr>
 <tr>
-<td><strong>Ⅱ Read</strong> — <em>Your library, projects, and the graph that connects them.</em></td>
-<td><a href="../projects/">Projects</a> (<code>/projects</code>) · <a href="../knowledge-graph/">Knowledge Graph</a> (<code>/knowledge</code>) · <a href="../citation-graph/">Citation Graph</a> (<code>/citations</code>) · <a href="../consensus/">Consensus</a> (<code>/consensus</code>) · <a href="../extraction-table/">Extraction Table</a> (<code>/extractions</code>)</td>
+<td><strong>Ⅱ Workspace</strong> — <em>Projects, questions, and the tools that connect your papers.</em></td>
+<td><a href="../projects/">Projects</a> (<code>/projects</code>) · <a href="../ask/">Ask</a> (<code>/ask</code>) · <a href="../extraction-table/">Extraction Table</a> (<code>/extractions</code>) · <a href="../knowledge-graph/">Knowledge Graph</a> (<code>/knowledge</code>) · <a href="../citation-graph/">Citation Graph</a> (<code>/citations</code>) · <a href="../consensus/">Consensus</a> (<code>/consensus</code>)</td>
 </tr>
 <tr>
 <td><strong>Ⅲ Learn</strong> — <em>Cards, analytics, and how your knowledge grows.</em></td>
 <td><a href="../learning-cards/">Learning Cards</a> (<code>/cards</code>) · <a href="../analytics/">Analytics</a> (<code>/analytics</code>)</td>
 </tr>
 <tr>
-<td><strong>Ⅳ Ask</strong> — <em>Cross-paper reasoning and workspace.</em></td>
-<td><a href="../ask/">Ask</a> (<code>/ask</code>)</td>
-</tr>
-<tr>
-<td><strong>Ⅴ Admin</strong> — <em>Users, health, backups, and audit trail.</em> (<strong>admin role only</strong>)</td>
+<td><strong>Ⅳ Admin</strong> — <em>Users, health, and audit trail.</em> (<strong>admin role only</strong>)</td>
 <td><a href="../admin/">User Management</a> (<code>/admin/users</code>) · <a href="../admin/">System Health</a> (<code>/admin/system-health</code>) · <a href="../admin/">Audit Log</a> (<code>/admin/audit-log</code>) · <a href="../admin/">Backups</a> (<code>/admin/backups</code>) · <a href="../admin/">System Logs</a> (<code>/logs</code>)</td>
 </tr>
 </tbody>
 </table>
-<h3 id="density-modes-simple-and-full">Density modes — simple and full<a class="headerlink" href="#density-modes-simple-and-full" title="Permanent link">&para;</a></h3>
-<p>The sidebar has two density modes, remembered per device:</p>
-<ul>
-<li><strong>Simple</strong> — a short rail of the daily essentials (<strong>Home · My Day · Library · Ask · Cards</strong>). Everything else is one <strong>"Show all features"</strong> toggle away in the sidebar footer. This is the default the first time you use JARVIS, so the app isn't overwhelming.</li>
-<li><strong>Full</strong> — the complete grouped layout shown above. This is the default for returning users.</li>
-</ul>
-<p>Switch modes any time with the <strong>"Show all features" / "Simple view"</strong> toggle in the sidebar footer. Your choice is stored on your device and survives logout; it does not change which pages exist — every destination is always reachable.</p>
+<p><strong>Papers</strong> and <strong>Discover</strong> are two views of the same <code>/feed</code> route, told apart by the <code>surface</code> query parameter. Discover is highlighted only while <code>surface=search</code>; every other feed state — Inbox, Saved, Reading, Trash — highlights Papers. See <a href="../research-feed/">Papers &amp; Discover</a>.</p>
 <h3 id="sidebar-footer">Sidebar footer<a class="headerlink" href="#sidebar-footer" title="Permanent link">&para;</a></h3>
-<p>Below a separator, the sidebar footer is visible to <strong>all users</strong>:</p>
+<p>Below a separator, and visible to everyone:</p>
 <ul>
-<li><strong>Density toggle</strong> (<strong>"Show all features" / "Simple view"</strong>) — switches the sidebar between simple and full modes (see above).</li>
-<li><strong>Settings</strong> link (<code>/settings</code>) — navigates to the Settings page.</li>
-<li><strong>HealthDots pill</strong> — shows live service health indicators. Admin users can click the pill to navigate to <code>/admin/system-health</code>; non-admin users see an in-place popover.</li>
-<li><strong>Logout</strong> button — ends the current session.</li>
+<li>The <strong>Show all features</strong> / <strong>Simple view</strong> toggle described above.</li>
+<li><strong>Settings</strong> (<code>/settings</code>) — a footer utility link, not a member of any numbered group.</li>
+<li>The <strong>health pill</strong> — live service-health dots. Admins can click it to open System Health; everyone else gets the detail in a popover on the spot.</li>
+<li>The running version number.</li>
+<li><strong>Sign out</strong>.</li>
 </ul>
+<p>Collapsing the sidebar with the chevron in its header leaves icons only; each one keeps its label as a tooltip.</p>
 <hr />
 <h2 id="topbar-controls">TopBar controls<a class="headerlink" href="#topbar-controls" title="Permanent link">&para;</a></h2>
 <table>
@@ -2004,43 +2070,50 @@
 <tbody>
 <tr>
 <td><strong>BrandMark</strong></td>
-<td>Application logo / home anchor</td>
+<td>Application logo and home anchor</td>
 </tr>
 <tr>
-<td><strong>⌘K / Ctrl+K</strong></td>
-<td>Open the command-palette search — search papers, navigate to pages, or run actions</td>
+<td><strong>Search your papers</strong> (⌘K / Ctrl+K)</td>
+<td>Opens the command palette over the papers you have saved</td>
 </tr>
 <tr>
 <td><strong>Error pill</strong></td>
-<td>Appears only when the application has logged errors in the last 24 hours; shows the count of error/critical events and, when clicked, opens the System Logs error view. Hidden when there are no recent errors.</td>
+<td>Appears only when the application has logged errors in the last 24 hours; shows the count and opens the System Logs error view</td>
 </tr>
 <tr>
 <td><strong>Jobs indicator</strong></td>
-<td>Shows queued, running, and recent background work for your account, including work started from Telegram or another browser; click to expand the jobs panel</td>
+<td>Queued, running, and recent background work for your account, including work started from Telegram or another browser</td>
 </tr>
 <tr>
-<td><strong>Pomodoro timer</strong></td>
-<td>Shows the shared per-user focus session started from Web or Telegram; pause, resume, and stop operate on the same interval, while work and break preferences remain local to this browser (configure them in <a href="../settings/">Settings</a> §IV System → Timer)</td>
+<td><strong>Focus timer</strong></td>
+<td>The shared per-user focus interval, startable from either Web or Telegram; see <a href="../settings/">Settings</a></td>
 </tr>
 <tr>
 <td><strong>Keyboard shortcuts</strong></td>
-<td>Opens the keyboard-shortcuts reference panel</td>
+<td>Opens the shortcut reference (also <code>?</code>)</td>
 </tr>
 <tr>
 <td><strong>Theme toggle</strong></td>
-<td>Switch between light and dark mode</td>
+<td>Light or dark</td>
 </tr>
 <tr>
 <td><strong>User avatar menu</strong></td>
-<td>A round avatar button; opens a menu with two items — <strong>Settings</strong> (goes to <code>/settings</code>) and <strong>Logout</strong> (ends the session and returns to the sign-in page).</td>
+<td>Settings and Sign out</td>
 </tr>
 </tbody>
 </table>
+<h3 id="the-three-ways-to-search">The three ways to search<a class="headerlink" href="#the-three-ways-to-search" title="Permanent link">&para;</a></h3>
+<p>The app has three search inputs and they never overlap, so a result is always where you expect it:</p>
+<ol>
+<li><strong>⌘K in the TopBar</strong> searches <strong>the papers you have already saved</strong> and opens one.</li>
+<li><strong>The filter box on Papers, Inbox, or Trash</strong> narrows <strong>the list you are currently looking at</strong> by title or author, inside whatever facets are selected. It does not leave the view.</li>
+<li><strong>Discover</strong> searches <strong>external sources you do not have yet</strong> — arXiv, Semantic Scholar, OpenAlex, PubMed — and its results have to be saved before they join your library.</li>
+</ol>
 <hr />
 <h2 id="related-pages">Related pages<a class="headerlink" href="#related-pages" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../getting-started/">Getting Started</a> — signing in and the setup wizard that precedes first use.</li>
-<li><a href="../settings/">Settings</a> — configure the timer interval and appearance preferences.</li>
+<li><a href="../settings/">Settings</a> — appearance, timer, and account preferences.</li>
 </ul>
 
 

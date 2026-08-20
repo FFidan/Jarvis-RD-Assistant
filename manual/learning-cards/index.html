@@ -713,7 +713,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -945,10 +945,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#review-now-button" class="md-nav__link">
+  <a href="#review-now" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Review now button
+        Review now
       
     </span>
   </a>
@@ -1988,10 +1988,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#review-now-button" class="md-nav__link">
+  <a href="#review-now" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Review now button
+        Review now
       
     </span>
   </a>
@@ -2095,12 +2095,12 @@
   
 
 
-<!-- verified-against-UI: 2026-06-06 | routes: /cards, /cards?mode=review, /cards?mode=library -->
+<!-- verified-against-UI: 2026-08-19 | routes: /cards, /cards?mode=review, /cards?mode=library -->
 
 <h1 id="learning-cards">Learning Cards<a class="headerlink" href="#learning-cards" title="Permanent link">&para;</a></h1>
-<p><em>This area is evolving; verified 2026-06-06.</em></p>
-<p>The <strong>Learning Cards</strong> page at <code>/cards</code> is a spaced-repetition study system built on the FSRS (Free Spaced Repetition Scheduler) algorithm. It keeps key facts from your research papers fresh with scientifically-spaced review intervals.</p>
-<p>The page opens in <strong>review mode</strong> (<code>?mode=review</code>) when you have cards due for review; otherwise it defaults to <strong>library mode</strong> (<code>?mode=library</code>). You can switch between modes using tabs at the top of the page.</p>
+<p>The <strong>Learning Cards</strong> page at <code>/cards</code> is a spaced-repetition study system built on the FSRS (Free Spaced Repetition Scheduler) algorithm. It keeps key facts from your papers fresh by scheduling each one just before you would forget it.</p>
+<p>The page has two modes and picks the useful one for you: <strong>review</strong> (<code>?mode=review</code>) when cards are due, and <strong>library</strong> (<code>?mode=library</code>) when none are. There are no tabs — a <strong>Review now</strong> button takes you into a session, and the breadcrumb at the top of a session takes you back to the library.</p>
+<p>Its settings live in <strong>Settings → Research → Learning Cards</strong>; see <a href="../settings/">Settings</a>.</p>
 <hr />
 <h2 id="library-mode-modelibrary">Library mode — <code>?mode=library</code><a class="headerlink" href="#library-mode-modelibrary" title="Permanent link">&para;</a></h2>
 <!-- screenshot: learning-cards-library -->
@@ -2115,13 +2115,13 @@
 <h3 id="deckbrowser">DeckBrowser<a class="headerlink" href="#deckbrowser" title="Permanent link">&para;</a></h3>
 <p>Below the stats, <strong>DeckBrowser</strong> lists your decks. Each deck entry shows its name, the number of cards it contains, and how many are currently due. A <strong>Start review</strong> button for each deck launches a review session scoped to that deck.</p>
 <h3 id="cardlist">CardList<a class="headerlink" href="#cardlist" title="Permanent link">&para;</a></h3>
-<p>The card list below the deck browser shows all cards, or the cards within a selected deck. Each card shows its front (question) face. Clicking a card expands it to show both front and back.</p>
+<p>Selecting a deck lists its cards below the browser. Each card shows its front (question) face; clicking one expands it to show the answer as well.</p>
 <h3 id="generating-cards">Generating cards<a class="headerlink" href="#generating-cards" title="Permanent link">&para;</a></h3>
 <p>Click <strong>Generate</strong> to open the <strong>GenerateCardsDialog</strong>. Select one or more papers and a prompt style; the LLM pipeline generates a set of question-and-answer cards from the paper's chunks and adds them to a deck named after the paper.</p>
 <h3 id="creating-a-card-manually">Creating a card manually<a class="headerlink" href="#creating-a-card-manually" title="Permanent link">&para;</a></h3>
 <p>Click <strong>New Card</strong> to open the <strong>CreateCardForm</strong> and write a card by hand. Fill in the front (question), back (answer), and optionally assign it to an existing deck or create a new one.</p>
-<h3 id="review-now-button">Review now button<a class="headerlink" href="#review-now-button" title="Permanent link">&para;</a></h3>
-<p>If cards are due, a <strong>"Review now (N)"</strong> button appears showing the count. Clicking it switches to review mode.</p>
+<h3 id="review-now">Review now<a class="headerlink" href="#review-now" title="Permanent link">&para;</a></h3>
+<p>When cards are due, a <strong>Review now (N)</strong> button in the header shows the count and starts a session across all decks. <strong>Start review</strong> on a single deck scopes the session to that deck instead.</p>
 <hr />
 <h2 id="review-mode-modereview">Review mode — <code>?mode=review</code><a class="headerlink" href="#review-mode-modereview" title="Permanent link">&para;</a></h2>
 <!-- screenshot: learning-cards-session -->
@@ -2163,7 +2163,7 @@
 </table>
 <p>The FSRS algorithm uses your rating to compute the next review date for the card. Cards rated <strong>Again</strong> reappear within the current session.</p>
 <h3 id="sessioncomplete">SessionComplete<a class="headerlink" href="#sessioncomplete" title="Permanent link">&para;</a></h3>
-<p>When all due cards in the session have been reviewed, the <strong>SessionComplete</strong> screen shows a summary: cards reviewed, ratings breakdown, and estimated next review dates. A button returns you to the library or to the full <code>/cards</code> page.</p>
+<p>When every due card in the session has been reviewed, a summary replaces the card canvas and a button returns you to the library.</p>
 <hr />
 <h2 id="offline-review">Offline review<a class="headerlink" href="#offline-review" title="Permanent link">&para;</a></h2>
 <p>Card ratings made while offline are stored in an <strong>IndexedDB outbox</strong>. When your connection is restored, queued ratings are automatically drained and synced to the server. The review session itself is fully functional offline; only the sync step requires a connection.</p>
@@ -2172,7 +2172,8 @@
 <ul>
 <li><a href="../paper-detail/">Paper Detail</a> — trigger card generation for a specific paper from the right-hand actions sidebar.</li>
 <li><a href="../analytics/">Analytics</a> — review activity and FSRS retention charts.</li>
-<li><a href="../home-my-day/">My Day &amp; Home</a> — LearningFocusSection shows today's due-card count with a link here.</li>
+<li><a href="../home-my-day/">My Day &amp; Home</a> — the Learning &amp; focus chip shows today's due-card count and links here.</li>
+<li><a href="../settings/">Settings</a> — FSRS retention and learning steps, under §VI Research → Learning Cards.</li>
 </ul>
 
 

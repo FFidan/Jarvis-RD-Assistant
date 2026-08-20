@@ -708,7 +708,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -2156,7 +2156,7 @@ plus your model set and a PDF/page-snapshot library that grows with use.</p>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>bash scripts/check-python-deps.sh            # verify parity
 </code></pre></div>
 <p>Groups: <code>jarvis-common</code> (shared), <code>paper-ingestion</code>, <code>paper-ingestion-optional</code>,
-<code>learning-engine</code>, <code>telegram-bot</code> (plus <code>-cpu</code> conflict forks of the paper-ingestion and optional groups that resolve PyTorch from the CPU index). FastAPI pinned <code>&gt;=0.137.0,&lt;0.141.0</code>.</p>
+<code>learning-engine</code>, <code>telegram-bot</code> (plus <code>-cpu</code> conflict forks of the paper-ingestion and optional groups that resolve PyTorch from the CPU index). FastAPI pinned <code>&gt;=0.137.0,&lt;0.142.0</code>.</p>
 <p>Frontend (<code>frontend/package.json</code>): React ^19, TypeScript ^5.6, Vite ^8,
 TanStack Query ^5, Zustand ^5, React Router ^7, Recharts ^2.15,
 Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).</p>
@@ -2356,13 +2356,13 @@ Observability variables (Langfuse): <a href="https://github.com/limitcycle-oss/j
 <td>PubMed XML parsing + hardened XML in <code>cached_transport.py</code></td>
 </tr>
 <tr>
-<td><code>qdrant-client&gt;=1.14.3,&lt;1.15.0</code></td>
+<td><code>qdrant-client&gt;=1.14.3,&lt;1.20.0</code></td>
 <td>paper_ingestion</td>
 <td>Client API used with the tested Qdrant 1.13.2 service, including filtered vector maintenance</td>
 </tr>
 <tr>
 <td><code>scikit-learn&gt;=1.6.0</code></td>
-<td>paper_ingestion (optional)</td>
+<td>paper_ingestion</td>
 <td>Per-user logistic regression on recommendation feedback</td>
 </tr>
 </tbody>

@@ -708,7 +708,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -1764,6 +1764,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Persistence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database-ownership-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database ownership contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2084,6 +2101,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Persistence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#database-ownership-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database ownership contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2134,21 +2168,23 @@ Telegram delivery.</p>
   chunking, embeddings, RAG, extraction, Pulse, Zotero, and source integrations.</li>
 <li><code>learning_engine</code> - FastAPI service for FSRS cards, reviews, projects,
   analytics, and card generation.</li>
+<li><code>platform_api</code> - identity assertions, configuration and provider state,
+  pairing, audit, erasure coordination, and public operator jobs.</li>
 <li><code>telegram_bot</code> - optional push-notification and interaction service. It is a
-  thin REST client: commands, inline callbacks, and scheduled jobs (daily
-  briefing, deadline warnings, author alerts) all call the <code>learning_engine</code>
-  and <code>paper_ingestion</code> REST APIs using <code>X-Owner-User-Id</code> owner-override.
-  Direct Postgres access is limited to the bot's own pairing table
-  (<code>telegram_user_pairings</code>) and the nudge scheduler — all product-data tenant
-  scoping is enforced server-side by the service endpoints the bot calls.</li>
+  database-free REST client; Platform supplies route-bound assertions and the
+  owning APIs retain pairing and product-data authorization.</li>
 <li><code>frontend</code> - React dashboard served through nginx. Host port defaults to
   <code>3001</code>; container port is <code>3000</code>.</li>
 <li><code>postgres</code> - primary state store.</li>
 <li><code>qdrant</code> - vector store for semantic search.</li>
 <li><code>litellm</code> and <code>ollama</code> - LLM gateway and local model runtime.</li>
 </ul>
-<p>Services communicate over the Docker <code>jarvis</code> network. The frontend proxies API
-requests through nginx to <code>paper_ingestion</code> and <code>learning_engine</code>.</p>
+<p>Services communicate over the Docker <code>jarvis</code> network. nginx obtains a
+Platform-signed, request-bound assertion for browser API requests; Platform is
+the only assertion signer.</p>
+<p>W3C trace and correlation context can cross these boundaries. Diagnostics and
+metadata-only UDP forwarding are optional and bounded; Vector forwards
+structured stdout without a Docker socket or product-table sink.</p>
 <h2 id="backend-packages">Backend Packages<a class="headerlink" href="#backend-packages" title="Permanent link">&para;</a></h2>
 <p><code>services/paper_ingestion/paper_ingestion/</code> is split by responsibility:</p>
 <ul>
@@ -2251,31 +2287,14 @@ HTTP client.</p>
   <strong>Admin → User Management</strong> sidebar section (<code>/admin/users</code>).</li>
 </ul>
 <h3 id="cross-service-auth-boundary-resolver-di">Cross-Service Auth Boundary (resolver DI)<a class="headerlink" href="#cross-service-auth-boundary-resolver-di" title="Permanent link">&para;</a></h3>
-<p><code>jarvis_common.auth</code> exposes three production user-id resolvers:</p>
-<ul>
-<li><strong><code>current_user_id_strict</code></strong> — session-only. Hard 401 without a valid session
-  cookie. No <code>X-Owner-User-Id</code> path.</li>
-<li><strong><code>current_user_id_with_owner_override</code></strong> — session-first, honors a verified
-  <code>X-Owner-User-Id</code> header when a valid <code>X-API-Key</code> is present, but returns
-  <code>None</code> (does not raise) when no identity can be resolved. Used by endpoints
-  that may be reached unauthenticated.</li>
-<li><strong><code>current_user_id_strict_with_owner_override</code></strong> (and its <code>Depends()</code> wrapper
-  <code>get_current_user_id</code>) — the raising variant of the above: same
-  <code>X-Owner-User-Id</code> override path but a hard 401 when no identity resolves.
-  Required for cross-service callers (the Telegram bot) making per-user
-  requests.</li>
-</ul>
-<p>The override-capable resolver is applied <strong>selectively, by reachability</strong> — only
-on endpoints that a header-authenticated caller actually reaches per-user.
-Everything else uses session-only <code>current_user_id_strict</code> by design (smaller
-attack surface). <code>scripts/check-no-unsafe-resolver.py</code> enforces that every
-router endpoint has one of the three safe resolvers; it does not mandate the
-override-capable one because the session-only choice is intentional.</p>
+<p><code>jarvis_common.auth</code> resolves browser sessions and verifies Platform-issued,
+route-bound service assertions. Service capabilities are exact and deny by
+default; product APIs do not accept a generic downstream owner override.</p>
 <h3 id="telegram-pairing">Telegram Pairing<a class="headerlink" href="#telegram-pairing" title="Permanent link">&para;</a></h3>
 <p>The dashboard issues short-lived pairing tokens in <code>telegram_pairing_tokens</code>;
 the bot stores durable chat ownership in <code>telegram_user_pairings</code> (see
-<code>db/init.sql</code>). A chat is authenticated <strong>exclusively</strong> via the <code>/pair &lt;token&gt;</code>
-flow — the token is generated in Settings → Integrations → Telegram and
+<code>db/init.sql</code>). A chat is authenticated <strong>exclusively</strong> via the <code>/pair &lt;code&gt;</code>
+flow — the code is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
 <code>/pair</code>. The legacy dashboard-code pairing path is no longer active. Pairing
@@ -2309,11 +2328,36 @@ visibility</a>.</p>
 of accepted deferrals and their explicit reopen criteria.</p>
 <h2 id="persistence">Persistence<a class="headerlink" href="#persistence" title="Permanent link">&para;</a></h2>
 <p>Fresh schema is defined in <code>db/init.sql</code>; existing installs advance through
-<code>db/migrations/</code>. The migration runner applies migrations on
-<code>paper_ingestion</code> startup. The current migration count and range are documented in
+<code>db/migrations/</code>. The dedicated one-shot migrator applies migrations before
+product readiness. Runtime services perform read-only schema-floor and
+integrity checks; they do not run DDL at startup. The current migration count and range are documented in
 <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/db/migrations/README.md"><code>db/migrations/README.md</code></a> — that file is the authoritative source; do not hand-stamp a literal count here.
 Fresh-install validation must replay <code>db/init.sql</code> and migrations against live
 Docker Postgres when schema duplication risk is in scope.</p>
+<h3 id="database-ownership-contract">Database ownership contract<a class="headerlink" href="#database-ownership-contract" title="Permanent link">&para;</a></h3>
+<p><code>db/ownership-manifest.json</code> is the executable
+v1.2.6 ownership contract. It assigns every current table, sequence, function,
+type, trigger, rule, and background-job kind to exactly one of four domains:</p>
+<ul>
+<li>Platform owns identity, sessions, configuration, pairing, audit, and system
+  events.</li>
+<li>Research owns papers, discovery, ingestion, extraction, retrieval, Pulse,
+  recommendations, and source state.</li>
+<li>Learning owns cards, reviews, projects, tasks, journal entries, daily
+  activity, and scheduled nudges.</li>
+<li>Operations owns migration metadata and PostgreSQL-backed job infrastructure.</li>
+</ul>
+<p>The manifest also records computed-SQL sources, supported database scripts,
+and every temporary cross-domain write. <code>scripts/database_inventory.py --check</code>
+compares those declarations with the current schema and production Python. An
+unowned object, an unreviewed computed query path, or an unclassified
+cross-domain write fails validation.</p>
+<p>The database has physical <code>platform</code>, <code>research</code>, <code>learning</code>, and <code>ops</code>
+schemas. Each domain has a NOLOGIN owner and distinct runtime role; the
+one-shot migration authority and isolated LiteLLM migrator are separate from
+their runtimes. Runtime roles cannot perform DDL or assume owner roles.</p>
+<p>Cross-domain mutation uses an owner API, an idempotent outbox/inbox, or a fixed
+database capability. The manifest records the permitted seams and their owners.</p>
 <h2 id="frontend-contract-boundary">Frontend Contract Boundary<a class="headerlink" href="#frontend-contract-boundary" title="Permanent link">&para;</a></h2>
 <p>The React dashboard contains meaningful workflow logic and API assumptions.
 Before changing backend response shapes, job envelopes, status fields, or error

@@ -713,7 +713,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -1325,15 +1325,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#one-click-restore" class="md-nav__link">
+  <a href="#requesting-a-restore" class="md-nav__link">
     <span class="md-ellipsis">
       
-        One-click restore
+        Requesting a restore
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="One-click restore">
+    <nav class="md-nav" aria-label="Requesting a restore">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2026,15 +2026,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#one-click-restore" class="md-nav__link">
+  <a href="#requesting-a-restore" class="md-nav__link">
     <span class="md-ellipsis">
       
-        One-click restore
+        Requesting a restore
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="One-click restore">
+    <nav class="md-nav" aria-label="Requesting a restore">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -2145,8 +2145,9 @@
 <p>The default installation takes a restore point each day and can take one on
 demand. Setup creates an encryption key, so those archives are encrypted unless
 the operator deliberately changes the backup configuration. Administrators use
-<strong>Admin → Backups</strong> (<code>/admin/backups</code>) to review, download, retain, and restore
-them.</p>
+<strong>Admin → Backups</strong> (<code>/admin/backups</code>) to review, download, retain, and request
+a restore. Starting the destructive restore requires an operator command on the
+host.</p>
 <p>This page is for <strong>admins</strong>. Regular users do not see the Backups panel; during
 a restore they see a brief "restore in progress" message.</p>
 <hr />
@@ -2235,18 +2236,28 @@ exists without sending the key through an untrusted channel.</p>
 <p>Automatic pruning has two floors you cannot switch off. Your last restore point is never removed, however old it is; and a single automatic run never removes more than half of your restore points, because a server clock that jumps forward makes every archive look old at once. When that happens the run removes only the oldest half and says so, and normal runs converge on the window you asked for over the following days. Deleting a restore point yourself from the Backups panel is not subject to either floor — that is what the typed <strong>DELETE</strong> confirmation is for — and each delete records how many restore points are left.</p>
 <p>If you set the <code>BACKUP_RETENTION_DAYS</code> environment variable, <code>0</code> means <em>no age limit</em>; earlier releases read <code>0</code> as "remove anything older than about a day". The <strong>Keep most recent</strong> cap still applies either way.</p>
 <hr />
-<h2 id="one-click-restore">One-click restore<a class="headerlink" href="#one-click-restore" title="Permanent link">&para;</a></h2>
-<p>You can roll the whole instance back to any listed restore point without leaving the browser.</p>
+<h2 id="requesting-a-restore">Requesting a restore<a class="headerlink" href="#requesting-a-restore" title="Permanent link">&para;</a></h2>
+<p>An administrator can select and confirm a restore in the browser. The browser
+queues the request but cannot start the privileged database operation. An
+operator must then run <code>jarvis-research restore run</code> on the host.</p>
 <!-- screenshot: typed-RESTORE confirmation dialog over the Backups panel -->
 
 <ol>
 <li><strong>Pick a restore point</strong> and click <strong>Restore to this point</strong>.</li>
 <li><strong>Confirm.</strong> A dialog explains that this replaces the current databases, search index, and provider keys with the contents of that backup. Type <strong>RESTORE</strong> to proceed.</li>
-<li><strong>Watch the guided progress view.</strong> The panel shows each step live and keeps updating even through the brief window when the app itself is unreachable mid-restore. Other users see a maintenance message until it completes.</li>
+<li><strong>Start it on the host.</strong> Run <code>jarvis-research restore run</code>. The command uses
+   a transient restore job, reconstructs database authority, applies required
+   migrations, and fails nonzero if any phase is incomplete.</li>
+<li><strong>Watch the guided progress view.</strong> The panel shows each step live and keeps
+   updating even through the brief window when the app itself is unreachable.
+   Other users see a maintenance message until it completes.</li>
 </ol>
 <h3 id="what-happens-behind-the-scenes">What happens behind the scenes<a class="headerlink" href="#what-happens-behind-the-scenes" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>A safety backup is taken first.</strong> Before anything is touched, the current state is captured as a new restore point — so even a restore you regret is recoverable.</li>
+<li><strong>A safety backup is taken first.</strong> The transient restore job captures the
+  current state before anything is touched, so even a restore you regret is
+  recoverable. The continuously running backup service has no restore
+  credential and cannot execute a restore.</li>
 <li><strong>The restore point is checked before use.</strong> Current backup points carry a
   signed manifest that names the exact archives for one run. Restore checks the
   signature, timestamp, file names, sizes, and checksums before decrypting or
@@ -2275,7 +2286,11 @@ exists without sending the key through an untrusted channel.</p>
   live. Durable accounts, roles, and passkeys remain, but every user — including
   the initiating administrator — must sign in again.</li>
 </ul>
-<p>A clean restore lifts the maintenance window by itself. If a restore fails, the guided view says exactly what happened and what to do next — including the safety backup taken beforehand, which appears in the panel and can be restored like any other point.</p>
+<p>A clean restore lifts the maintenance window only after ownership, grants,
+default privileges, schema migrations, and service readiness have been
+verified. If a restore fails, maintenance remains active when needed and the
+guided view says what happened and what to do next, including the safety backup
+taken beforehand.</p>
 <hr />
 <h2 id="identity-and-credential-boundaries">Identity and credential boundaries<a class="headerlink" href="#identity-and-credential-boundaries" title="Permanent link">&para;</a></h2>
 <p>A restore preserves durable accounts, roles, and passkeys while revoking
@@ -2314,12 +2329,13 @@ it replaces data.</p>
    minutes.</li>
 <li>Upload the archive set and encryption key. The dedicated browser upload
    service writes only to the restore inbox; it has no database, application
-   secret, or Docker-socket access. The backup sidecar validates and consumes
-   that inbox.</li>
+   secret, or Docker-socket access. The scheduled backup service publishes a
+   safe inventory so the browser can validate the set before privileged work.</li>
 <li>Under <strong>Restore from another JARVIS</strong>, confirm that <strong>Complete</strong>,
    <strong>Secrets</strong>, and <strong>Key ready</strong> are shown. Select <strong>Restore to this point</strong> and
-   type <strong>RESTORE</strong>.</li>
-<li>Follow the progress view. A successful restore installs the recovered data
+   type <strong>RESTORE</strong>. The request remains queued.</li>
+<li>On the server, run <code>jarvis-research restore run</code>. Follow the progress view.
+   A successful restore installs the recovered data
    keys, rebinds the database account, restarts affected services, and signs
    everyone out. Sign in with the recovered account.</li>
 <li>Review every restored outbound integration. In the original progress tab,
@@ -2347,14 +2363,12 @@ format.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>jarvis-research<span class="w"> </span>restore<span class="w"> </span>request<span class="w"> </span>&lt;timestamp&gt;
 </code></pre></div>
 <p>The command generates the restore identifier and request timestamp the
-   backup service requires, fills in the real paths, and prints the three steps
+   restore job requires, fills in the real paths, and prints the steps
    below. It submits nothing and moves nothing.</p>
 <ol>
 <li>Follow the printed steps <strong>in order</strong>: copy the archive set into the restore
    inbox, then the matching encryption key under its required one-time name,
-   and only then submit the printed request. The backup service acts on a
-   submitted request within seconds, so submitting it first fails the restore
-   against an empty inbox.</li>
+   and only then submit the printed request.</li>
 </ol>
 <p>If the set is in the configured S3 bucket, pull only that timestamp instead
    of copying the archives by hand:</p>
@@ -2363,15 +2377,17 @@ format.</p>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
 </code></pre></div>
 <ol>
-<li>Follow the restore:</li>
+<li>Start the queued restore and follow it:</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>jarvis-research<span class="w"> </span>restore<span class="w"> </span>status
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>jarvis-research<span class="w"> </span>restore<span class="w"> </span>run
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>jarvis-research<span class="w"> </span>restore<span class="w"> </span>status
 </code></pre></div>
 <p>It reports the state, the current step, any error, whether manual follow-up
    is required, and the safety backup to restore if it is. The WebUI Backup
-   panel shows the same status, and <code>docker compose logs -f postgres-backup</code>
-   shows the raw progress. The one-time key and decrypted secrets staging are
-   removed when the restore exits.</p>
+   panel shows the same status. The host command prints the privileged job's
+   progress and exits nonzero unless authority reconstruction and migration
+   complete. The one-time key and decrypted secrets staging are removed when
+   the restore exits.</p>
 <ol>
 <li>Review the restored outbound settings and run
    <code>jarvis-research restore acknowledge &lt;restore-id&gt;</code> with the restore

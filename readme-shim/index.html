@@ -708,7 +708,7 @@
   <span class="md-ellipsis">
     
   
-    Research Feed & Library
+    Papers & Discover
   
 
     
@@ -2456,7 +2456,7 @@ interactive path.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev<span class="w">  </span><span class="c1"># local dev / CI smoke test</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nb">umask</span><span class="w"> </span><span class="m">077</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>./smtp-password.txt
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">"</span><span class="w"> </span>&gt;<span class="w"> </span>./smtp-password.txt
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
@@ -2483,15 +2483,25 @@ the supported path for a first install.</p>
 </ul>
 <h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>flowchart TD
-    UI["React Dashboard · :3001&lt;br/&gt;(nginx reverse-proxies to backends)"]
-    UI --&gt; PI["Paper Ingestion · FastAPI :8000&lt;br/&gt;discovery · PDF · embedding · RAG · summarization · knowledge graph"]
-    UI --&gt; LE["Learning Engine · FastAPI :8001&lt;br/&gt;card generation · FSRS scheduling · review tracking · projects · analytics"]
-    PI --&gt; PG[("Postgres · :5432")]
+    UI["React Dashboard · nginx"]
+    UI --&gt; GW["Gateway identity hop"]
+    GW --&gt; PL["Platform API · identity · configuration · audit · pairing · jobs"]
+    GW --&gt; PI["Research · discovery · PDF · embedding · RAG · summarization"]
+    GW --&gt; LE["Learning · cards · reviews · projects · analytics"]
+    TG["Telegram (optional)"] --&gt; PL
+    TG --&gt; PI
+    TG --&gt; LE
+    PL --&gt; PG
+    PI --&gt; PG[("Postgres · platform / research / learning / ops")]
     PI --&gt; QD[("Qdrant · :6333")]
     PI --&gt; LL["LiteLLM · :4000"]
     LE --&gt; PG
     LE --&gt; LL
     LL --&gt; OL["Ollama · :11434"]</code></pre>
+<p>The gateway obtains a Platform-signed, request-bound assertion before sending a
+browser request to a product API. Telegram is a REST client: it has no
+PostgreSQL or configuration-encryption credential and sends no generic
+impersonation header downstream.</p>
 <p><strong>Optional services:</strong> Telegram bot (<code>--profile telegram</code>), Langfuse LLM-trace observability (off by default — <code>make observability-up</code>; see <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a>).</p>
 <h2 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h2>
 <p>The Quickstart above is the normal install path. The <a href="../DEPLOYMENT/">deployment
@@ -2510,11 +2520,11 @@ also available as a separate legacy route from v1.1.3, which is outside the
 maintained update window:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="o">(</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nb">set</span><span class="w"> </span>-e
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nv">bootstrap</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nb">trap</span><span class="w"> </span><span class="s1">&#39;rm -f &quot;$bootstrap&quot;&#39;</span><span class="w"> </span>EXIT
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>curl<span class="w"> </span>-fsSL<span class="w"> </span>-o<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bootstrap</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nv">bootstrap</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nb">trap</span><span class="w"> </span><span class="s1">'rm -f "$bootstrap"'</span><span class="w"> </span>EXIT
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>curl<span class="w"> </span>-fsSL<span class="w"> </span>-o<span class="w"> </span><span class="s2">"</span><span class="nv">$bootstrap</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span>https://raw.githubusercontent.com/limitcycle-oss/jarvis-rd-assistant/v1.2.2/scripts/update-bootstrap.sh
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>bash<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$bootstrap</span><span class="s2">&quot;</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PWD</span><span class="s2">&quot;</span><span class="w"> </span>--to<span class="w"> </span>v1.2.2
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>bash<span class="w"> </span><span class="s2">"</span><span class="nv">$bootstrap</span><span class="s2">"</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">"</span><span class="w"> </span>--to<span class="w"> </span>v1.2.2
 <a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="o">)</span>
 </code></pre></div>
 <p>Those lifecycle commands predate the backup protocol required by v1.2.2. The
@@ -2554,7 +2564,7 @@ access remain inside the trust boundary.</p>
 <p>We strictly use Docker Compose for local development to avoid polluting the host with heavy ML dependencies.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">                    </span><span class="c1"># Start local development services</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>paper_ingestion<span class="w">  </span><span class="c1"># Follow logs</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w">  </span><span class="c1"># Run a service&#39;s tests</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w">  </span><span class="c1"># Run a service's tests</span>
 <a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>ruff<span class="w"> </span>check<span class="w"> </span>.<span class="w">   </span><span class="c1"># Lint one service</span>
 </code></pre></div>
 <p>Install Python dev dependencies, then run the full quality gate:</p>
@@ -2572,8 +2582,8 @@ access remain inside the trust boundary.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>POSTGRES_PASSWORD</code></td>
-<td>Database password</td>
+<td>Database passwords</td>
+<td>Not a single variable: each service connects as its own least-privilege PostgreSQL role with its own password file under <code>secrets/</code>. <code>scripts/init-secrets.sh</code> creates them; the <a href="../DEPLOYMENT/#docker-secrets">deployment guide</a> lists every one.</td>
 </tr>
 <tr>
 <td><code>JARVIS_API_KEY</code></td>
@@ -2605,7 +2615,7 @@ access remain inside the trust boundary.</p>
 </tr>
 </tbody>
 </table>
-<p>See <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/.env.example"><code>.env.example</code></a> for the full annotated list. For production deployments using Docker Secrets (<code>_FILE</code> variants), see <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/secrets/README.md"><code>secrets/README.md</code></a>.</p>
+<p>See <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/.env.example"><code>.env.example</code></a> for the full annotated list. For production deployments using Docker Secrets (<code>_FILE</code> variants), see the <a href="../DEPLOYMENT/#docker-secrets">complete secret inventory</a>; <a href="https://github.com/limitcycle-oss/jarvis-rd-assistant/blob/main/secrets/README.md"><code>secrets/README.md</code></a> covers file permissions and rotation.</p>
 <h3 id="adding-a-paper-source">Adding a paper source<a class="headerlink" href="#adding-a-paper-source" title="Permanent link">&para;</a></h3>
 <ol>
 <li>Create <code>services/paper_ingestion/paper_ingestion/sources/new_source.py</code>.</li>
