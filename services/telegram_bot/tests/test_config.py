@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, patch
@@ -115,7 +116,8 @@ def test_config_rejects_credentials_in_service_url() -> None:
 
 
 def test_bot_config_has_numpy_style_public_docstring() -> None:
-    doc = BotConfig.__doc__ or ""
+    doc = inspect.getdoc(BotConfig)
+    assert doc is not None
     assert "Parameters\n----------" in doc
     for field in (
         "telegram_token",
