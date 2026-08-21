@@ -119,7 +119,7 @@ async def _apply_migration_sql(
     try:
         async with conn.transaction():
             if assume_role is not None:
-                await conn.execute(f"SET LOCAL ROLE {assume_role}")
+                await conn.execute("SELECT set_config('role', $1, true)", assume_role)
             await conn.execute(cleaned_sql)
             if assume_role is not None:
                 await conn.execute("RESET ROLE")
