@@ -1368,6 +1368,19 @@ cmd_update() {
   _migrate_legacy_pending_for_repo \
     || die "Cannot safely assign the old shared update journal to this install." \
       "No services were changed. Keep ${LEGACY_PENDING_FILE_PATH} and run: jarvis-research doctor"
+  # The guard below runs backup-lifecycle.sh inside the backup sidecar through this
+  # checkout's compose file, and Compose refuses to start a service whose file-backed
+  # secret is absent. A release that begins mounting a new secret reaches an older
+  # install without that file, so create what this checkout declares before anything
+  # touches a container. After the fast-forward this process is already the new
+  # release's, so the script it runs is the one that knows the new names.
+  # init-secrets.sh is idempotent and never overwrites an existing secret; it is the
+  # same call update.sh makes before it stages images.
+  info "Ensuring the Docker-secret source files this release expects exist..."
+  if ! bash "${REPO}/scripts/init-secrets.sh"; then
+    die "Could not create the Docker-secret source files this release requires." \
+      "No services were changed. Run: bash scripts/init-secrets.sh   (then re-run: jarvis-research update)"
+  fi
   _acquire_update_volume_guard
 
   # Explicit resume is valid only for a schema-checked durable transaction whose
