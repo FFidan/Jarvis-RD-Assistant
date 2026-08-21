@@ -1164,10 +1164,10 @@ log_lacks_mutations "update_requires_backup_on_destructive_migration(no-backup):
 # =============================================================================
 # Backup fixture helper: write one encrypted, authenticated restore point using
 # the exact request ID observed in the on-demand trigger.
-#   $1=backup_dir  $2=mode  $3=run_id
+#   $1=backup_dir  $2=mode  $3=run_id  $4=schema_version of the source install
 # =============================================================================
 seed_fresh_backup() {
-  local dir="$1" mode="$2" run_id="$3" ts="20991231_235959"
+  local dir="$1" mode="$2" run_id="$3" schema_version="${4:-200}" ts="20991231_235959"
   local jf="jarvis_${ts}.sql.gz.enc" sf="secrets_${ts}.tar.gz.enc" qf="qdrant_papers_${ts}.snapshot.enc"
   local lf="litellm_${ts}.sql.gz.enc" pf="pdfs_${ts}.tar.gz.enc"
   if [ "$mode" = "renamed" ]; then jf="jarvis_20991231_235958.sql.gz.enc"; fi
@@ -1189,11 +1189,11 @@ seed_fresh_backup() {
   entries="$entries,{\"filename\":\"$sf\",\"sha256\":\"$ssha\",\"size_bytes\":$ssz}"
   entries="$entries,{\"filename\":\"$qf\",\"sha256\":\"$qsha\",\"size_bytes\":$qsz}"
   if [ "$mode" = "legacy" ]; then
-    printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":200,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
-      "$ts" "$entries" > "$dir/manifest_${ts}.json"
+    printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":%s,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
+      "$ts" "$schema_version" "$entries" > "$dir/manifest_${ts}.json"
   else
-    printf '{"timestamp":"%s","run_id":"%s","app_version":"1.1.3","schema_version":200,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
-      "$ts" "$run_id" "$entries" > "$dir/manifest_${ts}.json"
+    printf '{"timestamp":"%s","run_id":"%s","app_version":"1.1.3","schema_version":%s,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
+      "$ts" "$run_id" "$schema_version" "$entries" > "$dir/manifest_${ts}.json"
   fi
   if [ "$mode" = "unsigned" ]; then return 0; fi
   if [ "$mode" = "bad_hmac" ]; then
@@ -1215,7 +1215,7 @@ seed_fresh_backup() {
 }
 
 respond_to_backup() {
-  local mode="$1"
+  local mode="$1" schema_version="${2:-200}"
   (
     local request_id=""
     for _ in $(seq 1 100); do
@@ -1231,7 +1231,7 @@ respond_to_backup() {
       sleep 0.02
     done
     if [ "$mode" = "replayed" ]; then request_id="00000000000000000000000000000000"; mode="good"; fi
-    seed_fresh_backup "$BK" "$mode" "$request_id"
+    seed_fresh_backup "$BK" "$mode" "$request_id" "$schema_version"
   ) >/dev/null 2>&1 &
 }
 
@@ -1265,6 +1265,31 @@ if [ "$rc" -eq 0 ] \
   pass "staged target runtime creates the release's secrets before its first sidecar run, then a target-format backup, and hands off the backup sidecar"
 else
   check_fail "staged target runtime backup: rc=$rc out=<<<$out>>> log=$staged_log"
+fi
+
+# The source schema comes from the fresh backup's authenticated manifest, so an
+# installation below the maintained window is refused while the checkout is
+# still on its own release.
+new_staged_update_env
+respond_to_backup good 102
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'predates the maintained update window' \
+   && has "$out" 'No branch change was made'; then
+  pass "an installation below the maintained schema floor is refused before the checkout advances"
+else
+  check_fail "update below floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "update below floor: no branch or image mutation"
+
+new_staged_update_env
+respond_to_backup good 106
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$(cat "$STUB_LOG")" 'merge --ff-only'; then
+  pass "an installation at the oldest maintained schema floor updates"
+else
+  check_fail "update at oldest floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
 fi
 
 new_staged_update_env

@@ -1144,6 +1144,24 @@ _require_fresh_backup() {
     && [ "$VERIFIED_BACKUP_RUN_ID" = "$request_id" ]
 }
 
+# The oldest database schema an in-place update may start from — v1.2.0 and
+# v1.2.1, the oldest rows of the support table in docs/RELEASE.md.
+SUPPORTED_SOURCE_FLOOR=106
+
+# _require_supported_source_floor BACKUP_ID RUN_ID SHAPE — read the source
+# schema from the fresh backup's authenticated manifest and refuse an
+# installation older than the maintained window while nothing has changed yet.
+_require_supported_source_floor() {
+  local floor
+  floor="$(_backup_volume_helper verify-floor "$1" "$2" "$3" 2>/dev/null | tr -d '\r\n')" || true
+  printf '%s' "$floor" | grep -Eq '^[0-9]+$' \
+    || die "Could not read this installation's schema version from the verified backup." \
+      "No branch change was made. Review: docker compose logs postgres-backup, then re-run: jarvis-research update"
+  [ "$floor" -ge "$SUPPORTED_SOURCE_FLOOR" ] \
+    || die "This installation's database (schema ${floor}) predates the maintained update window (oldest supported: ${SUPPORTED_SOURCE_FLOOR})." \
+      "No branch change was made. Complete the one-time step in docs/manual/cli.md (Updating from a release before v1.2.2), then re-run: jarvis-research update"
+}
+
 # -----------------------------------------------------------------------------
 # Stage-first pull + the fast-forward advance.
 # -----------------------------------------------------------------------------
@@ -1504,6 +1522,10 @@ cmd_update() {
         backup_run_id="${VERIFIED_BACKUP_RUN_ID:-}"
         MIGRATIONS_RAN=1
         ok "Verified backup ${backup_id} present; continuing."
+        # The check rides on the backup a data-changing migration requires; a
+        # cohort with only additive migrations takes no backup and reaches the
+        # merge unchecked. The source floor does not depend on the target.
+        _require_supported_source_floor "$backup_id" "$backup_run_id" current
       else
         die "No fresh, verified backup exists — refusing to apply a data-changing migration." \
             "Take a backup (WebUI Backup panel or the backup sidecar), then re-run: jarvis-research update"

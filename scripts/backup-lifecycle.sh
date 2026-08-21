@@ -1166,6 +1166,12 @@ verify_backup_set() {
   printf '%s|%s\n' "$manifest_ts" "$signed_run_id"
 }
 
+# The schema version an authenticated manifest records for the installation it
+# was taken from. Only meaningful once verify_backup_set has accepted the set.
+manifest_schema_version() {
+  grep -oE '"schema_version":[0-9]+' "$1" | head -1 | cut -d: -f2
+}
+
 wait_verify_backup() {
   local request_id="$1" timeout="$2" interval="$3" waited=0 manifest f
   valid_id "$request_id" || fail "invalid backup request id"
@@ -1311,7 +1317,7 @@ PERL
 }
 
 usage() {
-  printf '%s\n' 'usage: backup-lifecycle.sh <reserve-host|host-reservation-status|hold-host|host-status|wait-host|current-host|release-host|host-release-complete|cancel-host-reservation|clear-retained-host|reserve-update|update-reservation-status|current-update-reservation|hold-update|update-status|update-promoted-status|wait-update|current-update|promote-update|release-update|reserve-rotation|rotation-reservation-status|hold-rotation|rotation-status|wait-rotation|current-rotation|release-rotation|rotation-release-complete|inspect-quarantine|acknowledge-quarantine|publish-request|write-pin|pin-matches|clear-pin|wait-verify|verify> ...' >&2
+  printf '%s\n' 'usage: backup-lifecycle.sh <reserve-host|host-reservation-status|hold-host|host-status|wait-host|current-host|release-host|host-release-complete|cancel-host-reservation|clear-retained-host|reserve-update|update-reservation-status|current-update-reservation|hold-update|update-status|update-promoted-status|wait-update|current-update|promote-update|release-update|reserve-rotation|rotation-reservation-status|hold-rotation|rotation-status|wait-rotation|current-rotation|release-rotation|rotation-release-complete|inspect-quarantine|acknowledge-quarantine|publish-request|write-pin|pin-matches|clear-pin|wait-verify|verify|verify-floor> ...' >&2
   exit 2
 }
 
@@ -1391,6 +1397,12 @@ case "${1:-}" in
     [ "$#" -eq 4 ] || usage
     valid_ts "$2" || fail "invalid backup timestamp"
     verify_backup_set "${BACKUP_DIR}/manifest_${2}.json" "$3" "$4"
+    ;;
+  verify-floor)
+    [ "$#" -eq 4 ] || usage
+    valid_ts "$2" || fail "invalid backup timestamp"
+    verify_backup_set "${BACKUP_DIR}/manifest_${2}.json" "$3" "$4" >/dev/null \
+      && manifest_schema_version "${BACKUP_DIR}/manifest_${2}.json"
     ;;
   *) usage ;;
 esac

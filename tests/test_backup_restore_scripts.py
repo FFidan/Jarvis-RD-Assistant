@@ -580,6 +580,99 @@ def _lifecycle_verifies(archive_dir: Path) -> bool:
     return _run_bash(body).returncode == 0
 
 
+def _signed_current_set(archive_dir: Path, schema_version: int) -> str:
+    """Write a complete, signed, current-shape restore point and return its run id."""
+    run_id = "0123456789abcdef0123456789abcdef"
+    key = archive_dir / "backup_key"
+    key.write_text("a-backup-encryption-key\n")
+    archives = []
+    for name, content in (
+        (f"jarvis_{TS}.sql.gz.enc", b"jarvis-data"),
+        (f"litellm_{TS}.sql.gz.enc", b"litellm-data"),
+        (f"pdfs_{TS}.tar.gz.enc", b"pdf-archive"),
+        (f"secrets_{TS}.tar.gz.enc", b"secrets-archive"),
+        (f"qdrant_papers_{TS}.snapshot.enc", b"qdrant-snapshot"),
+    ):
+        (archive_dir / name).write_bytes(content)
+        archives.append(
+            {
+                "filename": name,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+            }
+        )
+    manifest = archive_dir / f"manifest_{TS}.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "timestamp": TS,
+                "run_id": run_id,
+                "app_version": "1.2.5",
+                "schema_version": schema_version,
+                "created_at": "2026-07-19T12:00:00+00:00",
+                "archives": archives,
+            },
+            separators=(",", ":"),
+        )
+    )
+    (archive_dir / f"manifest_{TS}.json.hmac").write_text(
+        _current_signature(key.read_bytes(), manifest.read_bytes()) + "\n"
+    )
+    return run_id
+
+
+def _verify_floor(archive_dir: Path, run_id: str) -> subprocess.CompletedProcess:
+    """Run the script's own verify-floor subcommand over a prepared archive set."""
+    source = BACKUP_LIFECYCLE.read_text()
+    branch = source.split("\n  verify-floor)", 1)[1].split("\n    ;;", 1)[0]
+    body = (
+        "set -uo pipefail\n"
+        f'BACKUP_DIR="{archive_dir}"\n'
+        f'BACKUP_KEY_FILE="{archive_dir}/backup_key"\n'
+        f'MANIFEST_HMAC_LABEL="{MANIFEST_HMAC_LABEL}"\n'
+        'fail() { echo "$*" >&2; return 1; }\n'
+        + "".join(
+            _shell_function(source, name)
+            for name in (
+                "valid_id",
+                "valid_ts",
+                "manifest_signature",
+                "legacy_manifest_signature",
+                "verify_manifest_hmac",
+                "verify_backup_set",
+                "manifest_schema_version",
+            )
+        )
+        + f"usage() {{ exit 2; }}\nset -- verify-floor {TS} {run_id} current\n"
+        + branch
+        + "\n"
+    )
+    return _run_bash(body)
+
+
+def test_verify_floor_reports_the_source_schema_of_an_authenticated_backup(
+    tmp_path: Path,
+) -> None:
+    """The update guard reads the source schema from a set it has just authenticated."""
+    run_id = _signed_current_set(tmp_path, 106)
+
+    result = _verify_floor(tmp_path, run_id)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "106"
+
+
+def test_verify_floor_reports_nothing_for_an_unauthenticated_backup(tmp_path: Path) -> None:
+    """An unsigned manifest states a schema too; reading it without the MAC would trust it."""
+    run_id = _signed_current_set(tmp_path, 106)
+    (tmp_path / f"manifest_{TS}.json.hmac").unlink()
+
+    result = _verify_floor(tmp_path, run_id)
+
+    assert result.returncode != 0
+    assert "106" not in result.stdout
+
+
 def test_the_three_scripts_share_one_manifest_domain_label() -> None:
     """A signature only travels between them while all three name the same label."""
     declaration = f'MANIFEST_HMAC_LABEL="{MANIFEST_HMAC_LABEL}"'
