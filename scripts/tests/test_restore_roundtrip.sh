@@ -734,6 +734,8 @@ backup_ready() {
 manifest_schema() { sc "cat /backups/manifest_${1}.json 2>/dev/null" | grep -oE '"schema_version":[0-9]+' | grep -oE '[0-9]+' | head -1; }
 no_swap_dbs() { [ "$(q postgres "SELECT count(*) FROM pg_database WHERE datname IN ('jarvis_restore_tmp','jarvis_pre_restore','litellm_restore_tmp','litellm_pre_restore')")" = "0" ]; }
 max_version()      { q jarvis "SELECT COALESCE(MAX(version),0) FROM ops.schema_migrations"; }
+# A predecessor below 0114 keeps its catalog in public; ops.schema_migrations does not exist yet.
+legacy_max_version() { q jarvis "SELECT COALESCE(MAX(version),0) FROM public.schema_migrations"; }
 webauthn_present() { q jarvis "SELECT (to_regclass('platform.webauthn_credentials') IS NOT NULL)"; }
 marker_tags()      { q jarvis "SELECT COALESCE(string_agg(tag, ',' ORDER BY tag), '') FROM public.roundtrip_marker"; }
 # Governed roles carrying a stored search_path default. Every relation lives in
@@ -1196,10 +1198,10 @@ run_hostile_case() { # <source ts> <dest ts> <secrets|pdfs>
   reset_maint
 }
 
-seed_jarvis_113() { # Construct the supported v1.2.5 predecessor from retained migrations.
-  local role
-  seed_jarvis_101 "${1:-schema-113-seed}" || return 1
-  run_fixture_migrations 113 || return 1
+seed_jarvis_at() { # <floor> <marker_tag> -> a maintained predecessor at an exact schema floor, from retained migrations
+  local floor="$1" role
+  seed_jarvis_101 "${2:-schema-${floor}-seed}" || return 1
+  run_fixture_migrations "$floor" || return 1
   role="$(fixture_pg_role)"
   [ "$role" = jarvis ] && return 0
   # This snapshot models the predecessor's reader contract. The post-restore
@@ -1263,6 +1265,10 @@ if ! printf '%s' "$CURRENT_SCHEMA" | grep -Eq '^[0-9]+$'; then
   printf 'FAIL: could not resolve the current migration version\n' >&2
   exit 1
 fi
+# Schema floors of the maintained source window (v1.2.1, v1.2.2, v1.2.3/v1.2.4,
+# v1.2.5); refresh with the release support table in docs/RELEASE.md. The
+# newest floor is last: the sections after the predecessor loop build on it.
+MAINTAINED_FLOORS="106 110 111 113"
 
 # --- Start the isolated fixture ----------------------------------------------
 printf 'archive mode: %s\n' "$ENC_LABEL"
@@ -1293,21 +1299,27 @@ seed_source_data_keys \
 # =============================================================================
 # Supported-predecessor restore
 # =============================================================================
-sec "Supported predecessor 113 advances through root authority"
-if seed_jarvis_113 "restore-point" \
-   && advance_fixture_authority \
-   && [ "$(max_version)" = "$CURRENT_SCHEMA" ] \
-   && [ "$(webauthn_present)" = "t" ] \
-   && [ "$(q jarvis 'SELECT count(*) FROM platform.telegram_user_pairings WHERE chat_id < 0')" = "0" ] \
-   && [ "$(q jarvis "SELECT value #>> '{}' FROM platform.user_config WHERE user_id IS NULL AND key = 'owner.user_id'")" = "1" ] \
-   && [ "$(q jarvis "SELECT count(*) FROM platform.audit_log WHERE action = 'owner.backfilled'")" = "1" ]; then
-  ok "supported predecessor 113 advanced to schema ${CURRENT_SCHEMA} through bootstrap, migrators, and finalization"
-else
-  no "supported predecessor 113 did not advance through the integrated authority sequence"
-  dump_diagnostics
-  printf '\nROUND-TRIP: PASS=%s FAIL=%s\n' "$pass" "$fail"
-  exit 1
-fi
+for floor in $MAINTAINED_FLOORS; do
+  # The restore sections below look for exactly "restore-point", the tag of the
+  # newest predecessor.
+  if [ "$floor" = "113" ]; then tag="restore-point"; else tag="restore-point-${floor}"; fi
+  sec "Maintained predecessor ${floor} advances through root authority"
+  if seed_jarvis_at "$floor" "$tag" \
+     && [ "$(legacy_max_version)" = "$floor" ] \
+     && advance_fixture_authority \
+     && [ "$(max_version)" = "$CURRENT_SCHEMA" ] \
+     && [ "$(webauthn_present)" = "t" ] \
+     && [ "$(q jarvis 'SELECT count(*) FROM platform.telegram_user_pairings WHERE chat_id < 0')" = "0" ] \
+     && [ "$(q jarvis "SELECT value #>> '{}' FROM platform.user_config WHERE user_id IS NULL AND key = 'owner.user_id'")" = "1" ] \
+     && [ "$(q jarvis "SELECT count(*) FROM platform.audit_log WHERE action = 'owner.backfilled'")" = "1" ]; then
+    ok "maintained predecessor ${floor} advanced to schema ${CURRENT_SCHEMA} through bootstrap, migrators, and finalization"
+  else
+    no "maintained predecessor ${floor} did not advance through the integrated authority sequence (seeded floor: $(legacy_max_version))"
+    dump_diagnostics
+    printf '\nROUND-TRIP: PASS=%s FAIL=%s\n' "$pass" "$fail"
+    exit 1
+  fi
+done
 
 # An upgraded deployment must resolve unqualified names exactly as a fresh
 # install does. Only the bootstrap superuser may store another role's default,
@@ -1444,49 +1456,53 @@ else
 fi
 
 # =============================================================================
-# Older-schema restore: construct the supported 113 predecessor, advance to the
-# packaged schema, restore the 113 backup, and re-run the root recovery sequence.
+# Older-schema restore: construct a maintained predecessor, advance to the
+# packaged schema, restore the predecessor's backup, and re-run the root
+# recovery sequence -- from the newest maintained floor and from the oldest.
 # =============================================================================
-sec "Schema 113 restore and integrated forward migration"
-seed_jarvis_113 "older-restore-point"
-clear_backups
-sc 'touch /backup-trigger/.backup_now'
-if wait_for 120 "consistent backup at schema 113" backup_ready; then
-  TS2="$(last_run_ts)"
-  if [ -n "$TS2" ] && [ "$(manifest_schema "$TS2")" = "113" ]; then
-    ok "supported predecessor backup captured at schema 113 (ts=$TS2)"
+restore_from_legacy_floor() { # <floor> <marker_tag>
+  local floor="$1" tag="$2" ts=""
+  sec "Schema ${floor} restore and integrated forward migration"
+  seed_jarvis_at "$floor" "$tag"
+  clear_backups
+  sc 'touch /backup-trigger/.backup_now'
+  if wait_for 120 "consistent backup at schema ${floor}" backup_ready; then
+    ts="$(last_run_ts)"
+    if [ -n "$ts" ] && [ "$(manifest_schema "$ts")" = "$floor" ]; then
+      ok "supported predecessor backup captured at schema ${floor} (ts=$ts)"
+    else
+      no "supported predecessor backup schema wrong (ts=$ts schema=$(manifest_schema "$ts"))"
+    fi
   else
-    no "supported predecessor backup schema wrong (ts=$TS2 schema=$(manifest_schema "$TS2"))"
+    no "older backup never reported success"; ts=""
   fi
-else
-  no "older backup never reported success"; TS2=""
-fi
 
-# Advance the fixture database through the production authority sequence.
-if advance_fixture_authority; then
-  if [ "$(max_version)" = "$CURRENT_SCHEMA" ] && [ "$(webauthn_present)" = "t" ]; then
-    ok "fixture database advanced 113 -> ${CURRENT_SCHEMA} through root jobs"
+  # Advance the fixture database through the production authority sequence.
+  if advance_fixture_authority; then
+    if [ "$(max_version)" = "$CURRENT_SCHEMA" ] && [ "$(webauthn_present)" = "t" ]; then
+      ok "fixture database advanced ${floor} -> ${CURRENT_SCHEMA} through root jobs"
+    else
+      no "live advance wrong (max=$(max_version) webauthn=$(webauthn_present))"
+    fi
   else
-    no "live advance wrong (max=$(max_version) webauthn=$(webauthn_present))"
+    no "root authority sequence failed to advance the fixture database to ${CURRENT_SCHEMA}"
   fi
-else
-  no "root authority sequence failed to advance the fixture database to ${CURRENT_SCHEMA}"
-fi
-
-if [ -n "${TS2:-}" ]; then
-  write_restore_request "$TS2"
+  [ -n "$ts" ] || return 0
+  write_restore_request "$ts"
   if run_restore_authority "$LAST_RESTORE_ID"; then
-    fails_before=$fail
+    local fails_before=$fail
     [ "$(max_version)" = "$CURRENT_SCHEMA" ] || no "integrated forward migration did not reach ${CURRENT_SCHEMA} (max=$(max_version))"
     [ "$(webauthn_present)" = "t" ] || no "integrated forward migration did not restore WebAuthn tables"
-    [ "$(marker_tags)" = "older-restore-point" ] || no "older restore point data missing (marker='$(marker_tags)')"
+    [ "$(marker_tags)" = "$tag" ] || no "older restore point data missing (marker='$(marker_tags)')"
     no_swap_dbs || no "older restore left a _restore_tmp/_pre_restore database"
     ! manual_step_flagged || no "older restore required an unexpected manual operator step"
-    [ "$fail" = "$fails_before" ] && ok "schema 113 restore advanced to ${CURRENT_SCHEMA} through the integrated authority sequence"
+    [ "$fail" = "$fails_before" ] && ok "schema ${floor} restore advanced to ${CURRENT_SCHEMA} through the integrated authority sequence"
   else
     no "older-schema restore did not complete cleanly"
   fi
-fi
+}
+restore_from_legacy_floor 113 "older-restore-point"
+restore_from_legacy_floor 106 "oldest-restore-point"
 
 # =============================================================================
 # Compose service mounts
