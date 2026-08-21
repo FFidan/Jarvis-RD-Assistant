@@ -137,9 +137,14 @@ material reaches the process list on either the signing or the verification path
 
 Both constructions are HMAC-SHA256 over the same key file, so accepting either
 does not weaken forgery resistance for anyone who does not already hold the key.
-The residual is historical: an attacker who read the derived key from the process
-list of a host running a release **before** v1.2.6 can forge a signature under the
-earlier construction, and verification will accept it for a manifest of any shape.
+The residual is a capability that could only have been acquired before this
+release, but acquiring it needed no unusual access or timing: every release before
+v1.2.6 put the derived key in argv on **every** manifest verification, so any
+account that could read the process list on such a host could have taken it.
+Holding it forges a signature under the earlier construction, which verification
+now accepts for a manifest of any shape, where before this release it would have
+been accepted only for the pre-v1.2 schema. Rotating the backup key file is what
+revokes that capability; nothing else does.
 The fallback is kept because removing it locks an operator out of every backup set
 written before v1.2.6, including the one an in-flight upgrade just took. Signed
 manifests still do not authenticate an unsigned pre-upgrade set, and no

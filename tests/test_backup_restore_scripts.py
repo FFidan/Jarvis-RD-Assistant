@@ -609,12 +609,20 @@ def test_no_verification_path_puts_a_derived_key_in_the_process_list() -> None:
 
     Both constructions are HMAC-SHA256 over the same key file. The earlier one was
     weaker only in how openssl had to be keyed, and it is no longer keyed that way.
+
+    The assertion is on the shape of every openssl invocation rather than on one
+    option name. ``-hmac "$(cat -- "$ENC_KEYFILE")"`` exposes strictly more than
+    ``-macopt hexkey:`` ever did and would satisfy a check that only looks for the
+    latter, which is why the residual-risk entry reopens on any argv-keyed MAC.
     """
+    permitted_key = '"$MANIFEST_HMAC_LABEL"'
     for script in (BACKUP_SH, RESTORE_SH, BACKUP_LIFECYCLE):
-        executable = [
-            line for line in script.read_text().splitlines() if not line.lstrip().startswith("#")
-        ]
-        assert not [line for line in executable if "macopt" in line], script.name
+        for line in script.read_text().splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            assert "-macopt" not in line, f"{script.name}: {line.strip()}"
+            for keyed in re.findall(r"-hmac\s+(\S+)", line):
+                assert keyed == permitted_key, f"{script.name}: {line.strip()}"
 
 
 def test_a_signature_matching_neither_construction_is_refused(signed_set: Path) -> None:
