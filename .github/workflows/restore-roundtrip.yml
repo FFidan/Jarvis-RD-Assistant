@@ -1,0 +1,52 @@
+name: Restore round-trip
+
+# Cross-version state is only observable when one release's code meets another
+# release's data, so this runs on every change to a surface the release support
+# table depends on. It drives each maintained schema floor through the authority
+# sequence and restores from both ends of the window.
+on:
+  pull_request:
+    paths:
+      - scripts/**
+      - db/**
+      - docker-compose*.yml
+      - libs/jarvis_common/jarvis_common/migrations.py
+      - versions.env
+      - .github/workflows/restore-roundtrip.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restore-roundtrip-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  restore-roundtrip:
+    name: Restore round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Free disk space for the cold installs
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: Run the restore round-trip
+        run: |
+          rc=0
+          env -u COMPOSE_PROJECT_NAME bash scripts/tests/test_restore_roundtrip.sh --release-gate \
+            > restore-roundtrip.log 2>&1 || rc=$?
+          cat restore-roundtrip.log
+          exit "$rc"
+
+      - name: Upload the round-trip log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: restore-roundtrip-log
+          path: restore-roundtrip.log
+          if-no-files-found: ignore
