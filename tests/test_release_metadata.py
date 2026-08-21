@@ -503,6 +503,17 @@ def test_update_and_restore_floors_are_distinct_in_current_docs() -> None:
     assert "Portable fresh-host restore starts with a complete, signed archive set" in backup
     assert "earlier or unsigned" in backup.lower()
 
+    one_step = "update to the current release in one step through the target release's update"
+    for document in (readme, deployment, cli):
+        assert one_step in document
+
+
+def test_the_maintained_source_floor_is_one_number_everywhere_it_is_enforced() -> None:
+    """The documented window and both enforcing scripts state the same floor."""
+    assert "schema floor 106" in " ".join(_read("docs/RELEASE.md").split())
+    assert "SUPPORTED_SOURCE_FLOOR=106" in _read("scripts/jarvis-research.sh")
+    assert "legacy_floor_min=106" in _read("scripts/postgres-role-bootstrap.sh")
+
 
 def test_local_security_scan_is_pinned_fail_closed_and_outside_the_repo() -> None:
     makefile = _read("Makefile")

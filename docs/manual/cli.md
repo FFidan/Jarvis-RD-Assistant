@@ -125,11 +125,15 @@ an unexpected commit.
 
 ### Updating from a release before v1.2.2
 
-Maintained in-place update support starts at v1.2.0. The procedure below is the
-required one-time bridge for v1.2.0 and v1.2.1. It is also preserved as a
-separate immutable legacy bridge from v1.1.3, but v1.1.3 is no longer in the
-maintained source matrix and a direct jump from v1.1.3 to the current release is
-not supported.
+Maintained in-place update support starts at v1.2.0. Installations running
+v1.2.0 or v1.2.1 update to the current release in one step through the target
+release's update bootstrap, which is the `bootstrap` path in the release support
+table. The procedure below is the immutable legacy bridge for installations
+older than the maintained window — v1.1.3 and earlier — which is no longer in
+the maintained source matrix; a direct jump from v1.1.3 to the current release is
+not supported. To take the one-step path, run the same bootstrap command shown
+below with the release you are updating to in place of `v1.2.2`, in both the
+download URL and `--to`.
 
 Installations first set up before v1.1.3 need one extra step before the bootstrap
 below. v1.1.3 added an SMTP password to the deployment's Docker secrets, and no

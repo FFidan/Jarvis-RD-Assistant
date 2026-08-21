@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-08-20_
+_Last updated: 2026-08-21_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -14,6 +14,37 @@ Related docs:
 ---
 
 ## v1.2.6 accepted boundaries
+
+### The backup sidecar logs one connection failure during an upgrade
+
+While an update applies this release's migrations, the backup sidecar is still
+running with the previous release's configuration and tries to connect with a
+reader role the migrations have not created yet. Its log records one connection
+failure per attempt until the update recreates it with the new configuration.
+
+**Why accepted:** the sidecar is recreated as part of the same update, and the
+backup the update itself requires is taken through the target release's producer
+before the migrations run, so no restore point depends on those attempts.
+
+**Reopen criteria:** a backup is lost, or an upgrade check fails, because of a
+connection attempt made in this window.
+
+---
+
+### Secret files and the environment file can disagree on a key
+
+`scripts/init-secrets.sh` creates a missing secret file but does not reconcile a
+value that already exists in both the secret file and the environment file. An
+installation that was edited by hand can therefore hold two different values for
+one key, and which one applies depends on the service reading it.
+
+**Why accepted:** every supported path writes one of the two, and reconciling
+them automatically would overwrite an operator's deliberate edit without asking.
+
+**Reopen criteria:** an installation is found in this state through a normal
+supported procedure rather than a manual edit.
+
+---
 
 ### Erasure reclaims only papers the erased account held
 
