@@ -10,7 +10,7 @@ appears. The current contract is the [Source-aware paper
 visibility](docs/SECURITY.md#source-aware-paper-visibility) matrix; older
 references to a globally shared corpus must not be read as current behavior.
 
-## v1.2.6 (2026-08-21)
+## v1.2.6 (2026-08-22)
 
 This release gives every service sole ownership of its own data and makes each
 one prove who it is on every call between them. It also rebuilds the reading

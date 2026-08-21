@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-08-21_
+_Last updated: 2026-08-22_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
