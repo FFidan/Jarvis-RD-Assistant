@@ -435,7 +435,7 @@ if [ "$mode" = "finalize" ]; then
 fi
 
 # A fresh cluster creates the bootstrap login through the official image. On a
-# v1.2.5 volume, use the original bootstrap user once to create the isolated
+# pre-0114 volume, use the original bootstrap user once to create the isolated
 # authority. PostgreSQL cannot rename or demote that special role, so it is
 # retained without LOGIN after its ownership is transferred below.
 if ! connect_as "$bootstrap_role" "$bootstrap_password_file" -c 'SELECT 1' >/dev/null 2>&1; then
@@ -542,7 +542,7 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -c "
     jarvis_backup_reader, jarvis_restore_operator;
   ALTER DATABASE litellm OWNER TO jarvis_litellm_migrator;"
 
-# Existing LiteLLM objects were owned by the v1.2.5 cluster login. Transfer them
+# Existing LiteLLM objects were owned by the pre-0114 cluster login. Transfer them
 # before the pinned migration job and establish least-privilege future grants.
 if role_exists jarvis; then
   transfer_owned_objects litellm jarvis jarvis_litellm_migrator
