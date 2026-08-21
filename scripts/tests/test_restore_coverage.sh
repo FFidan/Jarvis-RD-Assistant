@@ -1388,9 +1388,9 @@ run_sbf() {
     "$ts" "$2" "$entries" > "$manifest"
   if [ "$4" != "unsigned" ]; then
     # The current construction, matching sign_manifest in backup.sh: the label
-    # keys the HMAC and the key file is fed in as a message prefix. This fixture
-    # carries a run_id, so it is a current manifest and the earlier construction
-    # is not accepted for it.
+    # keys the HMAC and the key file is fed in as a message prefix. Verification
+    # accepts either construction for either shape, so signing this way exercises
+    # the one the release ships rather than the compatibility path.
     { cat -- "$key"; printf '\n%s\n' 'jarvis-manifest-v1'; cat -- "$manifest"; } \
       | openssl dgst -sha256 -hmac 'jarvis-manifest-v1' -r | cut -d' ' -f1 > "${manifest}.hmac"
   fi

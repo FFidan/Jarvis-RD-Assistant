@@ -431,6 +431,11 @@ parse_authenticated_manifest() {
   mv -f "$tmp" "$out"
 }
 
+# authenticated_manifest_is_legacy <manifest> — whether an already-authenticated manifest
+# is the pre-v1.2 SCHEMA, which carried no run_id. That is a different question from which
+# construction signed it: run_id arrived in v1.2.0 and the signing change came in v1.2.6, so
+# its absence identifies the schema and says nothing about the signature. parse_authenticated_manifest
+# enforces the version separately.
 authenticated_manifest_is_legacy() {
   local manifest="$1"
   [ "$MANIFEST_AUTHENTICATED" = "1" ] \

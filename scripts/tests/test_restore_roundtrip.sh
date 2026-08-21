@@ -1146,6 +1146,18 @@ stage_hostile_current_set() { # <source ts> <dest ts> <secrets|pdfs>
   write_signed_inbox_manifest "$dest_ts" current "$j" "$l" "$p" "$s"
 }
 
+stage_cross_version_set() { # <timestamp>
+  # The set an upgrade from a maintained earlier release presents: the current schema,
+  # which carries a run_id and has since v1.2.0, signed with the derived-key
+  # construction releases before v1.2.6 used. No other leg produces that combination,
+  # and it is the one an operator's own restore point actually has.
+  local ts="$1"
+  stage_current_source_set "$ts" || return 1
+  sc "derived=\$(openssl dgst -sha256 -hmac jarvis-manifest-v1 -r < /restore-inbox/operator_key | cut -d' ' -f1); \
+      openssl dgst -sha256 -mac HMAC -macopt hexkey:\$derived -r < /restore-inbox/manifest_${ts}.json \
+      | cut -d' ' -f1 > /restore-inbox/manifest_${ts}.json.hmac"
+}
+
 stage_legacy_no_pdf_set() { # <source ts> <dest ts>
   local source_ts="$1" dest_ts="$2"
   local j="jarvis_${dest_ts}.sql.gz${SUF}" l="litellm_${dest_ts}.sql.gz${SUF}"
@@ -1615,6 +1627,35 @@ SQL
     ok "direct LiteLLM routing resumed after the exact review acknowledgement"
   else
     no "direct LiteLLM routing did not resume after the exact review acknowledgement"
+  fi
+fi
+
+# =============================================================================
+# A backup set signed by an earlier release still authenticates and restores
+# =============================================================================
+sec "Cross-version restore accepts a set signed before v1.2.6"
+if [ -n "${TS4:-}" ]; then
+  set_marker "cross-version-target-before"
+  stage_cross_version_set "$TS4"
+  write_inbox_restore_request "$TS4"
+  CROSS_RESTORE_ID="$LAST_RESTORE_ID"
+  if run_restore_authority "$LAST_RESTORE_ID"; then
+    fails_before=$fail
+    [ "$(marker_tags)" = "inbox-restore-point" ] \
+      || no "earlier-release restore did not revert data (marker='$(marker_tags)')"
+    [ "$(numeric_pdf_fingerprint)" = "$SOURCE_PDFS_EXPECTED" ] \
+      || no "earlier-release restore did not install the source PDFs byte-for-byte"
+    target_pg_auth_is_preserved \
+      || no "earlier-release restore changed the target PostgreSQL password"
+    [ "$fail" = "$fails_before" ] \
+      && ok "a manifest signed before v1.2.6 authenticated and restored its set"
+  else
+    no "a manifest signed before v1.2.6 did not restore"
+  fi
+  if acknowledge_restore_review "$CROSS_RESTORE_ID"; then
+    ok "cross-version restore review was acknowledged by exact restore ID"
+  else
+    no "could not acknowledge the cross-version restore review"
   fi
 fi
 
