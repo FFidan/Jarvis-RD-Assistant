@@ -538,7 +538,6 @@ def _lifecycle_verifies(archive_dir: Path) -> bool:
             for name in (
                 "manifest_signature",
                 "legacy_manifest_signature",
-                "manifest_predates_run_id",
                 "verify_manifest_hmac",
             )
         )
@@ -584,15 +583,13 @@ def test_a_backup_set_from_an_earlier_release_still_verifies(signed_set: Path) -
     assert _lifecycle_verifies(signed_set)
 
 
-def test_a_current_manifest_is_not_accepted_under_the_earlier_construction(
+def test_a_backup_set_from_a_maintained_earlier_release_still_verifies(
     signed_set: Path,
 ) -> None:
-    """The weaker key must not authenticate a manifest claiming to be current.
+    """Every release from v1.2.0 on writes a run_id, so the shape is not the discriminator.
 
-    Trying both constructions on every manifest would fix manifest
-    authentication at the weaker of the two, and would let anyone who can write
-    the backup directory force the earlier key onto the command line on demand
-    by corrupting a current signature.
+    An upgrade verifies a manifest the release being replaced signed. Refusing it
+    aborts the update and locks the operator out of their own restore point.
     """
     key = (signed_set / "backup_key").read_bytes()
     manifest = signed_set / f"manifest_{TS}.json"
@@ -603,8 +600,34 @@ def test_a_current_manifest_is_not_accepted_under_the_earlier_construction(
         _earlier_signature(key, manifest.read_bytes()) + "\n"
     )
 
-    assert not _verify(signed_set)
-    assert not _lifecycle_verifies(signed_set)
+    assert _verify(signed_set)
+    assert _lifecycle_verifies(signed_set)
+
+
+def test_no_verification_path_puts_a_derived_key_in_the_process_list() -> None:
+    """The fallback's whole cost was the derived key in argv, so it is not computed there.
+
+    Both constructions are HMAC-SHA256 over the same key file. The earlier one was
+    weaker only in how openssl had to be keyed, and it is no longer keyed that way.
+
+    The assertion is on the shape of every openssl invocation rather than on one
+    option name. ``-hmac "$(cat -- "$ENC_KEYFILE")"`` exposes strictly more than
+    ``-macopt hexkey:`` ever did and would satisfy a check that only looks for the
+    latter, which is why the residual-risk entry reopens on any argv-keyed MAC.
+    """
+    permitted = {'"$MANIFEST_HMAC_LABEL"', '"${MANIFEST_HMAC_LABEL}"'}
+    for script in (BACKUP_SH, RESTORE_SH, BACKUP_LIFECYCLE):
+        # Join continuations so a call split across lines is read whole, and drop
+        # trailing comments so prose about the option cannot fail the check. A gate
+        # that fails on a legitimate line is a gate someone deletes.
+        joined = script.read_text().replace("\\\n", " ")
+        for line in joined.splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            code = re.sub(r"\s#.*$", "", line)
+            assert "-macopt" not in code, f"{script.name}: {code.strip()}"
+            for keyed in re.findall(r"-hmac\s+(\S+)", code):
+                assert keyed in permitted, f"{script.name}: {code.strip()}"
 
 
 def test_a_signature_matching_neither_construction_is_refused(signed_set: Path) -> None:

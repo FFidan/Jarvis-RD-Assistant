@@ -26,6 +26,21 @@ only key copy are lost together, encrypted backups cannot be recovered.
 If someone else operates the server, ask them to confirm that an off-site copy
 exists without sending the key through an untrusted channel.
 
+### Rotate the key once, if this server ran a release before v1.2.6
+
+Releases before v1.2.6 passed a value derived from this key on the command line
+each time a backup manifest was checked, where any account able to list
+processes on the host could read it. Anyone who did can still forge the
+signature that marks an archive set as genuine, though they cannot decrypt the
+archives themselves without the key file.
+
+Replacing `secrets/backup_encrypt_key.txt` is what ends that, and nothing else
+does. Do it once, then take a fresh backup: archives written under the old key
+still need the old key to decrypt, so keep the previous copy off-site for as
+long as you intend to be able to restore those sets.
+
+If this server was first installed on v1.2.6 or later, there is nothing to do.
+
 ---
 
 ## What a backup contains
