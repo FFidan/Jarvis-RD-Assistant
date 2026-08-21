@@ -511,21 +511,27 @@ def _spin_pg_container(
         # completed its startup and accepts a full query round-trip.
         proto_deadline = time.monotonic() + 30
         while time.monotonic() < proto_deadline:
-            proto = _docker_cli(
-                [
-                    "exec",
-                    container,
-                    "psql",
-                    "-U",
-                    "jarvis",
-                    "-d",
-                    "jarvis",
-                    "-c",
-                    "SELECT 1",
-                ],
-                check=False,
-                timeout=5,
-            )
+            try:
+                proto = _docker_cli(
+                    [
+                        "exec",
+                        container,
+                        "psql",
+                        "-U",
+                        "jarvis",
+                        "-d",
+                        "jarvis",
+                        "-c",
+                        "SELECT 1",
+                    ],
+                    check=False,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                # A probe that outran its own timeout says the server is busy,
+                # not that it is broken; the deadline below is what gives up.
+                time.sleep(0.25)
+                continue
             if proto.returncode == 0:
                 break
             time.sleep(0.25)

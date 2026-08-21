@@ -1269,6 +1269,8 @@ fi
 # v1.2.5); refresh with the release support table in docs/RELEASE.md. The
 # newest floor is last: the sections after the predecessor loop build on it.
 MAINTAINED_FLOORS="106 110 111 113"
+NEWEST_MAINTAINED_FLOOR="${MAINTAINED_FLOORS##* }"
+OLDEST_MAINTAINED_FLOOR="${MAINTAINED_FLOORS%% *}"
 
 # --- Start the isolated fixture ----------------------------------------------
 printf 'archive mode: %s\n' "$ENC_LABEL"
@@ -1302,7 +1304,7 @@ seed_source_data_keys \
 for floor in $MAINTAINED_FLOORS; do
   # The restore sections below look for exactly "restore-point", the tag of the
   # newest predecessor.
-  if [ "$floor" = "113" ]; then tag="restore-point"; else tag="restore-point-${floor}"; fi
+  if [ "$floor" = "$NEWEST_MAINTAINED_FLOOR" ]; then tag="restore-point"; else tag="restore-point-${floor}"; fi
   sec "Maintained predecessor ${floor} advances through root authority"
   if seed_jarvis_at "$floor" "$tag" \
      && [ "$(legacy_max_version)" = "$floor" ] \
@@ -1501,8 +1503,8 @@ restore_from_legacy_floor() { # <floor> <marker_tag>
     no "older-schema restore did not complete cleanly"
   fi
 }
-restore_from_legacy_floor 113 "older-restore-point"
-restore_from_legacy_floor 106 "oldest-restore-point"
+restore_from_legacy_floor "$NEWEST_MAINTAINED_FLOOR" "older-restore-point"
+restore_from_legacy_floor "$OLDEST_MAINTAINED_FLOOR" "oldest-restore-point"
 
 # =============================================================================
 # Compose service mounts

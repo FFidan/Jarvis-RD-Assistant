@@ -63,6 +63,40 @@ def role_bootstrap_src() -> str:
     return ROLE_BOOTSTRAP.read_text()
 
 
+@pytest.mark.parametrize(
+    ("floor", "inside_window"),
+    (
+        ("105", False),
+        ("106", True),
+        ("110", True),
+        ("113", True),
+        ("114", False),
+        ("", False),
+        ("abc", False),
+    ),
+)
+def test_the_maintained_window_admits_exactly_its_own_floors(
+    role_bootstrap_src: str, floor: str, inside_window: bool
+) -> None:
+    """The window is a range test, so a floor one step outside it must be refused.
+
+    A predicate written as ``-lt 114`` alone, or as a glob over the middle
+    digits, admits floors below the oldest maintained release and hands a
+    v1.1.3 database to an upgrade that cannot complete.
+    """
+    window = "".join(
+        line + "\n"
+        for line in role_bootstrap_src.splitlines()
+        if line.startswith(("legacy_floor_min=", "legacy_floor_max="))
+    )
+    assert window.count("=") == 2, window
+    body = (
+        window + _shell_function(role_bootstrap_src, "legacy_floor") + f'legacy_floor "{floor}"\n'
+    )
+
+    assert (_run_bash(body).returncode == 0) is inside_window
+
+
 def test_schema_113_authority_normalizes_all_public_object_owners(
     role_bootstrap_src: str,
 ) -> None:

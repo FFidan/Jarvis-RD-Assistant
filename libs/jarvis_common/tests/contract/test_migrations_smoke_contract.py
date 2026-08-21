@@ -168,6 +168,9 @@ async def _hand_over_legacy_database(dsn: str, db_dir: Path, floor: int) -> asyn
             "CREATE ROLE jarvis_learning_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
             "CREATE ROLE jarvis_ops_owner NOLOGIN NOINHERIT NOBYPASSRLS"
         )
+        # The migrator holds no USAGE on these, so PostgreSQL drops them from its
+        # effective search_path and 0112's unqualified CREATE TABLE still lands in
+        # public, as it does on a real pre-0114 database where they do not exist.
         await bootstrap.execute(
             "CREATE SCHEMA platform AUTHORIZATION jarvis_platform_owner; "
             "CREATE SCHEMA research AUTHORIZATION jarvis_research_owner; "

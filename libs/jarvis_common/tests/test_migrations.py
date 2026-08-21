@@ -641,3 +641,55 @@ def test_both_schema_routes_define_every_function_identically() -> None:
     assert not missing_from_fresh_install, (
         f"migrations define functions db/init.sql never creates: {missing_from_fresh_install}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Legacy owner — the role a pre-0114 upgrade applies its remaining migrations as
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_only_pre_0114_migrations_run_as_the_legacy_owner(tmp_path, monkeypatch) -> None:
+    """The wrap covers exactly the migrations that predate the ownership hand-over.
+
+    0114 names its own roles, so assuming the legacy owner around it would
+    fight its SET LOCAL ROLE statements; every earlier file is unqualified
+    DDL on a schema that role owns and cannot be applied without it.
+    """
+    monkeypatch.delenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", raising=False)
+    (tmp_path / "0113_before.sql").write_text("ALTER TABLE papers ADD COLUMN a text;")
+    (tmp_path / "0114_handover.sql").write_text("SET LOCAL ROLE jarvis_legacy_rollback;")
+
+    pool, conn = make_pool_and_conn(fetch_return=[])
+    conn.fetchval = AsyncMock(
+        side_effect=["jarvis_legacy_rollback", False, False, required_code_schema()]
+    )
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    statements = [call.args for call in conn.execute.await_args_list]
+    assume = ("SELECT set_config('role', $1, true)", "jarvis_legacy_rollback")
+    before = statements.index(("ALTER TABLE papers ADD COLUMN a text;",))
+    after = statements.index(("SET LOCAL ROLE jarvis_legacy_rollback;",))
+    assert statements[before - 1] == assume
+    assert statements[before + 1] == ("RESET ROLE",)
+    assert assume not in statements[before + 1 :]
+    assert statements[after - 1] != assume
+
+
+@pytest.mark.asyncio
+async def test_a_database_without_the_legacy_owner_is_never_role_switched(
+    tmp_path, monkeypatch
+) -> None:
+    """A fresh install has no rollback role, and the runner must not invent one."""
+    monkeypatch.delenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", raising=False)
+    (tmp_path / "0113_before.sql").write_text("ALTER TABLE papers ADD COLUMN a text;")
+
+    pool, conn = make_pool_and_conn(fetch_return=[])
+    conn.fetchval = AsyncMock(side_effect=[None, False, required_code_schema()])
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    statements = [call.args for call in conn.execute.await_args_list]
+    assert not [call for call in statements if "set_config" in call[0]]
+    assert ("RESET ROLE",) not in statements

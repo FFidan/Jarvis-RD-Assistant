@@ -109,6 +109,9 @@ async def _apply_migration_sql(
 
     With ``assume_role`` the migration body runs under that role and the
     bookkeeping row is written as the connection's own user again.
+    ``set_config('role', …, is_local => true)`` is the function form of
+    ``SET LOCAL ROLE``, which takes an identifier and could not carry the
+    role name as a bound parameter.
     """
     forwards_notices = isinstance(
         conn,
@@ -495,6 +498,10 @@ async def run_migrations(
             # Resolved once: 0114 moves objects out of the public schema inside
             # this same transaction, and the wrap must not follow that change.
             legacy_owner = await _legacy_owner_role(conn)
+            if legacy_owner is not None:
+                logger.info(
+                    "Applying migrations up to %s as %s", LEGACY_OWNER_LAST_VERSION, legacy_owner
+                )
             for version, sql_file in migration_files:
                 if version in applied:
                     continue

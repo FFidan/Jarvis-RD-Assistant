@@ -487,7 +487,7 @@ if [ "$mode" = "restore-prepare" ]; then
         # complete public schema before migration 0114 performs its domain
         # transfer.
         transfer_schema_objects "$database" public jarvis_legacy_rollback
-      elif [ "$restored_floor" -lt 114 ]; then
+      elif [ "$restored_floor" -lt "$legacy_floor_min" ]; then
         echo "[cluster-bootstrap] restored migration floor ${restored_floor} is outside the maintained restore window (oldest: ${legacy_floor_min})." >&2
         exit 1
       else
@@ -597,7 +597,7 @@ case "$live_floor" in
       connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
         'GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE'
       echo "[cluster-bootstrap] temporary migration authority prepared for floor ${live_floor}." >&2
-    elif [ "$live_floor" -lt 114 ]; then
+    elif [ "$live_floor" -lt "$legacy_floor_min" ]; then
       echo "[cluster-bootstrap] migration floor ${live_floor} is outside the maintained update window (oldest: ${legacy_floor_min}); complete the documented one-time step first." >&2
       exit 1
     else
