@@ -1509,6 +1509,39 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#the-source-schema-refusal-rides-on-the-updates-own-restore-point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The source-schema refusal rides on the update's own restore point
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-backup-sidecar-logs-one-connection-failure-during-an-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The backup sidecar logs one connection failure during an upgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-preserved-cluster-owner-password-is-never-reconciled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The preserved cluster-owner password is never reconciled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#erasure-reclaims-only-papers-the-erased-account-held" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2237,6 +2270,39 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#the-source-schema-refusal-rides-on-the-updates-own-restore-point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The source-schema refusal rides on the update's own restore point
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-backup-sidecar-logs-one-connection-failure-during-an-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The backup sidecar logs one connection failure during an upgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-preserved-cluster-owner-password-is-never-reconciled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The preserved cluster-owner password is never reconciled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#erasure-reclaims-only-papers-the-erased-account-held" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2704,7 +2770,7 @@
 
 
 <h1 id="risk-register">Risk Register<a class="headerlink" href="#risk-register" title="Permanent link">&para;</a></h1>
-<p><em>Last updated: 2026-08-20</em></p>
+<p><em>Last updated: 2026-08-22</em></p>
 <p><em>Known residual risks and accepted operational/code-quality deferrals.</em></p>
 <p>This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Resolved or rejected findings, plus internal CI and test-infrastructure tracking, are archived separately and are not part of the published site.</p>
 <p>Related docs:</p>
@@ -2714,6 +2780,47 @@
 </ul>
 <hr />
 <h2 id="v126-accepted-boundaries">v1.2.6 accepted boundaries<a class="headerlink" href="#v126-accepted-boundaries" title="Permanent link">&para;</a></h2>
+<h3 id="the-source-schema-refusal-rides-on-the-updates-own-restore-point">The source-schema refusal rides on the update's own restore point<a class="headerlink" href="#the-source-schema-refusal-rides-on-the-updates-own-restore-point" title="Permanent link">&para;</a></h3>
+<p><code>jarvis-research update</code> reads the installation's schema version from the
+authenticated manifest of the restore point it takes before a data-changing
+migration, and refuses a source older than the maintained window. A release
+whose new migrations are all additive takes no restore point, so that update
+reaches the checkout advance without the schema being read. Such an
+installation is still refused, by the ownership bootstrap, but after the
+checkout has moved rather than before.</p>
+<p><strong>Why accepted:</strong> the schema is only knowable at that point from a restore point
+the update already needs, and taking one for every update — including the
+additive-only case that deliberately avoids it — costs every installation time
+and disk for a check that applies to a shrinking minority.</p>
+<p><strong>Reopen criteria:</strong> a release ships with only additive migrations while the
+support table still lists a source below the floor, or an installation reports
+being refused mid-update rather than before it.</p>
+<hr />
+<h3 id="the-backup-sidecar-logs-one-connection-failure-during-an-upgrade">The backup sidecar logs one connection failure during an upgrade<a class="headerlink" href="#the-backup-sidecar-logs-one-connection-failure-during-an-upgrade" title="Permanent link">&para;</a></h3>
+<p>While an update applies this release's migrations, the backup sidecar is still
+running with the previous release's configuration and tries to connect with a
+reader role the migrations have not created yet. Its log records one connection
+failure per attempt until the update recreates it with the new configuration.</p>
+<p><strong>Why accepted:</strong> the sidecar is recreated as part of the same update, and the
+backup the update itself requires is taken through the target release's producer
+before the migrations run, so no restore point depends on those attempts.</p>
+<p><strong>Reopen criteria:</strong> a backup is lost, or an upgrade check fails, because of a
+connection attempt made in this window.</p>
+<hr />
+<h3 id="the-preserved-cluster-owner-password-is-never-reconciled">The preserved cluster-owner password is never reconciled<a class="headerlink" href="#the-preserved-cluster-owner-password-is-never-reconciled" title="Permanent link">&para;</a></h3>
+<p><code>scripts/init-secrets.sh</code> keeps every managed secret file in step with the
+environment file, with one deliberate exception: when
+<code>secrets/postgres_password.txt</code> already exists it is preserved untouched and any
+<code>POSTGRES_PASSWORD</code> still present in the environment file is left where it is.
+The two can therefore hold different values. Only the file is used, and only by
+the upgrade bootstrap and the recovery paths.</p>
+<p><strong>Why accepted:</strong> this password is the cluster owner for an installation that
+predates per-service roles. Overwriting the preserved file from an environment
+value that a later release already migrated away would break exactly the upgrade
+and recovery paths it exists for.</p>
+<p><strong>Reopen criteria:</strong> a runtime service is found reading this password, or an
+upgrade fails because the preserved file and the environment file disagree.</p>
+<hr />
 <h3 id="erasure-reclaims-only-papers-the-erased-account-held">Erasure reclaims only papers the erased account held<a class="headerlink" href="#erasure-reclaims-only-papers-the-erased-account-held" title="Permanent link">&para;</a></h3>
 <p>Erasing an account removes the papers only that account held, together with
 their extracted text and their stored documents. The set is derived from that

@@ -1741,6 +1741,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cross-version-surfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-version surfaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#4-tag-the-release-and-promote-exact-digests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1970,6 +1981,17 @@
     <span class="md-ellipsis">
       
         3. Verify commit-addressed images
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cross-version-surfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-version surfaces
       
     </span>
   </a>
@@ -2291,13 +2313,38 @@ starts with complete, signed backup sets created by v1.2.0 or later. Earlier or
 unsigned sets retain only the constrained same-host recovery paths described in
 the backup guide; they are not universally portable.</p>
 <p>The supported window is deliberate: the <code>bootstrap</code> rows reach back at most
-four releases behind the <code>direct</code> row. When adding a release to the table
-would leave more than four <code>bootstrap</code> rows, the oldest row leaves support
-and the release notes say so. An installation older than every table row
+four releases behind the <code>direct</code> row (schema floor 106). When adding a release
+to the table would leave more than four <code>bootstrap</code> rows, the oldest row leaves
+support and the release notes say so. An installation older than every table row
 completes the documented one-time step in the
 <a href="../manual/cli/#updating-from-a-release-before-v122">command-line reference</a>
 and then follows the bootstrap path; the floor below that is a fresh install
 plus a backup restore.</p>
+<h3 id="cross-version-surfaces">Cross-version surfaces<a class="headerlink" href="#cross-version-surfaces" title="Permanent link">&para;</a></h3>
+<p>Some behaviour is only observable when code from one release meets state written
+by another. Each of these surfaces has a gate that exercises it from the oldest
+maintained source rather than from the candidate's own fresh state:</p>
+<ul>
+<li><strong>Backup manifest signing</strong> — a manifest written by an earlier release must
+  still authenticate. Gate: <code>tests/test_backup_restore_scripts.py</code>, plus the
+  restore round-trip's leg over a set signed before the candidate.</li>
+<li><strong>Declared secrets per service</strong> — a release may expect a secret file the
+  installed release never created. Gate: the staged-runtime cases in
+  <code>scripts/tests/test_jarvis_research_cli.sh</code>.</li>
+<li><strong>Schema floor and object ownership</strong> — every maintained floor must reach the
+  candidate's schema through the migrator role. Gate: the round-trip's
+  <code>MAINTAINED_FLOORS</code> legs and
+  <code>test_pre_0114_floors_upgrade_through_the_migrator</code>.</li>
+<li><strong>The update journal</strong> — a transaction record written by the installed release
+  must be readable and resumable by the candidate. Gate: the resume cases in the
+  command-line harness.</li>
+<li><strong>Compose contracts</strong> — mounts, profiles and service names travel between
+  releases. Gate: <code>tests/test_docker_compose_invariants.py</code>.</li>
+</ul>
+<p>The five hosted upgrade checks confirm; they do not discover. A release change
+that touches a surface in this list runs the restore round-trip at every
+maintained floor (the <code>restore-roundtrip</code> workflow) and a local cold install of
+the oldest source row before the change is proposed.</p>
 <p>The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull
 anonymously, build no application image, reach a healthy stack, and remove its
