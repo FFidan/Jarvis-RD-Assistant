@@ -129,26 +129,30 @@ manifest. No key material derived from the backup secret reaches the command
 line on the signing path.
 
 **Why still accepted:** `legacy_manifest_signature`, in `scripts/restore.sh` and
-`scripts/backup-lifecycle.sh`, reconstructs the derived key the releases before
-v1.2.6 used and passes it to openssl as `-macopt hexkey:`, where it is briefly
-visible to anything that can read the process list on that host. It is reached
-only for a manifest that carries no `run_id`, which is the shape written before
-v1.2.6 — a manifest claiming to be current is never checked against the legacy
-key, so a tampered current set cannot force the old key onto the command line.
-It was kept deliberately: the pinned openssl offers no way to key an HMAC from a
-file, so removing the fallback would lock an operator out of every backup set
-predating v1.2.6. Signed manifests still do not authenticate an unsigned
-pre-upgrade set, and no construction protects against an attacker who can
-replace both the archives and the backup key.
+`scripts/backup-lifecycle.sh`, reconstructs the key the releases before v1.2.6
+derived and verifies a manifest against it when the current construction does not
+match. It is computed with perl's `Digest::SHA` rather than openssl, because
+openssl can only be keyed on that derived secret through the command line. No key
+material reaches the process list on either the signing or the verification path.
 
-**Reopen criteria:** `-macopt hexkey:` appears anywhere in a product signing or
-verification path outside `legacy_manifest_signature` — the roundtrip harness
-uses it to write a pre-v1.2.6-shaped manifest with a throwaway key inside a
-disposable container, which is the shape being simulated and not an operator
-exposure; a signing path calls `legacy_manifest_signature`;
-verification reaches it for a manifest that carries a `run_id`; or the pinned
-openssl gains a way to key an HMAC from a file, at which point the fallback can
-be re-keyed and the argv exposure removed entirely.
+Both constructions are HMAC-SHA256 over the same key file, so accepting either
+does not weaken forgery resistance for anyone who does not already hold the key.
+The residual is historical: an attacker who read the derived key from the process
+list of a host running a release **before** v1.2.6 can forge a signature under the
+earlier construction, and verification will accept it for a manifest of any shape.
+The fallback is kept because removing it locks an operator out of every backup set
+written before v1.2.6, including the one an in-flight upgrade just took. Signed
+manifests still do not authenticate an unsigned pre-upgrade set, and no
+construction protects against an attacker who can replace both the archives and
+the backup key.
+
+**Reopen criteria:** `-macopt hexkey:` or any other argv-keyed MAC appears in a
+product signing or verification path — the shell harnesses use it to write a
+pre-v1.2.6-shaped manifest with a throwaway key inside a disposable container,
+which is the shape being simulated and not an operator exposure; a signing path
+calls `legacy_manifest_signature`; or pre-v1.2.6 releases leave the supported
+upgrade range, at which point the fallback and this entry should be removed
+together.
 
 ---
 

@@ -270,10 +270,10 @@ for scenario in "version" "confirm"; do
 done
 
 # === backup-lifecycle.sh — authenticated PDF role parity =====================
-# Sign the way the shape being simulated actually signs. A current manifest gets
-# the label-keyed construction backup.sh writes today; only the pre-1.2.6 shape
-# gets the derived-key one, which is the only shape verification still accepts it
-# for.
+# Sign the way the shape being simulated actually signs: a current manifest gets the
+# label-keyed construction backup.sh writes today, a pre-1.2.6 one the derived-key
+# construction. Verification accepts either for either shape — the manifest schema and
+# the signing construction changed in different releases and do not identify each other.
 sign_set_manifest() {
   local dir="$1" ts="$2" shape="${3:-current}" key manifest derived
   key="${dir}/backup.key"
