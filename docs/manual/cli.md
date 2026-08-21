@@ -125,11 +125,15 @@ an unexpected commit.
 
 ### Updating from a release before v1.2.2
 
-Maintained in-place update support starts at v1.2.0. The procedure below is the
-required one-time bridge for v1.2.0 and v1.2.1. It is also preserved as a
-separate immutable legacy bridge from v1.1.3, but v1.1.3 is no longer in the
-maintained source matrix and a direct jump from v1.1.3 to the current release is
-not supported.
+Maintained in-place update support starts at v1.2.0. Installations running
+v1.2.0 or v1.2.1 update to the current release in one step through the target
+release's update bootstrap, which is the `bootstrap` path in the release support
+table. The procedure below is the immutable legacy bridge for installations
+older than the maintained window — v1.1.3 and earlier — which is no longer in
+the maintained source matrix; a direct jump from v1.1.3 to the current release is
+not supported. To take the one-step path, run the same bootstrap command shown
+below with the release you are updating to in place of `v1.2.2`, in both the
+download URL and `--to`.
 
 Installations first set up before v1.1.3 need one extra step before the bootstrap
 below. v1.1.3 added an SMTP password to the deployment's Docker secrets, and no
@@ -149,8 +153,12 @@ builds or replaces anything, so this step is only needed once, on the way out of
 a pre-v1.1.3 installation.
 
 The lifecycle commands shipped with v1.1.3, v1.2.0 and v1.2.1 all predate the
-backup protocol required by v1.2.2. From the installation directory, run the
-v1.2.2 bootstrap once:
+backup protocol later releases require, which is why the bootstrap loads the
+target release's lifecycle files before updating. From the installation
+directory, run it once. An installation on v1.2.0 or v1.2.1 substitutes the
+release it is updating to for `v1.2.2` in both places below and lands on that
+release in one step; v1.1.3 and earlier run the immutable bridge exactly as
+written and then follow the bootstrap path:
 
 ```bash
 (
@@ -164,10 +172,10 @@ v1.2.2 bootstrap once:
 ```
 
 The bootstrap accepts only the managed repository on a clean `main` checkout,
-validates v1.2.2 against `origin`, and runs the lifecycle files stored in that
-release. The v1.2.2 updater then creates and authenticates a restore point
-containing both databases, uploaded PDFs and data-coupled secrets before it can
-apply a data-changing migration. If the command is interrupted, run the same
+validates the release you named against `origin`, and runs the lifecycle files
+stored in that release. That release's updater then creates and authenticates a
+restore point containing both databases, uploaded PDFs and data-coupled secrets
+before it can apply a data-changing migration. If the command is interrupted, run the same
 bootstrap command again; it resumes the recorded update.
 
 Your installed command may refuse first with `Your working tree has uncommitted

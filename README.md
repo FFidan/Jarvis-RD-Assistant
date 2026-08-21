@@ -187,10 +187,10 @@ jarvis-research update
 
 This is the transactional, database-safe upgrade path. It checks that release images are available, requires a fresh verified backup before a data-changing migration, and waits for the stack to become healthy.
 
-For a maintained installation still running v1.2.0 or v1.2.1, run the v1.2.2
-bootstrap once from the installation directory. The same immutable bridge is
-also available as a separate legacy route from v1.1.3, which is outside the
-maintained update window:
+Installations running v1.2.0 or v1.2.1 update to the current release in one step
+through the target release's update bootstrap, run once from the installation
+directory. The same immutable bootstrap is also available as a separate legacy
+route from v1.1.3, which is outside the maintained update window:
 
 ```bash
 (
@@ -203,7 +203,9 @@ maintained update window:
 )
 ```
 
-Those lifecycle commands predate the backup protocol required by v1.2.2. The
+Substitute the release you are updating to for `v1.2.2` above, in both the
+download URL and `--to`; v1.1.3 runs the bridge exactly as written. Those
+lifecycle commands predate the backup protocol later releases require. The
 bootstrap validates the selected release and runs its updater, which creates
 and authenticates a complete restore point before any data-changing migration.
 See the [command-line

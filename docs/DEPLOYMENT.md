@@ -779,10 +779,11 @@ It verifies the target release, protects data-changing migrations with a signed
 restore point, and can resume an interrupted run. The [command-line
 guide](manual/cli.md#how-update-works) is the canonical update runbook.
 
-A maintained installation running v1.2.0 or v1.2.1 needs the [v1.2.2 update
-bootstrap](manual/cli.md#updating-from-a-release-before-v122) once. It loads the
-v1.2.2 lifecycle command before the migration check so the required signed
-restore point includes both databases, uploaded PDFs and the data-coupled
+Installations running v1.2.0 or v1.2.1 update to the current release in one step
+through the target release's update bootstrap, described in the [command-line
+reference](manual/cli.md#updating-from-a-release-before-v122) and run once. It loads
+the target release's lifecycle command before the migration check so the required
+signed restore point includes both databases, uploaded PDFs and the data-coupled
 secrets. The same immutable bootstrap remains available as a separate legacy
 bridge from v1.1.3, which is outside the maintained update window. The command
 guide describes that bridge, the constrained manual fallback, and rollback

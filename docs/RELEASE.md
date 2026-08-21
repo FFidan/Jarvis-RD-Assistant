@@ -182,13 +182,40 @@ unsigned sets retain only the constrained same-host recovery paths described in
 the backup guide; they are not universally portable.
 
 The supported window is deliberate: the `bootstrap` rows reach back at most
-four releases behind the `direct` row. When adding a release to the table
-would leave more than four `bootstrap` rows, the oldest row leaves support
-and the release notes say so. An installation older than every table row
+four releases behind the `direct` row (schema floor 106). When adding a release
+to the table would leave more than four `bootstrap` rows, the oldest row leaves
+support and the release notes say so. An installation older than every table row
 completes the documented one-time step in the
 [command-line reference](manual/cli.md#updating-from-a-release-before-v122)
 and then follows the bootstrap path; the floor below that is a fresh install
 plus a backup restore.
+
+### Cross-version surfaces
+
+Some behaviour is only observable when code from one release meets state written
+by another. Each of these surfaces has a gate that exercises it from the oldest
+maintained source rather than from the candidate's own fresh state:
+
+- **Backup manifest signing** — a manifest written by an earlier release must
+  still authenticate. Gate: `tests/test_backup_restore_scripts.py`, plus the
+  restore round-trip's leg over a set signed before the candidate.
+- **Declared secrets per service** — a release may expect a secret file the
+  installed release never created. Gate: the staged-runtime cases in
+  `scripts/tests/test_jarvis_research_cli.sh`.
+- **Schema floor and object ownership** — every maintained floor must reach the
+  candidate's schema through the migrator role. Gate: the round-trip's
+  `MAINTAINED_FLOORS` legs and
+  `test_pre_0114_floors_upgrade_through_the_migrator`.
+- **The update journal** — a transaction record written by the installed release
+  must be readable and resumable by the candidate. Gate: the resume cases in the
+  command-line harness.
+- **Compose contracts** — mounts, profiles and service names travel between
+  releases. Gate: `tests/test_docker_compose_invariants.py`.
+
+The five hosted upgrade checks confirm; they do not discover. A release change
+that touches a surface in this list runs the restore round-trip at every
+maintained floor (the `restore-roundtrip` workflow) and a local cold install of
+the oldest source row before the change is proposed.
 
 The 40-hex value selects commit-addressed verification images; it is not a Git
 tag, version, prerelease, or GitHub Release. The cold install must pull

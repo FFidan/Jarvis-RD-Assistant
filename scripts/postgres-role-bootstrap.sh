@@ -10,6 +10,16 @@ database="${POSTGRES_DB:-jarvis}"
 bootstrap_role="jarvis_cluster_bootstrap"
 bootstrap_password_file="postgres_cluster_bootstrap_password"
 owner_roles="jarvis_platform_owner jarvis_research_owner jarvis_learning_owner jarvis_ops_owner"
+# The oldest schema floor a maintained in-place update or a portable restore may
+# start from: v1.2.0 and v1.2.1 (the release support table in docs/RELEASE.md).
+# Older databases take the documented one-time step to v1.2.2 first.
+legacy_floor_min=106
+# Every floor below 114 carries the single-owner public schema; 0114 is the hand-over.
+legacy_floor_max=113
+legacy_floor() { # <floor> -> true when a pre-0114 database is inside the maintained window
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -ge "$legacy_floor_min" ] && [ "$1" -le "$legacy_floor_max" ]
+}
 
 case "$mode" in
   prepare|finalize|restore-prepare|restore-finalize) ;;
@@ -425,7 +435,7 @@ if [ "$mode" = "finalize" ]; then
 fi
 
 # A fresh cluster creates the bootstrap login through the official image. On a
-# v1.2.5 volume, use the original bootstrap user once to create the isolated
+# pre-0114 volume, use the original bootstrap user once to create the isolated
 # authority. PostgreSQL cannot rename or demote that special role, so it is
 # retained without LOGIN after its ownership is transferred below.
 if ! connect_as "$bootstrap_role" "$bootstrap_password_file" -c 'SELECT 1' >/dev/null 2>&1; then
@@ -466,36 +476,38 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -c "
 if [ "$mode" = "restore-prepare" ]; then
   restored_floor="$(migration_floor)" || exit 1
   case "$restored_floor" in
-    113)
-      # Owner-free archives and historical upgrades can leave predecessor
-      # objects split across bootstrap principals. Normalize the complete
-      # public schema before migration 0114 performs its domain transfer.
-      transfer_schema_objects "$database" public jarvis_legacy_rollback
-      ;;
     ''|*[!0-9]*)
       echo "[cluster-bootstrap] restored migration floor is invalid." >&2
       exit 1
       ;;
     *)
-      if [ "$restored_floor" -lt 114 ]; then
-        echo "[cluster-bootstrap] restored migration floor is unsupported." >&2
+      if legacy_floor "$restored_floor"; then
+        # Owner-free archives and historical upgrades can leave a pre-0114
+        # source's objects split across bootstrap principals. Normalize the
+        # complete public schema before migration 0114 performs its domain
+        # transfer.
+        transfer_schema_objects "$database" public jarvis_legacy_rollback
+      elif [ "$restored_floor" -lt "$legacy_floor_min" ]; then
+        echo "[cluster-bootstrap] restored migration floor ${restored_floor} is outside the maintained restore window (oldest: ${legacy_floor_min})." >&2
         exit 1
+      else
+        transfer_schema_objects "$database" platform jarvis_platform_owner
+        transfer_schema_objects "$database" research jarvis_research_owner
+        transfer_schema_objects "$database" learning jarvis_learning_owner
+        transfer_schema_objects "$database" ops jarvis_ops_owner
       fi
-      transfer_schema_objects "$database" platform jarvis_platform_owner
-      transfer_schema_objects "$database" research jarvis_research_owner
-      transfer_schema_objects "$database" learning jarvis_learning_owner
-      transfer_schema_objects "$database" ops jarvis_ops_owner
       ;;
   esac
 fi
 
-# The v1.2.5 database and objects follow the renamed bootstrap role. Transfer
-# them to the isolated rollback login before migration 0114 assumes that owner.
+# A pre-0114 source's database and objects follow the renamed bootstrap role.
+# Transfer them to the isolated rollback login before migration 0114 assumes
+# that owner.
 prepared_floor="$(migration_floor)" || exit 1
-if [ "$prepared_floor" = "113" ]; then
+if legacy_floor "$prepared_floor"; then
   if [ "$mode" != "restore-prepare" ]; then
     if ! role_exists jarvis; then
-      echo "[cluster-bootstrap] v1.2.5 bootstrap owner is unavailable." >&2
+      echo "[cluster-bootstrap] the pre-0114 database owner 'jarvis' is unavailable." >&2
       exit 1
     fi
     transfer_schema_objects "$database" public jarvis_legacy_rollback
@@ -530,7 +542,7 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -d postgres -c "
     jarvis_backup_reader, jarvis_restore_operator;
   ALTER DATABASE litellm OWNER TO jarvis_litellm_migrator;"
 
-# Existing LiteLLM objects were owned by the v1.2.5 cluster login. Transfer them
+# Existing LiteLLM objects were owned by the pre-0114 cluster login. Transfer them
 # before the pinned migration job and establish least-privilege future grants.
 if role_exists jarvis; then
   transfer_owned_objects litellm jarvis jarvis_litellm_migrator
@@ -569,33 +581,33 @@ connect_as "$bootstrap_role" "$bootstrap_password_file" -d litellm -c "
 
 live_floor="$(migration_floor)" || exit 1
 case "$live_floor" in
-  113)
-    normalize_memberships
-    connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
-      'GRANT USAGE ON SCHEMA public TO jarvis_migrator; GRANT SELECT, INSERT, UPDATE ON TABLE public.schema_migrations TO jarvis_migrator'
-    for owner_role in $owner_roles; do
-      connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
-        "GRANT CREATE ON DATABASE ${database} TO ${owner_role}; REVOKE ${owner_role} FROM jarvis_migrator; GRANT ${owner_role} TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE; GRANT ${owner_role} TO jarvis_legacy_rollback WITH INHERIT FALSE"
-    done
-    connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
-      'GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE'
-    echo "[cluster-bootstrap] temporary migration authority prepared for floor 113." >&2
-    ;;
   ''|*[!0-9]*)
     echo "[cluster-bootstrap] migration floor is invalid." >&2
     exit 1
     ;;
   *)
-    if [ "$live_floor" -lt 114 ]; then
-      echo "[cluster-bootstrap] unsupported migration floor." >&2
-      exit 1
-    fi
-    normalize_memberships
-    if [ "$mode" = "restore-prepare" ]; then
+    if legacy_floor "$live_floor"; then
+      normalize_memberships
       connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
-        'GRANT USAGE ON SCHEMA ops TO jarvis_migrator; GRANT SELECT, INSERT ON TABLE ops.schema_migrations TO jarvis_migrator'
+        'GRANT USAGE ON SCHEMA public TO jarvis_migrator; GRANT SELECT, INSERT, UPDATE ON TABLE public.schema_migrations TO jarvis_migrator'
+      for owner_role in $owner_roles; do
+        connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
+          "GRANT CREATE ON DATABASE ${database} TO ${owner_role}; REVOKE ${owner_role} FROM jarvis_migrator; GRANT ${owner_role} TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE; GRANT ${owner_role} TO jarvis_legacy_rollback WITH INHERIT FALSE"
+      done
+      connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
+        'GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE'
+      echo "[cluster-bootstrap] temporary migration authority prepared for floor ${live_floor}." >&2
+    elif [ "$live_floor" -lt "$legacy_floor_min" ]; then
+      echo "[cluster-bootstrap] migration floor ${live_floor} is outside the maintained update window (oldest: ${legacy_floor_min}); complete the documented one-time step first." >&2
+      exit 1
+    else
+      normalize_memberships
+      if [ "$mode" = "restore-prepare" ]; then
+        connect_as "$bootstrap_role" "$bootstrap_password_file" -c \
+          'GRANT USAGE ON SCHEMA ops TO jarvis_migrator; GRANT SELECT, INSERT ON TABLE ops.schema_migrations TO jarvis_migrator'
+      fi
+      assert_final_memberships
     fi
-    assert_final_memberships
     ;;
 esac
 

@@ -584,6 +584,11 @@ case "${1:-}" in
           : > "$STUB_UPDATE_WAIT_FAIL_ONCE_FILE"
           exit 75
         fi
+        if [ "${helper_args[0]:-}" = verify-floor ] \
+           && [ -n "${STUB_VERIFY_FLOOR_RC:-}" ]; then
+          printf 'ERROR: backup manifest is not authenticated\n' >&2
+          exit "$STUB_VERIFY_FLOOR_RC"
+        fi
         if [ "${helper_args[0]:-}" = hold-update ]; then
           (
             exec 8>&-
@@ -840,6 +845,7 @@ new_env() {
         STUB_TARGET_SHA STUB_COMPOSE_LABEL_PROJECT STUB_UPDATE_WAIT_FAIL_ONCE_FILE \
         STUB_TARGET_CONFIG_JSON STUB_OWNER_ENV STUB_OWNER_DB_RESULT STUB_OWNER_SET_RC \
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
+        STUB_VERIFY_FLOOR_RC \
         STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
         STUB_COMPOSE_PS_FAIL STUB_FREEZE_STATE_DIR \
         STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC STUB_RESTORE_STATUS_AFTER_REQUEST BACKUP_COMPOSE_TIMEOUT_SECONDS \
@@ -905,6 +911,7 @@ run_cli() {
     "STUB_OWNER_ENV=${STUB_OWNER_ENV:-}" "STUB_OWNER_DB_RESULT=${STUB_OWNER_DB_RESULT:-}"
     "STUB_OWNER_SET_RC=${STUB_OWNER_SET_RC:-0}"
     "STUB_TARGET_BACKUP_RC=${STUB_TARGET_BACKUP_RC:-0}"
+    "STUB_VERIFY_FLOOR_RC=${STUB_VERIFY_FLOOR_RC:-}"
     "STUB_TARGET_BACKUP_SLEEP=${STUB_TARGET_BACKUP_SLEEP:-}"
     "STUB_SIDECAR_CHILD=${STUB_SIDECAR_CHILD:-}"
     "STUB_COMPOSE_PS_FAIL=${STUB_COMPOSE_PS_FAIL:-0}"
@@ -1164,10 +1171,10 @@ log_lacks_mutations "update_requires_backup_on_destructive_migration(no-backup):
 # =============================================================================
 # Backup fixture helper: write one encrypted, authenticated restore point using
 # the exact request ID observed in the on-demand trigger.
-#   $1=backup_dir  $2=mode  $3=run_id
+#   $1=backup_dir  $2=mode  $3=run_id  $4=schema_version of the source install
 # =============================================================================
 seed_fresh_backup() {
-  local dir="$1" mode="$2" run_id="$3" ts="20991231_235959"
+  local dir="$1" mode="$2" run_id="$3" schema_version="${4:-200}" ts="20991231_235959"
   local jf="jarvis_${ts}.sql.gz.enc" sf="secrets_${ts}.tar.gz.enc" qf="qdrant_papers_${ts}.snapshot.enc"
   local lf="litellm_${ts}.sql.gz.enc" pf="pdfs_${ts}.tar.gz.enc"
   if [ "$mode" = "renamed" ]; then jf="jarvis_20991231_235958.sql.gz.enc"; fi
@@ -1189,11 +1196,11 @@ seed_fresh_backup() {
   entries="$entries,{\"filename\":\"$sf\",\"sha256\":\"$ssha\",\"size_bytes\":$ssz}"
   entries="$entries,{\"filename\":\"$qf\",\"sha256\":\"$qsha\",\"size_bytes\":$qsz}"
   if [ "$mode" = "legacy" ]; then
-    printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":200,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
-      "$ts" "$entries" > "$dir/manifest_${ts}.json"
+    printf '{"timestamp":"%s","app_version":"1.1.3","schema_version":%s,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
+      "$ts" "$schema_version" "$entries" > "$dir/manifest_${ts}.json"
   else
-    printf '{"timestamp":"%s","run_id":"%s","app_version":"1.1.3","schema_version":200,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
-      "$ts" "$run_id" "$entries" > "$dir/manifest_${ts}.json"
+    printf '{"timestamp":"%s","run_id":"%s","app_version":"1.1.3","schema_version":%s,"created_at":"2099-12-31T23:59:59+00:00","archives":[%s]}' \
+      "$ts" "$run_id" "$schema_version" "$entries" > "$dir/manifest_${ts}.json"
   fi
   if [ "$mode" = "unsigned" ]; then return 0; fi
   if [ "$mode" = "bad_hmac" ]; then
@@ -1215,7 +1222,7 @@ seed_fresh_backup() {
 }
 
 respond_to_backup() {
-  local mode="$1"
+  local mode="$1" schema_version="${2:-200}"
   (
     local request_id=""
     for _ in $(seq 1 100); do
@@ -1231,7 +1238,7 @@ respond_to_backup() {
       sleep 0.02
     done
     if [ "$mode" = "replayed" ]; then request_id="00000000000000000000000000000000"; mode="good"; fi
-    seed_fresh_backup "$BK" "$mode" "$request_id"
+    seed_fresh_backup "$BK" "$mode" "$request_id" "$schema_version"
   ) >/dev/null 2>&1 &
 }
 
@@ -1266,6 +1273,49 @@ if [ "$rc" -eq 0 ] \
 else
   check_fail "staged target runtime backup: rc=$rc out=<<<$out>>> log=$staged_log"
 fi
+
+# The source schema comes from the fresh backup's authenticated manifest, so an
+# installation below the maintained window is refused while the checkout is
+# still on its own release.
+new_staged_update_env
+respond_to_backup good 102
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'schema 102' \
+   && has "$out" 'predates the maintained update window' \
+   && has "$out" 'No branch change was made'; then
+  pass "an installation below the maintained schema floor is refused before the checkout advances"
+else
+  check_fail "update below floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "update below floor: no branch or image mutation"
+
+new_staged_update_env
+respond_to_backup good 106
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && has "$(cat "$STUB_LOG")" 'merge --ff-only'; then
+  pass "an installation at the oldest maintained schema floor updates"
+else
+  check_fail "update at oldest floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+# The schema is read in a one-shot container whose output goes nowhere else. If
+# that read cannot answer, the update stops and carries the reason with it.
+new_staged_update_env
+STUB_VERIFY_FLOOR_RC=9
+respond_to_backup good
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" "Could not read this installation's schema version" \
+   && has "$out" 'not authenticated' \
+   && has "$out" 'jarvis-research doctor'; then
+  pass "an unanswerable schema check stops the update and reports its reason"
+else
+  check_fail "unreadable source schema: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "unreadable source schema: no branch or image mutation"
+unset STUB_VERIFY_FLOOR_RC
 
 new_staged_update_env
 STUB_TARGET_BACKUP_SLEEP=3
@@ -1699,6 +1749,34 @@ if [ "$rc" -eq 0 ] && grep -q 'compose pull' "$STUB_LOG" \
   pass "valid backup-bearing resume re-verifies then clears its pin after commit"
 else
   check_fail "valid backup resume contract wrong: rc=$rc pending=$([ -e "$PENDING_FILE" ] && cat "$PENDING_FILE") pin=$([ -e "$UPDATE_PIN_FILE" ] && cat "$UPDATE_PIN_FILE")"
+fi
+
+# A transaction record can be written by the installed release, which does not
+# check the source schema, so the branch advance is checked on this route too.
+new_env; register_repo
+seed_fresh_backup "$BK" good "$resume_run" 102
+write_pending_backup merge_pending "$resume_run"
+write_update_pin "$resume_run"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'schema 102' \
+   && has "$out" 'predates the maintained update window' \
+   && ! grep -q 'merge --ff-only' "$STUB_LOG" \
+   && [ -f "$PENDING_FILE" ]; then
+  pass "a pending update from a source below the maintained floor is refused before the branch advance"
+else
+  check_fail "resume below floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+new_env; register_repo
+seed_fresh_backup "$BK" good "$resume_run" 106
+write_pending_backup merge_pending "$resume_run"
+write_update_pin "$resume_run"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'merge --ff-only' "$STUB_LOG"; then
+  pass "a pending update from the oldest maintained floor still completes"
+else
+  check_fail "resume at oldest floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
 fi
 
 # an explicit --resume tag that disagrees with the pending target is refused

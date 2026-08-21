@@ -1,6 +1,6 @@
 # Risk Register
 
-_Last updated: 2026-08-20_
+_Last updated: 2026-08-22_
 
 _Known residual risks and accepted operational/code-quality deferrals._
 
@@ -14,6 +14,62 @@ Related docs:
 ---
 
 ## v1.2.6 accepted boundaries
+
+### The source-schema refusal rides on the update's own restore point
+
+`jarvis-research update` reads the installation's schema version from the
+authenticated manifest of the restore point it takes before a data-changing
+migration, and refuses a source older than the maintained window. A release
+whose new migrations are all additive takes no restore point, so that update
+reaches the checkout advance without the schema being read. Such an
+installation is still refused, by the ownership bootstrap, but after the
+checkout has moved rather than before.
+
+**Why accepted:** the schema is only knowable at that point from a restore point
+the update already needs, and taking one for every update — including the
+additive-only case that deliberately avoids it — costs every installation time
+and disk for a check that applies to a shrinking minority.
+
+**Reopen criteria:** a release ships with only additive migrations while the
+support table still lists a source below the floor, or an installation reports
+being refused mid-update rather than before it.
+
+---
+
+### The backup sidecar logs one connection failure during an upgrade
+
+While an update applies this release's migrations, the backup sidecar is still
+running with the previous release's configuration and tries to connect with a
+reader role the migrations have not created yet. Its log records one connection
+failure per attempt until the update recreates it with the new configuration.
+
+**Why accepted:** the sidecar is recreated as part of the same update, and the
+backup the update itself requires is taken through the target release's producer
+before the migrations run, so no restore point depends on those attempts.
+
+**Reopen criteria:** a backup is lost, or an upgrade check fails, because of a
+connection attempt made in this window.
+
+---
+
+### The preserved cluster-owner password is never reconciled
+
+`scripts/init-secrets.sh` keeps every managed secret file in step with the
+environment file, with one deliberate exception: when
+`secrets/postgres_password.txt` already exists it is preserved untouched and any
+`POSTGRES_PASSWORD` still present in the environment file is left where it is.
+The two can therefore hold different values. Only the file is used, and only by
+the upgrade bootstrap and the recovery paths.
+
+**Why accepted:** this password is the cluster owner for an installation that
+predates per-service roles. Overwriting the preserved file from an environment
+value that a later release already migrated away would break exactly the upgrade
+and recovery paths it exists for.
+
+**Reopen criteria:** a runtime service is found reading this password, or an
+upgrade fails because the preserved file and the environment file disagree.
+
+---
 
 ### Erasure reclaims only papers the erased account held
 

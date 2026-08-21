@@ -34,6 +34,12 @@ _SCHEMA_FLOOR_CONTENTION_POLL_SECONDS = 0.1
 # sync with that file, which is the single source of the baseline floor.
 _REQUIRED_CODE_SCHEMA_FALLBACK = 120
 
+# Migrations up to 0113 predate per-file role statements: they are plain DDL on
+# the public schema and run as its owner. db/migrations/0114 is the hand-over
+# that names its roles itself, and every later migration does the same.
+LEGACY_OWNER_ROLE = "jarvis_legacy_rollback"
+LEGACY_OWNER_LAST_VERSION = 113
+
 
 @dataclass(frozen=True, slots=True)
 class MigrationCheck:
@@ -63,13 +69,50 @@ def _log_migration_notice(_connection: object, message: object) -> None:
     logger.info("PostgreSQL migration notice: %s", message)
 
 
+async def _legacy_owner_role(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+) -> str | None:
+    """Return the legacy public-schema owner when this connection must assume it.
+
+    That is the case exactly during a pre-0114 upgrade: the bootstrap has
+    transferred the public schema to the legacy rollback role and granted that
+    role to the migrator, and 0107-0113 need the schema owner's privileges.
+    The catalog is read as data, so an absent role yields no row rather than
+    an error. Superusers are excluded: they are members of every role and own
+    what they create, so fresh-install and fixture paths never wrap. 0114
+    leaves the schema's owner in place, and the bootstrap revokes the
+    migrator's membership before any later run, so the result is empty on
+    every cluster that has completed the hand-over.
+    """
+    return await conn.fetchval(
+        """
+        SELECT r.rolname
+        FROM pg_roles AS r
+        JOIN pg_namespace AS n ON n.nspowner = r.oid AND n.nspname = 'public'
+        WHERE r.rolname = $1
+          AND pg_has_role(current_user, r.oid, 'MEMBER')
+          AND NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+        """,
+        LEGACY_OWNER_ROLE,
+    )
+
+
 async def _apply_migration_sql(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     cleaned_sql: str,
     version: int,
     sha256: str,
+    *,
+    assume_role: str | None = None,
 ) -> None:
-    """Execute one migration and record it, forwarding server notices."""
+    """Execute one migration and record it, forwarding server notices.
+
+    With ``assume_role`` the migration body runs under that role and the
+    bookkeeping row is written as the connection's own user again.
+    ``set_config('role', …, is_local => true)`` is the function form of
+    ``SET LOCAL ROLE``, which takes an identifier and could not carry the
+    role name as a bound parameter.
+    """
     forwards_notices = isinstance(
         conn,
         asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
@@ -78,7 +121,11 @@ async def _apply_migration_sql(
         conn.add_log_listener(_log_migration_notice)
     try:
         async with conn.transaction():
+            if assume_role is not None:
+                await conn.execute("SELECT set_config('role', $1, true)", assume_role)
             await conn.execute(cleaned_sql)
+            if assume_role is not None:
+                await conn.execute("RESET ROLE")
             has_hash_column = bool(
                 await conn.fetchval(
                     "SELECT EXISTS("
@@ -448,6 +495,13 @@ async def run_migrations(
             applied = {
                 r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")
             }
+            # Resolved once: 0114 moves objects out of the public schema inside
+            # this same transaction, and the wrap must not follow that change.
+            legacy_owner = await _legacy_owner_role(conn)
+            if legacy_owner is not None:
+                logger.info(
+                    "Applying migrations up to %s as %s", LEGACY_OWNER_LAST_VERSION, legacy_owner
+                )
             for version, sql_file in migration_files:
                 if version in applied:
                     continue
@@ -461,7 +515,13 @@ async def run_migrations(
                 # and DO blocks legitimately use `BEGIN`/`END` on their own lines).
                 cleaned_sql = _strip_outer_transaction_control(sql)
                 sha256 = packaged_hashes.get(version, hashlib.sha256(sql.encode()).hexdigest())
-                await _apply_migration_sql(conn, cleaned_sql, version, sha256)
+                await _apply_migration_sql(
+                    conn,
+                    cleaned_sql,
+                    version,
+                    sha256,
+                    assume_role=legacy_owner if version <= LEGACY_OWNER_LAST_VERSION else None,
+                )
                 logger.info("Migration %s applied successfully", version)
 
             # Still inside the advisory-locked transaction: refuse to serve on a

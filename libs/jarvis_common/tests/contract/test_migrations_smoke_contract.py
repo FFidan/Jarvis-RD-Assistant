@@ -82,38 +82,67 @@ async def test_a269_run_migrations_no_exception_on_already_applied_schema(_contr
     await run_migrations(_contract_pool, migrations_dir=migrations_dir)
 
 
-async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
-    dedicated_cluster_pg_dsn: str,
-) -> None:
-    """0114 moves a version-113 database through the temporary legacy authority.
+def _db_dir() -> Path:
+    return Path(__file__).resolve().parents[4] / "db"
 
-    Verified: db/migrations/0114_owned_schemas_and_roles.sql — temporary
-    membership revocation and final ``ops.schema_migrations`` record.
+
+async def _run_migrations_as_migrator(dsn: str, db_dir: Path) -> None:
+    migrator_pool = await asyncpg.create_pool(
+        dsn,
+        user="jarvis_migrator",
+        password="migration-contract-password",
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        from jarvis_common.migrations import run_migrations
+
+        await run_migrations(migrator_pool, migrations_dir=db_dir / "migrations")
+    finally:
+        await migrator_pool.close()
+
+
+async def _hand_over_legacy_database(dsn: str, db_dir: Path, floor: int) -> asyncpg.Connection:
+    """Seed a pre-0114 database at *floor* and stage the bootstrap's hand-over.
+
+    Mirrors ``scripts/postgres-role-bootstrap.sh`` at a legacy floor: the
+    rollback role owns the database, the public schema and every object in it,
+    holds no superuser bit, is granted the owner roles without inheritance,
+    and the migrator receives its temporary membership. Returns the
+    ``jarvis_bootstrap`` connection; the caller closes it.
     """
-    db_dir = Path(__file__).resolve().parents[4] / "db"
     init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
     legacy_init, marker, _ = init_sql.partition("-- FRESH-INSTALL OWNERSHIP BOUNDARY")
     assert marker, "fresh ownership boundary marker is missing from db/init.sql"
 
-    bootstrap = await asyncpg.connect(dedicated_cluster_pg_dsn)
+    bootstrap = await asyncpg.connect(dsn)
     try:
+        # The historical owner created the schema as a superuser; the rollback
+        # role stands in for it while seeding and is demoted before the hand-over.
+        await bootstrap.execute(
+            "CREATE ROLE jarvis_legacy_rollback SUPERUSER NOLOGIN NOINHERIT; "
+            "SET ROLE jarvis_legacy_rollback"
+        )
         await bootstrap.execute(legacy_init)
         await bootstrap.execute("DELETE FROM schema_migrations WHERE version >= 102")
         for migration in sorted((db_dir / "migrations").glob("01[0-1][0-9]_*.sql")):
             version = int(migration.name.split("_", maxsplit=1)[0])
-            if version >= 114:
+            if version > floor:
                 continue
             await bootstrap.execute(migration.read_text(encoding="utf-8"))
             await bootstrap.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
+        await bootstrap.execute("RESET ROLE")
+        database = await bootstrap.fetchval("SELECT current_database()")
         await bootstrap.execute(
-            "DO $$ BEGIN "
-            "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'jarvis') THEN "
-            "CREATE ROLE jarvis LOGIN SUPERUSER CREATEDB CREATEROLE; END IF; END $$;"
+            "ALTER ROLE jarvis_legacy_rollback NOSUPERUSER NOCREATEDB NOCREATEROLE "
+            "NOREPLICATION NOBYPASSRLS; "
+            "ALTER SCHEMA public OWNER TO jarvis_legacy_rollback; "
+            f'ALTER DATABASE "{database}" OWNER TO jarvis_legacy_rollback'
         )
         await bootstrap.execute(
             "CREATE ROLE jarvis_bootstrap LOGIN PASSWORD 'bootstrap-contract-password' "
             "SUPERUSER CREATEROLE NOINHERIT NOBYPASSRLS; "
-            "GRANT jarvis TO jarvis_bootstrap WITH ADMIN OPTION"
+            "GRANT jarvis_legacy_rollback TO jarvis_bootstrap WITH ADMIN OPTION"
         )
         await bootstrap.execute(
             "CREATE ROLE jarvis_migrator LOGIN PASSWORD 'migration-contract-password' "
@@ -124,12 +153,24 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
             "PASSWORD 'erasure-executor-contract-password' NOSUPERUSER NOCREATEDB "
             "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
         )
+        # The bootstrap provisions every login shell before the migrator runs;
+        # 0114 only creates the ones that are missing.
+        await bootstrap.execute(
+            "CREATE ROLE jarvis_platform_runtime NOLOGIN NOINHERIT NOBYPASSRLS; "
+            "CREATE ROLE jarvis_research_runtime NOLOGIN NOINHERIT NOBYPASSRLS; "
+            "CREATE ROLE jarvis_learning_runtime NOLOGIN NOINHERIT NOBYPASSRLS; "
+            "CREATE ROLE jarvis_backup_reader NOLOGIN NOINHERIT NOBYPASSRLS; "
+            "CREATE ROLE jarvis_restore_operator NOLOGIN NOINHERIT NOBYPASSRLS"
+        )
         await bootstrap.execute(
             "CREATE ROLE jarvis_platform_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
             "CREATE ROLE jarvis_research_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
             "CREATE ROLE jarvis_learning_owner NOLOGIN NOINHERIT NOBYPASSRLS; "
             "CREATE ROLE jarvis_ops_owner NOLOGIN NOINHERIT NOBYPASSRLS"
         )
+        # The migrator holds no USAGE on these, so PostgreSQL drops them from its
+        # effective search_path and 0112's unqualified CREATE TABLE still lands in
+        # public, as it does on a real pre-0114 database where they do not exist.
         await bootstrap.execute(
             "CREATE SCHEMA platform AUTHORIZATION jarvis_platform_owner; "
             "CREATE SCHEMA research AUTHORIZATION jarvis_research_owner; "
@@ -140,23 +181,41 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
             "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
             "jarvis_ops_owner TO jarvis_bootstrap WITH ADMIN OPTION"
         )
+    finally:
         await bootstrap.close()
-        bootstrap = await asyncpg.connect(
-            dedicated_cluster_pg_dsn,
-            user="jarvis_bootstrap",
-            password="bootstrap-contract-password",
-        )
-        # Renaming the historical database owner preserves the complete legacy
-        # ownership graph, including the database and public schema.
-        await bootstrap.execute("ALTER ROLE jarvis RENAME TO jarvis_legacy_rollback")
+    bootstrap = await asyncpg.connect(
+        dsn,
+        user="jarvis_bootstrap",
+        password="bootstrap-contract-password",
+    )
+    try:
         await bootstrap.execute(
             "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
-            "jarvis_ops_owner TO jarvis_legacy_rollback; "
+            "jarvis_ops_owner TO jarvis_legacy_rollback WITH INHERIT FALSE; "
             "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
-            "jarvis_ops_owner TO jarvis_migrator WITH ADMIN OPTION"
+            "jarvis_ops_owner TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE"
         )
         await bootstrap.execute("GRANT SELECT, INSERT ON schema_migrations TO jarvis_migrator")
-        await bootstrap.execute("GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION")
+        await bootstrap.execute(
+            "GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE"
+        )
+    except BaseException:
+        await bootstrap.close()
+        raise
+    return bootstrap
+
+
+async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
+    dedicated_cluster_pg_dsn: str,
+) -> None:
+    """0114 moves a version-113 database through the temporary legacy authority.
+
+    Verified: db/migrations/0114_owned_schemas_and_roles.sql — temporary
+    membership revocation and final ``ops.schema_migrations`` record.
+    """
+    db_dir = _db_dir()
+    bootstrap = await _hand_over_legacy_database(dedicated_cluster_pg_dsn, db_dir, 113)
+    try:
         await bootstrap.execute(
             """
             INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
@@ -166,19 +225,7 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
             """
         )
 
-        migrator_pool = await asyncpg.create_pool(
-            dedicated_cluster_pg_dsn,
-            user="jarvis_migrator",
-            password="migration-contract-password",
-            min_size=1,
-            max_size=1,
-        )
-        try:
-            from jarvis_common.migrations import run_migrations
-
-            await run_migrations(migrator_pool, migrations_dir=db_dir / "migrations")
-        finally:
-            await migrator_pool.close()
+        await _run_migrations_as_migrator(dedicated_cluster_pg_dsn, db_dir)
 
         await bootstrap.execute(
             "REVOKE jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
@@ -292,6 +339,53 @@ async def test_0114_upgrades_the_legacy_owner_through_the_migrator(
             ("jarvis_migrator", "jarvis_learning_owner", False),
             ("jarvis_migrator", "jarvis_ops_owner", False),
         }
+    finally:
+        await bootstrap.close()
+
+
+@pytest.mark.parametrize("floor", (106, 110, 111, 113))
+async def test_pre_0114_floors_upgrade_through_the_migrator(
+    dedicated_cluster_pg_dsn: str, floor: int
+) -> None:
+    """Every maintained pre-0114 floor reaches 120 through the migrator alone.
+
+    A source older than v1.2.5 still owes 0107-0113, plain DDL on the public
+    schema that the legacy owner holds after the bootstrap's transfer. The
+    migrator applies them under that role, then 0114 takes over as it does
+    today. With both roles proven non-superuser, the run succeeding below
+    floor 112 is the proof that the runner assumed the legacy owner.
+
+    Verified: libs/jarvis_common/jarvis_common/migrations.py:72-97 resolves the
+    legacy owner; :497 does so once before the loop; :516 assumes it for
+    versions <= 113.
+    """
+    # Verified: libs/jarvis_common/jarvis_common/migrations.py:497
+    db_dir = _db_dir()
+    bootstrap = await _hand_over_legacy_database(dedicated_cluster_pg_dsn, db_dir, floor)
+    try:
+        assert (
+            await bootstrap.fetch(
+                "SELECT rolname FROM pg_roles WHERE rolsuper "
+                "AND rolname IN ('jarvis_legacy_rollback', 'jarvis_migrator')"
+            )
+            == []
+        )
+
+        await _run_migrations_as_migrator(dedicated_cluster_pg_dsn, db_dir)
+
+        versions = {
+            row["version"]
+            for row in await bootstrap.fetch("SELECT version FROM ops.schema_migrations")
+        }
+        assert max(versions) == 120
+        assert set(range(floor + 1, 121)) <= versions
+        assert (
+            await bootstrap.fetchval(
+                "SELECT pg_get_userbyid(relowner) FROM pg_class "
+                "WHERE oid = 'learning.focus_sessions'::regclass"
+            )
+            == "jarvis_learning_owner"
+        )
     finally:
         await bootstrap.close()
 
