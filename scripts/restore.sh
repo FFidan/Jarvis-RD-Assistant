@@ -273,7 +273,8 @@ verify_manifest_signature() {
   if [ -s "$computed" ] && cmp -s "$computed" "$stored"; then rc=0; fi
   if [ "$rc" != 0 ]; then
     legacy_manifest_signature "$manifest" 2>/dev/null > "$computed"
-    if [ -s "$computed" ] && cmp -s "$computed" "$stored"; then rc=0; fi
+    if grep -Eq '^[0-9a-f]{64}$' "$computed" 2>/dev/null \
+       && cmp -s "$computed" "$stored"; then rc=0; fi
   fi
   set -e
   rm -f "$computed"
@@ -1270,13 +1271,16 @@ write_inbox_manifest() {
          && [ -f "$manifest" ] && [ ! -L "$manifest" ] \
          && [ -f "$signature" ] && [ ! -L "$signature" ]; then
         inventory="$(mktemp "${TRIGGER_DIR}/.inbox-inventory-${t}.XXXXXX" 2>/dev/null || true)"
+        # Chained rather than sequential: errexit does not apply inside a subshell
+        # used as an if-condition, so a bare list would report only the LAST command
+        # and a set whose signature verifies against nothing would still be listed as
+        # complete.
         if [ -n "$inventory" ] && (
           ENC_KEYFILE="$OPERATOR_KEYFILE"
-          verify_manifest_signature "$manifest"
-          parse_authenticated_manifest "$manifest" "$t" "$inventory"
-          verify_manifest_inventory "$INBOX_DIR" "$t" "$inventory"
-          MANIFEST_AUTHENTICATED=1
-          authenticated_manifest_is_legacy "$manifest"
+          verify_manifest_signature "$manifest" \
+            && parse_authenticated_manifest "$manifest" "$t" "$inventory" \
+            && verify_manifest_inventory "$INBOX_DIR" "$t" "$inventory" \
+            && { MANIFEST_AUTHENTICATED=1; authenticated_manifest_is_legacy "$manifest"; }
         ); then
           legacy_missing_pdfs="true"
           complete="true"

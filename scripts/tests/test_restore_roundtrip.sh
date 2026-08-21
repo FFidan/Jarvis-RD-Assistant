@@ -1635,6 +1635,14 @@ fi
 # =============================================================================
 sec "Cross-version restore accepts a set signed before v1.2.6"
 if [ -n "${TS4:-}" ]; then
+  # The compatibility signature is computed with Digest::SHA. If a future image drops
+  # it the module load fails, stderr is discarded, and every earlier-release manifest
+  # silently stops authenticating — so assert it in the image rather than on the host.
+  if sc 'perl -MDigest::SHA=hmac_sha256_hex -e1' >/dev/null 2>&1; then
+    ok "the backup image provides the module the compatibility signature needs"
+  else
+    no "the backup image has no Digest::SHA; earlier-release manifests cannot authenticate"
+  fi
   set_marker "cross-version-target-before"
   stage_cross_version_set "$TS4"
   write_inbox_restore_request "$TS4"

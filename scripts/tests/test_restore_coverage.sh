@@ -1089,7 +1089,11 @@ if command -v python3 >/dev/null 2>&1; then
 
   legacy_ts="20260630_020000"
   unsigned_legacy_ts="20260629_010000"
-  for ts in "$legacy_ts" "$unsigned_legacy_ts"; do
+  # A set whose signature is PRESENT but authenticates against neither construction.
+  # Distinct from the unsigned one above: the listing must refuse it on the signature,
+  # not on the signature's absence.
+  badsig_legacy_ts="20260628_000000"
+  for ts in "$legacy_ts" "$unsigned_legacy_ts" "$badsig_legacy_ts"; do
     printf 'LEGACY-J-%s' "$ts" > "${im_inbox}/jarvis_${ts}.sql.gz.enc"
     printf 'LEGACY-L-%s' "$ts" > "${im_inbox}/litellm_${ts}.sql.gz.enc"
     printf 'LEGACY-S-%s' "$ts" > "${im_inbox}/secrets_${ts}.tar.gz.enc"
@@ -1135,6 +1139,7 @@ if command -v python3 >/dev/null 2>&1; then
   openssl dgst -sha256 -mac HMAC -macopt "hexkey:${im_derived}" -r \
     < "${im_inbox}/manifest_${signed_current_ts}.json" | cut -d' ' -f1 \
     > "${im_inbox}/manifest_${signed_current_ts}.json.hmac"
+  printf '%064d\n' 0 > "${im_inbox}/manifest_${badsig_legacy_ts}.json.hmac"
   # A pending restore request the inventory pass must NOT consume.
   printf '{"timestamp":"%s","confirm":"RESTORE"}' "$current_ts" \
     > "${im_trig}/.restore_request.json"
@@ -1148,8 +1153,10 @@ d = json.loads(raw)
 by = {e["timestamp"]: e for e in d}
 assert set(by) == {
     "20260701_030000", "20260630_020000", "20260629_010000", "20260702_040000",
-    "20260703_050000"
+    "20260703_050000", "20260628_000000"
 }, by
+assert by["20260628_000000"]["complete"] is False, by
+assert by["20260628_000000"]["legacy_missing_pdfs"] is False, by
 expected_keys = {
     "timestamp", "complete", "has_pdfs", "legacy_missing_pdfs", "has_secrets", "has_key"
 }
