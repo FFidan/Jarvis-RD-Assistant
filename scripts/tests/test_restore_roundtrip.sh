@@ -27,6 +27,9 @@ sec() { printf '\n=== %s ===\n' "$1"; }
 
 # --- Invocation and ownership guards ----------------------------------------
 RELEASE_GATE=0
+# Fewer checks than this means legs were skipped rather than passed. Raise it
+# when legs are added; never lower it to make a run go green.
+RELEASE_GATE_MIN_CHECKS=37
 case "${1:-}" in
   --release-gate) RELEASE_GATE=1; shift ;;
   -h|--help)
@@ -1761,3 +1764,10 @@ printf '\n================================================================\n'
 printf 'RESTORE ROUND-TRIP: PASS=%s  FAIL=%s\n' "$pass" "$fail"
 printf '================================================================\n'
 [ "$fail" -eq 0 ] || exit 1
+# No failures and nothing observed are the same exit status otherwise, which is
+# how a run that skipped its way to the end would read as a passing release gate.
+if [ "$RELEASE_GATE" -eq 1 ] && [ "$pass" -lt "$RELEASE_GATE_MIN_CHECKS" ]; then
+  printf 'RELEASE GATE: %s checks ran, at least %s are required\n' \
+    "$pass" "$RELEASE_GATE_MIN_CHECKS" >&2
+  exit 1
+fi

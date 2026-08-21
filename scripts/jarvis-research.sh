@@ -1152,11 +1152,17 @@ SUPPORTED_SOURCE_FLOOR=106
 # schema from the fresh backup's authenticated manifest and refuse an
 # installation older than the maintained window while nothing has changed yet.
 _require_supported_source_floor() {
-  local floor
-  floor="$(_backup_volume_helper verify-floor "$1" "$2" "$3" 2>/dev/null | tr -d '\r\n')" || true
+  local floor detail diagnostics
+  diagnostics="$(mktemp)" || die "Could not create a temporary file for the schema check." \
+    "No branch change was made. Free some space, then re-run: jarvis-research update"
+  floor="$(_backup_volume_helper verify-floor "$1" "$2" "$3" 2>"$diagnostics" | tr -d '\r\n')" || true
+  # The check runs in a one-shot container whose output goes nowhere else, so its
+  # reason has to travel with the refusal.
+  detail="$(grep -E '^ERROR: ' "$diagnostics" | tail -1 || true)"
+  rm -f "$diagnostics"
   printf '%s' "$floor" | grep -Eq '^[0-9]+$' \
-    || die "Could not read this installation's schema version from the verified backup." \
-      "No branch change was made. Review: docker compose logs postgres-backup, then re-run: jarvis-research update"
+    || die "Could not read this installation's schema version from the verified backup. ${detail:-The check produced no diagnostic.}" \
+      "No branch change was made. Run: jarvis-research doctor"
   [ "$floor" -ge "$SUPPORTED_SOURCE_FLOOR" ] \
     || die "This installation's database (schema ${floor}) predates the maintained update window (oldest supported: ${SUPPORTED_SOURCE_FLOOR})." \
       "No branch change was made. Complete the one-time step in docs/manual/cli.md (Updating from a release before v1.2.2), then re-run: jarvis-research update"
@@ -1336,6 +1342,12 @@ _resume_pending_merge() {
     if ! _verify_recorded_update_backup_archives; then
       die "The pending update's recovery backup is no longer authenticated and complete." \
         "No branch change was made. Repair or replace that restore point, then start a new update."
+    fi
+    # The transaction record may have been written by the installed release,
+    # which did not check the source schema. This is the only other route to the
+    # branch advance, so it checks before taking it.
+    if [ "$TXN_LEGACY_RECOVERY" != "true" ]; then
+      _require_supported_source_floor "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" current
     fi
     if ! _update_backup_pin_matches "$TXN_BACKUP_ID" "$TXN_BACKUP_RUN_ID" false; then
       head="$(git rev-parse HEAD 2>/dev/null || true)"

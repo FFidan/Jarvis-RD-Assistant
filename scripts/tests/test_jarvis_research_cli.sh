@@ -584,6 +584,11 @@ case "${1:-}" in
           : > "$STUB_UPDATE_WAIT_FAIL_ONCE_FILE"
           exit 75
         fi
+        if [ "${helper_args[0]:-}" = verify-floor ] \
+           && [ -n "${STUB_VERIFY_FLOOR_RC:-}" ]; then
+          printf 'ERROR: backup manifest is not authenticated\n' >&2
+          exit "$STUB_VERIFY_FLOOR_RC"
+        fi
         if [ "${helper_args[0]:-}" = hold-update ]; then
           (
             exec 8>&-
@@ -840,6 +845,7 @@ new_env() {
         STUB_TARGET_SHA STUB_COMPOSE_LABEL_PROJECT STUB_UPDATE_WAIT_FAIL_ONCE_FILE \
         STUB_TARGET_CONFIG_JSON STUB_OWNER_ENV STUB_OWNER_DB_RESULT STUB_OWNER_SET_RC \
         STUB_PSQL_INPUT_FILE STUB_QUARANTINE_REPLACE_ON_ACK STUB_TARGET_BACKUP_RC \
+        STUB_VERIFY_FLOOR_RC \
         STUB_TARGET_BACKUP_SLEEP STUB_SIDECAR_CHILD \
         STUB_COMPOSE_PS_FAIL STUB_FREEZE_STATE_DIR \
         STUB_STACK_DOWN STUB_NO_CONTAINERS STUB_RESTORE_LEGACY_RC STUB_RESTORE_STATUS_AFTER_REQUEST BACKUP_COMPOSE_TIMEOUT_SECONDS \
@@ -905,6 +911,7 @@ run_cli() {
     "STUB_OWNER_ENV=${STUB_OWNER_ENV:-}" "STUB_OWNER_DB_RESULT=${STUB_OWNER_DB_RESULT:-}"
     "STUB_OWNER_SET_RC=${STUB_OWNER_SET_RC:-0}"
     "STUB_TARGET_BACKUP_RC=${STUB_TARGET_BACKUP_RC:-0}"
+    "STUB_VERIFY_FLOOR_RC=${STUB_VERIFY_FLOOR_RC:-}"
     "STUB_TARGET_BACKUP_SLEEP=${STUB_TARGET_BACKUP_SLEEP:-}"
     "STUB_SIDECAR_CHILD=${STUB_SIDECAR_CHILD:-}"
     "STUB_COMPOSE_PS_FAIL=${STUB_COMPOSE_PS_FAIL:-0}"
@@ -1292,6 +1299,23 @@ if [ "$rc" -eq 0 ] \
 else
   check_fail "update at oldest floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
 fi
+
+# The schema is read in a one-shot container whose output goes nowhere else. If
+# that read cannot answer, the update stops and carries the reason with it.
+new_staged_update_env
+STUB_VERIFY_FLOOR_RC=9
+respond_to_backup good
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" "Could not read this installation's schema version" \
+   && has "$out" 'not authenticated' \
+   && has "$out" 'jarvis-research doctor'; then
+  pass "an unanswerable schema check stops the update and reports its reason"
+else
+  check_fail "unreadable source schema: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+log_lacks_mutations "unreadable source schema: no branch or image mutation"
+unset STUB_VERIFY_FLOOR_RC
 
 new_staged_update_env
 STUB_TARGET_BACKUP_SLEEP=3
@@ -1725,6 +1749,34 @@ if [ "$rc" -eq 0 ] && grep -q 'compose pull' "$STUB_LOG" \
   pass "valid backup-bearing resume re-verifies then clears its pin after commit"
 else
   check_fail "valid backup resume contract wrong: rc=$rc pending=$([ -e "$PENDING_FILE" ] && cat "$PENDING_FILE") pin=$([ -e "$UPDATE_PIN_FILE" ] && cat "$UPDATE_PIN_FILE")"
+fi
+
+# A transaction record can be written by the installed release, which does not
+# check the source schema, so the branch advance is checked on this route too.
+new_env; register_repo
+seed_fresh_backup "$BK" good "$resume_run" 102
+write_pending_backup merge_pending "$resume_run"
+write_update_pin "$resume_run"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 1 ] \
+   && has "$out" 'schema 102' \
+   && has "$out" 'predates the maintained update window' \
+   && ! grep -q 'merge --ff-only' "$STUB_LOG" \
+   && [ -f "$PENDING_FILE" ]; then
+  pass "a pending update from a source below the maintained floor is refused before the branch advance"
+else
+  check_fail "resume below floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
+fi
+
+new_env; register_repo
+seed_fresh_backup "$BK" good "$resume_run" 106
+write_pending_backup merge_pending "$resume_run"
+write_update_pin "$resume_run"
+out="$(run_cli update --yes)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'merge --ff-only' "$STUB_LOG"; then
+  pass "a pending update from the oldest maintained floor still completes"
+else
+  check_fail "resume at oldest floor: rc=$rc out=<<<$out>>> log=$(cat "$STUB_LOG")"
 fi
 
 # an explicit --resume tag that disagrees with the pending target is refused

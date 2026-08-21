@@ -153,8 +153,12 @@ builds or replaces anything, so this step is only needed once, on the way out of
 a pre-v1.1.3 installation.
 
 The lifecycle commands shipped with v1.1.3, v1.2.0 and v1.2.1 all predate the
-backup protocol required by v1.2.2. From the installation directory, run the
-v1.2.2 bootstrap once:
+backup protocol later releases require, which is why the bootstrap loads the
+target release's lifecycle files before updating. From the installation
+directory, run it once. An installation on v1.2.0 or v1.2.1 substitutes the
+release it is updating to for `v1.2.2` in both places below and lands on that
+release in one step; v1.1.3 and earlier run the immutable bridge exactly as
+written and then follow the bootstrap path:
 
 ```bash
 (
@@ -168,10 +172,10 @@ v1.2.2 bootstrap once:
 ```
 
 The bootstrap accepts only the managed repository on a clean `main` checkout,
-validates v1.2.2 against `origin`, and runs the lifecycle files stored in that
-release. The v1.2.2 updater then creates and authenticates a restore point
-containing both databases, uploaded PDFs and data-coupled secrets before it can
-apply a data-changing migration. If the command is interrupted, run the same
+validates the release you named against `origin`, and runs the lifecycle files
+stored in that release. That release's updater then creates and authenticates a
+restore point containing both databases, uploaded PDFs and data-coupled secrets
+before it can apply a data-changing migration. If the command is interrupted, run the same
 bootstrap command again; it resumes the recorded update.
 
 Your installed command may refuse first with `Your working tree has uncommitted

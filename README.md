@@ -203,7 +203,9 @@ route from v1.1.3, which is outside the maintained update window:
 )
 ```
 
-Those lifecycle commands predate the backup protocol required by v1.2.2. The
+Substitute the release you are updating to for `v1.2.2` above, in both the
+download URL and `--to`; v1.1.3 runs the bridge exactly as written. Those
+lifecycle commands predate the backup protocol later releases require. The
 bootstrap validates the selected release and runs its updater, which creates
 and authenticates a complete restore point before any data-changing migration.
 See the [command-line

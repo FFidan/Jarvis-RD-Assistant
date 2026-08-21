@@ -507,12 +507,47 @@ def test_update_and_restore_floors_are_distinct_in_current_docs() -> None:
     for document in (readme, deployment, cli):
         assert one_step in document
 
+    # The superseded claim, which a reword could reintroduce beside the corrected one.
+    assert "still running v1.2.0 or v1.2.1" not in readme
+    assert "required one-time bridge for v1.2.0 and v1.2.1" not in cli
+    assert "running v1.2.0 or v1.2.1 needs" not in deployment
+
+
+def _declared_int(source: str, assignment: str) -> int:
+    return int(source.split(assignment, 1)[1].split("\n", 1)[0].strip().strip('"'))
+
 
 def test_the_maintained_source_floor_is_one_number_everywhere_it_is_enforced() -> None:
-    """The documented window and both enforcing scripts state the same floor."""
-    assert "schema floor 106" in " ".join(_read("docs/RELEASE.md").split())
-    assert "SUPPORTED_SOURCE_FLOOR=106" in _read("scripts/jarvis-research.sh")
-    assert "legacy_floor_min=106" in _read("scripts/postgres-role-bootstrap.sh")
+    """The documented window, both enforcing scripts and both checks state one window.
+
+    The floor lists are the sharp edge: dropping a release from support means
+    editing several files, and a list left behind keeps proving a window that is
+    no longer offered. The oldest table row is pinned here as well, so moving the
+    window cannot be done without also revisiting the number it implies.
+    """
+    release = _read("docs/RELEASE.md")
+    assert "schema floor 106" in " ".join(release.split())
+
+    rows = [line for line in release.splitlines() if line.startswith("| `v1.")]
+    assert "`v1.2.1`" in rows[0] and "`bootstrap`" in rows[0], rows[0]
+
+    oldest = _declared_int(_read("scripts/postgres-role-bootstrap.sh"), "legacy_floor_min=")
+    newest = _declared_int(_read("scripts/postgres-role-bootstrap.sh"), "legacy_floor_max=")
+    assert oldest == 106
+    assert _declared_int(_read("scripts/jarvis-research.sh"), "SUPPORTED_SOURCE_FLOOR=") == oldest
+
+    harness = _read("scripts/tests/test_restore_roundtrip.sh")
+    declared = harness.split('MAINTAINED_FLOORS="', 1)[1].split('"', 1)[0]
+    floors = [int(f) for f in declared.split()]
+    assert floors[0] == oldest
+    assert floors[-1] == newest
+
+    assert _declared_int(harness, "RELEASE_GATE_MIN_CHECKS=") >= len(floors) * 2
+    assert '[ "$pass" -lt "$RELEASE_GATE_MIN_CHECKS" ]' in harness
+
+    contract = _read("libs/jarvis_common/tests/contract/test_migrations_smoke_contract.py")
+    parametrized = contract.split('@pytest.mark.parametrize("floor", (', 1)[1].split(")", 1)[0]
+    assert [int(f) for f in parametrized.replace(",", " ").split()] == floors
 
 
 def test_local_security_scan_is_pinned_fail_closed_and_outside_the_repo() -> None:

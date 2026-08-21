@@ -10,7 +10,7 @@ on:
       - scripts/**
       - db/**
       - docker-compose*.yml
-      - libs/jarvis_common/jarvis_common/migrations.py
+      - libs/jarvis_common/**
       - versions.env
       - .github/workflows/restore-roundtrip.yml
   workflow_dispatch:
