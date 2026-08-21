@@ -615,14 +615,19 @@ def test_no_verification_path_puts_a_derived_key_in_the_process_list() -> None:
     ``-macopt hexkey:`` ever did and would satisfy a check that only looks for the
     latter, which is why the residual-risk entry reopens on any argv-keyed MAC.
     """
-    permitted_key = '"$MANIFEST_HMAC_LABEL"'
+    permitted = {'"$MANIFEST_HMAC_LABEL"', '"${MANIFEST_HMAC_LABEL}"'}
     for script in (BACKUP_SH, RESTORE_SH, BACKUP_LIFECYCLE):
-        for line in script.read_text().splitlines():
+        # Join continuations so a call split across lines is read whole, and drop
+        # trailing comments so prose about the option cannot fail the check. A gate
+        # that fails on a legitimate line is a gate someone deletes.
+        joined = script.read_text().replace("\\\n", " ")
+        for line in joined.splitlines():
             if line.lstrip().startswith("#"):
                 continue
-            assert "-macopt" not in line, f"{script.name}: {line.strip()}"
-            for keyed in re.findall(r"-hmac\s+(\S+)", line):
-                assert keyed == permitted_key, f"{script.name}: {line.strip()}"
+            code = re.sub(r"\s#.*$", "", line)
+            assert "-macopt" not in code, f"{script.name}: {code.strip()}"
+            for keyed in re.findall(r"-hmac\s+(\S+)", code):
+                assert keyed in permitted, f"{script.name}: {code.strip()}"
 
 
 def test_a_signature_matching_neither_construction_is_refused(signed_set: Path) -> None:

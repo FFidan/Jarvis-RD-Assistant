@@ -145,6 +145,7 @@ Holding it forges a signature under the earlier construction, which verification
 now accepts for a manifest of any shape, where before this release it would have
 been accepted only for the pre-v1.2 schema. Rotating the backup key file is what
 revokes that capability; nothing else does.
+
 The fallback is kept because removing it locks an operator out of every backup set
 written before v1.2.6, including the one an in-flight upgrade just took. Signed
 manifests still do not authenticate an unsigned pre-upgrade set, and no
@@ -152,9 +153,11 @@ construction protects against an attacker who can replace both the archives and
 the backup key.
 
 **Reopen criteria:** `-macopt hexkey:` or any other argv-keyed MAC appears in a
-product signing or verification path — the shell harnesses use it to write a
-pre-v1.2.6-shaped manifest with a throwaway key inside a disposable container,
-which is the shape being simulated and not an operator exposure; a signing path
+product signing or verification path — the shell harnesses use it to sign a
+manifest the pre-v1.2.6 way with a throwaway key inside a disposable container,
+which is the construction being simulated and not an operator exposure. One of
+them signs a CURRENT-shaped manifest that way on purpose, because that is what
+an upgrade from a maintained earlier release actually presents; a signing path
 calls `legacy_manifest_signature`; or pre-v1.2.6 releases leave the supported
 upgrade range, at which point the fallback and this entry should be removed
 together.

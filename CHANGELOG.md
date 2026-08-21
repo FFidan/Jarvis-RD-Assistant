@@ -109,6 +109,22 @@ say what it is really counting.
   the feed, settings and the Telegram guide were rewritten against the
   interface this release ships.
 
+### Security
+
+- **Backup manifests are signed without putting key material on the command
+  line.** The signature is keyed on a public label with the secret key file
+  supplied as input, so no account that can read the process list on the host
+  can recover it from a running backup.
+- **A backup set written by an earlier release still authenticates.** The
+  earlier signature is accepted when the current one does not match, so an
+  upgrade can verify the restore point it just took and an operator keeps
+  access to older archives.
+- **If this host ever ran a release before v1.2.6, rotate
+  `secrets/backup_encrypt_key.txt`.** Those releases passed a derived key on the
+  command line on every verification, where any local account could read it.
+  Anyone who did can still forge a manifest signature, and rotating that file is
+  what revokes it.
+
 ## v1.2.5 (2026-08-13)
 
 This release makes the research loop consistent across the Web interface,
