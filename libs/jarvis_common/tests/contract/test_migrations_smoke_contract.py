@@ -190,10 +190,12 @@ async def _hand_over_legacy_database(dsn: str, db_dir: Path, floor: int) -> asyn
             "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
             "jarvis_ops_owner TO jarvis_legacy_rollback WITH INHERIT FALSE; "
             "GRANT jarvis_platform_owner, jarvis_research_owner, jarvis_learning_owner, "
-            "jarvis_ops_owner TO jarvis_migrator WITH ADMIN OPTION"
+            "jarvis_ops_owner TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE"
         )
         await bootstrap.execute("GRANT SELECT, INSERT ON schema_migrations TO jarvis_migrator")
-        await bootstrap.execute("GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION")
+        await bootstrap.execute(
+            "GRANT jarvis_legacy_rollback TO jarvis_migrator WITH ADMIN OPTION, INHERIT FALSE"
+        )
     except BaseException:
         await bootstrap.close()
         raise
@@ -350,10 +352,11 @@ async def test_pre_0114_floors_upgrade_through_the_migrator(
     today. With both roles proven non-superuser, the run succeeding below
     floor 112 is the proof that the runner assumed the legacy owner.
 
-    Verified: libs/jarvis_common/jarvis_common/migrations.py:72-100 resolves the
+    Verified: libs/jarvis_common/jarvis_common/migrations.py:72-97 resolves the
     legacy owner; :497 does so once before the loop; :516 assumes it for
     versions <= 113.
     """
+    # Verified: libs/jarvis_common/jarvis_common/migrations.py:497
     db_dir = _db_dir()
     bootstrap = await _hand_over_legacy_database(dedicated_cluster_pg_dsn, db_dir, floor)
     try:
