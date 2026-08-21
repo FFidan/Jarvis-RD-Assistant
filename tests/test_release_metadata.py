@@ -542,7 +542,9 @@ def test_the_maintained_source_floor_is_one_number_everywhere_it_is_enforced() -
     assert floors[0] == oldest
     assert floors[-1] == newest
 
-    assert _declared_int(harness, "RELEASE_GATE_MIN_CHECKS=") >= len(floors) * 2
+    # A floor low enough to satisfy the window alone would let most of the run
+    # disappear and still report a passing release gate.
+    assert _declared_int(harness, "RELEASE_GATE_MIN_CHECKS=") >= 35
     assert '[ "$pass" -lt "$RELEASE_GATE_MIN_CHECKS" ]' in harness
 
     contract = _read("libs/jarvis_common/tests/contract/test_migrations_smoke_contract.py")
