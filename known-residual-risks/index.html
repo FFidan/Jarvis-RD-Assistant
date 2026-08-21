@@ -2788,25 +2788,35 @@ file in on standard input as a message prefix, followed by a separator and the
 manifest. No key material derived from the backup secret reaches the command
 line on the signing path.</p>
 <p><strong>Why still accepted:</strong> <code>legacy_manifest_signature</code>, in <code>scripts/restore.sh</code> and
-<code>scripts/backup-lifecycle.sh</code>, reconstructs the derived key the releases before
-v1.2.6 used and passes it to openssl as <code>-macopt hexkey:</code>, where it is briefly
-visible to anything that can read the process list on that host. It is reached
-only for a manifest that carries no <code>run_id</code>, which is the shape written before
-v1.2.6 — a manifest claiming to be current is never checked against the legacy
-key, so a tampered current set cannot force the old key onto the command line.
-It was kept deliberately: the pinned openssl offers no way to key an HMAC from a
-file, so removing the fallback would lock an operator out of every backup set
-predating v1.2.6. Signed manifests still do not authenticate an unsigned
-pre-upgrade set, and no construction protects against an attacker who can
-replace both the archives and the backup key.</p>
-<p><strong>Reopen criteria:</strong> <code>-macopt hexkey:</code> appears anywhere in a product signing or
-verification path outside <code>legacy_manifest_signature</code> — the roundtrip harness
-uses it to write a pre-v1.2.6-shaped manifest with a throwaway key inside a
-disposable container, which is the shape being simulated and not an operator
-exposure; a signing path calls <code>legacy_manifest_signature</code>;
-verification reaches it for a manifest that carries a <code>run_id</code>; or the pinned
-openssl gains a way to key an HMAC from a file, at which point the fallback can
-be re-keyed and the argv exposure removed entirely.</p>
+<code>scripts/backup-lifecycle.sh</code>, reconstructs the key the releases before v1.2.6
+derived and verifies a manifest against it when the current construction does not
+match. It is computed with perl's <code>Digest::SHA</code> rather than openssl, because
+openssl can only be keyed on that derived secret through the command line. No key
+material reaches the process list on either the signing or the verification path.</p>
+<p>Both constructions are HMAC-SHA256 over the same key file, so accepting either
+does not weaken forgery resistance for anyone who does not already hold the key.
+The residual is a capability that could only have been acquired before this
+release, but acquiring it needed no unusual access or timing: every release before
+v1.2.6 put the derived key in argv on <strong>every</strong> manifest verification, so any
+account that could read the process list on such a host could have taken it.
+Holding it forges a signature under the earlier construction, which verification
+now accepts for a manifest of any shape, where before this release it would have
+been accepted only for the pre-v1.2 schema. Rotating the backup key file is what
+revokes that capability; nothing else does.</p>
+<p>The fallback is kept because removing it locks an operator out of every backup set
+written before v1.2.6, including the one an in-flight upgrade just took. Signed
+manifests still do not authenticate an unsigned pre-upgrade set, and no
+construction protects against an attacker who can replace both the archives and
+the backup key.</p>
+<p><strong>Reopen criteria:</strong> <code>-macopt hexkey:</code> or any other argv-keyed MAC appears in a
+product signing or verification path — the shell harnesses use it to sign a
+manifest the pre-v1.2.6 way with a throwaway key inside a disposable container,
+which is the construction being simulated and not an operator exposure. One of
+them signs a CURRENT-shaped manifest that way on purpose, because that is what
+an upgrade from a maintained earlier release actually presents; a signing path
+calls <code>legacy_manifest_signature</code>; or pre-v1.2.6 releases leave the supported
+upgrade range, at which point the fallback and this entry should be removed
+together.</p>
 <hr />
 <h2 id="v113-access-mode-and-setup-entries">v1.1.3 access-mode and setup entries<a class="headerlink" href="#v113-access-mode-and-setup-entries" title="Permanent link">&para;</a></h2>
 <h3 id="amdintel-vulkan-acceleration-experimental-not-supported">AMD/Intel Vulkan acceleration — Experimental, not Supported<a class="headerlink" href="#amdintel-vulkan-acceleration-experimental-not-supported" title="Permanent link">&para;</a></h3>
