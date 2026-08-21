@@ -1274,6 +1274,7 @@ new_staged_update_env
 respond_to_backup good 102
 out="$(run_cli update --yes)"; rc=$?
 if [ "$rc" -eq 1 ] \
+   && has "$out" 'schema 102' \
    && has "$out" 'predates the maintained update window' \
    && has "$out" 'No branch change was made'; then
   pass "an installation below the maintained schema floor is refused before the checkout advances"
