@@ -19,6 +19,32 @@ CLI="${REPO_ROOT}/scripts/jarvis-research.sh"
 LIB="${REPO_ROOT}/scripts/setup_lib.sh"
 UPDATE_SCRIPT="${REPO_ROOT}/update.sh"
 LIFECYCLE_HELPER="${REPO_ROOT}/scripts/backup-lifecycle.sh"
+
+# The secret files docker-compose.yml attaches to the backup sidecar. Compose refuses to
+# start the service while any is missing, and the docker stub below does the same, so a
+# release that adds one cannot pass this harness unless the updater creates it first.
+sidecar_secret_files() {
+  local compose="$REPO_ROOT/docker-compose.yml" name
+  sed -n '/^  postgres-backup:/,/^  [a-z_-]*:$/p' "$compose" \
+    | sed -n '/^    secrets:/,/^    [a-z]/p' \
+    | sed -nE 's/^      - (source: )?([a-z_]+).*/\2/p' \
+    | while IFS= read -r name; do
+        sed -n "/^  ${name}:/,/file:/p" "$compose" \
+          | sed -nE 's#.*file: \./secrets/([a-z_]+\.txt).*#\1#p'
+      done
+}
+sidecar_secret_entries() {
+  sed -n '/^  postgres-backup:/,/^  [a-z_-]*:$/p' "$REPO_ROOT/docker-compose.yml" \
+    | sed -n '/^    secrets:/,/^    [a-z]/p' | grep -cE '^      - '
+}
+SIDECAR_SECRET_FILES="$(sidecar_secret_files | tr '\n' ' ')"
+# A harness that measured nothing would pass everything. Every declared entry must have
+# resolved to a file, so a reshaped compose file fails here rather than silently shrinking
+# the list. (Not modelled: the override file and the sidecar's ./secrets/*.txt bind mounts,
+# which a v1.2.5 install already has.)
+[ "$(printf '%s' "$SIDECAR_SECRET_FILES" | wc -w)" -ge 1 ] \
+  && [ "$(printf '%s' "$SIDECAR_SECRET_FILES" | wc -w)" -eq "$(sidecar_secret_entries)" ] \
+  || { printf 'FAIL: could not derive every backup sidecar secret file from docker-compose.yml\n' >&2; exit 1; }
 BACKUP_SCRIPT="${REPO_ROOT}/scripts/backup.sh"
 
 fail=0
@@ -503,6 +529,19 @@ case "${1:-}" in
   compose)
     log "compose-env file=${COMPOSE_FILE-<unset>} project=${COMPOSE_PROJECT_NAME-<unset>} profiles=${COMPOSE_PROFILES-<unset>} separator=${COMPOSE_PATH_SEPARATOR-<unset>} envfiles=${COMPOSE_ENV_FILES-<unset>} disable=${COMPOSE_DISABLE_ENV_FILE-<unset>}"
     raw_args=("$@")
+    # Compose refuses to create the backup sidecar while any secret file it declares is
+    # absent; `run` and `up` create a container, `ps`/`pause`/`unpause` do not.
+    if printf '%s\n' "${raw_args[@]}" | grep -qxE 'run|up' \
+       && printf '%s\n' "${raw_args[@]}" | grep -qx postgres-backup; then
+      for secret in ${STUB_SIDECAR_SECRET_FILES:-}; do
+        if [ ! -f "$STUB_REPO/secrets/$secret" ]; then
+          log "compose run postgres-backup refused: secret file $secret is missing"
+          printf 'Error response from daemon: invalid mount config for type "bind": bind source path does not exist: %s/secrets/%s\n' \
+            "$STUB_REPO" "$secret" >&2
+          exit 1
+        fi
+      done
+    fi
     helper_source=""
     producer_source=""
     pdf_source=""
@@ -734,13 +773,19 @@ make_repo() {
   ln -sf "$UPDATE_SCRIPT" "$dir/update.sh"
   cp "$LIFECYCLE_HELPER" "$dir/scripts/backup-lifecycle.sh"
   chmod +x "$dir/scripts/backup-lifecycle.sh"
-  # update.sh materializes the Docker-secret source files before it stages any
-  # image, so this fixture repo has to offer that script. A no-op stub is the
-  # right stand-in: these cases exercise the update transaction machinery, and
-  # the real script would generate keys on every one of them and rewrite this
-  # fixture's .env. The secrets phase itself is covered, with an ordering
-  # assertion, in scripts/tests/test_update_coverage.sh.
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/scripts/init-secrets.sh"
+  # update.sh and jarvis-research.sh both run init-secrets.sh before they touch a
+  # container. This stand-in creates the sidecar's secret files the way the real
+  # script would and records the call in the ordered stub log, which is the only
+  # way to prove it ran BEFORE the first sidecar run. The real script is covered
+  # by its own boot path; reproducing it here would only test the stub.
+  cat > "$dir/scripts/init-secrets.sh" <<INITSECRETS
+#!/usr/bin/env bash
+printf 'init-secrets ensured\\n' >> "\${STUB_LOG:?}"
+for secret in ${SIDECAR_SECRET_FILES}; do
+  [ -f "$dir/secrets/\$secret" ] || printf 'FIXTURE-%s\\n' "\$secret" > "$dir/secrets/\$secret"
+done
+exit 0
+INITSECRETS
   chmod +x "$dir/scripts/init-secrets.sh"
   cat > "$dir/pyproject.toml" <<'PYPROJECT'
 [project]
@@ -757,7 +802,11 @@ CADDY_IMAGE=caddy:2.9-alpine
 VE
   printf 'services:\n  dashboard:\n    image: x\n' > "$dir/docker-compose.yml"
   printf 'JARVIS_VERSION=1.1.2\nJARVIS_IMAGE_TAG=1.1.2\nTORCH_VARIANT=cpu\nTORCH_VARIANT_SUFFIX=\n' > "$dir/.env"
+  # A current install has every secret file its own compose file declares.
   mkdir -p "$dir/secrets"
+  for secret in $SIDECAR_SECRET_FILES; do
+    printf 'FIXTURE-%s\n' "$secret" > "$dir/secrets/$secret"
+  done
   printf 'FIXTURE-BACKUP-KEY\n' > "$dir/secrets/backup_encrypt_key.txt"
   # A setup.sh that doctor can shell for `--check`.
   cat > "$dir/setup.sh" <<'SETUP'
@@ -834,6 +883,7 @@ run_cli() {
     "STUB_BACKUP_KEY_FILE=$REPO/secrets/backup_encrypt_key.txt"
     "STUB_LIFECYCLE_HELPER=$LIFECYCLE_HELPER"
     "STUB_REPO=$REPO" "STUB_COMPOSE_LABEL_PROJECT=${STUB_COMPOSE_LABEL_PROJECT:-}"
+    "STUB_SIDECAR_SECRET_FILES=$SIDECAR_SECRET_FILES"
     "JARVIS_CLI_CONFIG_DIR=$CFG" "JARVIS_CLI_BIN_DIR=$CFG/bin"
     "JARVIS_BACKUP_DIR=$BK" "JARVIS_BACKUP_TRIGGER_DIR=$TRIG"
     "JARVIS_BACKUP_POLL_TIMEOUT=1" "JARVIS_BACKUP_POLL_INTERVAL=1"
@@ -898,6 +948,10 @@ register_repo() { printf '%s\n' "$REPO" > "$CFG/installs"; }
 new_staged_update_env() {
   new_env
   register_repo
+  # The install being upgraded was set up by a release that did not mount this
+  # secret; only the target's init-secrets.sh knows to create it. This is the
+  # shape every upgrade from v1.2.1-v1.2.5 to v1.2.6 presents.
+  rm -f "$REPO/secrets/postgres_backup_reader_password.txt"
   STUB_MIGRATIONS="db/migrations/0200_drop_thing.sql"
   STUB_MIG_CONTENT="DELETE FROM telegram_user_pairings WHERE chat_id < 0;"
   TARGET_RUNTIME="$ROOT/target-runtime.$RANDOM.$RANDOM"
@@ -1187,7 +1241,14 @@ out="$(run_cli update --yes)"; rc=$?
 staged_log="$(cat "$STUB_LOG")"
 sidecar_pause_line="$(grep -n 'docker compose pause postgres-backup' "$STUB_LOG" | head -1 | cut -d: -f1)"
 target_backup_line="$(grep -n 'docker target-backup request=' "$STUB_LOG" | head -1 | cut -d: -f1)"
+# The release's secret files must exist before the first sidecar run; position in
+# the ordered stub log is the only proof of ORDER, presence alone would pass a call
+# that sat after the guard.
+secrets_line="$(grep -n 'init-secrets ensured' "$STUB_LOG" | head -1 | cut -d: -f1)"
+first_sidecar_line="$(grep -n 'lifecycle ' "$STUB_LOG" | head -1 | cut -d: -f1)"
 if [ "$rc" -eq 0 ] \
+   && [ -n "$secrets_line" ] && [ -n "$first_sidecar_line" ] \
+   && [ "$secrets_line" -lt "$first_sidecar_line" ] \
    && has "$staged_log" 'target-backup request=[0-9a-f]\{32\}' \
    && has "$staged_log" "source=$TARGET_RUNTIME/backup.sh" \
    && has "$staged_log" "pdf=$REPO/shared/pdf_storage" \
@@ -1201,7 +1262,7 @@ if [ "$rc" -eq 0 ] \
    && [ "$(cat "$STUB_SIDECAR_STATE_FILE")" = running ] \
    && [ ! -e "$SIDECAR_MARKER" ] \
    && [ ! -e "$UPDATE_PIN_FILE" ]; then
-  pass "staged target runtime creates a target-format backup and hands off the backup sidecar"
+  pass "staged target runtime creates the release's secrets before its first sidecar run, then a target-format backup, and hands off the backup sidecar"
 else
   check_fail "staged target runtime backup: rc=$rc out=<<<$out>>> log=$staged_log"
 fi

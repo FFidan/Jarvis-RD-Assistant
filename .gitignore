@@ -54,6 +54,8 @@ secrets/*.txt.restore.*
 secrets/jarvis_config_key_rotation_state.txt.*
 .env.restore.*
 /.env.??????
+secrets/.platform-identity-private.??????
+secrets/.platform-identity-public.??????
 litellm/.config.yaml.*
 
 # Docker local overrides

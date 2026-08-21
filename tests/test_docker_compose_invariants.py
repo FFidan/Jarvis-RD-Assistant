@@ -1097,6 +1097,38 @@ def test_every_compose_secret_has_a_declared_provisioning_path(compose):
         )
 
 
+def test_init_secrets_interrupted_write_residue_is_gitignored() -> None:
+    """Every temporary file init-secrets.sh can leave behind must be ignored.
+
+    The updater runs init-secrets.sh before its first container, and the update
+    refuses to proceed while the checkout has an untracked file. A temp file left by
+    an interrupted run must therefore never be visible to git, or one interruption
+    would block every later update. The templates are read from the script so a new
+    one cannot arrive without an ignore pattern.
+    """
+    lines = (REPO_ROOT / PROVISIONING_SCRIPTS["update"]).read_text(encoding="utf-8").splitlines()
+    source = "\n".join(line for line in lines if not line.lstrip().startswith("#"))
+    # An invocation is `mktemp` in command position: after `$(`, at the start of a
+    # line, or after a command separator. That excludes the word inside the script's
+    # own error messages. Every invocation must yield a plain template: a call written
+    # with options or a variable prefix would resolve to a different path, so it fails
+    # here loudly instead of being silently unprotected while the test stays green.
+    command_position = r"""(?:\$\(|^[ \t]*|[;&|({][ \t]*)mktemp"""
+    invocations = re.findall(command_position + r"\b", source, flags=re.MULTILINE)
+    templates = re.findall(
+        command_position + r"""[ \t]+["']?([^\s"')$]+X{6})["']?""", source, flags=re.MULTILINE
+    )
+    assert invocations, "init-secrets.sh no longer calls mktemp; update this test"
+    assert len(templates) == len(invocations), (
+        f"mktemp invocations in init-secrets.sh: {len(invocations)}, templates understood: "
+        f"{templates}; write the call as `mktemp <path>.XXXXXX` or extend this test"
+    )
+    for template in templates:
+        sample = template.replace("XXXXXX", "abc123")
+        result = subprocess.run(["git", "check-ignore", "-q", sample], cwd=REPO_ROOT, check=False)
+        assert result.returncode == 0, f"interrupted-write residue is not ignored: {sample}"
+
+
 def _workflow(name: str) -> dict[str, Any]:
     return yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text())
 
